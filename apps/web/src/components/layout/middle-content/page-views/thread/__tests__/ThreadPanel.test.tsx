@@ -471,4 +471,92 @@ describe('ThreadPanel', () => {
       expected: 1,
     });
   });
+
+  it('given the GET response includes isFollowing=true, should label the toggle as Following', async () => {
+    renderPanel({
+      fetcher: vi.fn(async () => ({
+        messages: [],
+        hasMore: false,
+        nextCursor: null,
+        isFollowing: true,
+      })),
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-follow-toggle').textContent).toContain('Following');
+    });
+    expect({
+      given: 'a server response with isFollowing=true',
+      should: 'render the header toggle in the Following state',
+      actual: screen.getByTestId('thread-follow-toggle').getAttribute('aria-pressed'),
+      expected: 'true',
+    }).toEqual({
+      given: 'a server response with isFollowing=true',
+      should: 'render the header toggle in the Following state',
+      actual: 'true',
+      expected: 'true',
+    });
+  });
+
+  it('given the user clicks the follow toggle, should POST to the follow endpoint and flip the label optimistically', async () => {
+    const user = userEvent.setup();
+    const { fetchWithAuth } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(fetchWithAuth).mockResolvedValue(new Response('{}', { status: 200 }));
+    renderPanel({
+      fetcher: vi.fn(async () => ({
+        messages: [],
+        hasMore: false,
+        nextCursor: null,
+        isFollowing: false,
+      })),
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-follow-toggle').textContent).toContain('Not following');
+    });
+
+    await user.click(screen.getByTestId('thread-follow-toggle'));
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchWithAuth)).toHaveBeenCalledWith(
+        '/api/channels/page-1/messages/p1/follow',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-follow-toggle').textContent).toContain('Following');
+    });
+  });
+
+  it('given a follow POST that fails, should revert the label to its prior state', async () => {
+    const user = userEvent.setup();
+    const { fetchWithAuth } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(fetchWithAuth).mockResolvedValue(new Response('nope', { status: 500 }));
+    renderPanel({
+      fetcher: vi.fn(async () => ({
+        messages: [],
+        hasMore: false,
+        nextCursor: null,
+        isFollowing: false,
+      })),
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-follow-toggle').textContent).toContain('Not following');
+    });
+
+    await user.click(screen.getByTestId('thread-follow-toggle'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-follow-toggle').textContent).toContain('Not following');
+    });
+    expect({
+      given: 'a follow POST that returns 500',
+      should: 'revert the label back to the pre-click state',
+      actual: screen.getByTestId('thread-follow-toggle').textContent?.includes('Not following'),
+      expected: true,
+    }).toEqual({
+      given: 'a follow POST that returns 500',
+      should: 'revert the label back to the pre-click state',
+      actual: true,
+      expected: true,
+    });
+  });
 });

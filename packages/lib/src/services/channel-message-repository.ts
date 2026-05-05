@@ -312,6 +312,16 @@ export interface InsertChannelThreadReplyInput {
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
   alsoSendToParent?: boolean;
+  // Optional aiMeta passthrough — agent-authored replies (mention responder)
+  // need senderType + senderName so the rendered row reads "AgentTitle (User)"
+  // instead of the user's display name. Auto-follow logic is unchanged: PR 3
+  // upserts (parentAuthor, replier) regardless of aiMeta, and aiMeta only
+  // affects how the reply itself is shown.
+  aiMeta?: {
+    senderType: 'global_assistant' | 'agent';
+    senderName: string;
+    agentPageId?: string;
+  } | null;
 }
 
 export type InsertChannelThreadReplyResult =
@@ -367,6 +377,7 @@ async function insertChannelThreadReply(
         fileId: input.fileId,
         attachmentMeta: input.attachmentMeta,
         parentId: input.parentId,
+        aiMeta: input.aiMeta ?? undefined,
       })
       .returning();
 

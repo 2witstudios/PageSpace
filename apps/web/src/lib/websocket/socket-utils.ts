@@ -19,7 +19,7 @@ export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' 
 export type UsageOperation = 'updated';
 export type ActivityOperation = 'logged';
 export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
-export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed';
+export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed' | 'thread_updated';
 
 export interface ActivityEventPayload {
   activityId: string;
@@ -112,6 +112,14 @@ export interface InboxEventPayload {
   lastMessageSender?: string;
   unreadCount?: number;
   attachmentMeta?: AttachmentMeta | null;
+  // thread_updated-only fields. Added inline (rather than as a discriminated
+  // union) so existing call sites keep compiling — only thread_updated emitters
+  // populate these. Recipients are computed at the call site from
+  // `listFollowers`; the payload itself does not carry a recipient list.
+  rootMessageId?: string;
+  lastReplyAt?: string;
+  lastReplyPreview?: string;
+  lastReplySender?: { id: string; name: string };
 }
 
 /**

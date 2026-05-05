@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
-import { X } from 'lucide-react';
+import { Bell, BellOff, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
@@ -32,6 +32,7 @@ import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { AttachmentMeta, FileRelation } from '@/lib/attachment-utils';
 import type { Reaction } from '@/components/shared/MessageReactions';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
@@ -87,6 +88,13 @@ interface ListResponse {
   messages: RawReply[];
   hasMore: boolean;
   nextCursor: string | null;
+  /**
+   * Server-truth follow state for the requesting user. PR 5 added this so
+   * the toggle reflects the persisted follower row, not just local state.
+   * Older servers (pre-PR-5) omit the field; the panel treats `undefined` as
+   * "not following yet known" and disables the toggle until first refresh.
+   */
+  isFollowing?: boolean;
 }
 
 interface RawReply {
@@ -155,6 +163,20 @@ export function ThreadPanel({
   const [draft, setDraft] = useState('');
   const [optimisticReplies, setOptimisticReplies] = useState<ThreadReply[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Optimistic follow state: starts undefined until SWR returns. Once we have
+  // the server truth, optimistic updates lead the UI and the toggle reverts on
+  // POST/DELETE failure (mirrors the reaction toggle pattern elsewhere).
+  const [optimisticFollowing, setOptimisticFollowing] = useState<boolean | undefined>(undefined);
+  const [followError, setFollowError] = useState<string | null>(null);
+  const [followInFlight, setFollowInFlight] = useState(false);
+
+  // Clear the unread-thread badge for this root the moment the panel opens.
+  // Subsequent fan-outs while the panel is open could re-bump the badge; the
+  // page-side mount unsubscribes from the badge by closing the panel.
+  const clearThreadBadge = useThreadInboxStore((state) => state.clearRoot);
+  useEffect(() => {
+    clearThreadBadge({ source, contextId, rootMessageId: parentId });
+  }, [source, contextId, parentId, clearThreadBadge]);
 
   // Identity ref guards async work against thread switches: a send may
   // outlive the panel's current parentId if the user opens another thread
@@ -174,7 +196,62 @@ export function ThreadPanel({
     setOptimisticReplies([]);
     setDraft('');
     setSubmitError(null);
+    setOptimisticFollowing(undefined);
+    setFollowError(null);
+    setFollowInFlight(false);
   }, [parentId, contextId, source]);
+
+  // Effective follow state: optimistic value wins while the toggle is
+  // settling, otherwise the server-truth from SWR.
+  const isFollowing = optimisticFollowing ?? data?.isFollowing ?? false;
+  const followStateKnown = optimisticFollowing !== undefined || data?.isFollowing !== undefined;
+
+  const buildFollowUrl = useCallback(() => {
+    return source === 'channel'
+      ? `/api/channels/${contextId}/messages/${parentId}/follow`
+      : `/api/messages/${contextId}/${parentId}/follow`;
+  }, [source, contextId, parentId]);
+
+  const handleToggleFollow = useCallback(async () => {
+    if (followInFlight) return;
+    if (!followStateKnown) return;
+    // Snapshot the thread identity at the start of the request: if the user
+    // switches to another thread before the response arrives, we must NOT
+    // write the previous thread's optimistic state back into the store —
+    // optimisticFollowing takes precedence over server data, so leaking it
+    // across a thread switch would silently mislabel the new panel header.
+    const submitThreadKey = activeThreadKeyRef.current;
+    const next = !isFollowing;
+    setOptimisticFollowing(next);
+    setFollowError(null);
+    setFollowInFlight(true);
+    try {
+      const res = await fetchWithAuth(buildFollowUrl(), {
+        method: next ? 'POST' : 'DELETE',
+      });
+      if (!res.ok) {
+        throw new Error(`Follow toggle failed: ${res.status}`);
+      }
+      if (activeThreadKeyRef.current !== submitThreadKey) return;
+      // Refresh SWR so the server-truth replaces the optimistic value on the
+      // next render; mutate without revalidate is enough since we already
+      // know the new state.
+      mutate(
+        (current) => (current ? { ...current, isFollowing: next } : current),
+        { revalidate: false },
+      );
+      setOptimisticFollowing(undefined);
+    } catch (err) {
+      console.error('Follow toggle failed', err);
+      if (activeThreadKeyRef.current !== submitThreadKey) return;
+      setOptimisticFollowing(!next);
+      setFollowError('Could not update follow state');
+    } finally {
+      if (activeThreadKeyRef.current === submitThreadKey) {
+        setFollowInFlight(false);
+      }
+    }
+  }, [followInFlight, followStateKnown, isFollowing, buildFollowUrl, mutate]);
 
   const socket = useSocketStore((state) => state.socket);
   const connectionStatus = useSocketStore((state) => state.connectionStatus);
@@ -345,15 +422,37 @@ export function ThreadPanel({
             </span>
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          aria-label="Close thread"
-          data-testid="thread-panel-close"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleToggleFollow}
+            disabled={followInFlight || !followStateKnown}
+            aria-pressed={isFollowing}
+            aria-label={isFollowing ? 'Unfollow thread' : 'Follow thread'}
+            data-testid="thread-follow-toggle"
+            title={
+              followError
+                ? followError
+                : isFollowing
+                ? 'Following — click to stop receiving inbox bumps'
+                : 'Not following — click to receive inbox bumps for new replies'
+            }
+            className="gap-1.5 text-xs"
+          >
+            {isFollowing ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
+            <span>{isFollowing ? 'Following' : 'Not following'}</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label="Close thread"
+            data-testid="thread-panel-close"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Body */}

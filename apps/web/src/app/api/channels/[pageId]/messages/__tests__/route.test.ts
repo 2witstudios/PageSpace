@@ -40,6 +40,7 @@ const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
 const mockFileExists = vi.fn();
+const mockListChannelThreadFollowers = vi.fn();
 vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
     listChannelMessages: (...args: unknown[]) => mockListChannelMessages(...args),
@@ -50,6 +51,7 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
     fileExists: (...args: unknown[]) => mockFileExists(...args),
+    listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
   },
 }));
 
@@ -173,6 +175,9 @@ describe('GET /api/channels/[pageId]/messages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    // PR 5: thread GET also looks up followers to populate isFollowing.
+    // Default to an empty list so non-thread paths don't trip on undefined.
+    mockListChannelThreadFollowers.mockResolvedValue([]);
   });
 
   it('routes to listChannelThreadReplies when ?parentId= is provided', async () => {
@@ -255,6 +260,8 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+    mockListChannelThreadFollowers.mockResolvedValue([]);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -377,6 +384,196 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     const res = await callPost({ content: 'x', parentId: 'reply-as-parent' });
 
     expect(res.status).toBe(400);
+  });
+
+  it('fans out thread_updated to followers but EXCLUDES the reply author', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 2,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'in-thread',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID, 'follower-1', 'follower-2']);
+
+    await callPost({ content: 'in-thread', parentId: PARENT_ID });
+
+    const threadUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'thread_updated'
+    );
+    const recipients = threadUpdatedCalls.map(([userId]) => userId);
+    expect(recipients).toEqual(expect.arrayContaining(['follower-1', 'follower-2']));
+    expect(recipients).not.toContain(USER_ID);
+
+    // Each thread_updated payload carries the new contract fields.
+    const payload = threadUpdatedCalls[0][1] as {
+      operation: string;
+      type: string;
+      id: string;
+      rootMessageId: string;
+      lastReplyAt: string;
+      lastReplyPreview: string;
+      lastReplySender: { id: string; name: string };
+    };
+    expect(payload.type).toBe('channel');
+    expect(payload.id).toBe(PAGE_ID);
+    expect(payload.rootMessageId).toBe(PARENT_ID);
+    expect(payload.lastReplyAt).toBe(replyCreatedAt.toISOString());
+  });
+
+  it('emits channel_updated to a mentioned non-follower who can view the channel', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'hey @[Bob](user-bob:user)',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValueOnce({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+    // Default canUserViewPage mock returns true, so the mentioned user passes
+    // the view-permission gate.
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+
+    await callPost({
+      content: 'hey @[Bob](user-bob:user)',
+      parentId: PARENT_ID,
+    });
+
+    const channelUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) =>
+        (payload as { operation: string; type: string }).operation === 'channel_updated'
+    );
+    const recipients = channelUpdatedCalls.map(([userId]) => userId);
+    expect(recipients).toContain('user-bob');
+  });
+
+  it('does NOT fire the targeted mention bump when alsoSendToParent is set (broad fan-out covers everyone)', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: { id: 'mirror-1', createdAt: replyCreatedAt },
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations
+      .mockResolvedValueOnce({
+        id: 'reply-1',
+        parentId: PARENT_ID,
+        content: 'hey @[Bob](user-bob:user)',
+        createdAt: replyCreatedAt.toISOString(),
+        user: { id: USER_ID, name: 'Sender', image: null },
+      })
+      .mockResolvedValueOnce({ id: 'mirror-1', mirroredFromId: 'reply-1', parentId: null });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: {
+        query: { pages: { findFirst: ReturnType<typeof vi.fn> } };
+        select: ReturnType<typeof vi.fn>;
+      };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValueOnce({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+
+    await callPost({
+      content: 'hey @[Bob](user-bob:user)',
+      parentId: PARENT_ID,
+      alsoSendToParent: true,
+    });
+
+    // When alsoSendToParent is set, the mirror's broad fan-out covers viewable
+    // members. The targeted mention bump is short-circuited so user-bob does
+    // NOT receive two channel_updated payloads for the same underlying event.
+    const channelUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'channel_updated'
+    );
+    const recipientCounts = channelUpdatedCalls.reduce<Record<string, number>>(
+      (acc, [uid]) => {
+        const id = uid as string;
+        acc[id] = (acc[id] ?? 0) + 1;
+        return acc;
+      },
+      {}
+    );
+    expect(recipientCounts['user-bob'] ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  it('does NOT emit channel_updated to a mentioned user who cannot view the channel', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'hey @[Stranger](user-outsider:user)',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValueOnce({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+    // Sender (USER_ID) passes; the mentioned outsider does not.
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+
+    await callPost({
+      content: 'hey @[Stranger](user-outsider:user)',
+      parentId: PARENT_ID,
+    });
+
+    const channelUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) =>
+        (payload as { operation: string; type: string }).operation === 'channel_updated'
+    );
+    const recipients = channelUpdatedCalls.map(([uid]) => uid);
+    expect(recipients).not.toContain('user-outsider');
   });
 });
 

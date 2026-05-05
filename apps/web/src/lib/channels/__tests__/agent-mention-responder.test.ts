@@ -54,6 +54,28 @@ vi.mock('@/lib/ai/tools/channel-tools', () => ({
   },
 }));
 
+const mockInsertChannelThreadReply = vi.fn();
+const mockLoadChannelMessageWithRelations = vi.fn();
+const mockListChannelThreadFollowers = vi.fn();
+vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
+  channelMessageRepository: {
+    insertChannelThreadReply: (...args: unknown[]) => mockInsertChannelThreadReply(...args),
+    loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
+    listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
+  createSignedBroadcastHeaders: vi.fn(() => ({ 'x-signed': 'yes' })),
+}));
+
+const mockBroadcastInboxEvent = vi.fn();
+const mockBroadcastThreadReplyCountUpdated = vi.fn();
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastInboxEvent: (...args: unknown[]) => mockBroadcastInboxEvent(...args),
+  broadcastThreadReplyCountUpdated: (...args: unknown[]) => mockBroadcastThreadReplyCountUpdated(...args),
+}));
+
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
@@ -143,6 +165,22 @@ describe('agent-mention-responder', () => {
     mockCanUserViewPage.mockResolvedValue(true);
     mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Agent reply'));
     mockSendChannelExecute.mockResolvedValue(createSendChannelSuccess());
+    mockInsertChannelThreadReply.mockResolvedValue({
+      kind: 'ok',
+      reply: { id: 'agent-reply-1', createdAt: new Date('2026-05-05T12:00:00Z') },
+      mirror: null,
+      rootId: 'parent-thread',
+      replyCount: 2,
+      lastReplyAt: new Date('2026-05-05T12:00:00Z'),
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValue({
+      id: 'agent-reply-1',
+      parentId: 'parent-thread',
+      createdAt: new Date('2026-05-05T12:00:00Z').toISOString(),
+    });
+    mockListChannelThreadFollowers.mockResolvedValue([]);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
   });
 
   it('given message with no mentions, should not query agents or post responses', async () => {
@@ -279,5 +317,75 @@ describe('agent-mention-responder', () => {
 
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('given parentId is set, routes the agent reply via insertChannelThreadReply with aiMeta', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockAskAgentExecute.mockResolvedValue(
+      createAskAgentSuccess('In-thread reply')
+    );
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      sourceMessageId: 'thread-reply-1',
+      parentId: 'parent-thread',
+      content: 'Hey @[Budget Agent](agent-1:page) what do you think?',
+    });
+
+    expect(mockInsertChannelThreadReply).toHaveBeenCalledTimes(1);
+    const insertArgs = mockInsertChannelThreadReply.mock.calls[0][0];
+    expect(insertArgs.parentId).toBe('parent-thread');
+    expect(insertArgs.pageId).toBe('channel-1');
+    expect(insertArgs.userId).toBe('user-1');
+    expect(insertArgs.content).toBe('In-thread reply');
+    expect(insertArgs.aiMeta).toEqual({
+      senderType: 'agent',
+      senderName: 'Budget Agent',
+      agentPageId: 'agent-1',
+    });
+
+    // Top-level path must NOT fire when parentId is set.
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    // Parent footer refresh must fire so the channel-stream view updates.
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalledWith(
+      'channel-1',
+      expect.objectContaining({ rootId: 'parent-thread' })
+    );
+  });
+
+  it('given parentId is set, fans out thread_updated to followers excluding the human user', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockListChannelThreadFollowers.mockResolvedValue(['user-1', 'user-other', 'user-third']);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    const recipients = mockBroadcastInboxEvent.mock.calls
+      .filter(([, payload]) => (payload as { operation: string }).operation === 'thread_updated')
+      .map(([userId]) => userId);
+    expect(recipients).toEqual(expect.arrayContaining(['user-other', 'user-third']));
+    expect(recipients).not.toContain('user-1');
+  });
+
+  it('given parentId is empty, falls back to the existing top-level send path', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: '',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 });

@@ -10,7 +10,103 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
+import { buildThreadPreview } from '@/lib/channels/build-thread-preview';
 import type { AttachmentMeta } from '@pagespace/lib/types';
+
+interface ChannelInboxFanoutInput {
+  pageId: string;
+  driveId: string;
+  driveOwnerId: string | null | undefined;
+  senderUserId: string;
+  lastMessageAt: string;
+  lastMessagePreview: string;
+  lastMessageSender: string | undefined;
+}
+
+/**
+ * Fans out `channel_updated` to every drive member who can view the channel
+ * (excluding the sender). Mirrors the auth/permission logic of the top-level
+ * POST path so a thread reply with `alsoSendToParent=true` can drive the same
+ * channel-level inbox bump as a regular send.
+ *
+ * Returns the set of viewable user IDs so callers can use it to skip duplicate
+ * bumps (e.g. when also targeting mentioned non-follower recipients).
+ */
+async function fanOutChannelInboxUpdate(
+  input: ChannelInboxFanoutInput
+): Promise<Set<string>> {
+  const { pageId, driveId, driveOwnerId, senderUserId } = input;
+
+  const driveMembersRows = await db.query.driveMembers.findMany({
+    where: eq(driveMembers.driveId, driveId),
+    columns: { userId: true },
+  });
+
+  // Build a local member set so we never mutate the ORM-returned array.
+  // Drive owner is always a recipient even if they have no explicit row.
+  const memberUserIds = new Set(driveMembersRows.map((m) => m.userId));
+  if (driveOwnerId) {
+    memberUserIds.add(driveOwnerId);
+  }
+  const otherMemberIds = [...memberUserIds].filter((id) => id !== senderUserId);
+
+  const viewableUserIds = new Set<string>();
+  if (otherMemberIds.length === 0) {
+    return viewableUserIds;
+  }
+
+  if (driveOwnerId && otherMemberIds.includes(driveOwnerId)) {
+    viewableUserIds.add(driveOwnerId);
+  }
+
+  const adminMembers = await db.select({ userId: driveMembers.userId })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      inArray(driveMembers.userId, otherMemberIds),
+      eq(driveMembers.role, 'ADMIN')
+    ));
+  for (const admin of adminMembers) {
+    viewableUserIds.add(admin.userId);
+  }
+
+  const remainingIds = otherMemberIds.filter((id) => !viewableUserIds.has(id));
+  if (remainingIds.length > 0) {
+    const permittedMembers = await db.select({ userId: pagePermissions.userId })
+      .from(pagePermissions)
+      .where(and(
+        eq(pagePermissions.pageId, pageId),
+        inArray(pagePermissions.userId, remainingIds),
+        eq(pagePermissions.canView, true),
+        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
+      ));
+    for (const pm of permittedMembers) {
+      viewableUserIds.add(pm.userId);
+    }
+  }
+
+  await Promise.all(
+    otherMemberIds
+      .filter((id) => viewableUserIds.has(id))
+      .map((memberId) =>
+        broadcastInboxEvent(memberId, {
+          operation: 'channel_updated',
+          type: 'channel',
+          id: pageId,
+          driveId,
+          lastMessageAt: input.lastMessageAt,
+          lastMessagePreview: input.lastMessagePreview,
+          lastMessageSender: input.lastMessageSender,
+        })
+      )
+  );
+
+  return viewableUserIds;
+}
+
+// Local alias kept so the existing call sites in this file stay terse.
+const buildPreview = buildThreadPreview;
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -73,11 +169,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       return NextResponse.json({ error: 'Parent must be a top-level message' }, { status: 400 });
     }
 
-    const replies = await channelMessageRepository.listChannelThreadReplies({
-      rootId: parentId,
-      limit: limit + 1,
-      after: parsedCursor,
-    });
+    const [replies, followers] = await Promise.all([
+      channelMessageRepository.listChannelThreadReplies({
+        rootId: parentId,
+        limit: limit + 1,
+        after: parsedCursor,
+      }),
+      channelMessageRepository.listChannelThreadFollowers(parentId),
+    ]);
 
     const hasMore = replies.length > limit;
     const page = hasMore ? replies.slice(0, limit) : replies;
@@ -87,9 +186,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       ? `${last.createdAt.toISOString()}|${last.id}`
       : null;
 
+    // Reflect the persisted follower row, not just local state, per PR 5's
+    // locked requirement. The follow toggle in the panel header reads this.
+    const isFollowing = followers.includes(userId);
+
     auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'channel_thread', resourceId: parentId, details: { replyCount: page.length } });
 
-    return NextResponse.json({ messages: page, nextCursor, hasMore });
+    return NextResponse.json({ messages: page, nextCursor, hasMore, isFollowing });
   }
 
   // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
@@ -237,6 +340,157 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       lastReplyAt: result.lastReplyAt.toISOString(),
     });
 
+    // PR 5: thread_updated inbox fan-out + selective channel-level bumps.
+    //
+    // Followers of the root receive a `thread_updated` inbox event so they can
+    // surface an unread-thread badge on the channel row WITHOUT bumping the
+    // top-level channel unread (a thread reply is not a top-level message).
+    //
+    // The reply author is excluded — we never notify someone of their own post.
+    // PR 3's `insertChannelThreadReply` upserts `(parentAuthor, replier)` into
+    // `channelThreadFollowers`, so by the time we read followers below, both
+    // the parent author and the current replier are guaranteed to be in the
+    // set; filtering out the replier is what excludes self-notifications.
+    //
+    // Failure handling: any of these broadcasts may fail because the realtime
+    // sidecar is unhealthy. We log and continue — the DB commit is already
+    // durable and a missed inbox bump is recoverable on the next refresh.
+    try {
+      const replyContent = messageContent;
+      const replyPreview = buildPreview(replyContent);
+      const replySender = {
+        id: userId,
+        name:
+          replyWithRelations?.aiMeta?.senderName ||
+          replyWithRelations?.user?.name ||
+          'Member',
+      };
+      const replyCreatedAt = result.lastReplyAt.toISOString();
+
+      const followers = await channelMessageRepository.listChannelThreadFollowers(result.rootId);
+      const followerSet = new Set(followers);
+
+      await Promise.all(
+        followers
+          .filter((followerId: string) => followerId !== userId)
+          .map((followerId: string) =>
+            broadcastInboxEvent(followerId, {
+              operation: 'thread_updated',
+              type: 'channel',
+              id: pageId,
+              rootMessageId: result.rootId,
+              lastReplyAt: replyCreatedAt,
+              lastReplyPreview: replyPreview,
+              lastReplySender: replySender,
+            })
+          )
+      );
+
+      // Channel-level unread for thread replies is suppressed by default;
+      // the two exceptions are (a) `alsoSendToParent` (the mirror is a real
+      // top-level message) and (b) `@`-mentions of users who are NOT followers
+      // of the thread, which need to surface in the channel row's main unread.
+      //
+      // For (b) we use the simpler safe rule from the plan: bump
+      // `channel_updated` for mentioned users specifically (never broadly),
+      // because broad scanning for non-follower mentions is brittle.
+      const channel = await db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { driveId: true, title: true },
+        with: {
+          drive: {
+            columns: { ownerId: true, name: true, slug: true },
+          },
+        },
+      });
+
+      // The mention-targeted bump is only meaningful for thread-only replies.
+      // When `alsoSendToParent` is set, the mirror row triggers the broad
+      // `fanOutChannelInboxUpdate` below, which already reaches every viewable
+      // member including the mentioned user — running this targeted path too
+      // would deliver a duplicate `channel_updated` for the same underlying
+      // event, inflating the recipient's unread count by 2 instead of 1.
+      const isThreadOnlyReply = !mirrorWithRelations;
+      if (isThreadOnlyReply && replyContent.trim().length > 0 && channel?.driveId) {
+        const mentionedUserIds = extractMentionedUserIds(replyContent);
+        const candidateTargets = mentionedUserIds.filter(
+          (id: string) => id !== userId && !followerSet.has(id)
+        );
+
+        // Mention IDs come from message text, which is sender-controlled — so
+        // before we broadcast a channel_updated payload (which leaks the channel
+        // id, drive id, preview, and sender name), every candidate must pass
+        // the channel's view-permission check. Without this gate a sender could
+        // craft mentions for arbitrary user IDs and surface this channel to
+        // users who have no access.
+        const viewabilityChecks = await Promise.all(
+          candidateTargets.map(async (id: string) => ({
+            id,
+            canView: await canUserViewPage(id, pageId),
+          }))
+        );
+        const mentionTargets = viewabilityChecks
+          .filter((entry) => entry.canView)
+          .map((entry) => entry.id);
+
+        await Promise.all(
+          mentionTargets.map((memberId: string) =>
+            broadcastInboxEvent(memberId, {
+              operation: 'channel_updated',
+              type: 'channel',
+              id: pageId,
+              driveId: channel.driveId!,
+              lastMessageAt: replyCreatedAt,
+              lastMessagePreview: replyPreview,
+              lastMessageSender: replySender.name,
+            })
+          )
+        );
+      }
+
+      if (mirrorWithRelations && channel?.driveId) {
+        const mirrorPreview = buildPreview(replyContent);
+        await fanOutChannelInboxUpdate({
+          pageId,
+          driveId: channel.driveId,
+          driveOwnerId: channel.drive?.ownerId ?? null,
+          senderUserId: userId,
+          lastMessageAt: mirrorWithRelations.createdAt
+            ? new Date(mirrorWithRelations.createdAt).toISOString()
+            : replyCreatedAt,
+          lastMessagePreview: mirrorPreview,
+          lastMessageSender: replySender.name,
+        });
+      }
+
+      // Mention-responder: an @-mentioned AI agent inside a thread should
+      // reply IN THE THREAD, not at the top level. The responder is loaded
+      // dynamically (same as the top-level path) so a build-time circular
+      // dep cannot wire itself in at module load.
+      if (replyContent.trim().length > 0) {
+        void import('@/lib/channels/agent-mention-responder')
+          .then(({ triggerMentionedAgentResponses }) =>
+            triggerMentionedAgentResponses({
+              userId,
+              channelId: pageId,
+              channelTitle: channel?.title || 'Channel',
+              channelType: 'CHANNEL',
+              sourceMessageId: result.reply.id,
+              content: replyContent,
+              parentId: result.rootId,
+              driveId: channel?.driveId || null,
+              driveName: channel?.drive?.name || null,
+              driveSlug: channel?.drive?.slug || null,
+            })
+          )
+          .catch((error) => {
+            loggers.realtime.error('Failed to load channel mention responder module:', error as Error);
+          });
+      }
+    } catch (error) {
+      loggers.realtime.error('Failed to broadcast thread inbox update:', error as Error);
+    }
+
     return NextResponse.json(replyWithRelations, { status: 201 });
   }
 
@@ -317,85 +571,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
 
     if (channel?.driveId) {
-      // Get all drive members
-      const members = await db.query.driveMembers.findMany({
-        where: eq(driveMembers.driveId, channel.driveId),
-        columns: { userId: true },
+      const messagePreview = buildPreview(messageContent);
+
+      await fanOutChannelInboxUpdate({
+        pageId,
+        driveId: channel.driveId,
+        driveOwnerId: channel.drive?.ownerId ?? null,
+        senderUserId: userId,
+        lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
+        lastMessagePreview: messagePreview,
+        lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
       });
-
-      // Include drive owner in recipient list (if not already a member)
-      const driveOwnerId = channel.drive?.ownerId;
-      const memberUserIds = new Set(members.map(m => m.userId));
-      if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
-        members.push({ userId: driveOwnerId });
-      }
-
-      // Create message preview
-      const messagePreview = messageContent.length > 100
-        ? messageContent.substring(0, 100) + '...'
-        : messageContent;
-
-      // Batch permission check: mirrors getUserAccessLevel logic from @pagespace/lib.
-      // If that logic changes (e.g. new roles), update this batch version in sync.
-      // Drive owner and admins always have access; others need explicit page permissions.
-      const otherMemberIds = members
-        .filter(m => m.userId !== userId)
-        .map(m => m.userId);
-
-      let viewableUserIds: Set<string>;
-      if (otherMemberIds.length === 0) {
-        viewableUserIds = new Set();
-      } else {
-        // Drive owner always has access
-        viewableUserIds = new Set<string>();
-        if (driveOwnerId && otherMemberIds.includes(driveOwnerId)) {
-          viewableUserIds.add(driveOwnerId);
-        }
-
-        // Drive admins always have access
-        const adminMembers = await db.select({ userId: driveMembers.userId })
-          .from(driveMembers)
-          .where(and(
-            eq(driveMembers.driveId, channel.driveId),
-            inArray(driveMembers.userId, otherMemberIds),
-            eq(driveMembers.role, 'ADMIN')
-          ));
-        for (const admin of adminMembers) {
-          viewableUserIds.add(admin.userId);
-        }
-
-        // Check explicit page permissions for remaining members
-        const remainingIds = otherMemberIds.filter(id => !viewableUserIds.has(id));
-        if (remainingIds.length > 0) {
-          const permittedMembers = await db.select({ userId: pagePermissions.userId })
-            .from(pagePermissions)
-            .where(and(
-              eq(pagePermissions.pageId, pageId),
-              inArray(pagePermissions.userId, remainingIds),
-              eq(pagePermissions.canView, true),
-              or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
-            ));
-          for (const pm of permittedMembers) {
-            viewableUserIds.add(pm.userId);
-          }
-        }
-      }
-
-      const broadcastPromises = otherMemberIds
-        .filter(id => viewableUserIds.has(id))
-        .map(memberId =>
-          broadcastInboxEvent(memberId, {
-            operation: 'channel_updated',
-            type: 'channel',
-            id: pageId,
-            driveId: channel.driveId,
-            lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
-            lastMessagePreview: messagePreview,
-            lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
-          })
-        );
-
-      await Promise.all(broadcastPromises);
 
       // Broadcast read status change to sender to update their unread count
       await broadcastInboxEvent(userId, {
