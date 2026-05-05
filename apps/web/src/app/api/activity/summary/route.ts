@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, sql, count, isNotNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, sql, count, isNotNull, isNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
@@ -116,7 +116,10 @@ export async function GET(req: Request) {
             sql`${directMessages.conversationId} IN (${sql.join(conversationIds.map(id => sql`${id}`), sql`, `)})`,
             ne(directMessages.senderId, userId),
             eq(directMessages.isRead, false),
-            eq(directMessages.isActive, true)
+            eq(directMessages.isActive, true),
+            // Exclude thread replies — activity summary unread count must
+            // match the inbox unread badge.
+            isNull(directMessages.parentId)
           )
         );
       unreadCount = unreadResult?.count ?? 0;

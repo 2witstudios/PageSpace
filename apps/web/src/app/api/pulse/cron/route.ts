@@ -427,7 +427,10 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
           inArray(directMessages.conversationId, conversationIds),
           ne(directMessages.senderId, userId),
           eq(directMessages.isRead, false),
-          eq(directMessages.isActive, true)
+          eq(directMessages.isActive, true),
+          // Exclude thread replies — pulse cron summary should reflect the
+          // conversation stream, not panel-only thread replies.
+          isNull(directMessages.parentId)
         )
       )
       .orderBy(desc(directMessages.createdAt))

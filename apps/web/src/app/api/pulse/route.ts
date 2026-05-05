@@ -181,7 +181,9 @@ export async function GET(req: Request) {
       pagesTodayArr,
       pagesWeekArr,
     ] = await Promise.all([
-      // Unread messages
+      // Unread messages — exclude thread replies (parentId IS NOT NULL) so the
+      // pulse unread count matches the inbox unread count. Thread replies live
+      // in the panel; PR 5 will reintroduce per-follower thread bumps.
       conversationIds.length > 0
         ? db.select({ count: count() })
             .from(directMessages)
@@ -190,7 +192,8 @@ export async function GET(req: Request) {
                 inArray(directMessages.conversationId, conversationIds),
                 ne(directMessages.senderId, userId),
                 eq(directMessages.isRead, false),
-                eq(directMessages.isActive, true)
+                eq(directMessages.isActive, true),
+                isNull(directMessages.parentId)
               )
             )
         : Promise.resolve([{ count: 0 }]),

@@ -62,6 +62,11 @@ async function fetchDMConversations(userId: string) {
       ORDER BY c."lastMessageAt" DESC NULLS LAST
     ),
     unread_counts AS (
+      -- parentId IS NULL filter excludes thread replies from the inbox unread
+      -- count. Thread replies are panel-only by default; PR 5 will reintroduce
+      -- per-follower thread inbox bumps via thread_updated. Without this
+      -- filter, any new thread reply would inflate the conversation's unread
+      -- badge regardless of whether the user follows the thread.
       SELECT
         dm."conversationId",
         COUNT(*) as unread_count
@@ -70,6 +75,7 @@ async function fetchDMConversations(userId: string) {
       WHERE dm."senderId" = cd.other_user_id
         AND dm."isRead" = false
         AND dm."isActive" = true
+        AND dm."parentId" IS NULL
       GROUP BY dm."conversationId"
     )
     SELECT
@@ -146,12 +152,17 @@ async function fetchChannelsWithLastMessage(userId: string) {
         )
     ),
     latest_messages AS (
+      -- parentId IS NULL excludes thread replies from "last message" in the
+      -- channel inbox row. A thread reply belongs to the panel, not the main
+      -- stream, so it must not become the visible "last message" on the
+      -- channel card.
       SELECT DISTINCT ON (cm."pageId")
         cm."pageId",
         cm.content as last_message,
         cm."createdAt" as last_message_at
       FROM channel_messages cm
       INNER JOIN user_channels uc ON cm."pageId" = uc.id
+      WHERE cm."parentId" IS NULL
       ORDER BY cm."pageId", cm."createdAt" DESC
     )
     SELECT
