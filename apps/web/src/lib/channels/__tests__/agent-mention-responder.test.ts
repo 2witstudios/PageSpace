@@ -407,6 +407,25 @@ describe('agent-mention-responder', () => {
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
     expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
   });
+
+  it('given askAgentExecute returns a result with a wrong-typed success field, persists nothing and skips', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    // Predicate must reject `success: 'true'` (string) — locks in the strict-type
+    // checks end-to-end, not just at the unit level.
+    mockAskAgentExecute.mockResolvedValueOnce({ success: 'true', response: 'ok' });
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe('isAskAgentResult', () => {

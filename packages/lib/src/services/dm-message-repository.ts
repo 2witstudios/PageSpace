@@ -12,6 +12,10 @@ import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelec
 import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
+// Mirrors `messageWith` in channel-message-repository.ts. Kept duplicated
+// because the author relation is named differently (`sender` here vs `user`
+// there) and the column lists are short enough that a shared helper would
+// only obscure the intent.
 const dmMessageWith = {
   sender: {
     columns: {

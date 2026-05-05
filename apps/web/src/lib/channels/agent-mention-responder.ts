@@ -51,13 +51,17 @@ interface AskAgentResult {
   error?: string;
 }
 
+// Recognizes the AskAgentResult contract — a non-null object that has at least
+// one of the three declared keys, each of which (if present) carries the right
+// primitive type. The downstream `!success || !response` gate handles the
+// shape-valid-but-empty case (e.g. `{ success: true }` with no response); this
+// predicate's job is solely to reject foreign shapes the cast would have
+// accepted blindly.
 export function isAskAgentResult(value: unknown): value is AskAgentResult {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
-  // Each declared field is optional, so undefined is allowed; any other
-  // non-matching type rejects the shape.
   if (candidate.success !== undefined && typeof candidate.success !== 'boolean') {
     return false;
   }
