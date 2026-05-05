@@ -37,6 +37,14 @@ export interface ChannelInputFooterProps {
   attachmentsEnabled?: boolean;
   /** Whether input is disabled */
   disabled?: boolean;
+  /** Render the "Also send to {parent}" checkbox (thread composer only) */
+  alsoSendToParentEnabled?: boolean;
+  /** Label shown next to the also-send checkbox (e.g. "Also send to channel") */
+  alsoSendToParentLabel?: string;
+  /** Current checkbox value */
+  alsoSendToParent?: boolean;
+  /** Checkbox change handler */
+  onAlsoSendToParentChange?: (checked: boolean) => void;
   /** Additional class names */
   className?: string;
 }
@@ -73,6 +81,10 @@ export function ChannelInputFooter({
   onMentionClick,
   attachmentsEnabled = false,
   disabled = false,
+  alsoSendToParentEnabled = false,
+  alsoSendToParentLabel = 'Also send to channel',
+  alsoSendToParent = false,
+  onAlsoSendToParentChange,
   className,
 }: ChannelInputFooterProps) {
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -196,8 +208,26 @@ export function ChannelInputFooter({
         </EmojiPickerPopover>
       </div>
 
-      {/* Right group - Attachments (future) */}
-      <div className="flex items-center gap-1">
+      {/* Right group - Attachments + thread also-send toggle */}
+      <div className="flex items-center gap-2">
+        {alsoSendToParentEnabled && (
+          <label
+            className={cn(
+              'flex items-center gap-1.5 text-xs text-muted-foreground select-none',
+              disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+            )}
+          >
+            <input
+              type="checkbox"
+              data-testid="also-send-to-parent"
+              checked={alsoSendToParent}
+              disabled={disabled}
+              onChange={(e) => onAlsoSendToParentChange?.(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-border accent-primary"
+            />
+            {alsoSendToParentLabel}
+          </label>
+        )}
         {attachmentsEnabled && (
           <Tooltip>
             <TooltipTrigger asChild>

@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { Hash, ExternalLink, Lock, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import { Hash, ExternalLink, Lock, Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -14,7 +14,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
-import { ChannelInput, type ChannelInputRef, type FileAttachment } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
+import { type ChannelInputRef, type FileAttachment } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
+import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
@@ -31,6 +32,11 @@ import {
   type AttachmentMeta,
   type FileRelation,
 } from '@/lib/attachment-utils';
+import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
+import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { useMobile } from '@/hooks/useMobile';
+import { formatDistanceToNow } from 'date-fns';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -64,6 +70,9 @@ interface MessageWithUser {
     agentPageId?: string;
   } | null;
   editedAt?: string | null;
+  parentId?: string | null;
+  replyCount?: number;
+  lastReplyAt?: string | null;
 }
 
 interface Page {
@@ -94,6 +103,30 @@ export default function InboxChannelPage() {
   const connect = useSocketStore((state) => state.connect);
   const { permissions } = usePermissions(pageId);
   const canEdit = permissions?.canEdit || false;
+  const isMobile = useMobile();
+
+  // Thread panel state — generic across channels and DMs.
+  const threadPanelOpen = useThreadPanelStore((state) => state.open);
+  const threadPanelSource = useThreadPanelStore((state) => state.source);
+  const threadPanelContextId = useThreadPanelStore((state) => state.contextId);
+  const threadPanelParentId = useThreadPanelStore((state) => state.parentId);
+  const openThread = useThreadPanelStore((state) => state.openThread);
+  const closeThread = useThreadPanelStore((state) => state.close);
+
+  // Close any open thread when the user navigates between channels — the
+  // store is global, so a stale parentId from a previous page would render
+  // a panel against an unrelated message list otherwise.
+  useEffect(() => {
+    closeThread();
+    // Only fire on context switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId]);
+
+  const isThreadVisible =
+    threadPanelOpen &&
+    threadPanelSource === 'channel' &&
+    threadPanelContextId === pageId &&
+    !!threadPanelParentId;
 
   // Fetch page details
   const { data: page, error: pageError } = useSWR<Page>(
@@ -142,6 +175,10 @@ export default function InboxChannelPage() {
     socket.emit('join_channel', pageId);
 
     const handleNewMessage = (message: MessageWithUser) => {
+      // Thread replies live on the same room but belong to the panel — keep
+      // them out of the top-level stream. The panel listens to the same
+      // event and filters to its open root.
+      if (message.parentId) return;
       setMessages((prev) => {
         if (prev.find((m) => m.id === message.id)) {
           return prev;
@@ -150,10 +187,26 @@ export default function InboxChannelPage() {
       });
     };
 
+    const handleThreadCountUpdated = (data: {
+      rootId: string;
+      replyCount: number;
+      lastReplyAt: string;
+    }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.rootId
+            ? { ...m, replyCount: data.replyCount, lastReplyAt: data.lastReplyAt }
+            : m,
+        ),
+      );
+    };
+
     socket.on('new_message', handleNewMessage);
+    socket.on('thread_reply_count_updated', handleThreadCountUpdated);
 
     return () => {
       socket.off('new_message', handleNewMessage);
+      socket.off('thread_reply_count_updated', handleThreadCountUpdated);
     };
   }, [socket, connectionStatus, pageId]);
 
@@ -168,21 +221,24 @@ export default function InboxChannelPage() {
     }
   }, [messages]);
 
-  const handleSubmit = async (content: string, attachment?: FileAttachment) => {
+  const handleTopLevelSubmit = async ({
+    content,
+    attachment,
+  }: {
+    content: string;
+    attachment?: FileAttachment;
+  }) => {
     if (!user || !pageId) return;
-
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
 
-    const messageContent = typeof content === 'string' ? content : JSON.stringify(content);
-
     const tempId = `temp-${Date.now()}`;
     const optimisticMessage: MessageWithUser = {
       id: tempId,
       pageId,
-      content: messageContent,
+      content,
       userId: user.id,
       createdAt: new Date(),
       role: 'user',
@@ -194,42 +250,37 @@ export default function InboxChannelPage() {
         image: null,
       },
       fileId: attachment?.id || null,
-      attachmentMeta: attachment ? {
-        originalName: attachment.originalName,
-        size: attachment.size,
-        mimeType: attachment.mimeType,
-        contentHash: attachment.contentHash,
-      } : null,
+      attachmentMeta: attachment
+        ? {
+            originalName: attachment.originalName,
+            size: attachment.size,
+            mimeType: attachment.mimeType,
+            contentHash: attachment.contentHash,
+          }
+        : null,
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
+    setInputValue('');
+    channelInputRef.current?.clear();
 
     try {
       await post(`/api/channels/${pageId}/messages`, {
-        content: messageContent,
+        content,
         fileId: attachment?.id,
-        attachmentMeta: attachment ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        } : undefined,
+        attachmentMeta: attachment
+          ? {
+              originalName: attachment.originalName,
+              size: attachment.size,
+              mimeType: attachment.mimeType,
+              contentHash: attachment.contentHash,
+            }
+          : undefined,
       });
     } catch (error) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
     }
-  };
-
-  const handleSendMessage = (attachment?: FileAttachment) => {
-    if (!inputValue.trim() && !attachment) return;
-    if (!canEdit) {
-      toast.error(getPermissionErrorMessage('send', 'channel'));
-      return;
-    }
-    handleSubmit(inputValue, attachment);
-    channelInputRef.current?.clear();
-    setInputValue('');
   };
 
   const handleRefresh = useCallback(async () => {
@@ -455,8 +506,77 @@ export default function InboxChannelPage() {
     );
   }
 
+  const threadParent = isThreadVisible
+    ? messages.find((m) => m.id === threadPanelParentId) ?? null
+    : null;
+
+  const renderParentSlot = () => {
+    if (!threadParent) {
+      return (
+        <div className="text-sm text-muted-foreground italic">
+          Original message unavailable
+        </div>
+      );
+    }
+    const m = threadParent;
+    const isAi = !!m.aiMeta;
+    const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;
+    const avatarFallback = isAi
+      ? m.aiMeta!.senderType === 'agent'
+        ? 'A'
+        : m.aiMeta!.senderName?.[0]
+      : m.user?.name?.[0];
+    return (
+      <div className="flex items-start gap-3">
+        <Avatar className="shrink-0">
+          {!isAi && <AvatarImage src={m.user?.image || ''} />}
+          <AvatarFallback>{avatarFallback}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-sm">{displayName}</span>
+            <span className="text-xs text-muted-foreground">
+              {new Date(m.createdAt).toLocaleTimeString()}
+            </span>
+          </div>
+          {m.content && (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <StreamingMarkdown content={m.content} isStreaming={false} />
+            </div>
+          )}
+          <MessageAttachment message={m} />
+        </div>
+      </div>
+    );
+  };
+
+  const resolveThreadAuthor = (authorId: string | null | undefined, fallbackName?: string | null) => {
+    const fromList = messages.find((mm) => mm.userId === authorId);
+    if (fromList?.user) {
+      return { name: fromList.user.name, image: fromList.user.image };
+    }
+    if (authorId === user?.id) {
+      return { name: user?.name ?? 'You', image: null };
+    }
+    return { name: fallbackName ?? 'Member', image: null };
+  };
+
+  const threadPanel = isThreadVisible && threadPanelParentId ? (
+    <ThreadPanel
+      source="channel"
+      contextId={pageId}
+      parentId={threadPanelParentId}
+      currentUserId={user?.id ?? null}
+      parentSlot={renderParentSlot()}
+      resolveAuthor={resolveThreadAuthor}
+      replyCountHint={threadParent?.replyCount}
+      onClose={closeThread}
+    />
+  ) : null;
+
   return (
-    <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full">
+    <div className="flex h-full w-full">
+    <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-border p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
@@ -510,8 +630,9 @@ export default function InboxChannelPage() {
                   : m.user?.name?.[0];
 
                 const isOwnMessage = !isAi && m.userId === user?.id;
+                const replyCount = m.replyCount ?? 0;
                 return (
-                <div key={m.id} className="flex items-start gap-4">
+                <div key={m.id} className="group/msg flex items-start gap-4">
                   <Avatar className="shrink-0">
                     {!isAi && <AvatarImage src={m.user?.image || ''} />}
                     <AvatarFallback>{avatarFallback}</AvatarFallback>
@@ -530,12 +651,26 @@ export default function InboxChannelPage() {
                       {m.editedAt && (
                         <span className="text-xs text-muted-foreground italic">(Edited)</span>
                       )}
+                      <div className="ml-auto flex items-center gap-1">
+                        {!isAi && !m.id.startsWith('temp-') && (
+                          <button
+                            type="button"
+                            aria-label="Reply in thread"
+                            data-testid={`reply-in-thread-${m.id}`}
+                            onClick={() =>
+                              openThread({ source: 'channel', contextId: pageId, parentId: m.id })
+                            }
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <MessageSquareReply size={14} aria-hidden />
+                          </button>
+                        )}
                       {isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <button
                               aria-label="Message options"
-                              className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                               type="button"
                             >
                               <MoreHorizontal size={14} aria-hidden />
@@ -557,6 +692,7 @@ export default function InboxChannelPage() {
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
+                      </div>
                     </div>
                     {editingMessageId === m.id ? (
                       <div className="mt-1 flex flex-col gap-2">
@@ -601,6 +737,21 @@ export default function InboxChannelPage() {
                       </div>
                     ) : null}
                     <MessageAttachment message={m} />
+                    {replyCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openThread({ source: 'channel', contextId: pageId, parentId: m.id })
+                        }
+                        data-testid={`thread-footer-${m.id}`}
+                        className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+                        {m.lastReplyAt
+                          ? ` · last reply ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                          : ''}
+                      </button>
+                    )}
                     {/* Reactions */}
                     {user && !m.id.startsWith('temp-') && (
                       <MessageReactions
@@ -624,14 +775,14 @@ export default function InboxChannelPage() {
       <div className="flex-shrink-0 border-t border-border p-4">
         <div className="max-w-4xl mx-auto">
           {canEdit ? (
-            <ChannelInput
+            <MessageInput
               ref={channelInputRef}
+              source="channel"
+              contextId={page.id}
               value={inputValue}
               onChange={setInputValue}
-              onSend={handleSendMessage}
-              placeholder="Type a message... (use @ to mention, supports **markdown**)"
+              onSubmit={handleTopLevelSubmit}
               driveId={page.driveId}
-              channelId={page.id}
               attachmentsEnabled
             />
           ) : (
@@ -645,5 +796,19 @@ export default function InboxChannelPage() {
         </div>
       </div>
     </MessageDropZone>
+    {threadPanel && !isMobile && (
+      <div className="hidden md:flex w-[420px] shrink-0 h-full">
+        {threadPanel}
+      </div>
+    )}
+    {threadPanel && isMobile && (
+      <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
+        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+          <SheetTitle className="sr-only">Thread</SheetTitle>
+          {threadPanel}
+        </SheetContent>
+      </Sheet>
+    )}
+    </div>
   );
 }
