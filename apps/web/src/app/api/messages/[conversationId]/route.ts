@@ -31,7 +31,9 @@ export async function GET(
       max: 100,
     });
     const beforeParam = searchParams.get('before');
-    const parentId = searchParams.get('parentId');
+    const cursorParam = searchParams.get('cursor');
+    const rawParentId = searchParams.get('parentId');
+    const parentId = rawParentId ? rawParentId.trim() : '';
     let before: Date | undefined;
     if (beforeParam) {
       before = new Date(beforeParam);
@@ -41,6 +43,20 @@ export async function GET(
           { status: 400 }
         );
       }
+    }
+
+    let parsedAfter: { createdAt: Date; id: string } | undefined;
+    if (cursorParam) {
+      const sep = cursorParam.lastIndexOf('|');
+      if (sep === -1) {
+        return NextResponse.json({ error: 'Invalid cursor format' }, { status: 400 });
+      }
+      const cursorDate = new Date(cursorParam.slice(0, sep));
+      const cursorId = cursorParam.slice(sep + 1);
+      if (Number.isNaN(cursorDate.getTime()) || !cursorId) {
+        return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+      }
+      parsedAfter = { createdAt: cursorDate, id: cursorId };
     }
 
     const conversation = await dmMessageRepository.findConversationForParticipant(
@@ -57,9 +73,10 @@ export async function GET(
 
     // Thread-replies branch: caller is opening a thread panel and wants the
     // ascending list of replies for one parent. The parent must belong to this
-    // conversation and itself be top-level. Mark-as-read is intentionally
-    // NOT triggered here — that belongs to the conversation stream, not the
-    // panel.
+    // conversation and itself be top-level. `findActiveMessage` already filters
+    // isActive=true, so a soft-deleted parent surfaces as 404 here. Mark-as-read
+    // is intentionally NOT triggered — that belongs to the conversation stream,
+    // not the panel.
     if (parentId) {
       const parent = await dmMessageRepository.findActiveMessage({
         messageId: parentId,
@@ -80,17 +97,26 @@ export async function GET(
 
       const replies = await dmMessageRepository.listDmThreadReplies({
         rootId: parentId,
-        limit,
+        limit: limit + 1,
+        after: parsedAfter,
       });
+
+      const hasMore = replies.length > limit;
+      const page = hasMore ? replies.slice(0, limit) : replies;
+      const last = page[page.length - 1];
+      const nextCursor = hasMore && last
+        ? `${last.createdAt.toISOString()}|${last.id}`
+        : null;
 
       auditRequest(request, {
         eventType: 'data.read',
         userId,
         resourceType: 'dm_thread',
         resourceId: parentId,
+        details: { replyCount: page.length },
       });
 
-      return NextResponse.json({ messages: replies });
+      return NextResponse.json({ messages: page, nextCursor, hasMore });
     }
 
     const messages = await dmMessageRepository.listActiveMessages({
@@ -194,7 +220,8 @@ export async function POST(
     const content = rawContent.trim().length > 0 ? rawContent : '';
     const fileId = typeof body.fileId === 'string' && body.fileId.length > 0 ? body.fileId : null;
     const rawAttachmentMeta = body.attachmentMeta ?? null;
-    const parentId = typeof body.parentId === 'string' && body.parentId.length > 0 ? body.parentId : null;
+    const trimmedParent = typeof body.parentId === 'string' ? body.parentId.trim() : '';
+    const parentId = trimmedParent.length > 0 ? trimmedParent : null;
     const alsoSendToParent = body.alsoSendToParent === true;
 
     if (content.length === 0 && !fileId) {
@@ -340,6 +367,8 @@ export async function POST(
         try {
           // Two events with distinct ids — clients dedupe on id, so a viewer of
           // both the thread panel and parent stream receives both copies cleanly.
+          // 5s timeout matches broadcastThreadReplyCountUpdated — an unhealthy
+          // realtime server must not stall the API response after the commit.
           const threadBody = JSON.stringify({
             channelId: `dm:${conversationId}`,
             event: 'new_dm_message',
@@ -349,6 +378,7 @@ export async function POST(
             method: 'POST',
             headers: createSignedBroadcastHeaders(threadBody),
             body: threadBody,
+            signal: AbortSignal.timeout(5000),
           });
 
           if (result.mirror) {
@@ -361,10 +391,11 @@ export async function POST(
               method: 'POST',
               headers: createSignedBroadcastHeaders(mirrorBody),
               body: mirrorBody,
+              signal: AbortSignal.timeout(5000),
             });
           }
         } catch (error) {
-          loggers.realtime?.error?.('Failed to broadcast DM thread reply to socket server:', error as Error);
+          loggers.realtime.error('Failed to broadcast DM thread reply to socket server:', error as Error);
         }
       }
 

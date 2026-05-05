@@ -180,6 +180,7 @@ describe('GET /api/channels/[pageId]/messages', () => {
       id: PARENT_ID,
       pageId: PAGE_ID,
       parentId: null,
+      isActive: true,
     });
     mockListChannelThreadReplies.mockResolvedValueOnce([]);
 
@@ -201,11 +202,26 @@ describe('GET /api/channels/[pageId]/messages', () => {
     expect(mockListChannelThreadReplies).not.toHaveBeenCalled();
   });
 
+  it('returns 404 when ?parentId= refers to a soft-deleted parent (clients cannot enumerate replies of a tombstoned thread)', async () => {
+    mockFindChannelMessageInPage.mockResolvedValueOnce({
+      id: PARENT_ID,
+      pageId: PAGE_ID,
+      parentId: null,
+      isActive: false,
+    });
+
+    const res = await callGet(`?parentId=${PARENT_ID}`);
+
+    expect(res.status).toBe(404);
+    expect(mockListChannelThreadReplies).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when ?parentId= refers to a message that is itself a reply (depth-2 fetch)', async () => {
     mockFindChannelMessageInPage.mockResolvedValueOnce({
       id: PARENT_ID,
       pageId: PAGE_ID,
       parentId: 'some-other-parent',
+      isActive: true,
     });
 
     const res = await callGet(`?parentId=${PARENT_ID}`);

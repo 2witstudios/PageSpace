@@ -38,7 +38,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Pagination params
   const { searchParams } = new URL(req.url);
   const cursor = searchParams.get('cursor');
-  const parentId = searchParams.get('parentId');
+  const rawParentId = searchParams.get('parentId');
+  const parentId = rawParentId ? rawParentId.trim() : '';
   const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 200);
 
   let parsedCursor: { createdAt: Date; id: string } | undefined;
@@ -57,13 +58,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   // Thread-replies branch: caller is opening a thread panel and wants the
   // ascending list of replies to a single top-level parent. The parent must
-  // belong to this page and itself be top-level (depth-1 only).
+  // belong to this page, be active, and itself be top-level (depth-1 only).
   if (parentId) {
     const parent = await channelMessageRepository.findChannelMessageInPage({
       messageId: parentId,
       pageId,
     });
-    if (!parent) {
+    // Treat soft-deleted parents the same as missing parents — clients should
+    // not be able to enumerate replies of a tombstoned thread root.
+    if (!parent || !parent.isActive) {
       return NextResponse.json({ error: 'Parent message not found in this channel' }, { status: 404 });
     }
     if (parent.parentId !== null) {
@@ -131,7 +134,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }, { status: 403 });
   }
 
-  const { content, fileId, attachmentMeta, parentId, alsoSendToParent } = await req.json() as {
+  const { content, fileId, attachmentMeta, parentId: rawParentId, alsoSendToParent } = await req.json() as {
     content: string;
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
@@ -139,6 +142,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     alsoSendToParent?: boolean;
   };
   const messageContent = typeof content === 'string' ? content : '';
+  const parentId = typeof rawParentId === 'string' ? rawParentId.trim() : '';
 
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
@@ -156,7 +160,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // transactional helper that bumps replyCount + lastReplyAt and upserts
   // followers in one shot. Mirror copy (alsoSendToParent) writes a second
   // top-level row so the parent stream sees it too.
-  if (typeof parentId === 'string' && parentId.length > 0) {
+  if (parentId.length > 0) {
     const result = await channelMessageRepository.insertChannelThreadReply({
       parentId,
       pageId,
@@ -193,6 +197,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       try {
         // Two events with distinct ids — clients dedupe on id, so a viewer of
         // both the thread panel and parent stream receives both copies cleanly.
+        // 5s timeout matches broadcastThreadReplyCountUpdated and the other
+        // socket-utils helpers — an unhealthy realtime server must not stall
+        // the API response after the DB commit.
         const thread = JSON.stringify({
           channelId: pageId,
           event: 'new_message',
@@ -202,6 +209,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           method: 'POST',
           headers: createSignedBroadcastHeaders(thread),
           body: thread,
+          signal: AbortSignal.timeout(5000),
         });
 
         if (mirrorWithRelations) {
@@ -214,6 +222,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             method: 'POST',
             headers: createSignedBroadcastHeaders(mirror),
             body: mirror,
+            signal: AbortSignal.timeout(5000),
           });
         }
       } catch (error) {
