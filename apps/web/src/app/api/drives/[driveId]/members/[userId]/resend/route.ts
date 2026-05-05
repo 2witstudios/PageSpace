@@ -152,10 +152,12 @@ export async function POST(
         magicLinkUrl,
       });
     } catch (emailError) {
+      // Don't include recipientEmail in metadata — it's PII and driveId +
+      // targetUserId is enough to triage. (CodeRabbit PR #1245)
       loggers.api.error(
         'Failed to send drive invitation resend email',
         emailError instanceof Error ? emailError : new Error(String(emailError)),
-        { driveId, targetUserId, recipientEmail: targetEmail }
+        { driveId, targetUserId }
       );
       return NextResponse.json(
         { error: 'Failed to send invitation email. Please try again.' },
