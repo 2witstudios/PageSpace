@@ -6,14 +6,15 @@ import * as crypto from 'crypto';
 
 type PushPlatform = 'ios' | 'android' | 'web';
 
-interface PushNotificationPayload {
-  title: string;
-  body: string;
+export interface PushNotificationPayload {
+  title?: string;
+  body?: string;
   badge?: number;
   sound?: string;
   data?: Record<string, unknown>;
   category?: string;
   threadId?: string;
+  silent?: boolean;
 }
 
 interface SendPushResult {
@@ -134,19 +135,36 @@ async function sendToApns(
   try {
     const jwtToken = getApnsJwtToken();
 
-    const apnsPayload = {
-      aps: {
-        alert: {
-          title: payload.title,
-          body: payload.body,
-        },
-        badge: payload.badge,
-        sound: payload.sound || 'default',
-        'thread-id': payload.threadId,
-        category: payload.category,
-      },
-      ...payload.data,
-    };
+    const isSilent = payload.silent === true;
+    const apnsPayload: Record<string, unknown> = isSilent
+      ? {
+          aps: {
+            'content-available': 1,
+            ...(payload.badge !== undefined && { badge: payload.badge }),
+          },
+          ...payload.data,
+        }
+      : {
+          aps: {
+            alert: {
+              title: payload.title ?? '',
+              body: payload.body ?? '',
+            },
+            badge: payload.badge,
+            sound: payload.sound || 'default',
+            'thread-id': payload.threadId,
+            category: payload.category,
+          },
+          ...payload.data,
+        };
+
+    console.log('[APNs] send', {
+      host: apnsHost,
+      bundleId,
+      tokenId,
+      tokenPrefix: deviceToken.slice(0, 8),
+      isSilent,
+    });
 
     const response = await fetch(
       `https://${apnsHost}/3/device/${deviceToken}`,
@@ -155,20 +173,32 @@ async function sendToApns(
         headers: {
           'authorization': `bearer ${jwtToken}`,
           'apns-topic': bundleId,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
+          'apns-push-type': isSilent ? 'background' : 'alert',
+          'apns-priority': isSilent ? '5' : '10',
           'content-type': 'application/json',
         },
         body: JSON.stringify(apnsPayload),
       }
     );
 
+    const apnsId = response.headers?.get?.('apns-id') ?? null;
+
     if (response.ok) {
+      console.log('[APNs] accepted', { tokenId, apnsId });
       return { success: true, tokenId };
     }
 
     const errorBody = await response.json().catch(() => ({}));
     const reason = (errorBody as { reason?: string }).reason || 'Unknown error';
+
+    console.error('[APNs] reject', {
+      status: response.status,
+      reason,
+      apnsId,
+      host: apnsHost,
+      bundleId,
+      tokenId,
+    });
 
     // Check if token should be removed (invalid or unregistered)
     const invalidTokenReasons = [
@@ -185,7 +215,12 @@ async function sendToApns(
       shouldRemoveToken: invalidTokenReasons.includes(reason),
     };
   } catch (error) {
-    console.error('APNs send error:', error);
+    console.error('[APNs] send error', {
+      tokenId,
+      host: apnsHost,
+      bundleId,
+      error: error instanceof Error ? error.message : error,
+    });
     return {
       success: false,
       tokenId,
@@ -293,8 +328,16 @@ export async function sendPushNotification(
   });
 
   if (tokens.length === 0) {
+    console.warn('[push] no active tokens', { userId });
     return { sent: 0, failed: 0, errors: [] };
   }
+
+  console.log('[push] dispatching', {
+    userId,
+    tokenCount: tokens.length,
+    platforms: tokens.map((t) => t.platform),
+    silent: payload.silent === true,
+  });
 
   const results: SendPushResult[] = [];
 

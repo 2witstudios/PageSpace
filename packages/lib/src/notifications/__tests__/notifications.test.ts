@@ -132,6 +132,12 @@ function setupDeleteChain() {
 beforeEach(() => {
   vi.clearAllMocks();
   global.fetch = vi.fn().mockResolvedValue({ ok: true });
+
+  // Default db.select chain so getUnreadNotificationCount (used by sendBadgedPush
+  // and sendSilentBadgeUpdate) resolves to 0 unless a test overrides it.
+  const defaultWhereFn = vi.fn().mockResolvedValue([{ count: 0 }]);
+  const defaultFromFn = vi.fn().mockReturnValue({ where: defaultWhereFn });
+  vi.mocked(db.select).mockReturnValue({ from: defaultFromFn } as unknown as ReturnType<typeof db.select>);
 });
 
 describe('createNotification', () => {
@@ -203,9 +209,12 @@ describe('createNotification', () => {
       driveId: 'drive-1',
     });
 
+    // sendBadgedPush is fire-and-forget (awaits unread-count first); flush microtasks.
+    await vi.waitFor(() => expect(sendPushNotification).toHaveBeenCalled());
     expect(sendPushNotification).toHaveBeenCalledWith('user-1', expect.objectContaining({
       title: 'Test',
       body: 'Test message',
+      badge: 0,
     }));
   });
 
@@ -220,6 +229,7 @@ describe('createNotification', () => {
       driveId: 'drive-1',
     });
 
+    await vi.waitFor(() => expect(sendPushNotification).toHaveBeenCalled());
     expect(sendPushNotification).toHaveBeenCalledWith('user-1', expect.objectContaining({
       data: expect.objectContaining({ pageId: 'page-1', driveId: 'drive-1' }),
     }));
