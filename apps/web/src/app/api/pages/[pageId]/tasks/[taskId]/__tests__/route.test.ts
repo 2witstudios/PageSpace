@@ -683,7 +683,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
 
     vi.mocked(db.transaction).mockImplementation(async (callback) => {
-      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...taskWithPage, title: 'New Title' }]);
+      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...taskWithPage, page: { title: 'New Title' } }]);
       const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
       const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
       const txSelectLimit = vi.fn().mockResolvedValue([{ revision: 1 }]);
@@ -700,7 +700,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     });
 
     vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);
-    setupRelationsLookup({ ...taskWithPage, title: 'New Title', assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title' }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(200);
