@@ -2,10 +2,18 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions } from '@pagespace/lib/services/drive-member-service';
+import {
+  checkDriveAccess,
+  getDriveMemberDetails,
+  getMemberPermissions,
+  updateMemberRole,
+  updateMemberPermissions,
+  getDriveRecipientUserIds,
+} from '@pagespace/lib/services/drive-member-service';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
@@ -312,30 +320,52 @@ export async function DELETE(
 
     auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } });
 
-    // Broadcast member removal event
-    await broadcastDriveMemberEvent(
-      createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
-        driveName: access.drive.name,
-      })
-    );
+    // Fan out member_removed to owner + remaining accepted members so any admin
+    // watching the members page sees the row disappear without a manual refresh.
+    // Called after the transaction so the just-removed user is excluded.
+    // Best-effort: the membership delete has already committed, so a transient
+    // failure here must NOT turn a successful removal into a 500 response.
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveMemberEventToRecipients(
+        createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
+          driveName: access.drive.name,
+        }),
+        recipientUserIds
+      );
+    } catch (broadcastError) {
+      loggers.api.error(
+        'Failed to broadcast member_removed (post-commit, non-fatal)',
+        broadcastError instanceof Error ? broadcastError : new Error(String(broadcastError)),
+      );
+    }
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-    // This ensures the user stops receiving updates even if their socket is still connected
-
-    // First, kick from drive-level rooms
-    await Promise.all([
-      kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
-      kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
-    ]);
-
-    // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
-    const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
-    if (drivePages.length > 0) {
-      const pageKickPromises = drivePages.flatMap((page) => [
-        kickUserFromPage(page.id, targetUserId, 'member_removed'),
-        kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
+    // This ensures the user stops receiving updates even if their socket is still connected.
+    // Same best-effort contract as the broadcast above: the membership delete has
+    // already committed, so any post-commit failure here must be logged and not
+    // propagated as a 500 (would falsely signal failure on an applied removal).
+    try {
+      // First, kick from drive-level rooms
+      await Promise.all([
+        kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
+        kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
       ]);
-      await Promise.all(pageKickPromises);
+
+      // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
+      const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
+      if (drivePages.length > 0) {
+        const pageKickPromises = drivePages.flatMap((page) => [
+          kickUserFromPage(page.id, targetUserId, 'member_removed'),
+          kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
+        ]);
+        await Promise.all(pageKickPromises);
+      }
+    } catch (kickError) {
+      loggers.api.error(
+        'Failed to kick user from rooms (post-commit, non-fatal)',
+        kickError instanceof Error ? kickError : new Error(String(kickError)),
+      );
     }
 
     // Note: No in-app notification sent for removal - the broadcast event

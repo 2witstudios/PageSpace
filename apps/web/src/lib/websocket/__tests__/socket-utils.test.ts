@@ -13,14 +13,20 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   })),
 }));
 
+// Hoist a stable realtime logger so tests can assert on its warn/debug calls.
+const loggerSpies = vi.hoisted(() => ({
+  realtimeLogger: {
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+  },
+}));
+
 vi.mock('@pagespace/lib/logging/logger-browser', () => ({
   browserLoggers: {
     realtime: {
-      child: vi.fn(() => ({
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      })),
+      child: vi.fn(() => loggerSpies.realtimeLogger),
     },
   },
 }));
@@ -72,6 +78,10 @@ describe('socket-utils', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loggerSpies.realtimeLogger.warn.mockClear();
+    loggerSpies.realtimeLogger.error.mockClear();
+    loggerSpies.realtimeLogger.debug.mockClear();
+    loggerSpies.realtimeLogger.info.mockClear();
     global.fetch = mockFetch;
     mockFetch.mockResolvedValue({ ok: true });
 
@@ -198,6 +208,53 @@ describe('socket-utils', () => {
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it('given a recipient response with ok=false, should count it as a failure in the warn log', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({ ok: false, status: 502, statusText: 'Bad Gateway' });
+
+      await broadcastDriveEvent(
+        { driveId: 'drive-123', operation: 'updated' },
+        ['user-1', 'user-2']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
+
+    it('given all recipients return ok, should NOT log a warn and should log a debug success', async () => {
+      mockFetch.mockResolvedValue({ ok: true });
+
+      await broadcastDriveEvent(
+        { driveId: 'drive-123', operation: 'updated' },
+        ['user-1', 'user-2']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).not.toHaveBeenCalled();
+      expect(loggerSpies.realtimeLogger.debug).toHaveBeenCalledWith(
+        'Drive event broadcasted to users',
+        expect.objectContaining({ recipientCount: 2 })
+      );
+    });
+
+    it('given a network error on one recipient, should still count it as a failure (parity with !ok)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockRejectedValueOnce(new Error('Network down'));
+
+      await broadcastDriveEvent(
+        { driveId: 'drive-123', operation: 'updated' },
+        ['user-1', 'user-2']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
   });
 
   describe('broadcastDriveMemberEvent', () => {
@@ -277,6 +334,53 @@ describe('socket-utils', () => {
       await expect(
         broadcastDriveMemberEventToRecipients(payload, ['admin-a', 'admin-b'])
       ).resolves.toBeUndefined();
+    });
+
+    it('given a recipient response with ok=false, should count it as a failure in the warn log', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
+
+      await broadcastDriveMemberEventToRecipients(
+        { driveId: 'drive-abc', userId: 'user-actor', operation: 'member_removed' },
+        ['admin-a', 'admin-b']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive member event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
+    });
+
+    it('given all recipients return ok, should NOT log a warn and should log a debug success', async () => {
+      mockFetch.mockResolvedValue({ ok: true });
+
+      await broadcastDriveMemberEventToRecipients(
+        { driveId: 'drive-abc', userId: 'user-actor', operation: 'member_added' },
+        ['admin-a', 'admin-b']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).not.toHaveBeenCalled();
+      expect(loggerSpies.realtimeLogger.debug).toHaveBeenCalledWith(
+        'Drive member event broadcasted to recipients',
+        expect.objectContaining({ recipientCount: 2 })
+      );
+    });
+
+    it('given a network error on one recipient, should still count it as a failure (parity with !ok)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockRejectedValueOnce(new Error('Network down'));
+
+      await broadcastDriveMemberEventToRecipients(
+        { driveId: 'drive-abc', userId: 'user-actor', operation: 'member_removed' },
+        ['admin-a', 'admin-b']
+      );
+
+      expect(loggerSpies.realtimeLogger.warn).toHaveBeenCalledWith(
+        'Some drive member event broadcasts failed',
+        expect.objectContaining({ failedCount: 1, totalCount: 2 })
+      );
     });
   });
 

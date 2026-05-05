@@ -184,6 +184,7 @@ playground.xcworkspace
 .agents/
 .claude/skills/
 .claude/*.local.md
+**/.claude/*.local.md
 .claude/scheduled_tasks.lock
 skills-lock.json
 
