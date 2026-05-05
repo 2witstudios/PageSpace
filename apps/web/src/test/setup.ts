@@ -21,6 +21,22 @@ vi.mock('next/navigation', () => ({
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }))
 
+// jsdom does not implement matchMedia. Provide a permissive default that
+// returns false (i.e. desktop, non-touch) so hooks like useMobile / useTouchDevice
+// can boot during component tests without each test re-stubbing it.
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 // Mock environment variables - only set if not already provided (allows CI to override)
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://test:test@localhost:5432/pagespace_test'
 process.env.CSRF_SECRET = process.env.CSRF_SECRET || 'test-csrf-secret-key-minimum-32-characters'
