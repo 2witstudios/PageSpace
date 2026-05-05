@@ -52,11 +52,13 @@ interface AskAgentResult {
 }
 
 // Recognizes the AskAgentResult contract — a non-null object that has at least
-// one of the three declared keys, each of which (if present) carries the right
-// primitive type. The downstream `!success || !response` gate handles the
-// shape-valid-but-empty case (e.g. `{ success: true }` with no response); this
-// predicate's job is solely to reject foreign shapes the cast would have
-// accepted blindly.
+// one of the three declared keys. Each key's value is checked against its
+// declared primitive type ONLY when the value is not `undefined`; an explicit
+// `undefined` value (with the key present) is treated the same as the key
+// being absent, matching the optional `?` semantics of the interface. The
+// downstream `!success || !response` gate handles the shape-valid-but-empty
+// case (e.g. `{ success: true }` with no response); this predicate's job is
+// solely to reject foreign shapes the cast would have accepted blindly.
 export function isAskAgentResult(value: unknown): value is AskAgentResult {
   if (typeof value !== 'object' || value === null) {
     return false;
