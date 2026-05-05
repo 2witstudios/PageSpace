@@ -105,7 +105,12 @@ function ChannelView({ page }: ChannelViewProps) {
 
     socket.emit('join_channel', page.id);
 
-    const handleNewMessage = (message: MessageWithUser) => {
+    const handleNewMessage = (message: MessageWithUser & { parentId?: string | null }) => {
+      // Thread replies belong to the panel; the main channel stream renders
+      // only top-level messages. PR 4 will surface parentId-bearing rows in
+      // the ThreadPanel; until then, drop them here so the thread API does
+      // not pollute the live channel view of older clients.
+      if (message.parentId) return;
       setMessages((prev) => {
         // If the message is already in the list, don't add it again.
         if (prev.find((m) => m.id === message.id)) {
