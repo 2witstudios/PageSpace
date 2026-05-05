@@ -206,5 +206,33 @@ describe('Drive Member acceptedAt Gate Coverage', () => {
     it('lib coverage scan should discover a non-trivial number of files (sanity check)', () => {
       expect(libFiles.length).toBeGreaterThanOrEqual(50);
     });
+
+    it('lib allow-list should not contain stale entries for files that no longer reference driveMembers', () => {
+      const stale: string[] = [];
+
+      for (const [pattern] of LIB_ACCEPTED_AT_GATE_EXEMPT) {
+        const file = libFiles.find((f) => toLibLogicalPath(f) === pattern);
+        if (!file) {
+          stale.push(`${pattern} (lib file not found)`);
+          continue;
+        }
+        const content = readFileSync(file, 'utf-8');
+        if (!DRIVE_MEMBERS_REFERENCE.test(content)) {
+          stale.push(`${pattern} (no longer references driveMembers)`);
+        }
+      }
+
+      expect(stale).toEqual([]);
+    });
+
+    it('lib allow-list entries should each carry a justification (no empty reasons)', () => {
+      const empty: string[] = [];
+      for (const [pattern, reason] of LIB_ACCEPTED_AT_GATE_EXEMPT) {
+        if (!reason || reason.trim().length < 10) {
+          empty.push(pattern);
+        }
+      }
+      expect(empty).toEqual([]);
+    });
   });
 });
