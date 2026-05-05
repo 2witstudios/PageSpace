@@ -8,7 +8,7 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/per
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
-import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
@@ -38,6 +38,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Pagination params
   const { searchParams } = new URL(req.url);
   const cursor = searchParams.get('cursor');
+  const parentId = searchParams.get('parentId');
   const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 200);
 
   let parsedCursor: { createdAt: Date; id: string } | undefined;
@@ -52,6 +53,40 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
     }
     parsedCursor = { createdAt: cursorDate, id: cursorId };
+  }
+
+  // Thread-replies branch: caller is opening a thread panel and wants the
+  // ascending list of replies to a single top-level parent. The parent must
+  // belong to this page and itself be top-level (depth-1 only).
+  if (parentId) {
+    const parent = await channelMessageRepository.findChannelMessageInPage({
+      messageId: parentId,
+      pageId,
+    });
+    if (!parent) {
+      return NextResponse.json({ error: 'Parent message not found in this channel' }, { status: 404 });
+    }
+    if (parent.parentId !== null) {
+      return NextResponse.json({ error: 'Parent must be a top-level message' }, { status: 400 });
+    }
+
+    const replies = await channelMessageRepository.listChannelThreadReplies({
+      rootId: parentId,
+      limit: limit + 1,
+      after: parsedCursor,
+    });
+
+    const hasMore = replies.length > limit;
+    const page = hasMore ? replies.slice(0, limit) : replies;
+    // Ascending cursor: next page starts strictly after the last row.
+    const last = page[page.length - 1];
+    const nextCursor = hasMore && last
+      ? `${last.createdAt.toISOString()}|${last.id}`
+      : null;
+
+    auditRequest(req, { eventType: 'data.read', userId: auth.userId, resourceType: 'channel_thread', resourceId: parentId, details: { replyCount: page.length } });
+
+    return NextResponse.json({ messages: page, nextCursor, hasMore });
   }
 
   // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
@@ -96,10 +131,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }, { status: 403 });
   }
 
-  const { content, fileId, attachmentMeta } = await req.json() as {
+  const { content, fileId, attachmentMeta, parentId, alsoSendToParent } = await req.json() as {
     content: string;
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
+    parentId?: string;
+    alsoSendToParent?: boolean;
   };
   const messageContent = typeof content === 'string' ? content : '';
 
@@ -113,6 +150,84 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     if (!exists) {
       return NextResponse.json({ error: 'File not found' }, { status: 400 });
     }
+  }
+
+  // Thread reply branch: validate the parent and route through the
+  // transactional helper that bumps replyCount + lastReplyAt and upserts
+  // followers in one shot. Mirror copy (alsoSendToParent) writes a second
+  // top-level row so the parent stream sees it too.
+  if (typeof parentId === 'string' && parentId.length > 0) {
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      parentId,
+      pageId,
+      userId,
+      content: messageContent,
+      fileId: fileId || null,
+      attachmentMeta: attachmentMeta || null,
+      alsoSendToParent: alsoSendToParent === true,
+    });
+
+    if (result.kind === 'parent_not_found') {
+      return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
+    }
+    if (result.kind === 'parent_wrong_page') {
+      return NextResponse.json({ error: 'Parent message belongs to a different channel' }, { status: 400 });
+    }
+    if (result.kind === 'parent_not_top_level') {
+      return NextResponse.json({ error: 'Threads are exactly one level deep' }, { status: 400 });
+    }
+
+    // Sender's own read status — sending counts as reading.
+    await channelMessageRepository.upsertChannelReadStatus({
+      userId,
+      channelId: pageId,
+      readAt: new Date(),
+    });
+
+    const replyWithRelations = await channelMessageRepository.loadChannelMessageWithRelations(result.reply.id);
+    const mirrorWithRelations = result.mirror
+      ? await channelMessageRepository.loadChannelMessageWithRelations(result.mirror.id)
+      : null;
+
+    if (process.env.INTERNAL_REALTIME_URL) {
+      try {
+        // Two events with distinct ids — clients dedupe on id, so a viewer of
+        // both the thread panel and parent stream receives both copies cleanly.
+        const thread = JSON.stringify({
+          channelId: pageId,
+          event: 'new_message',
+          payload: replyWithRelations,
+        });
+        await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(thread),
+          body: thread,
+        });
+
+        if (mirrorWithRelations) {
+          const mirror = JSON.stringify({
+            channelId: pageId,
+            event: 'new_message',
+            payload: mirrorWithRelations,
+          });
+          await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+            method: 'POST',
+            headers: createSignedBroadcastHeaders(mirror),
+            body: mirror,
+          });
+        }
+      } catch (error) {
+        loggers.realtime.error('Failed to broadcast thread reply to socket server:', error as Error);
+      }
+    }
+
+    await broadcastThreadReplyCountUpdated(pageId, {
+      rootId: result.rootId,
+      replyCount: result.replyCount,
+      lastReplyAt: result.lastReplyAt.toISOString(),
+    });
+
+    return NextResponse.json(replyWithRelations, { status: 201 });
   }
 
   const createdMessage = await channelMessageRepository.insertChannelMessage({
