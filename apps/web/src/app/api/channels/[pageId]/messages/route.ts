@@ -12,6 +12,7 @@ import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/web
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
+import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 interface ChannelInboxFanoutInput {
@@ -203,9 +204,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   });
 
   const hasMore = messages.length > limit;
-  const page = hasMore ? messages.slice(0, limit) : messages;
+  const sliced = hasMore ? messages.slice(0, limit) : messages;
   // Reverse to chronological order (oldest first) for display
-  page.reverse();
+  sliced.reverse();
+  // Enrich with denormalized quote snapshots; helper short-circuits when no
+  // row carries a quotedMessageId so this is a no-op for quote-free pages.
+  const page = await attachQuotedMessages(sliced, 'channel');
 
   // Composite cursor: createdAt|id
   const nextCursor = hasMore && page.length > 0
@@ -237,15 +241,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }, { status: 403 });
   }
 
-  const { content, fileId, attachmentMeta, parentId: rawParentId, alsoSendToParent } = await req.json() as {
+  const { content, fileId, attachmentMeta, parentId: rawParentId, alsoSendToParent, quotedMessageId: rawQuotedMessageId } = await req.json() as {
     content: string;
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
     parentId?: string;
     alsoSendToParent?: boolean;
+    quotedMessageId?: string;
   };
   const messageContent = typeof content === 'string' ? content : '';
   const parentId = typeof rawParentId === 'string' ? rawParentId.trim() : '';
+  const quotedMessageId = typeof rawQuotedMessageId === 'string' ? rawQuotedMessageId.trim() : '';
 
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
@@ -256,6 +262,34 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const exists = await channelMessageRepository.fileExists(fileId);
     if (!exists) {
       return NextResponse.json({ error: 'File not found' }, { status: 400 });
+    }
+  }
+
+  // Quote-reply validation. Quotes are top-level only — the quoted message
+  // must (a) belong to this channel, (b) be active, and (c) itself be a
+  // top-level message (parentId IS NULL), mirroring the parent_not_top_level
+  // rule the thread-reply path already enforces. canUserEditPage above
+  // already gated read access to the channel, so no second permission check
+  // is needed for the quoted row.
+  if (quotedMessageId.length > 0) {
+    if (parentId.length > 0) {
+      return NextResponse.json(
+        { error: 'Quote replies cannot be combined with thread replies' },
+        { status: 400 },
+      );
+    }
+    const quoted = await channelMessageRepository.findChannelMessageInPage({
+      messageId: quotedMessageId,
+      pageId,
+    });
+    if (!quoted || !quoted.isActive) {
+      return NextResponse.json({ error: 'Quoted message not found' }, { status: 404 });
+    }
+    if (quoted.parentId !== null) {
+      return NextResponse.json(
+        { error: 'Threads are exactly one level deep' },
+        { status: 400 },
+      );
     }
   }
 
@@ -500,6 +534,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     content: messageContent,
     fileId: fileId || null,
     attachmentMeta: attachmentMeta || null,
+    quotedMessageId: quotedMessageId.length > 0 ? quotedMessageId : null,
   });
 
   // Update sender's read status - sending a message means they've read the channel
@@ -509,7 +544,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     readAt: new Date(),
   });
 
-  const newMessage = await channelMessageRepository.loadChannelMessageWithRelations(createdMessage.id);
+  const baseMessage = await channelMessageRepository.loadChannelMessageWithRelations(createdMessage.id);
+  // Enrich with the quote snapshot so the realtime payload and the JSON
+  // response carry the same denormalized shape the GET list returns.
+  const newMessage = baseMessage
+    ? (await attachQuotedMessages([baseMessage], 'channel'))[0]
+    : null;
 
   // Debug: Check what type the content is
   loggers.realtime.debug('Database returned content type:', { type: typeof newMessage?.content });
@@ -550,6 +590,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       },
     });
 
+    // Note: triggerMentionedAgentResponses scans `messageContent` only — the
+    // user's typed body — so an inline quote that happens to contain an
+    // @-agent mention syntax string in its snapshot snippet does NOT
+    // re-trigger the agent. This is intentional; do not "fix" it.
     if (messageContent.trim().length > 0) {
       void import('@/lib/channels/agent-mention-responder')
         .then(({ triggerMentionedAgentResponses }) =>
