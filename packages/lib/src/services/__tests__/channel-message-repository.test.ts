@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Boundary-level test double: see test-doubles/db.ts for the design rationale
 // (no thenable Drizzle chain mocks; assertions read observable state, not the
 // order of intermediate builder method calls).
-import { testDb, testDbState } from './test-doubles/db';
+import { testDbState } from './test-doubles/db';
 
 vi.mock('@pagespace/db/db', async () => {
   const m = await import('./test-doubles/db');
