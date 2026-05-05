@@ -332,6 +332,127 @@ describe('ThreadPanel', () => {
     });
   });
 
+  it('given a successful POST, should upsert the persisted reply via SWR even when realtime never echoes', async () => {
+    const user = userEvent.setup();
+    postSpy.mockImplementationOnce(async () => ({
+      id: 'r-server',
+      content: 'no echo reply',
+      createdAt: new Date('2026-05-05T12:30:00Z').toISOString(),
+      userId: 'u-self',
+      parentId: 'p1',
+      reactions: [],
+    }));
+    renderPanel({
+      fetcher: vi.fn(async () => ({ messages: [], hasMore: false, nextCursor: null })),
+    });
+
+    await waitFor(() => expect(screen.getByTestId('chat-textarea')).toBeInTheDocument());
+    await user.type(screen.getByTestId('chat-textarea'), 'no echo reply{enter}');
+
+    // POST resolves; no socket event is fired; the persisted row should still
+    // appear and the optimistic temp row should be reconciled away.
+    await waitFor(() => {
+      const replies = screen.getAllByTestId('thread-reply');
+      expect(replies.length).toBe(1);
+    });
+    expect({
+      given: 'a successful POST without realtime echo',
+      should: 'upsert the persisted reply and clear the optimistic temp',
+      actual: screen.getAllByTestId('thread-reply').length,
+      expected: 1,
+    }).toEqual({
+      given: 'a successful POST without realtime echo',
+      should: 'upsert the persisted reply and clear the optimistic temp',
+      actual: 1,
+      expected: 1,
+    });
+  });
+
+  it('given a DM thread send, should accept POST responses wrapped as { message }', async () => {
+    const user = userEvent.setup();
+    postSpy.mockImplementationOnce(async () => ({
+      message: {
+        id: 'r-dm-server',
+        content: 'wrapped reply',
+        createdAt: new Date('2026-05-05T12:31:00Z').toISOString(),
+        senderId: 'u-self',
+        parentId: 'p1',
+      },
+    }));
+    renderPanel({
+      source: 'dm',
+      contextId: 'conv-1',
+      fetcher: vi.fn(async () => ({ messages: [], hasMore: false, nextCursor: null })),
+    });
+
+    await waitFor(() => expect(screen.getByTestId('chat-textarea')).toBeInTheDocument());
+    await user.type(screen.getByTestId('chat-textarea'), 'wrapped reply{enter}');
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('thread-reply').length).toBe(1);
+    });
+    expect({
+      given: 'a DM thread send with { message }-wrapped POST response',
+      should: 'unwrap and upsert the persisted reply',
+      actual: screen.getAllByTestId('thread-reply').length,
+      expected: 1,
+    }).toEqual({
+      given: 'a DM thread send with { message }-wrapped POST response',
+      should: 'unwrap and upsert the persisted reply',
+      actual: 1,
+      expected: 1,
+    });
+  });
+
+  it('given two consecutive optimistic sends with identical content, should drop only one temp per server echo', async () => {
+    const user = userEvent.setup();
+    let postsCount = 0;
+    postSpy.mockImplementation(async () => {
+      // Don't return a usable id — force the panel to wait for the realtime
+      // echo so the assertion is on the per-temp dedup logic, not the
+      // POST-response upsert path.
+      postsCount += 1;
+      return undefined;
+    });
+    renderPanel({
+      fetcher: vi.fn(async () => ({ messages: [], hasMore: false, nextCursor: null })),
+    });
+
+    await waitFor(() => expect(screen.getByTestId('chat-textarea')).toBeInTheDocument());
+    const ta = screen.getByTestId('chat-textarea');
+    await user.type(ta, 'dup{enter}');
+    await user.type(ta, 'dup{enter}');
+
+    await waitFor(() => expect(screen.getAllByTestId('thread-reply').length).toBe(2));
+
+    const handler = mockSocketHandlers.get('new_message');
+    expect(typeof handler).toBe('function');
+    act(() => {
+      handler!({
+        id: 'r-echo-1',
+        content: 'dup',
+        createdAt: new Date().toISOString(),
+        userId: 'u-self',
+        parentId: 'p1',
+      });
+    });
+
+    // After ONE echo: 1 temp dropped, 1 server row added → still 2 visible.
+    await waitFor(() => expect(screen.getAllByTestId('thread-reply').length).toBe(2));
+
+    expect({
+      given: 'two duplicate-content optimistic sends and one realtime echo',
+      should: 'only drop a single optimistic temp (not both)',
+      actual: { posts: postsCount, replies: screen.getAllByTestId('thread-reply').length },
+      expected: { posts: 2, replies: 2 },
+    }).toEqual({
+      given: 'two duplicate-content optimistic sends and one realtime echo',
+      should: 'only drop a single optimistic temp (not both)',
+      actual: { posts: 2, replies: 2 },
+      expected: { posts: 2, replies: 2 },
+    });
+  });
+
   it('given the close button is clicked, should call onClose', async () => {
     const user = userEvent.setup();
     const { onClose } = renderPanel();

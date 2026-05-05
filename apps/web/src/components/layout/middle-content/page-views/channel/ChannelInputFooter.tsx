@@ -211,7 +211,12 @@ export function ChannelInputFooter({
       {/* Right group - Attachments + thread also-send toggle */}
       <div className="flex items-center gap-2">
         {alsoSendToParentEnabled && (
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground select-none cursor-pointer">
+          <label
+            className={cn(
+              'flex items-center gap-1.5 text-xs text-muted-foreground select-none',
+              disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+            )}
+          >
             <input
               type="checkbox"
               data-testid="also-send-to-parent"

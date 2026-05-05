@@ -22,7 +22,7 @@
  * `useEditingStore` automatically by the underlying ChannelInput.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -156,6 +156,14 @@ export function ThreadPanel({
   const [optimisticReplies, setOptimisticReplies] = useState<ThreadReply[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Identity ref guards async work against thread switches: a send may
+  // outlive the panel's current parentId if the user opens another thread
+  // before the network call resolves. The ref reflects the live mount.
+  const activeThreadKeyRef = useRef(`${source}:${contextId}:${parentId}`);
+  useEffect(() => {
+    activeThreadKeyRef.current = `${source}:${contextId}:${parentId}`;
+  }, [source, contextId, parentId]);
+
   const listUrl = buildListUrl(source, contextId, parentId);
   const swrFetcher = useMemo(() => fetcher ?? defaultFetcher, [fetcher]);
 
@@ -189,9 +197,19 @@ export function ThreadPanel({
         },
         { revalidate: false },
       );
-      // Drop a matching optimistic temp row if the server-confirmed version
-      // arrives back via realtime.
-      setOptimisticReplies((prev) => prev.filter((r) => !r.id.startsWith('temp-') || r.content !== raw.content));
+      // Drop ONE matching optimistic temp row when the server-confirmed
+      // version arrives — content+author. Filtering by content alone would
+      // wipe both rows when the user fires the same reply twice in a row.
+      setOptimisticReplies((prev) => {
+        const idx = prev.findIndex(
+          (r) =>
+            r.id.startsWith('temp-') &&
+            r.content === raw.content &&
+            (r.authorId ?? null) === (raw.userId ?? raw.senderId ?? null),
+        );
+        if (idx === -1) return prev;
+        return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+      });
     };
 
     const handleEdited = (data: { messageId: string; content: string; editedAt: string }) => {
@@ -248,6 +266,9 @@ export function ThreadPanel({
       alsoSendToParent: boolean;
     }) => {
       if (!currentUserId) return;
+      // Snapshot the thread identity at send time so async results bound to
+      // the OLD thread can't leak state into a thread the user switched to.
+      const submitThreadKey = `${source}:${contextId}:${parentId}`;
       const tempId = `temp-${Date.now()}`;
       const optimistic: ThreadReply = {
         id: tempId,
@@ -261,19 +282,46 @@ export function ThreadPanel({
       setSubmitError(null);
 
       try {
-        await post(buildPostUrl(source, contextId), {
+        const response = (await post(buildPostUrl(source, contextId), {
           content,
           parentId,
           ...(alsoSendToParent ? { alsoSendToParent: true } : {}),
-        });
+        })) as RawReply | { message: RawReply } | undefined;
+        if (activeThreadKeyRef.current !== submitThreadKey) return;
+        // Use the POST response to upsert the persisted reply directly.
+        // Without this the temp row would stay stuck on "sending…" whenever
+        // realtime broadcast is unavailable (e.g. INTERNAL_REALTIME_URL unset
+        // or socket disconnected) — the websocket echo isn't the only signal.
+        // Channel returns the reply at the top level; DM wraps it in
+        // { message }.
+        const persisted: RawReply | null = response
+          ? 'message' in (response as { message?: RawReply })
+            ? ((response as { message: RawReply }).message ?? null)
+            : ((response as RawReply).id ? (response as RawReply) : null)
+          : null;
+        if (persisted) {
+          mutate(
+            (current) => {
+              const base: ListResponse = current ?? { messages: [], hasMore: false, nextCursor: null };
+              if (base.messages.some((m) => m.id === persisted.id)) return base;
+              return { ...base, messages: [...base.messages, persisted] };
+            },
+            { revalidate: false },
+          );
+          // Remove the specific optimistic row we created for this send;
+          // realtime echo may also fire and target the same tempId, but a
+          // double-removal is a no-op.
+          setOptimisticReplies((prev) => prev.filter((r) => r.id !== tempId));
+        }
       } catch (err) {
         console.error('Thread reply failed', err);
+        if (activeThreadKeyRef.current !== submitThreadKey) return;
         setOptimisticReplies((prev) => prev.filter((r) => r.id !== tempId));
         setDraft(content);
         setSubmitError('Failed to send reply');
       }
     },
-    [currentUserId, source, contextId, parentId],
+    [currentUserId, source, contextId, parentId, mutate],
   );
 
   // Once we have a fetch response, count the actual visible rows (server +
