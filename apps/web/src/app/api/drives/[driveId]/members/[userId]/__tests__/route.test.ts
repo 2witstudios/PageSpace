@@ -1167,6 +1167,40 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       expect(recipientArg).toEqual([]);
     });
 
+    it('should still return 200 if recipient lookup fails post-commit (non-fatal broadcast)', async () => {
+      // Membership delete has already committed (transaction returns); a
+      // transient DB failure during the post-commit recipient lookup must
+      // NOT turn a successful removal into a 500 response.
+      const lookupError = new Error('Transient DB blip');
+      vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(lookupError);
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      // The error is logged but swallowed.
+      expect(loggers.api.error).toHaveBeenCalledWith(
+        'Failed to broadcast member_removed (post-commit, non-fatal)',
+        lookupError,
+      );
+      // Kicks still run after the swallowed broadcast failure.
+      expect(kickUserFromDrive).toHaveBeenCalled();
+    });
+
+    it('should still return 200 if broadcast itself rejects post-commit (non-fatal broadcast)', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockDriveOwnerId]);
+      vi.mocked(broadcastDriveMemberEventToRecipients).mockRejectedValueOnce(
+        new Error('Realtime down')
+      );
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      // Kicks still run after the swallowed broadcast failure.
+      expect(kickUserFromDrive).toHaveBeenCalled();
+    });
+
     it('should kick user from drive rooms', async () => {
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 

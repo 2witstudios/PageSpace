@@ -323,13 +323,22 @@ export async function DELETE(
     // Fan out member_removed to owner + remaining accepted members so any admin
     // watching the members page sees the row disappear without a manual refresh.
     // Called after the transaction so the just-removed user is excluded.
-    const recipientUserIds = await getDriveRecipientUserIds(driveId);
-    await broadcastDriveMemberEventToRecipients(
-      createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
-        driveName: access.drive.name,
-      }),
-      recipientUserIds
-    );
+    // Best-effort: the membership delete has already committed, so a transient
+    // failure here must NOT turn a successful removal into a 500 response.
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveMemberEventToRecipients(
+        createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
+          driveName: access.drive.name,
+        }),
+        recipientUserIds
+      );
+    } catch (broadcastError) {
+      loggers.api.error(
+        'Failed to broadcast member_removed (post-commit, non-fatal)',
+        broadcastError instanceof Error ? broadcastError : new Error(String(broadcastError)),
+      );
+    }
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
     // This ensures the user stops receiving updates even if their socket is still connected
