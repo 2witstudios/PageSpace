@@ -258,12 +258,20 @@ describe('dmMessageRepository lifecycle', () => {
     const setCalls = mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>);
     assert({
       given: 'a restore of a DM thread reply whose parent is still active',
-      should: 'flip isActive=true and increment parent.replyCount in the same tx',
+      should: 'flip isActive=true, reset deletedAt, and increment parent.replyCount in the same tx',
       actual: {
         firstSetIsActive: setCalls[0]?.isActive,
+        // deletedAt MUST be reset on restore — otherwise the retention purge
+        // (filters by deletedAt < olderThan) could either skip the row forever
+        // or purge it unexpectedly when re-soft-deleted.
+        firstSetDeletedAt: setCalls[0]?.deletedAt,
         secondHasReplyCount: 'replyCount' in (setCalls[1] ?? {}),
       },
-      expected: { firstSetIsActive: true, secondHasReplyCount: true },
+      expected: {
+        firstSetIsActive: true,
+        firstSetDeletedAt: null,
+        secondHasReplyCount: true,
+      },
     });
   });
 
