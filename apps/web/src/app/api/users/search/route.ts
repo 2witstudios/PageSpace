@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, ilike } from '@pagespace/db/operators'
+import { eq, and, or, ilike, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
@@ -31,7 +31,10 @@ export async function GET(request: Request) {
     // Only search public profiles or exact email matches
     const searchPattern = `%${query}%`;
 
-    // First, search in user profiles (public only)
+    // First, search in user profiles (public only).
+    // The inner join on users + isNotNull(emailVerified) excludes temp users
+    // created by pending magic-link invites — those accounts have no human
+    // behind them and must not surface as invite targets.
     const profileResults = await db.select({
       userId: userProfiles.userId,
       username: userProfiles.username,
@@ -45,6 +48,7 @@ export async function GET(request: Request) {
     .where(
       and(
         eq(userProfiles.isPublic, true),
+        isNotNull(users.emailVerified),
         or(
           ilike(userProfiles.username, searchPattern),
           ilike(userProfiles.displayName, searchPattern)
@@ -53,14 +57,19 @@ export async function GET(request: Request) {
     )
     .limit(limit);
 
-    // Also search by email (exact match for privacy)
+    // Also search by email (exact match for privacy).
+    // emailVerified IS NOT NULL is the gate that closes Review C1: an admin
+    // searching `bob@example.com` while bob holds only a pending invite from
+    // another drive used to get a clickable result and could fall into the
+    // userId path which auto-accepts. Temp users now stay invisible.
     const emailResults = await db.select({
       userId: users.id,
       email: users.email,
       name: users.name,
+      emailVerified: users.emailVerified,
     })
     .from(users)
-    .where(eq(users.email, query))
+    .where(and(eq(users.email, query), isNotNull(users.emailVerified)))
     .limit(1);
 
     // Combine results, avoiding duplicates
@@ -78,8 +87,11 @@ export async function GET(request: Request) {
       });
     }
 
-    // Add email results if not already in map
+    // Add email results if not already in map.
+    // Defense in depth: even if the DB layer returns an unverified row,
+    // drop it here so search can never surface a temp user.
     for (const result of emailResults) {
+      if (result.emailVerified === null) continue;
       if (!userMap.has(result.userId)) {
         // Check if this user has a profile
         const profile = await db.select()

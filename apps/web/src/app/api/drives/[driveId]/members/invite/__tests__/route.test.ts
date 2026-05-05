@@ -16,6 +16,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     findAdminMembership: vi.fn(),
     findExistingMember: vi.fn(),
     findUserIdByEmail: vi.fn(),
+    findUserVerificationStatusById: vi.fn(),
     findActivePendingMemberByEmail: vi.fn(),
     findInviterDisplay: vi.fn(),
     createDriveMember: vi.fn(),
@@ -192,6 +193,11 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
+    vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
+      email: 'invited@example.com',
+      emailVerified: new Date('2026-01-01'),
+      suspendedAt: null,
+    } as never);
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
     vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
@@ -363,6 +369,110 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(driveInviteRepository.findUserIdByEmail).not.toHaveBeenCalled();
       expect(driveInviteRepository.findActivePendingMemberByEmail).not.toHaveBeenCalled();
+    });
+
+    // Review C1 — closes the path "create temp user via email invite to drive A
+    // → revoke that invite → admin uses /users/search to re-invite by userId on
+    // drive B". Before this gate, the userId path called
+    // createAcceptedMemberWithPermissions on a never-authenticated account.
+    describe('emailVerified gate on userId path (Review C1: temp-user-via-userId-path adversarial path)', () => {
+      it('routes unverified target through invitation flow — must NOT call createAcceptedMemberWithPermissions', async () => {
+        vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
+          email: 'unverified@example.com',
+          emailVerified: null,
+          suspendedAt: null,
+        } as never);
+
+        const response = await POST(
+          buildPost(mockDriveId, {
+            userId: 'temp_user_id',
+            role: 'MEMBER',
+            permissions: [],
+          }),
+          createContext(mockDriveId)
+        );
+        const json = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(json.kind).toBe('invited');
+        expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+        expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+          expect.objectContaining({ acceptedAt: null, role: 'MEMBER', driveId: mockDriveId })
+        );
+        expect(createMagicLinkToken).toHaveBeenCalledWith({
+          email: 'unverified@example.com',
+          expiryMinutes: 60 * 24 * 7,
+        });
+        expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
+          expect.objectContaining({ recipientEmail: 'unverified@example.com' })
+        );
+      });
+
+      it('rejects suspended target user with 403 even on userId path', async () => {
+        vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
+          email: 'banned@example.com',
+          emailVerified: new Date('2026-01-01'),
+          suspendedAt: new Date('2026-02-01'),
+        } as never);
+
+        const response = await POST(
+          buildPost(mockDriveId, { userId: 'suspended_user', role: 'MEMBER', permissions: [] }),
+          createContext(mockDriveId)
+        );
+
+        expect(response.status).toBe(403);
+        expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      });
+
+      it('returns 404 when invited userId resolves to no user record', async () => {
+        vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue(null as never);
+
+        const response = await POST(
+          buildPost(mockDriveId, { userId: 'ghost_user', role: 'MEMBER', permissions: [] }),
+          createContext(mockDriveId)
+        );
+
+        expect(response.status).toBe(404);
+        expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      });
+
+      // Codex P2: unverified-userId-path reroutes to handleEmailPath but used
+      // to hardcode permissions: [], silently dropping caller-supplied page
+      // permissions while returning kind: invited. The fix forwards the
+      // original permissions so the email path's existing 422 fires.
+      it('rejects 422 when permissions[] non-empty on unverified-userId path — adversarial silently-dropped-permissions path', async () => {
+        vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
+          email: 'unverified@example.com',
+          emailVerified: null,
+          suspendedAt: null,
+        } as never);
+
+        const response = await POST(
+          buildPost(mockDriveId, {
+            userId: 'temp_user_id',
+            role: 'MEMBER',
+            permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
+          }),
+          createContext(mockDriveId)
+        );
+
+        expect(response.status).toBe(422);
+        // Critically: nothing should have been written — no token, no member.
+        expect(createMagicLinkToken).not.toHaveBeenCalled();
+        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+        expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+      });
+
+      it('verified target preserves Epic 2 behavior (auto-accept add path)', async () => {
+        // findUserVerificationStatusById defaults to a verified user in beforeEach.
+        const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+        const json = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(json.kind).toBe('added');
+        expect(driveInviteRepository.createAcceptedMemberWithPermissions).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

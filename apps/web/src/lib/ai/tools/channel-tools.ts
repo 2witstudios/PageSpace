@@ -4,7 +4,7 @@ import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/per
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
@@ -192,8 +192,13 @@ export const channelTools = {
         // Broadcast inbox updates to channel members
         try {
           if (channel.driveId) {
+            // Pending admins (acceptedAt IS NULL) must not receive inbox
+            // notifications for channels in a drive they have not joined.
             const members = await db.query.driveMembers.findMany({
-              where: eq(driveMembers.driveId, channel.driveId),
+              where: and(
+                eq(driveMembers.driveId, channel.driveId),
+                isNotNull(driveMembers.acceptedAt)
+              ),
               columns: { userId: true },
             });
 

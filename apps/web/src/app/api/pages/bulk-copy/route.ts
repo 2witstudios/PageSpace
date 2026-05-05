@@ -4,7 +4,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators'
+import { and, eq, inArray, desc, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
@@ -62,10 +62,14 @@ export async function POST(request: Request) {
     let canEditDrive = isOwner;
 
     if (!isOwner) {
+      // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
+      // would otherwise pass the role check and be allowed to write into a
+      // drive they have not accepted into. Closes Review C2.
       const membership = await db.query.driveMembers.findFirst({
         where: and(
           eq(driveMembers.driveId, targetDriveId),
-          eq(driveMembers.userId, userId)
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
         ),
       });
       canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';

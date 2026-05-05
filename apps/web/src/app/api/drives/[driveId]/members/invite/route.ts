@@ -167,9 +167,50 @@ async function handleUserIdPath(args: {
   // Set when we arrived here via an email-payload fall-through. Lets the
   // audit trail record the original email selector even after lookup.
   sourceEmail?: string;
+  // Set when the email path has already validated the target's verification
+  // status. Skips the redundant lookup and prevents the verified-existing-user
+  // shortcut from infinite-recursing through the gate added below.
+  skipVerificationCheck?: boolean;
 }): Promise<Response> {
-  const { request, body, drive, driveId, inviterUserId, sourceEmail } = args;
+  const { request, body, drive, driveId, inviterUserId, sourceEmail, skipVerificationCheck } = args;
   const { userId: invitedUserId, role, customRoleId, permissions } = body;
+
+  // Review C1: a never-authenticated user (emailVerified IS NULL) must not be
+  // auto-accepted into a drive. Route them through the invitation flow so they
+  // explicitly consent via magic-link click. Suspended users are refused
+  // outright. Missing user → 404 since the userId came from a client-supplied
+  // selector and a stale userId should not silently create membership.
+  if (!skipVerificationCheck) {
+    const targetStatus = await driveInviteRepository.findUserVerificationStatusById(invitedUserId);
+    if (!targetStatus) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+    if (targetStatus.suspendedAt) {
+      return NextResponse.json(
+        { error: 'This account is suspended and cannot be invited.' },
+        { status: 403 }
+      );
+    }
+    if (!targetStatus.emailVerified) {
+      // Forward the caller-supplied permissions verbatim. The email path
+      // returns 422 when `permissions.length > 0` for not-yet-registered
+      // targets — that's the correct behavior here too. Hardcoding `[]`
+      // would silently drop the permissions and return kind:invited,
+      // misleading admins into thinking page-level grants applied.
+      return await handleEmailPath({
+        request,
+        body: {
+          email: targetStatus.email,
+          role,
+          customRoleId: customRoleId ?? null,
+          permissions,
+        },
+        drive,
+        driveId,
+        inviterUserId,
+      });
+    }
+  }
 
   const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));
   const existingMember = await driveInviteRepository.findExistingMember(driveId, invitedUserId);
@@ -335,6 +376,7 @@ async function handleEmailPath(args: {
       driveId,
       inviterUserId,
       sourceEmail: email,
+      skipVerificationCheck: true,
     });
   }
 

@@ -28,6 +28,7 @@ vi.mock('@pagespace/db/operators', () => ({
   gte: vi.fn(),
   desc: vi.fn(),
   inArray: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
@@ -37,7 +38,7 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { operation: 'operation', resourceType: 'resourceType', resourceTitle: 'resourceTitle', userId: 'userId', driveId: 'driveId', timestamp: 'timestamp' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', userId: 'userId' },

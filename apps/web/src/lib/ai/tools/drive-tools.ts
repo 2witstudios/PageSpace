@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne } from '@pagespace/db/operators'
+import { eq, and, ne, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '@pagespace/lib/utils/utils';
@@ -70,6 +70,7 @@ export const driveTools = {
           .leftJoin(drives, eq(driveMembers.driveId, drives.id))
           .where(and(
             eq(driveMembers.userId, userId),
+            isNotNull(driveMembers.acceptedAt),
             ne(drives.ownerId, userId) // Exclude owned drives
           ));
 
