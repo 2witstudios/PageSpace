@@ -21,6 +21,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
     getMemberPermissions: vi.fn(),
     updateMemberRole: vi.fn(),
     updateMemberPermissions: vi.fn(),
+    getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('@pagespace/lib/notifications/notifications', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
   createDriveMemberEventPayload: vi.fn((driveId, userId, event, data) => ({
     driveId,
     userId,
@@ -111,11 +113,12 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions } from '@pagespace/lib/services/drive-member-service'
+import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
@@ -975,6 +978,9 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
 
     // Re-set up activity logger mocks
     vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' } as never);
+
+    // Default: empty recipient list for fan-out (no admins to notify)
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
   });
 
   const createDeleteRequest = () => {
@@ -1127,16 +1133,38 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       );
     });
 
-    it('should broadcast member removal event', async () => {
+    it('should fan out member_removed to drive recipients (owner + remaining members)', async () => {
+      // Owner + two other admins still on the drive after the removal
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([
+        mockDriveOwnerId,
+        'admin_a',
+        'admin_b',
+      ]);
+
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
+      expect(getDriveRecipientUserIds).toHaveBeenCalledWith(mockDriveId);
       expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
         mockDriveId,
         mockTargetUserId,
         'member_removed',
         { driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
+      const [, recipientArg] = vi.mocked(broadcastDriveMemberEventToRecipients).mock.calls[0];
+      expect(recipientArg).toEqual([mockDriveOwnerId, 'admin_a', 'admin_b']);
+      // The legacy single-recipient helper must NOT be used for member_removed.
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+    });
+
+    it('should still broadcast (with empty recipients) when no other members remain', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
+
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
+      const [, recipientArg] = vi.mocked(broadcastDriveMemberEventToRecipients).mock.calls[0];
+      expect(recipientArg).toEqual([]);
     });
 
     it('should kick user from drive rooms', async () => {

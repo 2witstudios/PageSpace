@@ -2,10 +2,18 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions } from '@pagespace/lib/services/drive-member-service';
+import {
+  checkDriveAccess,
+  getDriveMemberDetails,
+  getMemberPermissions,
+  updateMemberRole,
+  updateMemberPermissions,
+  getDriveRecipientUserIds,
+} from '@pagespace/lib/services/drive-member-service';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
@@ -312,11 +320,15 @@ export async function DELETE(
 
     auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } });
 
-    // Broadcast member removal event
-    await broadcastDriveMemberEvent(
+    // Fan out member_removed to owner + remaining accepted members so any admin
+    // watching the members page sees the row disappear without a manual refresh.
+    // Called after the transaction so the just-removed user is excluded.
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveMemberEventToRecipients(
       createDriveMemberEventPayload(driveId, targetUserId, 'member_removed', {
         driveName: access.drive.name,
-      })
+      }),
+      recipientUserIds
     );
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
