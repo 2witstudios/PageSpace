@@ -438,13 +438,16 @@ async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'c
       taskList: {
         columns: { id: true, title: true, pageId: true },
       },
+      page: {
+        columns: { title: true },
+      },
     },
   });
 
   if (!task) return null;
 
   const parts: string[] = ['<task-context>'];
-  parts.push(`Title: ${task.title}`);
+  parts.push(`Title: ${task.page?.title ?? ''}`);
   if (task.description) parts.push(`Description: ${task.description}`);
   parts.push(`Status: ${task.status}`);
   parts.push(`Priority: ${task.priority}`);

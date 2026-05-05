@@ -73,12 +73,14 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ _and: true, args })),
   or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
   ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
+  isNotNull: vi.fn((col: unknown) => ({ _isNotNull: true, col })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
     id: 'users.id',
     email: 'users.email',
     name: 'users.name',
+    emailVerified: 'users.emailVerified',
   },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -101,6 +103,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
+import { and, isNotNull } from '@pagespace/db/operators';
 
 // ============================================================================
 // Test Helpers
@@ -346,6 +349,44 @@ describe('GET /api/users/search', () => {
 
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(2);
+    });
+  });
+
+  describe('emailVerified gate (Review C1: temp-user-via-search re-invite path)', () => {
+    it('given an email-shaped query, the email-match where-clause MUST compose isNotNull(users.emailVerified) so temp users (emailVerified IS NULL) cannot surface in search results', async () => {
+      const request = new Request('https://example.com/api/users/search?q=temp@example.com');
+      await GET(request);
+
+      // The route's email lookup must restrict to verified users — otherwise an
+      // admin can pick a temp user (created by a prior pending invite) and
+      // fall through to the userId-path which auto-accepts. See Review 1
+      // finding C1 / Review 2 §1.
+      expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
+      const emailWhereCall = vi.mocked(and).mock.calls.find((args) =>
+        args.some((a) => (a as { _eq?: true; col?: unknown }).col === 'users.email')
+      );
+      expect(emailWhereCall, 'email lookup should use and(eq(email,...), isNotNull(emailVerified))').toBeDefined();
+      expect(emailWhereCall).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ _isNotNull: true, col: 'users.emailVerified' }),
+        ])
+      );
+    });
+
+    it('given a temp-user record (emailVerified: null) returned by the DB, the route must NOT include it in results (defense in depth)', async () => {
+      // Even if the DB layer somehow returned a temp user, the route should not
+      // surface them. This is belt-and-suspenders against future regressions.
+      const tempUserResults = [
+        { userId: 'temp_user', email: 'temp@example.com', name: 'Temp', emailVerified: null },
+      ];
+      setupDbChains([], tempUserResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=temp@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users.find((u: { userId: string }) => u.userId === 'temp_user')).toBeUndefined();
     });
   });
 

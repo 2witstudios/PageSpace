@@ -285,27 +285,48 @@ describe('Magic Link Service', () => {
       });
     });
 
-    it('cleans up old unused tokens for same user', async () => {
-      // Create first token
-      await createMagicLinkToken({ email: testUserEmail });
+    // Review H1 — multi-token isolation. Pre-fix, createMagicLinkToken ran a
+    // blind delete of all unused magic_link tokens for the user before
+    // inserting the new one. That silently invalidated:
+    //   - a 7-day pending drive invitation when a 5-min sign-in token issued
+    //   - a drive-A invitation when a drive-B invitation issued for same email
+    //   - the original email's link when admin clicked Resend on the same drive
+    // The fix: stop the pre-insert deletion entirely. Tokens have a TTL and a
+    // unique tokenHash; verifyMagicLinkToken refuses expired/used rows.
+    it('preserves prior unused tokens — adversarial concurrent-invitations-from-two-drives path', async () => {
+      const first = await createMagicLinkToken({ email: testUserEmail });
+      const second = await createMagicLinkToken({ email: testUserEmail });
 
-      const firstCount = await db.query.verificationTokens.findMany({
-        where: eq(verificationTokens.userId, testUserId),
-      });
-      expect(firstCount).toHaveLength(1);
+      if (!first.ok || !second.ok) {
+        throw new Error('Setup failed: both creates should succeed');
+      }
 
-      // Create second token - should clean up first
-      await createMagicLinkToken({ email: testUserEmail });
-
-      const secondCount = await db.query.verificationTokens.findMany({
+      const stored = await db.query.verificationTokens.findMany({
         where: eq(verificationTokens.userId, testUserId),
       });
 
       assert({
-        given: 'multiple magic link requests',
-        should: 'only keep latest token',
-        actual: secondCount.length,
-        expected: 1,
+        given: 'two concurrent invitations for the same user',
+        should: 'preserve both unused tokens (no blind type-wide cleanup)',
+        actual: stored.length,
+        expected: 2,
+      });
+
+      // Both tokens must remain clickable.
+      const verifyFirst = await verifyMagicLinkToken({ token: first.data.token });
+      assert({
+        given: 'the first invitation token after a second was issued',
+        should: 'still verify successfully (T1 is not invalidated by T2)',
+        actual: verifyFirst.ok,
+        expected: true,
+      });
+
+      const verifySecond = await verifyMagicLinkToken({ token: second.data.token });
+      assert({
+        given: 'the second invitation token',
+        should: 'verify successfully',
+        actual: verifySecond.ok,
+        expected: true,
       });
     });
   });

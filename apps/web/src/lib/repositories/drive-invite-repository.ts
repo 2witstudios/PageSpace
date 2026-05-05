@@ -156,6 +156,18 @@ export const driveInviteRepository = {
       : null;
   },
 
+  async findUserVerificationStatusById(
+    userId: string
+  ): Promise<{ email: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { email: true, emailVerified: true, suspendedAt: true },
+    });
+    return user
+      ? { email: user.email, emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
+      : null;
+  },
+
   async findActivePendingMemberByEmail(driveId: string, email: string): Promise<{ id: string } | null> {
     const results = await db
       .select({ id: driveMembers.id })

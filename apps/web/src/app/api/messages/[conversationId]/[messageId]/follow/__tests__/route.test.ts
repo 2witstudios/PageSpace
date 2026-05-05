@@ -106,7 +106,7 @@ describe('POST /api/messages/[conversationId]/[messageId]/follow', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 400 when the message is a thread reply (followers attach to roots only)', async () => {
+  it('returns 400 with parent_not_top_level when the message is a thread reply (followers attach to roots only)', async () => {
     mockFindActiveMessage.mockResolvedValueOnce({
       id: MSG_ID,
       conversationId: CONV_ID,
@@ -114,6 +114,8 @@ describe('POST /api/messages/[conversationId]/[messageId]/follow', () => {
     });
     const res = await callPost();
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'parent_not_top_level' });
+    expect(mockAddDmThreadFollower).not.toHaveBeenCalled();
   });
 });
 

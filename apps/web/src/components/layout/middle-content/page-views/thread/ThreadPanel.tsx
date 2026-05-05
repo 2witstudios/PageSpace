@@ -107,6 +107,7 @@ interface RawReply {
   aiMeta?: { senderName: string } | null;
   // dm shape
   senderId?: string | null;
+  sender?: { id: string; name: string | null; image: string | null } | null;
   // common
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
@@ -138,9 +139,12 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   content: raw.content,
   createdAt:
     typeof raw.createdAt === 'string' ? raw.createdAt : new Date(raw.createdAt).toISOString(),
+  // Channel rows carry { userId, user }; DM rows carry { senderId, sender }.
+  // The two pairs travel together — a row never has `user` from one side and
+  // `senderId` from the other. The fallback chains below assume that invariant.
   authorId: raw.userId ?? raw.senderId ?? null,
-  authorName: raw.user?.name ?? raw.aiMeta?.senderName ?? null,
-  authorImage: raw.user?.image ?? null,
+  authorName: raw.user?.name ?? raw.sender?.name ?? raw.aiMeta?.senderName ?? null,
+  authorImage: raw.user?.image ?? raw.sender?.image ?? null,
   fileId: raw.fileId ?? null,
   attachmentMeta: raw.attachmentMeta ?? null,
   file: raw.file ?? null,

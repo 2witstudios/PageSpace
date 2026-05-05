@@ -222,18 +222,23 @@ export async function broadcastDriveEvent(
 
   try {
     const results = await Promise.allSettled(
-      recipientUserIds.map((userId) => {
+      recipientUserIds.map(async (userId) => {
         const requestBody = JSON.stringify({
           channelId: `user:${userId}:drives`,
           event: `drive:${payload.operation}`,
           payload,
         });
-        return fetch(`${realtimeUrl}/api/broadcast`, {
+        const response = await fetch(`${realtimeUrl}/api/broadcast`, {
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
           signal: AbortSignal.timeout(5000),
         });
+        // fetch only rejects on network error; HTTP 4xx/5xx must be surfaced explicitly.
+        if (!response.ok) {
+          throw new Error(`Broadcast HTTP ${response.status}`);
+        }
+        return response;
       })
     );
 
@@ -348,18 +353,23 @@ export async function broadcastDriveMemberEventToRecipients(
 
   try {
     const results = await Promise.allSettled(
-      recipientUserIds.map((userId) => {
+      recipientUserIds.map(async (userId) => {
         const requestBody = JSON.stringify({
           channelId: `user:${userId}:drives`,
           event: `drive:${payload.operation}`,
           payload,
         });
-        return fetch(`${realtimeUrl}/api/broadcast`, {
+        const response = await fetch(`${realtimeUrl}/api/broadcast`, {
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
           signal: AbortSignal.timeout(5000),
         });
+        // fetch only rejects on network error; HTTP 4xx/5xx must be surfaced explicitly.
+        if (!response.ok) {
+          throw new Error(`Broadcast HTTP ${response.status}`);
+        }
+        return response;
       })
     );
 

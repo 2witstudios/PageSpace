@@ -90,13 +90,14 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
   desc: vi.fn((a: unknown) => a),
   isNull: vi.fn((a: unknown) => a),
+  isNotNull: vi.fn((a: unknown) => ({ _isNotNull: true, col: a })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
   drives: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role' },
 }));
 
 // ── Imports (after mocks) ───────────────────────────────────────────────
@@ -323,6 +324,27 @@ describe('POST /api/pages/bulk-move', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toMatch(/permission.*move/i);
+    });
+
+    // Review C2 — pending ADMIN escalation. Pre-fix, the membership predicate
+    // only checked role IN (OWNER, ADMIN); a pending invitee with role=ADMIN
+    // (acceptedAt: null) passed and could write into a drive they had not
+    // joined. Adversarial test pins the gate by asserting the WHERE clause
+    // composes isNotNull(driveMembers.acceptedAt).
+    it('rejects pending ADMIN (acceptedAt IS NULL) — adversarial pending-admin-can-bulk-move-into-unaccepted-drive path', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
+      // Simulate the gate filtering out the pending row (post-fix, the DB
+      // returns nothing for an acceptedAt IS NULL membership).
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(403);
+      // Force the route to compose the gate; without isNotNull on
+      // driveMembers.acceptedAt, the regression test cannot detect a
+      // future drift back to the old predicate.
+      const { isNotNull } = await import('@pagespace/db/operators');
+      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
     });
   });
 

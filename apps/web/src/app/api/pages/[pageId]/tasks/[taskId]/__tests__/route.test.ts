@@ -95,8 +95,8 @@ vi.mock('@pagespace/db/db', () => ({
     })),
     transaction: vi.fn(async (callback: (tx: unknown) => unknown) => {
       const txUpdateReturning = vi.fn().mockResolvedValue([{
-        id: 'task-1', title: 'Updated Task', status: 'pending',
-        assigneeId: null, assigneeAgentId: null, pageId: null,
+        id: 'task-1', status: 'pending',
+        assigneeId: null, assigneeAgentId: null, pageId: 'linked-page-1',
       }]);
       const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
       const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
@@ -146,7 +146,6 @@ import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
-import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // ---------- Helpers ----------
 
@@ -192,16 +191,16 @@ function setupCanEdit(can = true) {
 
 const baseTask = {
   id: mockTaskId,
-  title: 'Existing Task',
   description: 'desc',
   status: 'pending',
   priority: 'medium',
   assigneeId: null,
   assigneeAgentId: null,
-  pageId: null,
+  pageId: 'linked-page-1',
   completedAt: null,
   taskListId: mockTaskListId,
   position: 0,
+  page: { title: 'Existing Task' },
 };
 
 function setupTaskLookup(taskList = { id: mockTaskListId }, task: Record<string, unknown> | null = baseTask) {
@@ -684,7 +683,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
 
     vi.mocked(db.transaction).mockImplementation(async (callback) => {
-      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...taskWithPage, title: 'New Title' }]);
+      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...taskWithPage, page: { title: 'New Title' } }]);
       const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
       const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
       const txSelectLimit = vi.fn().mockResolvedValue([{ revision: 1 }]);
@@ -701,7 +700,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     });
 
     vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);
-    setupRelationsLookup({ ...taskWithPage, title: 'New Title', assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title' }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(200);
@@ -1048,49 +1047,6 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(response.status).toBe(404);
     const body = await response.json();
     expect(body.error).toBe('Task not found');
-  });
-
-  it('deletes task record directly when task has no linked page', async () => {
-    setupAuth();
-    setupCanEdit(true);
-    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
-    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ ...baseTask, pageId: null } as never);
-
-    const response = await DELETE(createDeleteRequest(), context);
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.success).toBe(true);
-    expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'task_deleted',
-      taskId: mockTaskId,
-    }));
-    expect(logPageActivity).toHaveBeenCalledWith(
-      mockUserId,
-      'delete',
-      { id: mockPageId, title: 'Existing Task', driveId: 'drive-1' },
-      {
-        actorEmail: 'test@test.com',
-        actorDisplayName: 'Test User',
-        metadata: {
-          taskId: mockTaskId,
-          taskListId: mockTaskListId,
-          taskListPageId: mockPageId,
-          isConversationTask: true,
-        },
-      },
-    );
-  });
-
-  it('deletes task without logging when taskListPage is null', async () => {
-    setupAuth();
-    setupCanEdit(true);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
-    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
-    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ ...baseTask, pageId: null } as never);
-
-    const response = await DELETE(createDeleteRequest(), context);
-    expect(response.status).toBe(200);
-    expect(logPageActivity).not.toHaveBeenCalled();
   });
 
   it('trashes linked page when task has a pageId', async () => {

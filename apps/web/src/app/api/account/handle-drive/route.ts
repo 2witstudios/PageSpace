@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, isNotNull } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -52,12 +52,15 @@ export async function POST(req: Request) {
     }
 
     if (action === 'transfer') {
-      // Verify the new owner is an admin in the drive
+      // Verify the new owner is an *accepted* admin in the drive. A pending
+      // admin (acceptedAt IS NULL) must not receive ownership — they have
+      // never authenticated to the drive and cannot consent. Closes Review C2.
       const newOwnerMembership = await db.query.driveMembers.findFirst({
         where: and(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, newOwnerId),
-          eq(driveMembers.role, 'ADMIN')
+          eq(driveMembers.role, 'ADMIN'),
+          isNotNull(driveMembers.acceptedAt)
         ),
       });
 

@@ -21,6 +21,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
     getMemberPermissions: vi.fn(),
     updateMemberRole: vi.fn(),
     updateMemberPermissions: vi.fn(),
+    getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
@@ -45,11 +46,13 @@ vi.mock('@pagespace/lib/notifications/notifications', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
-  createDriveMemberEventPayload: vi.fn((driveId, userId, event, data) => ({
+  broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
+  // Mirror the production shape from socket-utils.ts: { driveId, userId, operation, ...options }
+  createDriveMemberEventPayload: vi.fn((driveId, userId, operation, options = {}) => ({
     driveId,
     userId,
-    event,
-    data,
+    operation,
+    ...options,
   })),
   kickUserFromDrive: vi.fn().mockResolvedValue(undefined),
   kickUserFromDriveActivity: vi.fn().mockResolvedValue(undefined),
@@ -111,11 +114,12 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions } from '@pagespace/lib/services/drive-member-service'
+import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
   broadcastDriveMemberEvent,
+  broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
@@ -975,6 +979,9 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
 
     // Re-set up activity logger mocks
     vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' } as never);
+
+    // Default: empty recipient list for fan-out (no admins to notify)
+    vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
   });
 
   const createDeleteRequest = () => {
@@ -1127,16 +1134,94 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       );
     });
 
-    it('should broadcast member removal event', async () => {
+    it('should fan out member_removed to drive recipients (owner + remaining members)', async () => {
+      // Owner + two other admins still on the drive after the removal
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([
+        mockDriveOwnerId,
+        'admin_a',
+        'admin_b',
+      ]);
+
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
+      expect(getDriveRecipientUserIds).toHaveBeenCalledWith(mockDriveId);
       expect(createDriveMemberEventPayload).toHaveBeenCalledWith(
         mockDriveId,
         mockTargetUserId,
         'member_removed',
         { driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
+      const [, recipientArg] = vi.mocked(broadcastDriveMemberEventToRecipients).mock.calls[0];
+      expect(recipientArg).toEqual([mockDriveOwnerId, 'admin_a', 'admin_b']);
+      // The legacy single-recipient helper must NOT be used for member_removed.
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+    });
+
+    it('should still broadcast (with empty recipients) when no other members remain', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
+
+      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(broadcastDriveMemberEventToRecipients).toHaveBeenCalledTimes(1);
+      const [, recipientArg] = vi.mocked(broadcastDriveMemberEventToRecipients).mock.calls[0];
+      expect(recipientArg).toEqual([]);
+    });
+
+    it('should still return 200 if recipient lookup fails post-commit (non-fatal broadcast)', async () => {
+      // Membership delete has already committed (transaction returns); a
+      // transient DB failure during the post-commit recipient lookup must
+      // NOT turn a successful removal into a 500 response.
+      const lookupError = new Error('Transient DB blip');
+      vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(lookupError);
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      // The error is logged but swallowed.
+      expect(loggers.api.error).toHaveBeenCalledWith(
+        'Failed to broadcast member_removed (post-commit, non-fatal)',
+        lookupError,
+      );
+      // Kicks still run after the swallowed broadcast failure.
+      expect(kickUserFromDrive).toHaveBeenCalled();
+    });
+
+    it('should still return 200 if broadcast itself rejects post-commit (non-fatal broadcast)', async () => {
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockDriveOwnerId]);
+      vi.mocked(broadcastDriveMemberEventToRecipients).mockRejectedValueOnce(
+        new Error('Realtime down')
+      );
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      // Kicks still run after the swallowed broadcast failure.
+      expect(kickUserFromDrive).toHaveBeenCalled();
+    });
+
+    it('should still return 200 if the page-room db lookup rejects post-commit (non-fatal kicks)', async () => {
+      // Drive-level kicks succeed; the db.select for page rooms throws.
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockRejectedValue(new Error('Page lookup blew up')),
+        }),
+      } as never);
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      // Drive-level kicks ran before the failure.
+      expect(kickUserFromDrive).toHaveBeenCalled();
+      // The error is logged, not propagated.
+      expect(loggers.api.error).toHaveBeenCalledWith(
+        'Failed to kick user from rooms (post-commit, non-fatal)',
+        expect.any(Error),
+      );
     });
 
     it('should kick user from drive rooms', async () => {

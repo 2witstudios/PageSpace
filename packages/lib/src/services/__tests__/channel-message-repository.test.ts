@@ -1,6 +1,33 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Riteway-style assert helper (matches packages/lib/src/auth/magic-link-service.test.ts).
+// Boundary-level test double: see test-doubles/db.ts for the design rationale
+// (no thenable Drizzle chain mocks; assertions read observable state, not the
+// order of intermediate builder method calls).
+import { testDbState } from './test-doubles/db';
+
+vi.mock('@pagespace/db/db', async () => {
+  const m = await import('./test-doubles/db');
+  return { db: m.testDb };
+});
+vi.mock('@pagespace/db/operators', async () => {
+  const m = await import('./test-doubles/db');
+  return m.operators;
+});
+vi.mock('@pagespace/db/schema/chat', async () => {
+  const m = await import('./test-doubles/db');
+  return m.chatSchema;
+});
+vi.mock('@pagespace/db/schema/social', async () => {
+  const m = await import('./test-doubles/db');
+  return m.socialSchema;
+});
+vi.mock('@pagespace/db/schema/storage', async () => {
+  const m = await import('./test-doubles/db');
+  return m.storageSchema;
+});
+
+import { channelMessageRepository } from '../channel-message-repository';
+
 interface AssertParams {
   given: string;
   should: string;
@@ -9,271 +36,122 @@ interface AssertParams {
 }
 
 const assert = ({ given, should, actual, expected }: AssertParams): void => {
-  const message = `Given ${given}, should ${should}`;
-  expect(actual, message).toEqual(expected);
+  expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 };
 
-const {
-  mockChannelMessagesFindMany,
-  mockChannelMessagesFindFirst,
-  mockReactionsFindFirst,
-  mockFilesFindFirst,
-  mockFollowersWhere,
-  mockSelectFrom,
-  mockInsertValues,
-  mockInsertReturning,
-  mockInsertOnConflictDoUpdate,
-  mockInsertOnConflictDoNothing,
-  mockUpdateSet,
-  mockUpdateWhere,
-  mockUpdateReturning,
-  mockDeleteWhere,
-  mockDeleteReturning,
-  mockTransaction,
-} = vi.hoisted(() => ({
-  mockChannelMessagesFindMany: vi.fn(),
-  mockChannelMessagesFindFirst: vi.fn(),
-  mockReactionsFindFirst: vi.fn(),
-  mockFilesFindFirst: vi.fn(),
-  mockFollowersWhere: vi.fn(),
-  mockSelectFrom: vi.fn(),
-  mockInsertValues: vi.fn(),
-  mockInsertReturning: vi.fn(),
-  mockInsertOnConflictDoUpdate: vi.fn(),
-  mockInsertOnConflictDoNothing: vi.fn(),
-  mockUpdateSet: vi.fn(),
-  mockUpdateWhere: vi.fn(),
-  mockUpdateReturning: vi.fn(),
-  mockDeleteWhere: vi.fn(),
-  mockDeleteReturning: vi.fn(),
-  mockTransaction: vi.fn(),
-}));
-
-vi.mock('@pagespace/db/db', () => ({
-  db: {
-    query: {
-      channelMessages: {
-        findMany: mockChannelMessagesFindMany,
-        findFirst: mockChannelMessagesFindFirst,
-      },
-      channelMessageReactions: { findFirst: mockReactionsFindFirst },
-      files: { findFirst: mockFilesFindFirst },
-    },
-    insert: vi.fn(() => ({ values: mockInsertValues })),
-    update: vi.fn(() => ({ set: mockUpdateSet })),
-    delete: vi.fn(() => ({ where: mockDeleteWhere })),
-    select: vi.fn(() => ({ from: mockSelectFrom })),
-    transaction: mockTransaction,
-  },
-}));
-
-vi.mock('@pagespace/db/operators', () => {
-  const sqlFn = Object.assign(
-    vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
-    {
-      join: vi.fn((items: unknown[], separator: unknown) => ({ items, separator })),
-    }
-  );
-  return {
-    and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
-    asc: vi.fn((field: unknown) => ({ op: 'asc', field })),
-    desc: vi.fn((field: unknown) => ({ op: 'desc', field })),
-    eq: vi.fn((field: unknown, value: unknown) => ({ op: 'eq', field, value })),
-    gt: vi.fn((field: unknown, value: unknown) => ({ op: 'gt', field, value })),
-    isNull: vi.fn((field: unknown) => ({ op: 'isNull', field })),
-    lt: vi.fn((field: unknown, value: unknown) => ({ op: 'lt', field, value })),
-    or: vi.fn((...conditions: unknown[]) => ({ op: 'or', conditions })),
-    sql: sqlFn,
-  };
-});
-
-vi.mock('@pagespace/db/schema/chat', () => ({
-  channelMessages: {
-    id: 'channel_messages.id',
-    pageId: 'channel_messages.pageId',
-    userId: 'channel_messages.userId',
-    content: 'channel_messages.content',
-    fileId: 'channel_messages.fileId',
-    attachmentMeta: 'channel_messages.attachmentMeta',
-    isActive: 'channel_messages.isActive',
-    editedAt: 'channel_messages.editedAt',
-    createdAt: 'channel_messages.createdAt',
-    parentId: 'channel_messages.parentId',
-    replyCount: 'channel_messages.replyCount',
-    lastReplyAt: 'channel_messages.lastReplyAt',
-    mirroredFromId: 'channel_messages.mirroredFromId',
-    quotedMessageId: 'channel_messages.quotedMessageId',
-  },
-  channelMessageReactions: {
-    id: 'channel_message_reactions.id',
-    messageId: 'channel_message_reactions.messageId',
-    userId: 'channel_message_reactions.userId',
-    emoji: 'channel_message_reactions.emoji',
-  },
-  channelReadStatus: {
-    userId: 'channel_read_status.userId',
-    channelId: 'channel_read_status.channelId',
-    lastReadAt: 'channel_read_status.lastReadAt',
-  },
-  channelThreadFollowers: {
-    rootMessageId: 'channel_thread_followers.rootMessageId',
-    userId: 'channel_thread_followers.userId',
-  },
-}));
-
-vi.mock('@pagespace/db/schema/storage', () => ({
-  files: {
-    id: 'files.id',
-  },
-}));
-
-import { db } from '@pagespace/db/db';
-import {
-  channelMessages,
-  channelMessageReactions,
-  channelReadStatus,
-  channelThreadFollowers,
-} from '@pagespace/db/schema/chat';
-import { and, asc, eq, gt, isNull, lt, or } from '@pagespace/db/operators';
-import { channelMessageRepository } from '../channel-message-repository';
-
 beforeEach(() => {
-  vi.clearAllMocks();
-
-  // Insert pipeline
-  mockInsertOnConflictDoUpdate.mockResolvedValue(undefined);
-  mockInsertOnConflictDoNothing.mockResolvedValue(undefined);
-  mockInsertReturning.mockResolvedValue([{ id: 'msg-1' }]);
-  mockInsertValues.mockReturnValue({
-    returning: mockInsertReturning,
-    onConflictDoUpdate: mockInsertOnConflictDoUpdate,
-    onConflictDoNothing: mockInsertOnConflictDoNothing,
-  });
-  vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
-
-  // Update pipeline (resolves to a chainable .returning() too, for soft-delete tx)
-  mockUpdateReturning.mockResolvedValue([{ parentId: null }]);
-  mockUpdateWhere.mockReturnValue({
-    returning: mockUpdateReturning,
-    then: (resolve: (v: unknown) => unknown) => resolve(undefined),
-  });
-  mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-  vi.mocked(db.update).mockReturnValue({ set: mockUpdateSet } as never);
-
-  // Delete pipeline
-  mockDeleteReturning.mockResolvedValue([{ id: 'reaction-1' }]);
-  mockDeleteWhere.mockReturnValue({
-    returning: mockDeleteReturning,
-    then: (resolve: (v: unknown) => unknown) => resolve(undefined),
-  });
-  vi.mocked(db.delete).mockReturnValue({ where: mockDeleteWhere } as never);
-
-  // Select pipeline. Two callers exist:
-  //  1) listChannelThreadFollowers — db.select(cols).from(table).where(...) → rows
-  //  2) insertChannelThreadReply — tx.select(cols).from(table).where(...).for('update') → rows
-  // The default chain handles both: where() returns an object that is itself
-  // thenable (so listFollowers awaits the rows directly) AND has .for() that
-  // returns a promise (so insertChannelThreadReply awaits the locked rows).
-  const defaultLockedRows: unknown[] = [];
-  const defaultRows: unknown[] = [];
-  mockSelectFrom.mockReturnValue({
-    where: vi.fn(() => ({
-      then: (resolve: (v: unknown) => unknown) => resolve(defaultRows),
-      for: vi.fn().mockResolvedValue(defaultLockedRows),
-    })),
-  });
-  vi.mocked(db.select).mockReturnValue({ from: mockSelectFrom } as never);
-
-  // Transaction passes db itself as the tx so all chain mocks above apply
-  // unchanged inside the callback.
-  mockTransaction.mockImplementation(
-    async (cb: (tx: unknown) => Promise<unknown>) => cb(db)
-  );
+  testDbState.reset();
 });
 
 describe('channelMessageRepository.listChannelMessages', () => {
   it('filters out replies by requiring parentId IS NULL', async () => {
-    mockChannelMessagesFindMany.mockResolvedValue([]);
+    testDbState.seed('channelMessages', [
+      { id: 'top-a', pageId: 'page-1', userId: 'u-1', content: 'a', isActive: true, parentId: null, createdAt: new Date('2026-05-01T00:00:00Z') },
+      { id: 'reply-a', pageId: 'page-1', userId: 'u-1', content: 'reply', isActive: true, parentId: 'top-a', createdAt: new Date('2026-05-01T00:01:00Z') },
+      { id: 'top-b', pageId: 'page-1', userId: 'u-1', content: 'b', isActive: true, parentId: null, createdAt: new Date('2026-05-01T00:02:00Z') },
+    ]);
 
-    await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
+    const rows = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
 
     assert({
-      given: 'a top-level message fetch',
-      should: 'add a parentId IS NULL filter so thread replies do not leak into the main stream',
-      actual: vi.mocked(isNull).mock.calls.some(
-        ([field]) => field === channelMessages.parentId
-      ),
-      expected: true,
+      given: 'a top-level message fetch on a page that has both top-level rows and a thread reply',
+      should: 'omit the reply — only top-level rows leak into the main stream',
+      actual: rows.map((r) => r.id).sort(),
+      expected: ['top-a', 'top-b'],
     });
   });
 
   it('omits the cursor branch when no cursor is supplied', async () => {
-    mockChannelMessagesFindMany.mockResolvedValue([]);
+    const earliest = new Date('2026-05-01T00:00:00Z');
+    const middle = new Date('2026-05-01T00:01:00Z');
+    const latest = new Date('2026-05-01T00:02:00Z');
+    testDbState.seed('channelMessages', [
+      { id: 'a', pageId: 'page-1', isActive: true, parentId: null, createdAt: earliest },
+      { id: 'b', pageId: 'page-1', isActive: true, parentId: null, createdAt: middle },
+      { id: 'c', pageId: 'page-1', isActive: true, parentId: null, createdAt: latest },
+    ]);
 
-    await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
+    const rows = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
 
     assert({
       given: 'a list call without a cursor',
-      should: 'not build any (createdAt, id) cursor disjunction',
-      actual: vi.mocked(or).mock.calls.length,
-      expected: 0,
+      should: 'return every active top-level row newest-first — no cursor exclusion is applied',
+      actual: rows.map((r) => r.id),
+      expected: ['c', 'b', 'a'],
     });
   });
 
   it('builds a composite cursor disjunction when cursor is supplied', async () => {
-    mockChannelMessagesFindMany.mockResolvedValue([]);
-    const cursor = { createdAt: new Date('2026-01-01T00:00:00Z'), id: 'msg-cursor' };
+    const t = new Date('2026-05-01T12:00:00Z');
+    const tBefore = new Date('2026-05-01T11:59:00Z');
+    const tAfter = new Date('2026-05-01T12:01:00Z');
+    testDbState.seed('channelMessages', [
+      // Same createdAt as the cursor row — id ordering is the tiebreaker.
+      { id: 'tie-before', pageId: 'page-1', isActive: true, parentId: null, createdAt: t },
+      { id: 'tie-cursor', pageId: 'page-1', isActive: true, parentId: null, createdAt: t },
+      { id: 'tie-zafter', pageId: 'page-1', isActive: true, parentId: null, createdAt: t },
+      // Strictly older row — should be returned by the cursor.
+      { id: 'older', pageId: 'page-1', isActive: true, parentId: null, createdAt: tBefore },
+      // Strictly newer row — should be excluded.
+      { id: 'newer', pageId: 'page-1', isActive: true, parentId: null, createdAt: tAfter },
+    ]);
 
-    await channelMessageRepository.listChannelMessages({
+    const rows = await channelMessageRepository.listChannelMessages({
       pageId: 'page-1',
       limit: 10,
-      cursor,
+      cursor: { createdAt: t, id: 'tie-cursor' },
     });
 
-    const ltCalls = vi.mocked(lt).mock.calls;
     assert({
-      given: 'a composite cursor (createdAt, id)',
-      should: 'use lt() against both createdAt and id so pagination is stable across ties',
-      actual: {
-        createdAt: ltCalls.some(([field, value]) => field === channelMessages.createdAt && value === cursor.createdAt),
-        id: ltCalls.some(([field, value]) => field === channelMessages.id && value === cursor.id),
-      },
-      expected: { createdAt: true, id: true },
+      given: 'a composite cursor (createdAt, id) at the tie row',
+      should: 'return rows strictly older by createdAt OR same-createdAt with strictly smaller id — never the cursor row, never anything newer',
+      actual: rows.map((r) => r.id).sort(),
+      expected: ['older', 'tie-before'],
     });
   });
 
   it('passes the supplied limit through unchanged so the route can fetch limit+1 for hasMore', async () => {
-    mockChannelMessagesFindMany.mockResolvedValue([]);
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      id: `m-${i}`,
+      pageId: 'page-1',
+      isActive: true,
+      parentId: null,
+      createdAt: new Date(2026, 4, 1, 12, i),
+    }));
+    testDbState.seed('channelMessages', rows);
 
-    await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 51 });
+    const result = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 3 });
 
-    const call = mockChannelMessagesFindMany.mock.calls[0]?.[0] as { limit: number };
     assert({
       given: 'a limit value chosen by the route',
-      should: 'forward it verbatim — the repository does not own pagination semantics',
-      actual: call.limit,
-      expected: 51,
+      should: 'forward it verbatim — return at most that many rows',
+      actual: result.length,
+      expected: 3,
     });
   });
 });
 
 describe('channelMessageRepository.findChannelMessageInPage', () => {
   it('scopes the lookup to a single page', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'msg-1', pageId: 'page-1' });
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', isActive: true, content: 'hi' },
+      { id: 'msg-1-other', pageId: 'page-other', isActive: true, content: 'leak' },
+    ]);
 
-    await channelMessageRepository.findChannelMessageInPage({ messageId: 'msg-1', pageId: 'page-1' });
+    const result = await channelMessageRepository.findChannelMessageInPage({ messageId: 'msg-1', pageId: 'page-1' });
 
-    const eqCalls = vi.mocked(eq).mock.calls;
     assert({
       given: 'a (messageId, pageId) tuple',
-      should: 'add an eq predicate on pageId so a stolen message id from another channel cannot hit',
-      actual: eqCalls.some(([field, value]) => field === channelMessages.pageId && value === 'page-1'),
-      expected: true,
+      should: 'return the row from the requested page only — never the other page row, even with the same id',
+      actual: result?.pageId,
+      expected: 'page-1',
     });
   });
 
   it('returns null when the message belongs to a different page', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce(undefined);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', isActive: true, content: 'hi' },
+    ]);
 
     const result = await channelMessageRepository.findChannelMessageInPage({
       messageId: 'msg-1',
@@ -291,29 +169,38 @@ describe('channelMessageRepository.findChannelMessageInPage', () => {
 
 describe('channelMessageRepository.loadChannelMessageWithRelations', () => {
   it('asks for user, file, and reactions-with-user relations so the route response stays rich', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'msg-1' });
+    testDbState.seed('users', [
+      { id: 'u-1', name: 'Alice', image: '/avatar.png' },
+      { id: 'u-2', name: 'Bob' },
+    ]);
+    testDbState.seed('files', [
+      { id: 'file-1', mimeType: 'image/png', sizeBytes: 1024 },
+    ]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', userId: 'u-1', fileId: 'file-1', isActive: true, content: 'hi' },
+    ]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-2', emoji: '👍' },
+    ]);
 
-    await channelMessageRepository.loadChannelMessageWithRelations('msg-1');
+    const result = await channelMessageRepository.loadChannelMessageWithRelations('msg-1');
 
-    const call = mockChannelMessagesFindFirst.mock.calls[0]?.[0] as {
-      with: { user: unknown; file: unknown; reactions: { with: { user: unknown } } };
-    };
     assert({
-      given: 'a freshly created message id',
-      should: 'load all three relations so the broadcast payload matches the route shape',
+      given: 'a freshly created message id with linked user/file/reactor',
+      should: 'load all three relations so the broadcast payload renders without a re-fetch',
       actual: {
-        hasUser: !!call.with.user,
-        hasFile: !!call.with.file,
-        hasReactionUser: !!call.with.reactions.with.user,
+        userId: (result?.user as { id: string } | null)?.id,
+        fileId: (result?.file as { id: string } | null)?.id,
+        reactionUser: (result?.reactions as Array<{ user: { name: string } }> | undefined)?.[0]?.user?.name,
       },
-      expected: { hasUser: true, hasFile: true, hasReactionUser: true },
+      expected: { userId: 'u-1', fileId: 'file-1', reactionUser: 'Bob' },
     });
   });
 });
 
 describe('channelMessageRepository.fileExists', () => {
   it('returns true when the file row is present', async () => {
-    mockFilesFindFirst.mockResolvedValueOnce({ id: 'file-1' });
+    testDbState.seed('files', [{ id: 'file-1', mimeType: 'image/png' }]);
 
     const result = await channelMessageRepository.fileExists('file-1');
 
@@ -326,8 +213,6 @@ describe('channelMessageRepository.fileExists', () => {
   });
 
   it('returns false when the file row is missing', async () => {
-    mockFilesFindFirst.mockResolvedValueOnce(undefined);
-
     const result = await channelMessageRepository.fileExists('missing-file');
 
     assert({
@@ -341,8 +226,6 @@ describe('channelMessageRepository.fileExists', () => {
 
 describe('channelMessageRepository.insertChannelMessage', () => {
   it('writes pageId, userId, content, fileId, and attachmentMeta verbatim', async () => {
-    mockInsertReturning.mockResolvedValueOnce([{ id: 'msg-1' }]);
-
     await channelMessageRepository.insertChannelMessage({
       pageId: 'page-1',
       userId: 'user-1',
@@ -351,25 +234,46 @@ describe('channelMessageRepository.insertChannelMessage', () => {
       attachmentMeta: { kind: 'image' } as never,
     });
 
-    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    const inserted = testDbState.rows('channelMessages')[0];
     assert({
       given: 'an insert request with all fields populated',
-      should: 'forward each field unchanged — the repository does not normalize input',
-      actual: values,
+      should: 'persist each field unchanged — the repository does not normalize input',
+      actual: {
+        pageId: inserted.pageId,
+        userId: inserted.userId,
+        content: inserted.content,
+        fileId: inserted.fileId,
+        attachmentMeta: inserted.attachmentMeta,
+      },
       expected: {
         pageId: 'page-1',
         userId: 'user-1',
         content: 'hello',
         fileId: 'file-1',
         attachmentMeta: { kind: 'image' },
-        quotedMessageId: null,
       },
     });
   });
 
-  it('persists an explicit quotedMessageId on the row when provided', async () => {
-    mockInsertReturning.mockResolvedValueOnce([{ id: 'msg-3' }]);
+  it('persists null fileId and null attachmentMeta when there is no attachment', async () => {
+    await channelMessageRepository.insertChannelMessage({
+      pageId: 'page-1',
+      userId: 'user-1',
+      content: 'plain text',
+      fileId: null,
+      attachmentMeta: null,
+    });
 
+    const inserted = testDbState.rows('channelMessages')[0];
+    assert({
+      given: 'a text-only message',
+      should: 'insert NULL into fileId and attachmentMeta rather than dropping the columns',
+      actual: { fileId: inserted.fileId, attachmentMeta: inserted.attachmentMeta },
+      expected: { fileId: null, attachmentMeta: null },
+    });
+  });
+
+  it('persists an explicit quotedMessageId on the row when provided', async () => {
     await channelMessageRepository.insertChannelMessage({
       pageId: 'page-1',
       userId: 'user-1',
@@ -379,61 +283,56 @@ describe('channelMessageRepository.insertChannelMessage', () => {
       quotedMessageId: 'quoted-msg-1',
     });
 
-    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    const inserted = testDbState.rows('channelMessages')[0];
     assert({
       given: 'an insert request with quotedMessageId set',
       should: 'forward the value verbatim so the new row links to the quoted source',
-      actual: values.quotedMessageId,
+      actual: inserted.quotedMessageId,
       expected: 'quoted-msg-1',
     });
   });
 
-  it('persists null fileId and null attachmentMeta when there is no attachment', async () => {
-    mockInsertReturning.mockResolvedValueOnce([{ id: 'msg-2' }]);
-
+  it('persists null quotedMessageId when the caller omits the field', async () => {
     await channelMessageRepository.insertChannelMessage({
       pageId: 'page-1',
       userId: 'user-1',
-      content: 'plain text',
+      content: 'plain top-level message',
       fileId: null,
       attachmentMeta: null,
     });
 
-    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    const inserted = testDbState.rows('channelMessages')[0];
     assert({
-      given: 'a text-only message',
-      should: 'insert NULL into fileId and attachmentMeta rather than dropping the columns',
-      actual: { fileId: values.fileId, attachmentMeta: values.attachmentMeta },
-      expected: { fileId: null, attachmentMeta: null },
+      given: 'a top-level message with no quote context',
+      should: 'still write the column as null rather than dropping it from the payload',
+      actual: inserted.quotedMessageId,
+      expected: null,
     });
   });
 });
 
 describe('channelMessageRepository.upsertChannelReadStatus', () => {
   it('upserts on (userId, channelId) so a sender-reads-own-message write is idempotent', async () => {
-    const readAt = new Date('2026-05-04T12:00:00Z');
+    const earlier = new Date('2026-05-04T11:00:00Z');
+    const later = new Date('2026-05-04T12:00:00Z');
 
     await channelMessageRepository.upsertChannelReadStatus({
       userId: 'user-1',
       channelId: 'page-1',
-      readAt,
+      readAt: earlier,
+    });
+    await channelMessageRepository.upsertChannelReadStatus({
+      userId: 'user-1',
+      channelId: 'page-1',
+      readAt: later,
     });
 
-    const conflict = mockInsertOnConflictDoUpdate.mock.calls[0]?.[0] as {
-      target: unknown[];
-      set: { lastReadAt: Date };
-    };
+    const rows = testDbState.rows('channelReadStatus');
     assert({
-      given: 'a sender posting in their own channel',
-      should: 'target the (userId, channelId) composite and update lastReadAt',
-      actual: {
-        target: conflict.target,
-        lastReadAt: conflict.set.lastReadAt,
-      },
-      expected: {
-        target: [channelReadStatus.userId, channelReadStatus.channelId],
-        lastReadAt: readAt,
-      },
+      given: 'two read-status writes for the same (userId, channelId)',
+      should: 'collapse to one row, with lastReadAt updated to the later timestamp',
+      actual: { rowCount: rows.length, lastReadAt: rows[0]?.lastReadAt },
+      expected: { rowCount: 1, lastReadAt: later },
     });
   });
 });
@@ -441,6 +340,10 @@ describe('channelMessageRepository.upsertChannelReadStatus', () => {
 describe('channelMessageRepository.updateChannelMessageContent', () => {
   it('writes content + editedAt and scopes the update to the message id', async () => {
     const editedAt = new Date('2026-05-04T13:00:00Z');
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', userId: 'u-1', content: 'orig', isActive: true, editedAt: null },
+      { id: 'msg-2', pageId: 'page-1', userId: 'u-1', content: 'untouched', isActive: true, editedAt: null },
+    ]);
 
     await channelMessageRepository.updateChannelMessageContent({
       messageId: 'msg-1',
@@ -448,18 +351,17 @@ describe('channelMessageRepository.updateChannelMessageContent', () => {
       editedAt,
     });
 
-    const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
-    const eqCalls = vi.mocked(eq).mock.calls;
+    const rows = testDbState.rows('channelMessages');
     assert({
       given: 'an edit request',
-      should: 'set both content and editedAt and target the matching message id',
+      should: 'set both content and editedAt on the targeted row only — the other row is untouched',
       actual: {
-        set,
-        whereOnId: eqCalls.some(([field, value]) => field === channelMessages.id && value === 'msg-1'),
+        target: rows.find((r) => r.id === 'msg-1'),
+        other: rows.find((r) => r.id === 'msg-2'),
       },
       expected: {
-        set: { content: 'edited', editedAt },
-        whereOnId: true,
+        target: expect.objectContaining({ content: 'edited', editedAt }),
+        other: expect.objectContaining({ content: 'untouched', editedAt: null }),
       },
     });
   });
@@ -467,152 +369,147 @@ describe('channelMessageRepository.updateChannelMessageContent', () => {
 
 describe('channelMessageRepository.softDeleteChannelMessage', () => {
   it('flips isActive=false and returns 1 row affected for a fresh delete', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', isActive: true, parentId: null, replyCount: 0 },
+    ]);
 
     const count = await channelMessageRepository.softDeleteChannelMessage('msg-1');
 
-    const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
+    const rows = testDbState.rows('channelMessages');
     assert({
       given: 'a delete request for a top-level message',
-      should: 'set isActive=false and return 1 row affected so the route can audit + broadcast',
-      actual: { set, count },
-      expected: { set: { isActive: false }, count: 1 },
+      should: 'set isActive=false on the targeted row and return 1 row affected so the route can audit + broadcast',
+      actual: { isActive: rows[0].isActive, count },
+      expected: { isActive: false, count: 1 },
     });
   });
 
   it('returns 0 affected rows on a double soft-delete (idempotency guard for routes)', async () => {
-    // The where(isActive=true) filter makes a second delete a no-op; the route
-    // must use the returned count to skip duplicate audit + broadcast.
-    mockUpdateReturning.mockResolvedValueOnce([]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', isActive: false, parentId: null, replyCount: 0 },
+    ]);
 
-    const count = await channelMessageRepository.softDeleteChannelMessage('already-deleted');
+    const count = await channelMessageRepository.softDeleteChannelMessage('msg-1');
 
     assert({
       given: 'a soft-delete of an already-inactive message',
       should: 'return 0 so the route can 404 instead of re-broadcasting message_deleted',
-      actual: { count, secondUpdateIssued: mockUpdateSet.mock.calls.length },
-      expected: { count: 0, secondUpdateIssued: 1 },
+      actual: count,
+      expected: 0,
     });
   });
 
   it('decrements the parent replyCount when the soft-deleted row is a thread reply, scoped to the returned parentId', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', isActive: true, parentId: null, replyCount: 3 },
+      { id: 'sibling-parent', pageId: 'page-1', isActive: true, parentId: null, replyCount: 5 },
+      { id: 'reply-1', pageId: 'page-1', isActive: true, parentId: 'parent-1', replyCount: 0 },
+    ]);
 
     await channelMessageRepository.softDeleteChannelMessage('reply-1');
 
-    // Two update calls: 1) flip isActive=false on the reply,
-    // 2) replyCount = GREATEST(replyCount - 1, 0) on the parent.
-    const setCalls = mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>);
-    // Verify the SECOND update's WHERE actually targets the parentId returned
-    // by the first UPDATE — this guards against a future refactor that
-    // accidentally decrements the wrong row.
-    const eqCalls = vi.mocked(eq).mock.calls;
-    const targetsParentId = eqCalls.some(
-      ([field, value]) => field === channelMessages.id && value === 'parent-1'
-    );
+    const rows = testDbState.rows('channelMessages');
     assert({
       given: 'a soft-delete of a thread reply',
-      should: 'issue two updates inside the same tx (flip isActive + decrement parent.replyCount) and target the returned parentId',
+      should: 'decrement the targeted parent.replyCount by exactly 1, never touch sibling parents, and tombstone the reply',
       actual: {
-        firstSet: setCalls[0],
-        secondHasReplyCount: 'replyCount' in (setCalls[1] ?? {}),
-        targetsParentId,
+        parent: rows.find((r) => r.id === 'parent-1')?.replyCount,
+        sibling: rows.find((r) => r.id === 'sibling-parent')?.replyCount,
+        replyActive: rows.find((r) => r.id === 'reply-1')?.isActive,
       },
-      expected: {
-        firstSet: { isActive: false },
-        secondHasReplyCount: true,
-        targetsParentId: true,
-      },
+      expected: { parent: 2, sibling: 5, replyActive: false },
     });
   });
 
   it('does NOT issue a parent-counter update when the row is top-level (parentId is null)', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
+    testDbState.seed('channelMessages', [
+      { id: 'top-1', pageId: 'page-1', isActive: true, parentId: null, replyCount: 7 },
+    ]);
 
     await channelMessageRepository.softDeleteChannelMessage('top-1');
 
+    const rows = testDbState.rows('channelMessages');
     assert({
       given: 'a soft-delete of a top-level message (parentId IS NULL)',
-      should: 'only run the isActive flip — never touch a parent counter',
-      actual: mockUpdateSet.mock.calls.length,
-      expected: 1,
+      should: 'flip isActive but never touch its own replyCount or any other row',
+      actual: { isActive: rows[0].isActive, replyCount: rows[0].replyCount, count: rows.length },
+      expected: { isActive: false, replyCount: 7, count: 1 },
     });
   });
 });
 
 describe('channelMessageRepository.restoreChannelMessage', () => {
   it('flips isActive=true when restoring a row and returns 1 row affected', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', isActive: false, parentId: null, replyCount: 0 },
+    ]);
 
     const count = await channelMessageRepository.restoreChannelMessage('msg-1');
 
-    const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
+    const rows = testDbState.rows('channelMessages');
     assert({
-      given: 'a restore request for a top-level row',
+      given: 'a restore request for a tombstoned top-level row',
       should: 'flip isActive back to true on the targeted row and return 1',
-      actual: { set, count },
-      expected: { set: { isActive: true }, count: 1 },
+      actual: { isActive: rows[0].isActive, count },
+      expected: { isActive: true, count: 1 },
     });
   });
 
-  // Helper for restore tests: stub the parent re-read inside the tx.
-  // restoreChannelMessage uses `tx.select().from().where().for('update')` for
-  // the parent isActive check (mirrors the insert-side lock).
-  const stubParentSelectForUpdate = (parent: Record<string, unknown> | null) => {
-    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
-    const whereFn = vi.fn(() => ({ for: forFn }));
-    const fromFn = vi.fn(() => ({ where: whereFn }));
-    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
-    return { forFn };
-  };
-
   it('increments the parent replyCount when the restored row is a thread reply AND the parent is still active', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
-    stubParentSelectForUpdate({ id: 'parent-1', isActive: true });
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', isActive: true, parentId: null, replyCount: 1 },
+      { id: 'reply-1', pageId: 'page-1', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
 
     const count = await channelMessageRepository.restoreChannelMessage('reply-1');
 
+    const rows = testDbState.rows('channelMessages');
     assert({
       given: 'a restore of a thread reply whose parent is still active',
-      should: 'return 1 row restored AND run two updates (isActive flip + parent.replyCount bump)',
+      should: 'restore the reply and bump the active parent.replyCount by 1',
       actual: {
         count,
-        updateCount: mockUpdateSet.mock.calls.length,
-        secondHasReplyCount: 'replyCount' in (mockUpdateSet.mock.calls[1]?.[0] as Record<string, unknown> ?? {}),
+        replyActive: rows.find((r) => r.id === 'reply-1')?.isActive,
+        parentReplyCount: rows.find((r) => r.id === 'parent-1')?.replyCount,
       },
-      expected: { count: 1, updateCount: 2, secondHasReplyCount: true },
+      expected: { count: 1, replyActive: true, parentReplyCount: 2 },
     });
   });
 
   it('does NOT increment the parent counter when the parent has been soft-deleted in the meantime, but still returns 1 row restored', async () => {
-    // Race scenario: reply was soft-deleted, parent was then soft-deleted, now
-    // an admin restores the reply. Bumping a tombstoned parent's replyCount
-    // would corrupt the counter the moment a future restore brings the parent
-    // back. Skip the bump — but the reply IS restored, so return 1.
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
-    stubParentSelectForUpdate({ id: 'parent-1', isActive: false });
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', isActive: false, parentId: null, replyCount: 5 },
+      { id: 'reply-1', pageId: 'page-1', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
 
     const count = await channelMessageRepository.restoreChannelMessage('reply-1');
 
+    const rows = testDbState.rows('channelMessages');
     assert({
       given: 'a restore of a thread reply whose parent is itself soft-deleted',
-      should: 'flip isActive=true on the reply, skip the parent bump, AND still return 1',
-      actual: { count, updateCount: mockUpdateSet.mock.calls.length },
-      expected: { count: 1, updateCount: 1 },
+      should: 'restore the reply but leave the tombstoned parent counter untouched (so a future parent restore does not over-count)',
+      actual: {
+        count,
+        replyActive: rows.find((r) => r.id === 'reply-1')?.isActive,
+        parentReplyCount: rows.find((r) => r.id === 'parent-1')?.replyCount,
+      },
+      expected: { count: 1, replyActive: true, parentReplyCount: 5 },
     });
   });
 
-  it('locks the parent row for the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
-    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
-    const { forFn } = stubParentSelectForUpdate({ id: 'parent-1', isActive: true });
+  it('locks the parent row for the duration of the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', isActive: true, parentId: null, replyCount: 1 },
+      { id: 'reply-1', pageId: 'page-1', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
 
     await channelMessageRepository.restoreChannelMessage('reply-1');
 
     assert({
-      given: 'a restore parent re-read inside the tx',
-      should: 'invoke .for("update") so a concurrent softDelete blocks until the restore commits',
-      actual: forFn.mock.calls[0]?.[0],
-      expected: 'update',
+      given: 'a restore of a thread reply whose parent must be re-validated under lock',
+      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
     });
   });
 });
@@ -627,331 +524,407 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
     attachmentMeta: null,
   };
 
-  // The helper validates the parent with `tx.select(...).from(...).where(...).for('update')`.
-  // This helper stubs the FOR UPDATE chain to return the supplied parent row
-  // (or no row, when null is passed).
-  const stubParentForUpdate = (parent: Record<string, unknown> | null) => {
-    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
-    const whereFn = vi.fn(() => ({ for: forFn }));
-    const fromFn = vi.fn(() => ({ where: whereFn }));
-    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
-    return { forFn, whereFn, fromFn };
+  const seedActiveParent = (overrides: Partial<Record<string, unknown>> = {}) => {
+    testDbState.seed('channelMessages', [
+      {
+        id: 'parent-1',
+        pageId: 'page-1',
+        userId: 'user-parent',
+        parentId: null,
+        isActive: true,
+        replyCount: 0,
+        ...overrides,
+      },
+    ]);
   };
 
   it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
-    const { forFn } = stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'page-1',
-      parentId: null,
-      userId: 'user-parent',
-      isActive: true,
-    });
-    mockInsertReturning.mockResolvedValueOnce([
-      { id: 'reply-1', createdAt: new Date(), parentId: 'parent-1' },
-    ]);
-    mockUpdateReturning.mockResolvedValueOnce([
-      { replyCount: 1, lastReplyAt: new Date() },
-    ]);
+    seedActiveParent();
 
     await channelMessageRepository.insertChannelThreadReply(baseInput);
 
     assert({
       given: 'a parent validation read inside the insert tx',
-      should: 'invoke .for("update") so a concurrent softDelete blocks until this tx commits',
-      actual: forFn.mock.calls[0]?.[0],
-      expected: 'update',
+      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until this tx commits',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
     });
   });
 
-  it('rejects with parent_not_found when the parent row is missing or inactive', async () => {
-    stubParentForUpdate(null);
-
+  it('rejects with parent_not_found when the parent row is missing', async () => {
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
 
     assert({
-      given: 'a parent id that does not resolve to an active row',
+      given: 'a parent id that does not resolve to any row',
       should: 'return parent_not_found WITHOUT inserting a reply or follower row',
-      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
-      expected: { kind: 'parent_not_found', insertCount: 0 },
+      actual: {
+        kind: result.kind,
+        replyCount: testDbState.count('channelMessages'),
+        followerCount: testDbState.count('channelThreadFollowers'),
+      },
+      expected: { kind: 'parent_not_found', replyCount: 0, followerCount: 0 },
     });
   });
 
   it('rejects with parent_not_found when the parent row exists but is soft-deleted (isActive=false)', async () => {
-    stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'page-1',
-      parentId: null,
-      userId: 'parent-author',
-      isActive: false,
-    });
+    seedActiveParent({ isActive: false });
 
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
 
     assert({
       given: 'a parent that has been soft-deleted',
       should: 'return parent_not_found — clients cannot reply into a tombstoned thread',
-      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
-      expected: { kind: 'parent_not_found', insertCount: 0 },
+      actual: {
+        kind: result.kind,
+        // The seeded parent stays the only row — no reply was added.
+        rowCount: testDbState.count('channelMessages'),
+      },
+      expected: { kind: 'parent_not_found', rowCount: 1 },
     });
   });
 
   it('rejects with parent_wrong_page when the parent belongs to a different channel', async () => {
-    stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'other-page',
-      parentId: null,
-      userId: 'parent-author',
-      isActive: true,
-    });
+    seedActiveParent({ pageId: 'other-page' });
 
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
 
     assert({
       given: 'a parent id whose pageId differs from the request page',
       should: 'return parent_wrong_page so the route can 400 — never insert a reply scoped to the wrong channel',
-      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
-      expected: { kind: 'parent_wrong_page', insertCount: 0 },
+      actual: { kind: result.kind, rowCount: testDbState.count('channelMessages') },
+      expected: { kind: 'parent_wrong_page', rowCount: 1 },
     });
   });
 
   it('rejects with parent_not_top_level when the parent itself has parentId set (depth-2 attempt)', async () => {
-    stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'page-1',
-      parentId: 'grandparent',
-      userId: 'parent-author',
-      isActive: true,
-    });
+    seedActiveParent({ parentId: 'grandparent' });
 
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
 
     assert({
       given: 'a parent that is itself a thread reply',
       should: 'return parent_not_top_level — threads are exactly one level deep',
-      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
-      expected: { kind: 'parent_not_top_level', insertCount: 0 },
+      actual: { kind: result.kind, rowCount: testDbState.count('channelMessages') },
+      expected: { kind: 'parent_not_top_level', rowCount: 1 },
     });
   });
 
   it('inserts the reply with parentId set, bumps replyCount + lastReplyAt, and upserts both followers', async () => {
-    stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'page-1',
-      parentId: null,
-      userId: 'user-parent',
-      isActive: true,
-    });
-    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
-    mockInsertReturning
-      .mockResolvedValueOnce([
-        { id: 'reply-1', createdAt: replyCreatedAt, parentId: 'parent-1' },
-      ]);
-    mockUpdateReturning.mockResolvedValueOnce([
-      { replyCount: 1, lastReplyAt: replyCreatedAt },
-    ]);
+    seedActiveParent();
 
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
 
-    const replyValues = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
-    const followerValues = mockInsertValues.mock.calls[1]?.[0] as Array<Record<string, unknown>>;
-    const updateSet = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
+    const messages = testDbState.rows('channelMessages');
+    const followers = testDbState.rows('channelThreadFollowers');
+    const reply = messages.find((r) => r.parentId === 'parent-1');
+    const parent = messages.find((r) => r.id === 'parent-1');
     assert({
       given: 'a happy-path thread reply with a distinct replier and parent author',
-      should: 'insert the reply with parentId, set lastReplyAt, and upsert followers for parent author + replier',
+      should: 'insert the reply with parentId=parent, bump parent.replyCount, set lastReplyAt, and add a follower row for both the parent author and the replier',
       actual: {
         kind: result.kind,
-        replyParent: replyValues.parentId,
-        updateHasReplyCount: 'replyCount' in updateSet,
-        updateLastReplyAt: updateSet.lastReplyAt,
-        followerUserIds: followerValues.map((r) => r.userId).sort(),
-        usedOnConflictDoNothing: mockInsertOnConflictDoNothing.mock.calls.length,
+        replyParentId: reply?.parentId,
+        parentReplyCount: parent?.replyCount,
+        parentLastReplyAt: parent?.lastReplyAt,
+        followerUserIds: followers.map((f) => f.userId).sort(),
       },
       expected: {
         kind: 'ok',
-        replyParent: 'parent-1',
-        updateHasReplyCount: true,
-        updateLastReplyAt: replyCreatedAt,
+        replyParentId: 'parent-1',
+        parentReplyCount: 1,
+        parentLastReplyAt: reply?.createdAt,
         followerUserIds: ['user-parent', 'user-replier'],
-        usedOnConflictDoNothing: 1,
       },
-    });
-  });
-
-  it('dedupes followers when the parent author replies to their own thread (one follower row, not two)', async () => {
-    stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'page-1',
-      parentId: null,
-      userId: 'user-self',
-      isActive: true,
-    });
-    mockInsertReturning.mockResolvedValueOnce([
-      { id: 'reply-1', createdAt: new Date(), parentId: 'parent-1' },
-    ]);
-    mockUpdateReturning.mockResolvedValueOnce([
-      { replyCount: 1, lastReplyAt: new Date() },
-    ]);
-
-    await channelMessageRepository.insertChannelThreadReply({
-      ...baseInput,
-      userId: 'user-self',
-    });
-
-    const followerValues = mockInsertValues.mock.calls[1]?.[0] as Array<Record<string, unknown>>;
-    assert({
-      given: 'a reply where the parent author and replier are the same user',
-      should: 'send a single follower row to onConflictDoNothing — Postgres rejects duplicate rows in one INSERT even with ON CONFLICT',
-      actual: followerValues,
-      expected: [{ rootMessageId: 'parent-1', userId: 'user-self' }],
     });
   });
 
   it('writes a second top-level row with mirroredFromId set when alsoSendToParent is true', async () => {
-    stubParentForUpdate({
-      id: 'parent-1',
-      pageId: 'page-1',
-      parentId: null,
-      userId: 'user-parent',
-      isActive: true,
-    });
-    mockInsertReturning
-      .mockResolvedValueOnce([
-        { id: 'reply-1', createdAt: new Date('2026-05-04T12:00:00Z'), parentId: 'parent-1' },
-      ])
-      .mockResolvedValueOnce([
-        { id: 'mirror-1', createdAt: new Date('2026-05-04T12:00:01Z'), mirroredFromId: 'reply-1' },
-      ]);
-    mockUpdateReturning.mockResolvedValueOnce([
-      { replyCount: 1, lastReplyAt: new Date('2026-05-04T12:00:00Z') },
-    ]);
+    seedActiveParent();
 
     const result = await channelMessageRepository.insertChannelThreadReply({
       ...baseInput,
       alsoSendToParent: true,
     });
 
-    // Three insert pipelines: 1) reply, 2) followers, 3) mirror top-level row.
-    const insertCount = mockInsertValues.mock.calls.length;
-    const mirrorValues = mockInsertValues.mock.calls[2]?.[0] as Record<string, unknown>;
+    const messages = testDbState.rows('channelMessages');
+    const reply = messages.find((r) => r.parentId === 'parent-1');
+    const mirror = messages.find((r) => r.mirroredFromId === reply?.id);
     assert({
       given: 'an alsoSendToParent thread reply',
-      should: 'write a second top-level row with mirroredFromId pointing at the reply id',
+      should: 'write a second top-level row (parentId IS NULL) with mirroredFromId pointing at the reply',
       actual: {
         kind: result.kind,
-        insertCount,
-        mirrorParentId: mirrorValues?.parentId ?? null,
-        mirrorMirroredFromId: mirrorValues?.mirroredFromId,
+        // Parent + reply + mirror.
+        rowCount: messages.length,
+        mirrorParentId: mirror?.parentId,
+        mirrorMirroredFromId: mirror?.mirroredFromId,
         resultMirrorId: result.kind === 'ok' ? result.mirror?.id : null,
       },
       expected: {
         kind: 'ok',
-        insertCount: 3,
+        rowCount: 3,
         mirrorParentId: null,
-        mirrorMirroredFromId: 'reply-1',
-        resultMirrorId: 'mirror-1',
+        mirrorMirroredFromId: reply?.id,
+        resultMirrorId: mirror?.id,
       },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Edge cases (PR 6b — added per audit findings)
+  // -------------------------------------------------------------------------
+
+  it('upserts exactly two follower rows for a reply with distinct parent author and replier', async () => {
+    seedActiveParent();
+
+    await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    const followers = testDbState.rows('channelThreadFollowers');
+    assert({
+      given: 'a thread reply where the parent author and the replier are different users',
+      should: 'leave exactly two rows in channelThreadFollowers, one for each — and both keyed to the root',
+      actual: {
+        rowCount: followers.length,
+        rows: followers
+          .map((f) => ({ rootMessageId: f.rootMessageId, userId: f.userId }))
+          .sort((a, b) => String(a.userId).localeCompare(String(b.userId))),
+      },
+      expected: {
+        rowCount: 2,
+        rows: [
+          { rootMessageId: 'parent-1', userId: 'user-parent' },
+          { rootMessageId: 'parent-1', userId: 'user-replier' },
+        ],
+      },
+    });
+  });
+
+  it('upserts exactly one follower row when the parent author replies to their own thread (self-reply dedup)', async () => {
+    seedActiveParent({ userId: 'user-self' });
+
+    await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      userId: 'user-self',
+    });
+
+    const followers = testDbState.rows('channelThreadFollowers');
+    assert({
+      given: 'a thread reply where the parent author and the replier are the same user',
+      should: 'collapse to a single follower row — the impl dedupes before INSERT to avoid Postgres rejecting two identical rows under onConflictDoNothing',
+      actual: followers.map((f) => ({ rootMessageId: f.rootMessageId, userId: f.userId })),
+      expected: [{ rootMessageId: 'parent-1', userId: 'user-self' }],
+    });
+  });
+
+  it('rolls the entire transaction back when the follower upsert step throws — no reply, no follower, parent counter unchanged', async () => {
+    const seededLastReplyAt = new Date('2026-04-01T00:00:00Z');
+    seedActiveParent({ replyCount: 7, lastReplyAt: seededLastReplyAt });
+    testDbState.failBefore('insert', 'channelThreadFollowers');
+
+    await expect(
+      channelMessageRepository.insertChannelThreadReply(baseInput)
+    ).rejects.toThrow();
+
+    const messages = testDbState.rows('channelMessages');
+    const followers = testDbState.rows('channelThreadFollowers');
+    const parent = messages.find((r) => r.id === 'parent-1');
+    assert({
+      given: 'an insertChannelThreadReply call where the follower upsert step fails inside the transaction',
+      should: 'roll back the reply insert AND the parent.replyCount + lastReplyAt bumps — only the seeded parent remains, every counter as-seeded, no followers',
+      actual: {
+        rowCount: messages.length,
+        parentReplyCount: parent?.replyCount,
+        parentLastReplyAt: parent?.lastReplyAt,
+        followerCount: followers.length,
+      },
+      expected: {
+        rowCount: 1,
+        parentReplyCount: 7,
+        parentLastReplyAt: seededLastReplyAt,
+        followerCount: 0,
+      },
+    });
+  });
+
+  it('rolls the entire transaction back when alsoSendToParent mirror-insert throws — reply rolled back, no mirror, parent counter unchanged', async () => {
+    seedActiveParent({ replyCount: 4 });
+    // The reply is the first channelMessages insert; the mirror is the second
+    // (after the followers insert hits channelThreadFollowers). Skip the first
+    // and fail the second so we exercise the rollback after a successful reply
+    // write.
+    testDbState.failBefore('insert', 'channelMessages', { skip: 1 });
+
+    await expect(
+      channelMessageRepository.insertChannelThreadReply({
+        ...baseInput,
+        alsoSendToParent: true,
+      })
+    ).rejects.toThrow();
+
+    const messages = testDbState.rows('channelMessages');
+    const followers = testDbState.rows('channelThreadFollowers');
+    const parent = messages.find((r) => r.id === 'parent-1');
+    assert({
+      given: 'an alsoSendToParent reply where the mirror insert step throws inside the transaction',
+      should: 'roll back EVERY write — no thread reply, no mirror, no follower rows, parent counter exactly as seeded',
+      actual: {
+        rowCount: messages.length,
+        parentReplyCount: parent?.replyCount,
+        followerCount: followers.length,
+      },
+      expected: { rowCount: 1, parentReplyCount: 4, followerCount: 0 },
+    });
+  });
+
+  it('soft-deleting a reply decrements parent.replyCount; restoring it (parent still active) increments it back', async () => {
+    seedActiveParent({ replyCount: 3 });
+    testDbState.seed('channelMessages', [
+      { id: 'reply-1', pageId: 'page-1', userId: 'user-replier', parentId: 'parent-1', isActive: true, replyCount: 0 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+    const afterDelete = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1')?.replyCount;
+    await channelMessageRepository.restoreChannelMessage('reply-1');
+    const afterRestore = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1')?.replyCount;
+
+    assert({
+      given: 'a parent with replyCount=3 and an active reply, then a soft-delete followed by a restore',
+      should: 'decrement parent.replyCount to 2 on delete, then increment back to 3 on restore (parent stays active)',
+      actual: { afterDelete, afterRestore },
+      expected: { afterDelete: 2, afterRestore: 3 },
+    });
+  });
+
+  it('restoring a reply when the parent itself has been soft-deleted in the meantime does NOT bump the tombstoned parent counter', async () => {
+    // Parent active with 3 replies. Soft-delete a reply (parent → 2). Then
+    // soft-delete the parent (parent stays at 2 internally, but tombstoned).
+    // Restoring the reply should NOT bump the tombstoned parent's counter
+    // back to 3 — see channel-message-repository.ts:213-247 for the FOR UPDATE
+    // rationale.
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'user-parent', parentId: null, isActive: true, replyCount: 2 },
+      { id: 'reply-1', pageId: 'page-1', userId: 'user-replier', parentId: 'parent-1', isActive: false, replyCount: 0 },
+    ]);
+    // Now soft-delete the parent so it is itself tombstoned.
+    await channelMessageRepository.softDeleteChannelMessage('parent-1');
+    const parentBeforeRestore = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    expect(parentBeforeRestore?.isActive).toBe(false);
+
+    await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    const rows = testDbState.rows('channelMessages');
+    const parent = rows.find((r) => r.id === 'parent-1');
+    const reply = rows.find((r) => r.id === 'reply-1');
+    assert({
+      given: 'a restore of a reply whose parent has been soft-deleted in the meantime',
+      should: 'restore the reply (isActive=true) but leave the tombstoned parent.replyCount exactly where it was',
+      actual: {
+        replyActive: reply?.isActive,
+        parentActive: parent?.isActive,
+        parentReplyCount: parent?.replyCount,
+      },
+      expected: { replyActive: true, parentActive: false, parentReplyCount: 2 },
     });
   });
 });
 
 describe('channelMessageRepository.listChannelThreadReplies', () => {
-  it('filters by parentId and asks for ascending order', async () => {
-    mockChannelMessagesFindMany.mockResolvedValueOnce([]);
+  it('filters by parentId and isActive=true and returns rows ascending by (createdAt, id)', async () => {
+    const t0 = new Date('2026-05-04T12:00:00Z');
+    const t1 = new Date('2026-05-04T12:01:00Z');
+    const t2 = new Date('2026-05-04T12:02:00Z');
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', isActive: true, parentId: null },
+      { id: 'r-3', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: t2 },
+      { id: 'r-1', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: t0 },
+      { id: 'r-2', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: t1 },
+      { id: 'r-deleted', pageId: 'page-1', isActive: false, parentId: 'parent-1', createdAt: t1 },
+      { id: 'other-parent-reply', pageId: 'page-1', isActive: true, parentId: 'other', createdAt: t1 },
+    ]);
 
-    await channelMessageRepository.listChannelThreadReplies({
-      rootId: 'parent-1',
-      limit: 50,
-    });
+    const result = await channelMessageRepository.listChannelThreadReplies({ rootId: 'parent-1', limit: 50 });
 
-    const eqCalls = vi.mocked(eq).mock.calls;
-    const ascCalls = vi.mocked(asc).mock.calls;
     assert({
-      given: 'a list-replies request for a thread root',
-      should: 'WHERE parentId = root AND order ascending by (createdAt, id)',
-      actual: {
-        scopedToParent: eqCalls.some(
-          ([field, value]) => field === channelMessages.parentId && value === 'parent-1'
-        ),
-        ascCount: ascCalls.length,
-      },
-      expected: { scopedToParent: true, ascCount: 2 },
+      given: 'a list-replies request for a thread root with active+deleted replies and an unrelated reply on another parent',
+      should: 'return only the parent-1 active replies, ordered ascending by (createdAt, id)',
+      actual: result.map((r) => r.id),
+      expected: ['r-1', 'r-2', 'r-3'],
     });
   });
 
   it('builds a strictly-greater-than composite cursor when after is supplied', async () => {
-    mockChannelMessagesFindMany.mockResolvedValueOnce([]);
-    const after = { createdAt: new Date('2026-05-04T12:00:00Z'), id: 'reply-cursor' };
+    const t0 = new Date('2026-05-04T12:00:00Z');
+    const t1 = new Date('2026-05-04T12:01:00Z');
+    testDbState.seed('channelMessages', [
+      { id: 'r-1', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: t0 },
+      { id: 'r-2-cursor', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: t1 },
+      { id: 'r-3', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: t1 },
+      { id: 'r-4', pageId: 'page-1', isActive: true, parentId: 'parent-1', createdAt: new Date('2026-05-04T12:02:00Z') },
+    ]);
 
-    await channelMessageRepository.listChannelThreadReplies({
+    const result = await channelMessageRepository.listChannelThreadReplies({
       rootId: 'parent-1',
       limit: 50,
-      after,
+      after: { createdAt: t1, id: 'r-2-cursor' },
     });
 
-    const gtCalls = vi.mocked(gt).mock.calls;
     assert({
-      given: 'an ascending-cursor pagination request',
-      should: 'use gt() against both createdAt and id so the next page never re-emits the cursor row',
-      actual: {
-        createdAt: gtCalls.some(([field, value]) => field === channelMessages.createdAt && value === after.createdAt),
-        id: gtCalls.some(([field, value]) => field === channelMessages.id && value === after.id),
-      },
-      expected: { createdAt: true, id: true },
+      given: 'an ascending-cursor pagination request at (t1, r-2-cursor)',
+      should: 'return rows strictly newer by createdAt OR same-createdAt with strictly larger id — never the cursor row, never anything older',
+      actual: result.map((r) => r.id).sort(),
+      expected: ['r-3', 'r-4'],
     });
   });
 });
 
 describe('channelMessageRepository thread follower helpers', () => {
-  it('addChannelThreadFollower inserts (rootId, userId) and uses onConflictDoNothing for idempotency', async () => {
+  it('addChannelThreadFollower inserts (rootId, userId) and is idempotent under a re-add', async () => {
+    await channelMessageRepository.addChannelThreadFollower('root-1', 'user-1');
     await channelMessageRepository.addChannelThreadFollower('root-1', 'user-1');
 
-    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    const rows = testDbState.rows('channelThreadFollowers');
     assert({
-      given: 'an explicit follower add',
-      should: 'insert the (rootMessageId, userId) pair with onConflictDoNothing so a re-add is a no-op',
-      actual: {
-        values,
-        usedOnConflictDoNothing: mockInsertOnConflictDoNothing.mock.calls.length,
-      },
-      expected: {
-        values: { rootMessageId: 'root-1', userId: 'user-1' },
-        usedOnConflictDoNothing: 1,
-      },
+      given: 'two adds of the same (rootId, userId)',
+      should: 'persist exactly one row — onConflictDoNothing makes the second add a no-op',
+      actual: rows.map((r) => ({ rootMessageId: r.rootMessageId, userId: r.userId })),
+      expected: [{ rootMessageId: 'root-1', userId: 'user-1' }],
     });
   });
 
   it('removeChannelThreadFollower deletes scoped to (rootId, userId) — never another user', async () => {
+    testDbState.seed('channelThreadFollowers', [
+      { rootMessageId: 'root-1', userId: 'user-1' },
+      { rootMessageId: 'root-1', userId: 'user-other' },
+      { rootMessageId: 'root-other', userId: 'user-1' },
+    ]);
+
     await channelMessageRepository.removeChannelThreadFollower('root-1', 'user-1');
 
-    const eqCalls = vi.mocked(eq).mock.calls;
+    const remaining = testDbState
+      .rows('channelThreadFollowers')
+      .map((r) => `${r.rootMessageId}:${r.userId}`)
+      .sort();
     assert({
-      given: 'an explicit follower remove',
-      should: 'WHERE on both rootMessageId AND userId so we never delete another user\'s follow row',
-      actual: {
-        scopedRoot: eqCalls.some(
-          ([field, value]) => field === channelThreadFollowers.rootMessageId && value === 'root-1'
-        ),
-        scopedUser: eqCalls.some(
-          ([field, value]) => field === channelThreadFollowers.userId && value === 'user-1'
-        ),
-      },
-      expected: { scopedRoot: true, scopedUser: true },
+      given: 'a remove of (root-1, user-1) when other follower rows exist',
+      should: 'delete only the matching tuple — leave (root-1, user-other) and (root-other, user-1) intact',
+      actual: remaining,
+      expected: ['root-1:user-other', 'root-other:user-1'],
     });
   });
 
   it('listChannelThreadFollowers returns a flat array of user ids — needed by inbox fanout', async () => {
-    const fromWhere = vi.fn().mockResolvedValueOnce([
-      { userId: 'user-a' },
-      { userId: 'user-b' },
+    testDbState.seed('channelThreadFollowers', [
+      { rootMessageId: 'root-1', userId: 'user-a' },
+      { rootMessageId: 'root-1', userId: 'user-b' },
+      { rootMessageId: 'root-other', userId: 'user-c' },
     ]);
-    mockSelectFrom.mockReturnValueOnce({ where: fromWhere });
 
     const result = await channelMessageRepository.listChannelThreadFollowers('root-1');
 
     assert({
-      given: 'a thread root with two followers',
-      should: 'return a flat string[] of user ids — callers fan out inbox events without re-shaping',
-      actual: result,
+      given: 'a thread root with two followers and an unrelated follower on another root',
+      should: 'return a flat string[] of user ids scoped to the requested root only',
+      actual: result.sort(),
       expected: ['user-a', 'user-b'],
     });
   });
@@ -959,22 +932,25 @@ describe('channelMessageRepository thread follower helpers', () => {
 
 describe('channelMessageRepository.addChannelReaction', () => {
   it('writes (messageId, userId, emoji) verbatim and returns the inserted row', async () => {
-    mockInsertReturning.mockResolvedValueOnce([{ id: 'reaction-1' }]);
-
     const result = await channelMessageRepository.addChannelReaction({
       messageId: 'msg-1',
       userId: 'user-1',
       emoji: '👍',
     });
 
-    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    const rows = testDbState.rows('channelMessageReactions');
     assert({
       given: 'a reaction add request',
-      should: 'persist the triple (messageId, userId, emoji) and return the new row id',
-      actual: { values, result },
+      should: 'persist the triple (messageId, userId, emoji) and return the inserted row',
+      actual: {
+        rowCount: rows.length,
+        persisted: { messageId: rows[0].messageId, userId: rows[0].userId, emoji: rows[0].emoji },
+        returned: { messageId: result.messageId, userId: result.userId, emoji: result.emoji },
+      },
       expected: {
-        values: { messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
-        result: { id: 'reaction-1' },
+        rowCount: 1,
+        persisted: { messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
+        returned: { messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
       },
     });
   });
@@ -982,26 +958,24 @@ describe('channelMessageRepository.addChannelReaction', () => {
 
 describe('channelMessageRepository.loadChannelReactionWithUser', () => {
   it('fetches the reaction with the user relation so broadcasts include name+id', async () => {
-    mockReactionsFindFirst.mockResolvedValueOnce({ id: 'reaction-1', user: { id: 'u', name: 'n' } });
+    testDbState.seed('users', [{ id: 'u-1', name: 'Alice' }]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-1', emoji: '👍' },
+    ]);
 
-    await channelMessageRepository.loadChannelReactionWithUser('reaction-1');
+    const result = await channelMessageRepository.loadChannelReactionWithUser('rx-1');
 
-    const call = mockReactionsFindFirst.mock.calls[0]?.[0] as {
-      with: { user: { columns: Record<string, true> } };
-    };
     assert({
       given: 'a freshly added reaction',
       should: 'load the user relation so the broadcast payload renders the actor without a re-fetch',
-      actual: call.with.user.columns,
-      expected: { id: true, name: true },
+      actual: (result?.user as { id: string; name: string } | null),
+      expected: { id: 'u-1', name: 'Alice' },
     });
   });
 });
 
 describe('channelMessageRepository.removeChannelReaction', () => {
   it('returns the count of rows actually removed so the route can 404 on no-op', async () => {
-    mockDeleteReturning.mockResolvedValueOnce([]);
-
     const removed = await channelMessageRepository.removeChannelReaction({
       messageId: 'msg-1',
       userId: 'user-1',
@@ -1009,7 +983,7 @@ describe('channelMessageRepository.removeChannelReaction', () => {
     });
 
     assert({
-      given: 'a delete that matched no rows',
+      given: 'a delete that matched no rows (table is empty)',
       should: 'return 0 so the route can return 404 instead of pretending success',
       actual: removed,
       expected: 0,
@@ -1017,29 +991,28 @@ describe('channelMessageRepository.removeChannelReaction', () => {
   });
 
   it('scopes the delete to (messageId, userId, emoji) — never deletes another user\'s reaction', async () => {
-    mockDeleteReturning.mockResolvedValueOnce([{ id: 'reaction-1' }]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-mine', messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
+      { id: 'rx-other-user', messageId: 'msg-1', userId: 'user-other', emoji: '👍' },
+      { id: 'rx-other-msg', messageId: 'msg-other', userId: 'user-1', emoji: '👍' },
+      { id: 'rx-other-emoji', messageId: 'msg-1', userId: 'user-1', emoji: '🎉' },
+    ]);
 
-    await channelMessageRepository.removeChannelReaction({
+    const removed = await channelMessageRepository.removeChannelReaction({
       messageId: 'msg-1',
       userId: 'user-1',
       emoji: '👍',
     });
 
-    const eqCalls = vi.mocked(eq).mock.calls;
-    const hasUserId = eqCalls.some(
-      ([field, value]) => field === channelMessageReactions.userId && value === 'user-1'
-    );
-    const hasMessageId = eqCalls.some(
-      ([field, value]) => field === channelMessageReactions.messageId && value === 'msg-1'
-    );
-    const hasEmoji = eqCalls.some(
-      ([field, value]) => field === channelMessageReactions.emoji && value === '👍'
-    );
+    const remaining = testDbState
+      .rows('channelMessageReactions')
+      .map((r) => r.id)
+      .sort();
     assert({
-      given: 'a reaction-removal request',
-      should: 'WHERE on all three of messageId, userId, and emoji so we only remove the requester\'s own reaction',
-      actual: { hasMessageId, hasUserId, hasEmoji },
-      expected: { hasMessageId: true, hasUserId: true, hasEmoji: true },
+      given: 'a reaction-removal request when reactions for other users / messages / emojis exist',
+      should: 'delete only the (msg-1, user-1, 👍) row, return 1, and leave the three unrelated rows intact',
+      actual: { removed, remaining },
+      expected: { removed: 1, remaining: ['rx-other-emoji', 'rx-other-msg', 'rx-other-user'] },
     });
   });
 });
@@ -1070,38 +1043,6 @@ describe('channelMessageRepository surface', () => {
         'updateChannelMessageContent',
         'upsertChannelReadStatus',
       ],
-    });
-  });
-});
-
-// Anchor: locks the parentId IS NULL semantics into the test suite even if the
-// route refactor diverges in shape later. PR 3 will remove this filter only by
-// changing the call signature to accept parentId — at which point this test
-// must be deliberately updated.
-describe('channelMessageRepository.listChannelMessages [thread-prep invariant]', () => {
-  it('uses isNull(channelMessages.parentId) — not a different field — to scope to top-level', async () => {
-    mockChannelMessagesFindMany.mockResolvedValue([]);
-
-    await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
-
-    assert({
-      given: 'a top-level fetch (PR 1 semantics)',
-      should: 'pass channelMessages.parentId to isNull — accidentally passing isActive or pageId would silently break thread isolation later',
-      actual: vi.mocked(isNull).mock.calls.flat(),
-      expected: [channelMessages.parentId],
-    });
-  });
-
-  it('combines page filters with the parentId filter via and()', async () => {
-    mockChannelMessagesFindMany.mockResolvedValue([]);
-
-    await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
-
-    assert({
-      given: 'three top-level filters (pageId, isActive, parentId IS NULL)',
-      should: 'compose them with and() — never with or()',
-      actual: vi.mocked(and).mock.calls.length > 0,
-      expected: true,
     });
   });
 });

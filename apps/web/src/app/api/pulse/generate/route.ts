@@ -451,8 +451,9 @@ export async function POST(req: Request) {
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
     const overdueTasks = await db
-      .select({ title: taskItems.title, priority: taskItems.priority })
+      .select({ title: pages.title, priority: taskItems.priority })
       .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
       .where(
         and(
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
@@ -464,8 +465,9 @@ export async function POST(req: Request) {
       .limit(5);
 
     const todayTasks = await db
-      .select({ title: taskItems.title, priority: taskItems.priority })
+      .select({ title: pages.title, priority: taskItems.priority })
       .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
       .where(
         and(
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),

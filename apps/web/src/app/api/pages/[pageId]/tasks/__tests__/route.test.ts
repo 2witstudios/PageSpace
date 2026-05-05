@@ -220,8 +220,8 @@ describe('Task API Routes', () => {
 
     it('returns tasks when user has view permission', async () => {
       const mockTasks = [
-        { id: 'task-1', title: 'Task 1', status: 'pending' },
-        { id: 'task-2', title: 'Task 2', status: 'completed' },
+        { id: 'task-1', status: 'pending', page: { id: 'p-1', title: 'Task 1', isTrashed: false, position: 0 } },
+        { id: 'task-2', status: 'completed', page: { id: 'p-2', title: 'Task 2', isTrashed: false, position: 1 } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
@@ -266,8 +266,8 @@ describe('Task API Routes', () => {
 
     it('sorts tasks in descending order when sortOrder is desc', async () => {
       const mockTasks = [
-        { id: 'task-1', title: 'First', position: 0, page: { position: 0, isTrashed: false } },
-        { id: 'task-2', title: 'Second', position: 1, page: { position: 1, isTrashed: false } },
+        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'First', position: 0, isTrashed: false } },
+        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Second', position: 1, isTrashed: false } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
@@ -287,8 +287,8 @@ describe('Task API Routes', () => {
 
     it('filters out trashed tasks', async () => {
       const mockTasks = [
-        { id: 'task-1', title: 'Active', position: 0, page: { position: 0, isTrashed: false } },
-        { id: 'task-2', title: 'Trashed', position: 1, page: { position: 1, isTrashed: true } },
+        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Active', position: 0, isTrashed: false } },
+        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Trashed', position: 1, isTrashed: true } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
@@ -307,8 +307,8 @@ describe('Task API Routes', () => {
 
     it('uses task.position as fallback when page.position is undefined', async () => {
       const mockTasks = [
-        { id: 'task-1', title: 'No Page', position: 5, page: null },
-        { id: 'task-2', title: 'Has Page', position: 3, page: { position: 2, isTrashed: false } },
+        { id: 'task-1', position: 5, page: null },
+        { id: 'task-2', position: 3, page: { id: 'p-2', title: 'Has Page', position: 2, isTrashed: false } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
@@ -385,8 +385,8 @@ describe('Task API Routes', () => {
 
     it('searches by description', async () => {
       const mockTasks = [
-        { id: 'task-1', title: 'Generic', description: 'Buy groceries', status: 'pending' },
-        { id: 'task-2', title: 'Call mom', description: null, status: 'pending' },
+        { id: 'task-1', description: 'Buy groceries', status: 'pending', page: { id: 'p-1', title: 'Generic', isTrashed: false, position: 0 } },
+        { id: 'task-2', description: null, status: 'pending', page: { id: 'p-2', title: 'Call mom', isTrashed: false, position: 1 } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
@@ -405,8 +405,8 @@ describe('Task API Routes', () => {
 
     it('filters tasks by search query', async () => {
       const mockTasks = [
-        { id: 'task-1', title: 'Buy groceries', description: 'Milk, bread', status: 'pending' },
-        { id: 'task-2', title: 'Call mom', description: null, status: 'pending' },
+        { id: 'task-1', description: 'Milk, bread', status: 'pending', page: { id: 'p-1', title: 'Buy groceries', isTrashed: false, position: 0 } },
+        { id: 'task-2', description: null, status: 'pending', page: { id: 'p-2', title: 'Call mom', isTrashed: false, position: 1 } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 

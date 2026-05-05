@@ -51,6 +51,31 @@ interface AskAgentResult {
   error?: string;
 }
 
+// Recognizes the AskAgentResult contract — a non-null object that has at least
+// one of the three declared keys. Each key's value is checked against its
+// declared primitive type ONLY when the value is not `undefined`; an explicit
+// `undefined` value (with the key present) is treated the same as the key
+// being absent, matching the optional `?` semantics of the interface. The
+// downstream `!success || !response` gate handles the shape-valid-but-empty
+// case (e.g. `{ success: true }` with no response); this predicate's job is
+// solely to reject foreign shapes the cast would have accepted blindly.
+export function isAskAgentResult(value: unknown): value is AskAgentResult {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (candidate.success !== undefined && typeof candidate.success !== 'boolean') {
+    return false;
+  }
+  if (candidate.response !== undefined && typeof candidate.response !== 'string') {
+    return false;
+  }
+  if (candidate.error !== undefined && typeof candidate.error !== 'string') {
+    return false;
+  }
+  return 'success' in candidate || 'response' in candidate || 'error' in candidate;
+}
+
 function convertMentionsToDisplayText(content: string): string {
   return content.replace(
     /@\[([^\]]{1,500})\]\(([^:)]{1,200}):([^)]{1,200})\)/g,
@@ -347,7 +372,7 @@ export async function triggerMentionedAgentResponses(
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
-        const askResult = (await askAgentExecute(
+        const rawAskResult: unknown = await askAgentExecute(
           {
             agentPath: `/${agent.title}`,
             agentId: agent.id,
@@ -372,7 +397,21 @@ export async function triggerMentionedAgentResponses(
               agentCallDepth: 0,
             } as ToolExecutionContext,
           }
-        )) as AskAgentResult;
+        );
+
+        if (!isAskAgentResult(rawAskResult)) {
+          channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
+            channelId: params.channelId,
+            agentId: agent.id,
+            receivedType: typeof rawAskResult,
+            receivedKeys:
+              rawAskResult && typeof rawAskResult === 'object'
+                ? Object.keys(rawAskResult as Record<string, unknown>)
+                : null,
+          });
+          continue;
+        }
+        const askResult = rawAskResult;
 
         if (!askResult.success || !askResult.response || !askResult.response.trim()) {
           channelMentionLogger.warn('Mentioned agent returned no response', {

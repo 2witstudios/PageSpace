@@ -12,7 +12,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNull } from '@pagespace/db/operators';
 import { users, verificationTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
-import { generateToken, hashToken, getTokenPrefix } from './token-utils';
+import { generateToken, hashToken } from './token-utils';
 import { secureCompare } from './secure-compare';
 
 // Token expiry: 5 minutes for magic links
@@ -156,18 +156,12 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
     }
   }
 
-  // Clean up old unused magic link tokens for this user
-  await db
-    .delete(verificationTokens)
-    .where(
-      and(
-        eq(verificationTokens.userId, userId),
-        eq(verificationTokens.type, 'magic_link'),
-        isNull(verificationTokens.usedAt)
-      )
-    );
-
-  // Generate secure token with ps_magic_ prefix
+  // Review H1: do NOT delete prior unused magic_link tokens here. The blind
+  // type-wide cleanup invalidated multi-token scenarios — a 7-day drive
+  // invitation could be silently nuked by a 5-min sign-in (or by an invitation
+  // from a second drive, or by Resend on the same drive). Tokens carry their
+  // own TTL via expiresAt and a unique tokenHash; verifyMagicLinkToken refuses
+  // expired/used rows. Stale entries age out naturally.
   const { token, hash, tokenPrefix } = generateToken('ps_magic');
   const expiresAt = new Date(Date.now() + effectiveExpiryMinutes * 60 * 1000);
 

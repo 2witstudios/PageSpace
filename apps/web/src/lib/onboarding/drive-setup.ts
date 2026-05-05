@@ -88,7 +88,6 @@ ${task.description}
         userId,
         assigneeId: task.assignee === 'self' ? userId : null,
         pageId: taskPageId,
-        title: task.title,
         description: task.description,
         status: task.status,
         priority: task.priority,

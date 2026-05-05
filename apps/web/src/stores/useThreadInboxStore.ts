@@ -67,7 +67,9 @@ export interface ThreadInboxState {
 
 export const useThreadInboxStore = create<ThreadInboxState>((set, get) => ({
   contexts: {},
-  bump: ({ source, contextId, rootMessageId }) =>
+  bump: ({ source, contextId, rootMessageId }) => {
+    // Drop malformed realtime payloads — empty/null keys would inflate the badge with nothing to clear them.
+    if (!rootMessageId) return;
     set((state) => {
       const key = buildKey(source, contextId);
       const ctx = state.contexts[key] ?? { byRoot: {} };
@@ -80,7 +82,8 @@ export const useThreadInboxStore = create<ThreadInboxState>((set, get) => ({
           },
         },
       };
-    }),
+    });
+  },
   clearRoot: ({ source, contextId, rootMessageId }) =>
     set((state) => {
       const key = buildKey(source, contextId);

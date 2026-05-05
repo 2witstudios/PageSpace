@@ -1,6 +1,6 @@
 {
-  "id": "5b28104c-59c9-49c2-a497-bb8c3aefbb90",
-  "prevId": "d24eadaa-cd34-4600-b1aa-dc738e819133",
+  "id": "17ed8c65-94fe-4672-b5ce-a8aeb256d477",
+  "prevId": "5b28104c-59c9-49c2-a497-bb8c3aefbb90",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3635,6 +3635,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "quotedMessageId": {
+          "name": "quotedMessageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3679,6 +3685,21 @@
             },
             {
               "expression": "createdAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "channel_messages_quoted_id_idx": {
+          "name": "channel_messages_quoted_id_idx",
+          "columns": [
+            {
+              "expression": "quotedMessageId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3749,6 +3770,19 @@
           "tableTo": "channel_messages",
           "columnsFrom": [
             "mirroredFromId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "channel_messages_quotedMessageId_channel_messages_id_fk": {
+          "name": "channel_messages_quotedMessageId_channel_messages_id_fk",
+          "tableFrom": "channel_messages",
+          "tableTo": "channel_messages",
+          "columnsFrom": [
+            "quotedMessageId"
           ],
           "columnsTo": [
             "id"
@@ -8134,6 +8168,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "quotedMessageId": {
+          "name": "quotedMessageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -8334,6 +8374,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "direct_messages_quoted_id_idx": {
+          "name": "direct_messages_quoted_id_idx",
+          "columns": [
+            {
+              "expression": "quotedMessageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -8395,6 +8450,19 @@
           "tableTo": "direct_messages",
           "columnsFrom": [
             "mirroredFromId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "direct_messages_quotedMessageId_direct_messages_id_fk": {
+          "name": "direct_messages_quotedMessageId_direct_messages_id_fk",
+          "tableFrom": "direct_messages",
+          "tableTo": "direct_messages",
+          "columnsFrom": [
+            "quotedMessageId"
           ],
           "columnsTo": [
             "id"

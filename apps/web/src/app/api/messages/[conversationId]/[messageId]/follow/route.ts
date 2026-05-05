@@ -39,7 +39,7 @@ export async function POST(req: Request, { params }: RouteParams) {
   }
   if (message.parentId !== null) {
     return NextResponse.json(
-      { error: 'Followers attach to top-level messages only' },
+      { error: 'parent_not_top_level' },
       { status: 400 }
     );
   }
