@@ -32,6 +32,9 @@ const mockUpdateConversationLastMessage = vi.fn();
 const mockListActiveMessages = vi.fn();
 const mockMarkActiveMessagesRead = vi.fn();
 const mockUpdateConversationLastRead = vi.fn();
+const mockInsertDmThreadReply = vi.fn();
+const mockListDmThreadReplies = vi.fn();
+const mockFindActiveMessage = vi.fn();
 vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   dmMessageRepository: {
     findConversationForParticipant: (...args: unknown[]) =>
@@ -46,6 +49,9 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
       mockMarkActiveMessagesRead(...args),
     updateConversationLastRead: (...args: unknown[]) =>
       mockUpdateConversationLastRead(...args),
+    insertDmThreadReply: (...args: unknown[]) => mockInsertDmThreadReply(...args),
+    listDmThreadReplies: (...args: unknown[]) => mockListDmThreadReplies(...args),
+    findActiveMessage: (...args: unknown[]) => mockFindActiveMessage(...args),
   },
 }));
 
@@ -74,8 +80,11 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 
 const mockBroadcastInboxEvent = vi.fn();
+const mockBroadcastThreadReplyCountUpdated = vi.fn();
 vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastInboxEvent: (...args: unknown[]) => mockBroadcastInboxEvent(...args),
+  broadcastThreadReplyCountUpdated: (...args: unknown[]) =>
+    mockBroadcastThreadReplyCountUpdated(...args),
 }));
 
 // --- Imports under test (must come after vi.mock blocks) -----------------------
@@ -720,5 +729,199 @@ describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
 
     expect(res.status).toBe(404);
     expect(mockMarkActiveMessagesRead).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// Thread reply support (PR 3)
+// =============================================================================
+
+const PARENT_ID = 'parent_dm';
+
+describe('GET /api/messages/[conversationId] (?parentId=)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+  });
+
+  it('routes to listDmThreadReplies when ?parentId= is provided and the parent is top-level', async () => {
+    mockFindActiveMessage.mockResolvedValueOnce({
+      id: PARENT_ID,
+      conversationId: CONVERSATION_ID,
+      parentId: null,
+    });
+    mockListDmThreadReplies.mockResolvedValueOnce([]);
+
+    const res = await callGet(`?parentId=${PARENT_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(mockListDmThreadReplies).toHaveBeenCalledWith(
+      expect.objectContaining({ rootId: PARENT_ID })
+    );
+    // Top-level list path must not run when threading.
+    expect(mockListActiveMessages).not.toHaveBeenCalled();
+    // Mark-as-read is for the conversation stream, not the thread panel.
+    expect(mockMarkActiveMessagesRead).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when ?parentId= refers to a message not in this conversation', async () => {
+    mockFindActiveMessage.mockResolvedValueOnce(null);
+
+    const res = await callGet(`?parentId=${PARENT_ID}`);
+
+    expect(res.status).toBe(404);
+    expect(mockListDmThreadReplies).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when ?parentId= refers to a message that is itself a reply (depth-2 fetch)', async () => {
+    mockFindActiveMessage.mockResolvedValueOnce({
+      id: PARENT_ID,
+      conversationId: CONVERSATION_ID,
+      parentId: 'some-other-parent',
+    });
+
+    const res = await callGet(`?parentId=${PARENT_ID}`);
+
+    expect(res.status).toBe(400);
+    expect(mockListDmThreadReplies).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/messages/[conversationId] (thread reply)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    vi.mocked(isEmailVerified).mockResolvedValue(true);
+    mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+    mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('routes through insertDmThreadReply when parentId is provided and broadcasts the reply', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertDmThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: {
+        id: 'reply-1',
+        parentId: PARENT_ID,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        content: 'in-thread',
+        createdAt: replyCreatedAt,
+      },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+
+    const res = await callRoute({
+      content: 'in-thread',
+      parentId: PARENT_ID,
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockInsertDmThreadReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentId: PARENT_ID,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        content: 'in-thread',
+        alsoSendToParent: false,
+      })
+    );
+    expect(mockInsertDmMessage).not.toHaveBeenCalled();
+    // No mirror → conversation preview should not bump for the thread-only reply.
+    expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+    expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
+    // Thread-only reply does NOT touch the conversation inbox bump path.
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+
+    const broadcasts = fetchMock.mock.calls
+      .filter(([url]) => typeof url === 'string' && url.includes('/api/broadcast'))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string));
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0].event).toBe('new_dm_message');
+    expect(broadcasts[0].payload.parentId).toBe(PARENT_ID);
+
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalledWith(
+      `dm:${CONVERSATION_ID}`,
+      expect.objectContaining({
+        rootId: PARENT_ID,
+        replyCount: 1,
+        lastReplyAt: replyCreatedAt.toISOString(),
+      })
+    );
+  });
+
+  it('emits TWO new_dm_message broadcasts and bumps the conversation preview when alsoSendToParent is true', async () => {
+    const t = new Date('2026-05-04T12:00:00Z');
+    mockInsertDmThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', parentId: PARENT_ID, conversationId: CONVERSATION_ID, senderId: SENDER_ID, content: 'echo', createdAt: t },
+      mirror: { id: 'mirror-1', mirroredFromId: 'reply-1', conversationId: CONVERSATION_ID, senderId: SENDER_ID, content: 'echo', createdAt: t },
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: t,
+    });
+
+    await callRoute({
+      content: 'echo',
+      parentId: PARENT_ID,
+      alsoSendToParent: true,
+    });
+
+    const broadcasts = fetchMock.mock.calls
+      .filter(([url]) => typeof url === 'string' && url.includes('/api/broadcast'))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string));
+    expect(broadcasts).toHaveLength(2);
+    const ids = broadcasts.map((b) => b.payload.id).sort();
+    expect(ids).toEqual(['mirror-1', 'reply-1']);
+
+    // Mirror behaves like a regular top-level send — preview + recipient inbox bump.
+    expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: CONVERSATION_ID,
+        lastMessagePreview: 'echo',
+      })
+    );
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
+      RECIPIENT_ID,
+      expect.objectContaining({ operation: 'dm_updated', id: CONVERSATION_ID })
+    );
+  });
+
+  it('returns 404 when the parent does not exist', async () => {
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'parent_not_found' });
+
+    const res = await callRoute({ content: 'x', parentId: 'missing' });
+
+    expect(res.status).toBe(404);
+    expect(mockBroadcastThreadReplyCountUpdated).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the parent belongs to a different conversation', async () => {
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'parent_wrong_conversation' });
+
+    const res = await callRoute({ content: 'x', parentId: 'cross-conv' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when the parent is itself a thread reply (depth-2 attempt)', async () => {
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'parent_not_top_level' });
+
+    const res = await callRoute({ content: 'x', parentId: 'reply-as-parent' });
+
+    expect(res.status).toBe(400);
   });
 });
