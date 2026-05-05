@@ -47,11 +47,12 @@ vi.mock('@pagespace/lib/notifications/notifications', () => ({
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
   broadcastDriveMemberEventToRecipients: vi.fn().mockResolvedValue(undefined),
-  createDriveMemberEventPayload: vi.fn((driveId, userId, event, data) => ({
+  // Mirror the production shape from socket-utils.ts: { driveId, userId, operation, ...options }
+  createDriveMemberEventPayload: vi.fn((driveId, userId, operation, options = {}) => ({
     driveId,
     userId,
-    event,
-    data,
+    operation,
+    ...options,
   })),
   kickUserFromDrive: vi.fn().mockResolvedValue(undefined),
   kickUserFromDriveActivity: vi.fn().mockResolvedValue(undefined),
