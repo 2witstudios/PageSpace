@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Search, UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User } from 'lucide-react';
+import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,24 +51,12 @@ interface Connection {
   isRequester: boolean;
 }
 
-interface SearchResult {
-  id: string;
-  name: string;
-  email: string;
-  image: string | null;
-  displayName: string | null;
-  bio: string | null;
-  avatarUrl: string | null;
-}
-
 export default function ConnectionsPage() {
   const { } = useAuth();
   const router = useRouter();
   const socket = useSocket();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [sendingRequest, setSendingRequest] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
 
   // Fetch accepted connections
@@ -102,43 +90,30 @@ export default function ConnectionsPage() {
     return () => { socket.off('notification:new', handleNotification); };
   }, [socket]);
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+  const handleSendConnectionRequest = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return;
 
-    setIsSearching(true);
-    setSearchResults([]);
-
+    setIsSubmitting(true);
     try {
-      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(searchQuery)}`);
-      if (!response.ok) throw new Error('Search failed');
+      const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(trimmedEmail)}`);
+      if (!response.ok) throw new Error('Failed to send connection request');
 
       const data = await response.json();
 
-      if (data.error) {
-        toast.error(data.error);
-      } else if (data.user) {
-        setSearchResults([data.user]);
-      } else {
-        toast.info('No user found with this email address');
+      if (!data.user) {
+        toast.error(data.error || 'No user found with this email address');
+        return;
       }
-    } catch (error) {
-      toast.error('Failed to search users');
-      console.error('Search error:', error);
-    } finally {
-      setIsSearching(false);
-    }
-  };
 
-  const handleSendRequest = async (targetUserId: string) => {
-    setSendingRequest(targetUserId);
-    try {
-      await post('/api/connections', { targetUserId });
+      const targetUser = data.user;
+      await post('/api/connections', { targetUserId: targetUser.id });
 
-      toast.success('Connection request sent');
-      setSearchResults(prev => prev.filter(u => u.id !== targetUserId));
+      const recipientLabel = targetUser.displayName || targetUser.name;
+      toast.success(`Connection request sent to ${recipientLabel} (${targetUser.email})`);
+      setEmail('');
       mutate('/api/connections?status=PENDING');
     } catch (error) {
-      // Check if this is a verification required error
       const errorMessage = (error as Error).message;
       if (errorMessage.includes('requiresEmailVerification') || errorMessage.includes('verification')) {
         setShowVerificationAlert(true);
@@ -147,7 +122,7 @@ export default function ConnectionsPage() {
 
       toast.error(errorMessage || 'Failed to send connection request');
     } finally {
-      setSendingRequest(null);
+      setIsSubmitting(false);
     }
   };
 
@@ -399,51 +374,19 @@ export default function ConnectionsPage() {
                   <Input
                     type="email"
                     placeholder="Enter email address"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendConnectionRequest()}
+                    disabled={isSubmitting}
                   />
-                  <Button onClick={handleSearch} disabled={isSearching || !searchQuery.trim()}>
-                    <Search className="h-4 w-4 mr-2" />
-                    Add
+                  <Button
+                    onClick={handleSendConnectionRequest}
+                    disabled={isSubmitting || !email.trim()}
+                  >
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    {isSubmitting ? 'Sending...' : 'Send Request'}
                   </Button>
                 </div>
-
-                {searchResults.length > 0 && (
-                  <div className="space-y-4">
-                    {searchResults.map((user) => {
-                      const displayName = user.displayName || user.name;
-                      return (
-                        <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
-                          <div className="flex items-center gap-4">
-                            <Avatar className="h-10 w-10">
-                              <AvatarImage src={user.image || user.avatarUrl || ''} />
-                              <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-medium">{displayName}</p>
-                              <p className="text-sm text-muted-foreground">{user.email}</p>
-                              {user.bio && (
-                                <p className="text-sm text-muted-foreground line-clamp-1 mt-1">{user.bio}</p>
-                              )}
-                            </div>
-                          </div>
-                          <Button
-                            onClick={() => handleSendRequest(user.id)}
-                            disabled={sendingRequest === user.id}
-                          >
-                            <UserPlus className="h-4 w-4 mr-2" />
-                            {sendingRequest === user.id ? 'Sending...' : 'Send Request'}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {isSearching && (
-                  <p className="text-center text-muted-foreground py-8">Searching...</p>
-                )}
               </div>
             </CardContent>
           </Card>
