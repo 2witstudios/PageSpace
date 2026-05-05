@@ -190,34 +190,6 @@ describe('channelMessageRepository.listChannelMessages', () => {
   });
 });
 
-describe('channelMessageRepository.getChannelMessageById', () => {
-  it('returns the row when one is found', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'msg-1' });
-
-    const result = await channelMessageRepository.getChannelMessageById('msg-1');
-
-    assert({
-      given: 'a stored message',
-      should: 'return the row for callers to inspect',
-      actual: result,
-      expected: { id: 'msg-1' },
-    });
-  });
-
-  it('returns null when no row is found', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce(undefined);
-
-    const result = await channelMessageRepository.getChannelMessageById('missing');
-
-    assert({
-      given: 'no message exists for the id',
-      should: 'return null so callers can branch on absence without try/catch',
-      actual: result,
-      expected: null,
-    });
-  });
-});
-
 describe('channelMessageRepository.findChannelMessageInPage', () => {
   it('scopes the lookup to a single page', async () => {
     mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'msg-1', pageId: 'page-1' });
@@ -516,7 +488,6 @@ describe('channelMessageRepository surface', () => {
         'addChannelReaction',
         'fileExists',
         'findChannelMessageInPage',
-        'getChannelMessageById',
         'insertChannelMessage',
         'listChannelMessages',
         'loadChannelMessageWithRelations',

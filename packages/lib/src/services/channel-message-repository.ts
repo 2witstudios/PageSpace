@@ -82,13 +82,6 @@ async function listChannelMessages(input: ListChannelMessagesInput) {
   });
 }
 
-async function getChannelMessageById(id: string): Promise<ChannelMessageRow | null> {
-  const row = await db.query.channelMessages.findFirst({
-    where: eq(channelMessages.id, id),
-  });
-  return row ?? null;
-}
-
 export interface FindChannelMessageInPageInput {
   messageId: string;
   pageId: string;
@@ -241,7 +234,6 @@ async function removeChannelReaction(
 
 export const channelMessageRepository = {
   listChannelMessages,
-  getChannelMessageById,
   findChannelMessageInPage,
   loadChannelMessageWithRelations,
   fileExists,
