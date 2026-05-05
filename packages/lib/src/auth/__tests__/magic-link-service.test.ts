@@ -96,8 +96,6 @@ describe('magic-link-service', () => {
         id: 'user-1',
         suspendedAt: null,
       } as never);
-      const mockDelete = vi.fn();
-      vi.mocked(db.delete).mockReturnValue({ where: mockDelete } as never);
       const mockValues = vi.fn();
       vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
 
@@ -108,6 +106,33 @@ describe('magic-link-service', () => {
         expect(result.data.userId).toBe('user-1');
         expect(result.data.isNewUser).toBe(false);
       }
+    });
+
+    // Review H1 — adversarial multi-token isolation. Pre-fix, the function
+    // ran a blind `delete from verificationTokens where userId=? and
+    // type='magic_link' and usedAt is null` before each insert, which
+    // silently invalidated:
+    //   - a 7-day pending invitation token when a 5-min sign-in token issued
+    //   - a drive-A invitation token when a drive-B invitation issued
+    //   - the original email's link when admin clicked Resend on the same drive
+    // Issuing a new token MUST NOT delete prior unused tokens for the user.
+    // Tokens age out via expiresAt instead.
+    it('does NOT delete prior unused magic_link tokens — adversarial concurrent-invitations-from-two-drives path', async () => {
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+        id: 'user-1',
+        suspendedAt: null,
+      } as never);
+      const mockDeleteWhere = vi.fn();
+      vi.mocked(db.delete).mockReturnValue({ where: mockDeleteWhere } as never);
+      vi.mocked(db.insert).mockReturnValue({ values: vi.fn() } as never);
+
+      const result = await createMagicLinkToken({ email: 'user@test.com' });
+
+      expect(result.ok).toBe(true);
+      // The blind pre-insert delete is gone — neither db.delete nor its
+      // chained where is called by createMagicLinkToken.
+      expect(db.delete).not.toHaveBeenCalled();
+      expect(mockDeleteWhere).not.toHaveBeenCalled();
     });
 
     it('should create new user when email not found', async () => {
