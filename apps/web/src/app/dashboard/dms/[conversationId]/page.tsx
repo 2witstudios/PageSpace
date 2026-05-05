@@ -188,8 +188,11 @@ export default function InboxDMPage() {
   const handleAddReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!user) return;
 
+    // Track this request's temp id so a rollback after a 409 race can't remove
+    // a confirmed reaction that already arrived via reaction_added.
+    const tempReactionId = `temp-${Date.now()}`;
     const optimisticReaction: Reaction = {
-      id: `temp-${Date.now()}`,
+      id: tempReactionId,
       emoji,
       userId: user.id,
       user: { id: user.id, name: user.name || 'You' },
@@ -213,9 +216,7 @@ export default function InboxDMPage() {
           if (m.id !== messageId) return m;
           return {
             ...m,
-            reactions: (m.reactions || []).filter(
-              (r) => !(r.emoji === emoji && r.userId === user.id)
-            ),
+            reactions: (m.reactions || []).filter((r) => r.id !== tempReactionId),
           };
         })
       );

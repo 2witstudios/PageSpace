@@ -318,26 +318,14 @@ async function updateConversationLastRead(
 // Mirrors the reaction surface from `channel-message-repository.ts` so the DM
 // route can reach feature parity. Kept in a clearly-marked section at the end
 // of the module so PR 3 (thread replies) merges cleanly above.
+//
+// Note: the reaction route uses the existing `findActiveMessage` helper for
+// the existence check so soft-deleted DMs (isActive=false) cannot accept
+// new reactions or have reactions removed — keeping reaction visibility
+// consistent with `listActiveMessages`.
 // ---------------------------------------------------------------------------
 
-export interface FindDmMessageInConversationInput {
-  messageId: string;
-  conversationId: string;
-}
-
 export type DmReactionRow = InferSelectModel<typeof dmMessageReactions>;
-
-async function findDmMessageInConversation(
-  input: FindDmMessageInConversationInput
-): Promise<DmMessageRow | null> {
-  const row = await db.query.directMessages.findFirst({
-    where: and(
-      eq(directMessages.id, input.messageId),
-      eq(directMessages.conversationId, input.conversationId)
-    ),
-  });
-  return row ?? null;
-}
 
 export interface DmReactionInput {
   messageId: string;
@@ -397,7 +385,6 @@ export const dmMessageRepository = {
   listActiveMessages,
   markActiveMessagesRead,
   updateConversationLastRead,
-  findDmMessageInConversation,
   addDmReaction,
   loadDmReactionWithUser,
   removeDmReaction,

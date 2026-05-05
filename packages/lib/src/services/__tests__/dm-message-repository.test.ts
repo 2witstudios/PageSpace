@@ -206,47 +206,6 @@ describe('dmMessageRepository.listActiveMessages [reactions parity]', () => {
   });
 });
 
-describe('dmMessageRepository.findDmMessageInConversation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('scopes the lookup to a single conversation so a stolen message id from another DM cannot hit', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({ id: 'msg-1', conversationId: 'conv-1' });
-
-    await dmMessageRepository.findDmMessageInConversation({
-      messageId: 'msg-1',
-      conversationId: 'conv-1',
-    });
-
-    const eqCalls = vi.mocked(eq).mock.calls;
-    assert({
-      given: 'a (messageId, conversationId) tuple',
-      should: 'add an eq predicate on conversationId so cross-conversation reactions are impossible',
-      actual: eqCalls.some(
-        ([field, value]) => field === directMessages.conversationId && value === 'conv-1'
-      ),
-      expected: true,
-    });
-  });
-
-  it('returns null when the message belongs to a different conversation', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce(undefined);
-
-    const result = await dmMessageRepository.findDmMessageInConversation({
-      messageId: 'msg-1',
-      conversationId: 'wrong-conv',
-    });
-
-    assert({
-      given: 'a message id that does not match the requested conversation',
-      should: 'return null so the route can render a 404 instead of leaking another conversation\'s row',
-      actual: result,
-      expected: null,
-    });
-  });
-});
-
 describe('dmMessageRepository.addDmReaction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -353,23 +312,23 @@ describe('dmMessageRepository.removeDmReaction', () => {
 });
 
 // Surface guard: keep the public API shape stable so consumers don't break.
+// Note: the route uses the existing `findActiveMessage` for the existence check
+// (active-only, by design — soft-deleted DMs cannot accept reactions).
 describe('dmMessageRepository surface', () => {
   it('exports the reaction functions the DM routes need at parity with channels', () => {
     const keys = Object.keys(dmMessageRepository);
     assert({
       given: 'the repository module',
-      should: 'expose addDmReaction, removeDmReaction, loadDmReactionWithUser, and findDmMessageInConversation',
+      should: 'expose addDmReaction, removeDmReaction, and loadDmReactionWithUser',
       actual: {
         addDmReaction: keys.includes('addDmReaction'),
         removeDmReaction: keys.includes('removeDmReaction'),
         loadDmReactionWithUser: keys.includes('loadDmReactionWithUser'),
-        findDmMessageInConversation: keys.includes('findDmMessageInConversation'),
       },
       expected: {
         addDmReaction: true,
         removeDmReaction: true,
         loadDmReactionWithUser: true,
-        findDmMessageInConversation: true,
       },
     });
   });

@@ -30,7 +30,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 const mockFindConversationForParticipant = vi.fn();
-const mockFindDmMessageInConversation = vi.fn();
+const mockFindActiveMessage = vi.fn();
 const mockAddDmReaction = vi.fn();
 const mockLoadDmReactionWithUser = vi.fn();
 const mockRemoveDmReaction = vi.fn();
@@ -38,8 +38,7 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   dmMessageRepository: {
     findConversationForParticipant: (...args: unknown[]) =>
       mockFindConversationForParticipant(...args),
-    findDmMessageInConversation: (...args: unknown[]) =>
-      mockFindDmMessageInConversation(...args),
+    findActiveMessage: (...args: unknown[]) => mockFindActiveMessage(...args),
     addDmReaction: (...args: unknown[]) => mockAddDmReaction(...args),
     loadDmReactionWithUser: (...args: unknown[]) =>
       mockLoadDmReactionWithUser(...args),
@@ -160,7 +159,7 @@ const callDelete = (body: unknown) =>
 function setupHappyPath() {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
   mockFindConversationForParticipant.mockResolvedValue(mockConversation());
-  mockFindDmMessageInConversation.mockResolvedValue(mockMessage());
+  mockFindActiveMessage.mockResolvedValue(mockMessage());
   mockAddDmReaction.mockResolvedValue(mockReactionRow());
   mockLoadDmReactionWithUser.mockResolvedValue(mockReactionWithUser());
   mockRemoveDmReaction.mockResolvedValue(1);
@@ -313,14 +312,28 @@ describe('POST /api/messages/[conversationId]/[messageId]/reactions', () => {
     });
   });
 
-  it('returns 404 when the message belongs to a different conversation', async () => {
-    mockFindDmMessageInConversation.mockResolvedValue(null);
+  it('looks up the message via the active-only seam scoped to (messageId, conversationId)', async () => {
+    await callPost({ emoji: '👍' });
+
+    assert({
+      given: 'a participant adding a reaction',
+      should: 'use findActiveMessage so a stolen messageId or a soft-deleted DM is not eligible for new reactions',
+      actual: mockFindActiveMessage.mock.calls[0]?.[0],
+      expected: { messageId: MESSAGE_ID, conversationId: CONVERSATION_ID },
+    });
+  });
+
+  it('returns 404 when the message is missing or soft-deleted', async () => {
+    // findActiveMessage filters isActive=true at the SQL layer. A soft-deleted
+    // DM is invisible here — the route must not let reactions accumulate on
+    // content that listActiveMessages already hides.
+    mockFindActiveMessage.mockResolvedValue(null);
 
     const res = await callPost({ emoji: '👍' });
 
     assert({
-      given: 'a stolen messageId from a different conversation',
-      should: 'return 404 because findDmMessageInConversation scopes by conversationId',
+      given: 'a stolen messageId or a soft-deleted DM',
+      should: 'return 404 without inserting — keeps reaction visibility consistent with listActiveMessages',
       actual: {
         status: res.status,
         addCalled: mockAddDmReaction.mock.calls.length,
@@ -358,6 +371,36 @@ describe('POST /api/messages/[conversationId]/[messageId]/reactions', () => {
         broadcasts: captureRealtimeBroadcasts(fetchMock).length,
       },
       expected: { status: 201, broadcasts: 0 },
+    });
+  });
+
+  it('attaches an AbortSignal to the broadcast fetch so a stalled sidecar cannot hang the response', async () => {
+    await callPost({ emoji: '👍' });
+
+    const broadcastCall = fetchMock.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/broadcast')
+    );
+    const init = broadcastCall?.[1] as RequestInit | undefined;
+    assert({
+      given: 'a successful DM reaction add',
+      should: 'pass an AbortSignal on the broadcast fetch — the helper bounds it with AbortSignal.timeout()',
+      actual: init?.signal instanceof AbortSignal,
+      expected: true,
+    });
+  });
+
+  it('still returns 201 when the broadcast sidecar responds with a non-2xx', async () => {
+    // Reaction is already committed; a flaky sidecar must not flip the
+    // user-facing response. The route logs and moves on.
+    fetchMock.mockResolvedValue(new Response('upstream error', { status: 503 }));
+
+    const res = await callPost({ emoji: '👍' });
+
+    assert({
+      given: 'a 503 from the realtime sidecar',
+      should: 'log and return 201 — the DB row exists, refetch will reconcile the missing chip',
+      actual: res.status,
+      expected: 201,
     });
   });
 });
@@ -433,6 +476,37 @@ describe('DELETE /api/messages/[conversationId]/[messageId]/reactions', () => {
         broadcasts: captureRealtimeBroadcasts(fetchMock).length,
       },
       expected: { status: 404, broadcasts: 0 },
+    });
+  });
+
+  it('attaches an AbortSignal to the DELETE broadcast and survives a non-2xx sidecar', async () => {
+    fetchMock.mockResolvedValue(new Response('upstream error', { status: 503 }));
+
+    const res = await callDelete({ emoji: '👍' });
+
+    const broadcastCall = fetchMock.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/broadcast')
+    );
+    const init = broadcastCall?.[1] as RequestInit | undefined;
+    assert({
+      given: 'a 503 from the realtime sidecar after the row is deleted',
+      should: 'still return 200 and bound the broadcast with an AbortSignal so a stalled sidecar cannot hang the response',
+      actual: {
+        status: res.status,
+        signaled: init?.signal instanceof AbortSignal,
+      },
+      expected: { status: 200, signaled: true },
+    });
+  });
+
+  it('looks up the message via the active-only seam to skip soft-deleted DMs', async () => {
+    await callDelete({ emoji: '👍' });
+
+    assert({
+      given: 'a participant removing a reaction',
+      should: 'use findActiveMessage so a soft-deleted DM cannot be touched via the reactions route',
+      actual: mockFindActiveMessage.mock.calls[0]?.[0],
+      expected: { messageId: MESSAGE_ID, conversationId: CONVERSATION_ID },
     });
   });
 

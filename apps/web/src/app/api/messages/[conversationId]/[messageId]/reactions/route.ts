@@ -7,13 +7,32 @@ import { dmMessageRepository } from '@pagespace/lib/services/dm-message-reposito
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
+// Bound the realtime fan-out so a stalled sidecar can't hang the user-facing
+// HTTP response after the DB write has already committed.
+const BROADCAST_TIMEOUT_MS = 1500;
+
 type RouteParams = { params: Promise<{ conversationId: string; messageId: string }> };
+
+async function broadcastDmEvent(requestBody: string): Promise<void> {
+  if (!process.env.INTERNAL_REALTIME_URL) return;
+  const response = await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+    method: 'POST',
+    headers: createSignedBroadcastHeaders(requestBody),
+    body: requestBody,
+    signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Broadcast failed with status ${response.status}`);
+  }
+}
 
 /**
  * POST /api/messages/[conversationId]/[messageId]/reactions
  * Add a reaction to a DM message. Authz: caller must be a participant.
  * Duplicate (messageId, userId, emoji) is rejected by the unique index, never
- * by application code.
+ * by application code. Soft-deleted messages cannot accept new reactions —
+ * the route uses the active-only lookup so reaction visibility stays in sync
+ * with `listActiveMessages`.
  */
 export async function POST(req: Request, { params }: RouteParams) {
   const { conversationId, messageId } = await params;
@@ -37,7 +56,7 @@ export async function POST(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'Emoji is required' }, { status: 400 });
   }
 
-  const message = await dmMessageRepository.findDmMessageInConversation({
+  const message = await dmMessageRepository.findActiveMessage({
     messageId,
     conversationId,
   });
@@ -62,25 +81,14 @@ export async function POST(req: Request, { params }: RouteParams) {
 
     const reactionWithUser = await dmMessageRepository.loadDmReactionWithUser(reaction.id);
 
-    if (process.env.INTERNAL_REALTIME_URL) {
-      try {
-        const requestBody = JSON.stringify({
-          channelId: `dm:${conversationId}`,
-          event: 'reaction_added',
-          payload: {
-            messageId,
-            reaction: reactionWithUser,
-          },
-        });
-
-        await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
-          method: 'POST',
-          headers: createSignedBroadcastHeaders(requestBody),
-          body: requestBody,
-        });
-      } catch (error) {
-        loggers.realtime.error('Failed to broadcast DM reaction:', error as Error);
-      }
+    try {
+      await broadcastDmEvent(JSON.stringify({
+        channelId: `dm:${conversationId}`,
+        event: 'reaction_added',
+        payload: { messageId, reaction: reactionWithUser },
+      }));
+    } catch (error) {
+      loggers.realtime.error('Failed to broadcast DM reaction:', error as Error);
     }
 
     return NextResponse.json(reactionWithUser, { status: 201 });
@@ -122,7 +130,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'Emoji is required' }, { status: 400 });
   }
 
-  const message = await dmMessageRepository.findDmMessageInConversation({
+  const message = await dmMessageRepository.findActiveMessage({
     messageId,
     conversationId,
   });
@@ -148,26 +156,14 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     resourceId: messageId,
   });
 
-  if (process.env.INTERNAL_REALTIME_URL) {
-    try {
-      const requestBody = JSON.stringify({
-        channelId: `dm:${conversationId}`,
-        event: 'reaction_removed',
-        payload: {
-          messageId,
-          emoji,
-          userId,
-        },
-      });
-
-      await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
-        method: 'POST',
-        headers: createSignedBroadcastHeaders(requestBody),
-        body: requestBody,
-      });
-    } catch (error) {
-      loggers.realtime.error('Failed to broadcast DM reaction removal:', error as Error);
-    }
+  try {
+    await broadcastDmEvent(JSON.stringify({
+      channelId: `dm:${conversationId}`,
+      event: 'reaction_removed',
+      payload: { messageId, emoji, userId },
+    }));
+  } catch (error) {
+    loggers.realtime.error('Failed to broadcast DM reaction removal:', error as Error);
   }
 
   return NextResponse.json({ success: true });
