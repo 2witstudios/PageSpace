@@ -178,13 +178,14 @@ async function updateChannelMessageContent(
     .where(eq(channelMessages.id, input.messageId));
 }
 
-async function softDeleteChannelMessage(messageId: string): Promise<void> {
+async function softDeleteChannelMessage(messageId: string): Promise<number> {
   // Soft-deleting a thread reply must decrement the parent's replyCount in the
   // same transaction so the footer count never drifts above the real number of
-  // visible replies. GREATEST(... - 1, 0) guards against a double soft-delete
-  // racing the counter into negative territory.
-  await db.transaction(async (tx) => {
-    const [row] = await tx
+  // visible replies. The `isActive=true` filter makes a double soft-delete a
+  // no-op (returns 0 affected rows), and GREATEST(... - 1, 0) guards against
+  // any drift that snuck in before this filter existed.
+  return db.transaction(async (tx) => {
+    const result = await tx
       .update(channelMessages)
       .set({ isActive: false })
       .where(
@@ -195,6 +196,7 @@ async function softDeleteChannelMessage(messageId: string): Promise<void> {
       )
       .returning({ parentId: channelMessages.parentId });
 
+    const row = result[0];
     if (row?.parentId) {
       await tx
         .update(channelMessages)
@@ -203,14 +205,17 @@ async function softDeleteChannelMessage(messageId: string): Promise<void> {
         })
         .where(eq(channelMessages.id, row.parentId));
     }
+
+    return result.length;
   });
 }
 
-async function restoreChannelMessage(messageId: string): Promise<void> {
-  // Mirror of softDeleteChannelMessage: flips isActive back to true and
-  // increments the parent's replyCount when the row is a thread reply.
-  await db.transaction(async (tx) => {
-    const [row] = await tx
+async function restoreChannelMessage(messageId: string): Promise<number> {
+  // Mirror of softDeleteChannelMessage. The parent counter is only bumped when
+  // the parent itself is still active — restoring an orphaned reply whose
+  // parent was deleted in the meantime must NOT inflate a tombstone's count.
+  return db.transaction(async (tx) => {
+    const result = await tx
       .update(channelMessages)
       .set({ isActive: true })
       .where(
@@ -221,14 +226,23 @@ async function restoreChannelMessage(messageId: string): Promise<void> {
       )
       .returning({ parentId: channelMessages.parentId });
 
+    const row = result[0];
     if (row?.parentId) {
-      await tx
-        .update(channelMessages)
-        .set({
-          replyCount: sql`${channelMessages.replyCount} + 1`,
-        })
-        .where(eq(channelMessages.id, row.parentId));
+      const parent = await tx.query.channelMessages.findFirst({
+        where: eq(channelMessages.id, row.parentId),
+        columns: { id: true, isActive: true },
+      });
+      if (parent?.isActive) {
+        await tx
+          .update(channelMessages)
+          .set({
+            replyCount: sql`${channelMessages.replyCount} + 1`,
+          })
+          .where(eq(channelMessages.id, row.parentId));
+      }
     }
+
+    return result.length;
   });
 }
 
@@ -313,16 +327,22 @@ async function insertChannelThreadReply(
   input: InsertChannelThreadReplyInput
 ): Promise<InsertChannelThreadReplyResult> {
   return db.transaction(async (tx) => {
-    const parent = await tx.query.channelMessages.findFirst({
-      where: eq(channelMessages.id, input.parentId),
-      columns: {
-        id: true,
-        pageId: true,
-        parentId: true,
-        userId: true,
-        isActive: true,
-      },
-    });
+    // SELECT ... FOR UPDATE locks the parent row for the rest of this tx so a
+    // concurrent softDeleteChannelMessage(parentId) blocks until our INSERT and
+    // replyCount UPDATE commit. Without this lock, the parent could flip
+    // isActive=false between validation and INSERT, leaving an orphaned reply
+    // attached to a tombstoned parent.
+    const [parent] = await tx
+      .select({
+        id: channelMessages.id,
+        pageId: channelMessages.pageId,
+        parentId: channelMessages.parentId,
+        userId: channelMessages.userId,
+        isActive: channelMessages.isActive,
+      })
+      .from(channelMessages)
+      .where(eq(channelMessages.id, input.parentId))
+      .for('update');
 
     if (!parent || !parent.isActive) {
       return { kind: 'parent_not_found' };
@@ -396,7 +416,10 @@ async function insertChannelThreadReply(
       mirror,
       rootId: input.parentId,
       replyCount: updatedParent.replyCount,
-      lastReplyAt: updatedParent.lastReplyAt!,
+      // We just SET lastReplyAt = reply.createdAt above, so the RETURNING value
+      // is non-null. Falling back to reply.createdAt makes that explicit
+      // instead of relying on a non-null assertion.
+      lastReplyAt: updatedParent.lastReplyAt ?? reply.createdAt,
     };
   });
 }

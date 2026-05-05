@@ -167,9 +167,19 @@ beforeEach(() => {
   });
   vi.mocked(db.delete).mockReturnValue({ where: mockDeleteWhere } as never);
 
-  // Select pipeline (followers list)
+  // Select pipeline. Two callers exist:
+  //  1) listChannelThreadFollowers — db.select(cols).from(table).where(...) → rows
+  //  2) insertChannelThreadReply — tx.select(cols).from(table).where(...).for('update') → rows
+  // The default chain handles both: where() returns an object that is itself
+  // thenable (so listFollowers awaits the rows directly) AND has .for() that
+  // returns a promise (so insertChannelThreadReply awaits the locked rows).
+  const defaultLockedRows: unknown[] = [];
+  const defaultRows: unknown[] = [];
   mockSelectFrom.mockReturnValue({
-    where: vi.fn().mockResolvedValue([]),
+    where: vi.fn(() => ({
+      then: (resolve: (v: unknown) => unknown) => resolve(defaultRows),
+      for: vi.fn().mockResolvedValue(defaultLockedRows),
+    })),
   });
   vi.mocked(db.select).mockReturnValue({ from: mockSelectFrom } as never);
 
@@ -433,21 +443,36 @@ describe('channelMessageRepository.updateChannelMessageContent', () => {
 });
 
 describe('channelMessageRepository.softDeleteChannelMessage', () => {
-  it('flips isActive=false (a delete must not purge — soft only)', async () => {
+  it('flips isActive=false and returns 1 row affected for a fresh delete', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
 
-    await channelMessageRepository.softDeleteChannelMessage('msg-1');
+    const count = await channelMessageRepository.softDeleteChannelMessage('msg-1');
 
     const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
     assert({
       given: 'a delete request for a top-level message',
-      should: 'set isActive=false rather than removing the row, so retention/audit still has the data',
-      actual: set,
-      expected: { isActive: false },
+      should: 'set isActive=false and return 1 row affected so the route can audit + broadcast',
+      actual: { set, count },
+      expected: { set: { isActive: false }, count: 1 },
     });
   });
 
-  it('decrements the parent replyCount when the soft-deleted row is a thread reply', async () => {
+  it('returns 0 affected rows on a double soft-delete (idempotency guard for routes)', async () => {
+    // The where(isActive=true) filter makes a second delete a no-op; the route
+    // must use the returned count to skip duplicate audit + broadcast.
+    mockUpdateReturning.mockResolvedValueOnce([]);
+
+    const count = await channelMessageRepository.softDeleteChannelMessage('already-deleted');
+
+    assert({
+      given: 'a soft-delete of an already-inactive message',
+      should: 'return 0 so the route can 404 instead of re-broadcasting message_deleted',
+      actual: { count, secondUpdateIssued: mockUpdateSet.mock.calls.length },
+      expected: { count: 0, secondUpdateIssued: 1 },
+    });
+  });
+
+  it('decrements the parent replyCount when the soft-deleted row is a thread reply, scoped to the returned parentId', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
 
     await channelMessageRepository.softDeleteChannelMessage('reply-1');
@@ -455,16 +480,25 @@ describe('channelMessageRepository.softDeleteChannelMessage', () => {
     // Two update calls: 1) flip isActive=false on the reply,
     // 2) replyCount = GREATEST(replyCount - 1, 0) on the parent.
     const setCalls = mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    // Verify the SECOND update's WHERE actually targets the parentId returned
+    // by the first UPDATE — this guards against a future refactor that
+    // accidentally decrements the wrong row.
+    const eqCalls = vi.mocked(eq).mock.calls;
+    const targetsParentId = eqCalls.some(
+      ([field, value]) => field === channelMessages.id && value === 'parent-1'
+    );
     assert({
       given: 'a soft-delete of a thread reply',
-      should: 'issue two updates inside the same tx — one to flip isActive, one to decrement parent.replyCount',
+      should: 'issue two updates inside the same tx (flip isActive + decrement parent.replyCount) and target the returned parentId',
       actual: {
         firstSet: setCalls[0],
         secondHasReplyCount: 'replyCount' in (setCalls[1] ?? {}),
+        targetsParentId,
       },
       expected: {
         firstSet: { isActive: false },
         secondHasReplyCount: true,
+        targetsParentId: true,
       },
     });
   });
@@ -484,33 +518,52 @@ describe('channelMessageRepository.softDeleteChannelMessage', () => {
 });
 
 describe('channelMessageRepository.restoreChannelMessage', () => {
-  it('flips isActive=true when restoring a row', async () => {
+  it('flips isActive=true when restoring a row and returns 1 row affected', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ parentId: null }]);
 
-    await channelMessageRepository.restoreChannelMessage('msg-1');
+    const count = await channelMessageRepository.restoreChannelMessage('msg-1');
 
     const set = mockUpdateSet.mock.calls[0]?.[0] as Record<string, unknown>;
     assert({
-      given: 'a restore request',
-      should: 'flip isActive back to true on the targeted row',
-      actual: set,
-      expected: { isActive: true },
+      given: 'a restore request for a top-level row',
+      should: 'flip isActive back to true on the targeted row and return 1',
+      actual: { set, count },
+      expected: { set: { isActive: true }, count: 1 },
     });
   });
 
-  it('increments the parent replyCount when the restored row is a thread reply', async () => {
+  it('increments the parent replyCount when the restored row is a thread reply AND the parent is still active', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: true });
 
     await channelMessageRepository.restoreChannelMessage('reply-1');
 
     assert({
-      given: 'a restore of a thread reply',
+      given: 'a restore of a thread reply whose parent is still active',
       should: 'run two updates — flip isActive=true, then increment parent.replyCount',
       actual: {
         count: mockUpdateSet.mock.calls.length,
         secondHasReplyCount: 'replyCount' in (mockUpdateSet.mock.calls[1]?.[0] as Record<string, unknown> ?? {}),
       },
       expected: { count: 2, secondHasReplyCount: true },
+    });
+  });
+
+  it('does NOT increment the parent counter when the parent has been soft-deleted in the meantime', async () => {
+    // Race scenario: reply was soft-deleted, parent was then soft-deleted, now
+    // an admin restores the reply. Bumping a tombstoned parent's replyCount
+    // would corrupt the counter the moment a future restore brings the parent
+    // back. Skip the bump.
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: false });
+
+    await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    assert({
+      given: 'a restore of a thread reply whose parent is itself soft-deleted',
+      should: 'flip isActive=true on the reply but skip the parent.replyCount bump',
+      actual: mockUpdateSet.mock.calls.length,
+      expected: 1,
     });
   });
 });
@@ -525,8 +578,44 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
     attachmentMeta: null,
   };
 
+  // The helper validates the parent with `tx.select(...).from(...).where(...).for('update')`.
+  // This helper stubs the FOR UPDATE chain to return the supplied parent row
+  // (or no row, when null is passed).
+  const stubParentForUpdate = (parent: Record<string, unknown> | null) => {
+    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
+    const whereFn = vi.fn(() => ({ for: forFn }));
+    const fromFn = vi.fn(() => ({ where: whereFn }));
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
+    return { forFn, whereFn, fromFn };
+  };
+
+  it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
+    const { forFn } = stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'user-parent',
+      isActive: true,
+    });
+    mockInsertReturning.mockResolvedValueOnce([
+      { id: 'reply-1', createdAt: new Date(), parentId: 'parent-1' },
+    ]);
+    mockUpdateReturning.mockResolvedValueOnce([
+      { replyCount: 1, lastReplyAt: new Date() },
+    ]);
+
+    await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent validation read inside the insert tx',
+      should: 'invoke .for("update") so a concurrent softDelete blocks until this tx commits',
+      actual: forFn.mock.calls[0]?.[0],
+      expected: 'update',
+    });
+  });
+
   it('rejects with parent_not_found when the parent row is missing or inactive', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce(undefined);
+    stubParentForUpdate(null);
 
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
 
@@ -538,8 +627,27 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
     });
   });
 
+  it('rejects with parent_not_found when the parent row exists but is soft-deleted (isActive=false)', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      pageId: 'page-1',
+      parentId: null,
+      userId: 'parent-author',
+      isActive: false,
+    });
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent that has been soft-deleted',
+      should: 'return parent_not_found — clients cannot reply into a tombstoned thread',
+      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
+      expected: { kind: 'parent_not_found', insertCount: 0 },
+    });
+  });
+
   it('rejects with parent_wrong_page when the parent belongs to a different channel', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       pageId: 'other-page',
       parentId: null,
@@ -558,7 +666,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
   });
 
   it('rejects with parent_not_top_level when the parent itself has parentId set (depth-2 attempt)', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       pageId: 'page-1',
       parentId: 'grandparent',
@@ -577,7 +685,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
   });
 
   it('inserts the reply with parentId set, bumps replyCount + lastReplyAt, and upserts both followers', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       pageId: 'page-1',
       parentId: null,
@@ -621,7 +729,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
   });
 
   it('dedupes followers when the parent author replies to their own thread (one follower row, not two)', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       pageId: 'page-1',
       parentId: null,
@@ -650,7 +758,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
   });
 
   it('writes a second top-level row with mirroredFromId set when alsoSendToParent is true', async () => {
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       pageId: 'page-1',
       parentId: null,
