@@ -234,10 +234,22 @@ export const pageReadTools = {
             taskList = newTaskList;
           }
 
-          // Get all tasks ordered by position
+          // Get all tasks ordered by position. Title lives on the linked page.
           const tasks = await db
-            .select()
+            .select({
+              id: taskItems.id,
+              title: pages.title,
+              description: taskItems.description,
+              status: taskItems.status,
+              priority: taskItems.priority,
+              position: taskItems.position,
+              assigneeId: taskItems.assigneeId,
+              dueDate: taskItems.dueDate,
+              completedAt: taskItems.completedAt,
+              pageId: taskItems.pageId,
+            })
             .from(taskItems)
+            .innerJoin(pages, eq(pages.id, taskItems.pageId))
             .where(eq(taskItems.taskListId, taskList.id))
             .orderBy(asc(taskItems.position));
 

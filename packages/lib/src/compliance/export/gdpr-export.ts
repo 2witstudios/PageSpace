@@ -452,13 +452,14 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   const allItems = await database
     .select({
       id: taskItems.id,
-      title: taskItems.title,
+      title: pages.title,
       status: taskItems.status,
       priority: taskItems.priority,
       taskListId: taskItems.taskListId,
       createdAt: taskItems.createdAt,
     })
     .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
     .where(inArray(taskItems.taskListId, listIds));
 
   const itemsByList = new Map<string, typeof allItems>();

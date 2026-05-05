@@ -7,7 +7,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
@@ -55,6 +55,9 @@ export async function PATCH(
       eq(taskItems.id, taskId),
       eq(taskItems.taskListId, taskList.id),
     ),
+    with: {
+      page: { columns: { title: true } },
+    },
   });
 
   if (!existingTask) {
@@ -66,12 +69,13 @@ export async function PATCH(
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
+  let trimmedTitle: string | undefined;
 
   if (title !== undefined) {
     if (typeof title !== 'string' || title.trim().length === 0) {
       return NextResponse.json({ error: 'Title cannot be empty' }, { status: 400 });
     }
-    updates.title = title.trim();
+    trimmedTitle = title.trim();
   }
 
   if (description !== undefined) {
@@ -205,7 +209,7 @@ export async function PATCH(
   try {
     [updatedTask] = await db.transaction(async (tx) => {
       // Update the task (only if there are field-level updates)
-      let task = existingTask;
+      let task: typeof taskItems.$inferSelect = existingTask;
       if (Object.keys(updates).length > 0) {
         [task] = await tx.update(taskItems)
           .set(updates)
@@ -213,8 +217,8 @@ export async function PATCH(
           .returning();
       }
 
-      // If title changed and task has a linked page, update the page title too
-      if (updates.title && existingTask.pageId) {
+      // Title is owned by the linked page — sync there when it changes.
+      if (trimmedTitle !== undefined) {
         const [linkedPage] = await tx
           .select({ revision: pages.revision })
           .from(pages)
@@ -225,7 +229,7 @@ export async function PATCH(
           const mutationResult = await applyPageMutation({
             pageId: existingTask.pageId,
             operation: 'update',
-            updates: { title: updates.title },
+            updates: { title: trimmedTitle },
             updatedFields: ['title'],
             expectedRevision: linkedPage.revision,
             context: {
@@ -330,6 +334,9 @@ export async function PATCH(
       user: {
         columns: { id: true, name: true, image: true },
       },
+      page: {
+        columns: { id: true, title: true },
+      },
       assignees: {
         with: {
           user: {
@@ -347,12 +354,14 @@ export async function PATCH(
     return NextResponse.json({ error: 'Task not found after update' }, { status: 404 });
   }
 
+  const responseTitle = taskWithRelations.page?.title ?? '';
+
   // Send notification if assignee was changed to a new user
   if (assigneeId !== undefined && assigneeId !== existingTask.assigneeId && assigneeId !== null) {
     void createTaskAssignedNotification(
       assigneeId,
       taskId,
-      taskWithRelations.title,
+      responseTitle,
       pageId,
       userId
     );
@@ -368,12 +377,14 @@ export async function PATCH(
       void createTaskAssignedNotification(
         newUserId,
         taskId,
-        taskWithRelations.title,
+        responseTitle,
         pageId,
         userId
       );
     }
   }
+
+  const responseBody = { ...taskWithRelations, title: responseTitle };
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [
@@ -383,15 +394,15 @@ export async function PATCH(
       taskListId: taskList.id,
       userId,
       pageId,
-      data: taskWithRelations,
+      data: responseBody,
     }),
   ];
 
-  if (linkedPageUpdated && taskListPage && existingTask.pageId) {
+  if (linkedPageUpdated && taskListPage) {
     broadcasts.push(
       broadcastPageEvent(
         createPageEventPayload(taskListPage.driveId, existingTask.pageId, 'updated', {
-          title: updates.title,
+          title: trimmedTitle,
         }),
       ),
     );
@@ -399,9 +410,10 @@ export async function PATCH(
 
   await Promise.all(broadcasts);
 
-  auditRequest(req, { eventType: 'data.write', userId, resourceType: 'task', resourceId: taskId, details: { action: 'update_task', pageId, updatedFields: Object.keys(updates) } });
+  const auditFields = [...Object.keys(updates), ...(trimmedTitle !== undefined ? ['title'] : [])];
+  auditRequest(req, { eventType: 'data.write', userId, resourceType: 'task', resourceId: taskId, details: { action: 'update_task', pageId, updatedFields: auditFields } });
 
-  return NextResponse.json(taskWithRelations);
+  return NextResponse.json(responseBody);
 }
 
 /**
@@ -450,6 +462,9 @@ export async function DELETE(
       eq(taskItems.id, taskId),
       eq(taskItems.taskListId, taskList.id),
     ),
+    with: {
+      page: { columns: { title: true } },
+    },
   });
 
   if (!existingTask) {
@@ -457,45 +472,7 @@ export async function DELETE(
   }
 
   const linkedPageId = existingTask.pageId;
-
-  if (!linkedPageId) {
-    // Task without a page (conversation-based) - hard-delete the task row.
-    // disableTaskTriggers MUST run BEFORE the task delete: task_triggers
-    // has ON DELETE CASCADE on taskItemId, so deleting the task first wipes
-    // the trigger rows and leaves orphan workflows rows behind.
-    await disableTaskTriggers(taskId, 'Task deleted');
-    await db.delete(taskItems).where(eq(taskItems.id, taskId));
-
-    await broadcastTaskEvent({
-      type: 'task_deleted',
-      taskId,
-      taskListId: taskList.id,
-      userId,
-      pageId,
-      data: { id: taskId },
-    });
-
-    if (taskListPage) {
-      const actorInfo = await getActorInfo(userId);
-      logPageActivity(userId, 'delete', {
-        id: pageId,
-        title: existingTask.title,
-        driveId: taskListPage.driveId,
-      }, {
-        ...actorInfo,
-        metadata: {
-          taskId,
-          taskListId: taskList.id,
-          taskListPageId: pageId,
-          isConversationTask: true,
-        },
-      });
-    }
-
-    auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'task', resourceId: taskId, details: { action: 'delete_task', pageId, hadLinkedPage: false } });
-
-    return NextResponse.json({ success: true });
-  }
+  const existingTitle = existingTask.page?.title ?? '';
 
   // Task has a linked page - trash the page
   const actorInfo = await getActorInfo(userId);
@@ -558,7 +535,7 @@ export async function DELETE(
     broadcasts.push(
       broadcastPageEvent(
         createPageEventPayload(taskListPage.driveId, linkedPageId, 'trashed', {
-          title: existingTask.title,
+          title: existingTitle,
           parentId: pageId,
         }),
       ),
@@ -567,7 +544,7 @@ export async function DELETE(
 
   await Promise.all(broadcasts);
 
-  auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'task', resourceId: taskId, details: { action: 'delete_task', pageId, hadLinkedPage: true } });
+  auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'task', resourceId: taskId, details: { action: 'delete_task', pageId } });
 
   return NextResponse.json({ success: true });
 }

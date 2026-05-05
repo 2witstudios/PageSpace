@@ -547,11 +547,12 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
 
   const overdueTasks = await db
     .select({
-      title: taskItems.title,
+      title: pages.title,
       priority: taskItems.priority,
       dueDate: taskItems.dueDate,
     })
     .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
     .where(
       and(
         or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
@@ -564,10 +565,11 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
 
   const todayTasks = await db
     .select({
-      title: taskItems.title,
+      title: pages.title,
       priority: taskItems.priority,
     })
     .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
     .where(
       and(
         or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
@@ -580,8 +582,9 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .limit(10);
 
   const recentlyCompletedTasks = await db
-    .select({ title: taskItems.title, completedAt: taskItems.completedAt })
+    .select({ title: pages.title, completedAt: taskItems.completedAt })
     .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
     .where(
       and(
         or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),

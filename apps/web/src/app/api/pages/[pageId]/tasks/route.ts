@@ -126,7 +126,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       assigneeId: true,
       assigneeAgentId: true,
       pageId: true,
-      title: true,
       description: true,
       status: true,
       priority: true,
@@ -162,6 +161,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       page: {
         columns: {
           id: true,
+          title: true,
           isTrashed: true,
           position: true,
         },
@@ -203,7 +203,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (search) {
     const searchLower = search.toLowerCase();
     tasks = tasks.filter(task =>
-      task.title.toLowerCase().includes(searchLower) ||
+      (task.page?.title.toLowerCase().includes(searchLower)) ||
       (task.description?.toLowerCase().includes(searchLower))
     );
   }
@@ -229,6 +229,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const enrichedTasks = tasks.map((t) => ({
     ...t,
+    title: t.page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
   }));
 
@@ -396,7 +397,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       taskListId: taskList.id,
       userId,
       pageId: taskPage.id,
-      title: title.trim(),
       description: description?.trim() || null,
       status: status || 'pending',
       priority: priority || 'medium',
@@ -462,6 +462,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       user: {
         columns: { id: true, name: true, image: true },
       },
+      page: {
+        columns: { id: true, title: true },
+      },
       assignees: {
         with: {
           user: {
@@ -475,6 +478,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     },
   });
 
+  const createdTitle = result.page.title;
+
   // Broadcast events
   await Promise.all([
     broadcastTaskEvent({
@@ -484,7 +489,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       userId,
       pageId,
       data: {
-        title: result.task.title,
+        title: createdTitle,
         priority: result.task.priority,
         pageId: result.page.id,
       },
@@ -492,7 +497,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     broadcastPageEvent(
       createPageEventPayload(taskListPage.driveId, result.page.id, 'created', {
         parentId: pageId,
-        title: result.task.title,
+        title: createdTitle,
         type: 'DOCUMENT',
       }),
     ),
@@ -502,7 +507,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const actorInfo = await getActorInfo(userId);
   logPageActivity(userId, 'create', {
     id: result.page.id,
-    title: result.task.title,
+    title: createdTitle,
     driveId: taskListPage.driveId,
   }, {
     ...actorInfo,
@@ -517,6 +522,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   return NextResponse.json({
     ...taskWithRelations,
+    title: createdTitle,
     pageId: result.page.id,
   }, { status: 201 });
 }
