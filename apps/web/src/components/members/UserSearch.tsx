@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Search, User } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Mail, Search, User } from 'lucide-react';
 import { useDebounce } from '@/hooks/useDebounce';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
@@ -18,9 +19,12 @@ interface SearchResult {
 
 interface UserSearchProps {
   onSelect: (user: SearchResult) => void;
+  onInviteEmail?: (email: string) => void;
 }
 
-export function UserSearch({ onSelect }: UserSearchProps) {
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -121,13 +125,33 @@ export function UserSearch({ onSelect }: UserSearchProps) {
       )}
 
       {/* No Results */}
-      {!loading && query.length >= 2 && results.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground">
-          <User className="w-12 h-12 mx-auto mb-2 opacity-50" />
-          <p>No users found</p>
-          <p className="text-sm mt-1">Try searching by email address</p>
-        </div>
-      )}
+      {!loading && query.length >= 2 && results.length === 0 && (() => {
+        const normalizedEmail = query.trim().toLowerCase();
+        const isEmail = EMAIL_REGEX.test(normalizedEmail);
+        if (isEmail && onInviteEmail) {
+          return (
+            <div className="text-center py-8 text-muted-foreground">
+              <Mail className="w-12 h-12 mx-auto mb-2 opacity-50" />
+              <p>No matching user found</p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3"
+                onClick={() => onInviteEmail(normalizedEmail)}
+              >
+                Invite {normalizedEmail} to PageSpace
+              </Button>
+            </div>
+          );
+        }
+        return (
+          <div className="text-center py-8 text-muted-foreground">
+            <User className="w-12 h-12 mx-auto mb-2 opacity-50" />
+            <p>No users found</p>
+            <p className="text-sm mt-1">Try searching by email address</p>
+          </div>
+        );
+      })()}
     </div>
   );
 }
