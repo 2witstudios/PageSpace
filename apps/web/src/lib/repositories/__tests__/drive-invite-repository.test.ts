@@ -48,6 +48,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
     userId: 'driveMembers.userId',
     role: 'driveMembers.role',
     acceptedAt: 'driveMembers.acceptedAt',
+    invitedAt: 'driveMembers.invitedAt',
   },
   pagePermissions: {
     id: 'pagePermissions.id',
@@ -332,5 +333,26 @@ describe('driveInviteRepository.acceptPendingMember', () => {
   it('given a concurrent acceptance has already set acceptedAt, the conditional UPDATE matches zero rows and returns false', async () => {
     setupConditionalUpdate([]);
     expect(await driveInviteRepository.acceptPendingMember('mem_already_accepted')).toBe(false);
+  });
+});
+
+describe('driveInviteRepository.bumpInvitedAt', () => {
+  // REVIEW: confirm overwrite acceptable for compliance.
+  // bumpInvitedAt overwrites the original invitedAt rather than persisting a
+  // separate lastInvitedAt column. The product requirement is "last sent N
+  // minutes ago" which only needs the most recent send time. If audit/legal
+  // ever needs the original-invite timestamp, add a lastInvitedAt column and
+  // stop overwriting. PR #1229 review flagged this as the simpler path.
+  it('given a member id, sets invitedAt to a fresh Date filtered by the member id (scoped, not mass)', async () => {
+    const { set, where } = setupUpdate();
+
+    await driveInviteRepository.bumpInvitedAt('mem_1');
+
+    const setArg = set.mock.calls[0]?.[0] as { invitedAt?: Date };
+    expect(setArg?.invitedAt).toBeInstanceOf(Date);
+    // Guard against accidental mass-update: WHERE must scope to this id.
+    expect(where).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'eq', field: 'driveMembers.id', value: 'mem_1' })
+    );
   });
 });

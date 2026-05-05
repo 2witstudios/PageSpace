@@ -244,6 +244,18 @@ export const driveInviteRepository = {
       );
   },
 
+  // REVIEW: confirm overwrite acceptable for compliance.
+  // Overwrites the original invitedAt instead of persisting a separate
+  // lastInvitedAt column. The product surface ("last sent N minutes ago")
+  // only needs the most recent send time. If audit/legal later needs the
+  // original-invite timestamp, add a lastInvitedAt column and stop overwriting.
+  async bumpInvitedAt(memberId: string): Promise<void> {
+    await db
+      .update(driveMembers)
+      .set({ invitedAt: new Date() })
+      .where(eq(driveMembers.id, memberId));
+  },
+
   async acceptPendingMember(memberId: string): Promise<boolean> {
     const updated = await db
       .update(driveMembers)
