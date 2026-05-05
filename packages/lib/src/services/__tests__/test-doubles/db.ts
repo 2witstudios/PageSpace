@@ -208,10 +208,16 @@ function applyDefaults(table: string, row: Row): Row {
   return out;
 }
 
+interface ForCall {
+  table: string;
+  mode: string;
+}
+
 export class DbState {
   private tables = new Map<string, Row[]>();
   private hooks = new Map<string, Hook[]>();
   private executeCalls: SqlMarker[] = [];
+  private forCalls: ForCall[] = [];
 
   seed(table: string, rows: Row[]): void {
     const cur = this.tables.get(table) ?? [];
@@ -238,6 +244,23 @@ export class DbState {
 
   recordExecute(marker: SqlMarker): void {
     this.executeCalls.push(marker);
+  }
+
+  /**
+   * Every `select(...).from(table).where(...).for(mode)` call lands here.
+   * Tests assert these to lock down `SELECT ... FOR UPDATE` against the
+   * impl — the lock prevents concurrent soft-delete from racing the
+   * insert/restore reply-count update, and silently dropping it would
+   * reintroduce the race the FOR UPDATE clause exists to close.
+   */
+  selectsForUpdate(table?: string): readonly ForCall[] {
+    const calls = this.forCalls.filter((c) => c.mode === 'update');
+    if (table) return calls.filter((c) => c.table === table);
+    return calls;
+  }
+
+  recordFor(table: string, mode: string): void {
+    this.forCalls.push({ table, mode });
   }
 
   /**
@@ -291,6 +314,7 @@ export class DbState {
     this.tables.clear();
     this.hooks.clear();
     this.executeCalls.length = 0;
+    this.forCalls.length = 0;
   }
 }
 
@@ -502,10 +526,70 @@ export function makeDb(state: DbState): TestDb {
     },
     execute: async (marker) => {
       state.recordExecute(marker);
+      applyExecuteSideEffects(state, marker);
       return { rows: [] };
     },
   };
   return db;
+}
+
+interface SqlJoinMarker {
+  __sqlJoin: true;
+  items: readonly unknown[];
+  separator: unknown;
+}
+
+const isSqlJoin = (v: unknown): v is SqlJoinMarker =>
+  typeof v === 'object' && v !== null && (v as { __sqlJoin?: true }).__sqlJoin === true;
+
+/**
+ * Side-effect interpreter for `tx.execute(sql\`...\`)`. Today the impl uses
+ * `execute` only for the `purgeInactiveMessages` orphan-link cleanup:
+ *
+ *   DELETE FROM file_conversations fc
+ *   USING (VALUES (fileId, conversationId), …) AS purged_pairs
+ *   WHERE fc.fileId = pp.fileId AND fc.conversationId = pp.conversationId
+ *     AND NOT EXISTS (SELECT 1 FROM direct_messages dm
+ *                     WHERE dm.fileId = fc.fileId
+ *                       AND dm.conversationId = fc.conversationId)
+ *
+ * Tests must observe that the orphan-link delete actually runs — without
+ * this branch, dropping the entire `tx.execute` call from the impl would
+ * leave attachment-link rows stranded and tests would still pass. So we
+ * recognize this specific pattern and apply the delete to in-memory state.
+ *
+ * Any other `execute` shape is left as record-only (caller knows). If a
+ * future impl introduces another raw SQL effect, add a branch here.
+ */
+function applyExecuteSideEffects(state: DbState, marker: SqlMarker): void {
+  const joined = marker.strings.join(' ');
+  if (!/DELETE\s+FROM\s+file_conversations/i.test(joined)) return;
+
+  const join = marker.values.find(isSqlJoin);
+  if (!join) return;
+
+  const pairs: Array<{ fileId: unknown; conversationId: unknown }> = [];
+  for (const item of join.items) {
+    if (!isSqlMarker(item)) continue;
+    const [fileId, conversationId] = item.values;
+    pairs.push({ fileId, conversationId });
+  }
+  if (pairs.length === 0) return;
+
+  const fileConversations = state.rowsRef('fileConversations');
+  const directMessages = state.rowsRef('directMessages');
+
+  for (let i = fileConversations.length - 1; i >= 0; i--) {
+    const link = fileConversations[i];
+    const matchedPair = pairs.some(
+      (p) => p.fileId === link.fileId && p.conversationId === link.conversationId
+    );
+    if (!matchedPair) continue;
+    const stillReferenced = directMessages.some(
+      (dm) => dm.fileId === link.fileId && dm.conversationId === link.conversationId
+    );
+    if (!stillReferenced) fileConversations.splice(i, 1);
+  }
 }
 
 function makeInsertBuilder(state: DbState, table: TableRef): InsertBuilder {
@@ -664,7 +748,10 @@ function makeSelectBuilder(state: DbState, cols?: Record<string, ColumnRef>): Se
           return state.rowsRef(table.__name).filter(pred);
         };
         const chain: SelectWhere = {
-          for: async (_mode) => buildResult(filter()),
+          for: async (mode) => {
+            state.recordFor(table.__name, mode);
+            return buildResult(filter());
+          },
           orderBy: (...orders) => ({
             limit: async (n) => buildResult(sortRows(filter(), orders).slice(0, n)),
           }),
@@ -753,9 +840,3 @@ export const storageSchema = {
 // with `state.reset()`.
 export const testDbState = new DbState();
 export const testDb = makeDb(testDbState);
-
-// Convenience pre-bound mock factories so tests can write
-//   vi.mock('@pagespace/db/db', () => testDbDbMock);
-// in a single line. We can't expose these as plain functions because vi.mock
-// factories are hoisted above any imports — instead each call site uses
-// `() => import('./test-doubles/db').then(m => ...)` (see channel-message-repository.test.ts).

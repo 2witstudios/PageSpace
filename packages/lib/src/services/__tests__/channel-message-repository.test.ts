@@ -459,6 +459,22 @@ describe('channelMessageRepository.restoreChannelMessage', () => {
       expected: { count: 1, replyActive: true, parentReplyCount: 5 },
     });
   });
+
+  it('locks the parent row for the duration of the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', isActive: true, parentId: null, replyCount: 1 },
+      { id: 'reply-1', pageId: 'page-1', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
+
+    await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    assert({
+      given: 'a restore of a thread reply whose parent must be re-validated under lock',
+      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
+    });
+  });
 });
 
 describe('channelMessageRepository.insertChannelThreadReply', () => {
@@ -484,6 +500,19 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
       },
     ]);
   };
+
+  it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
+    seedActiveParent();
+
+    await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a parent validation read inside the insert tx',
+      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until this tx commits',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
+    });
+  });
 
   it('rejects with parent_not_found when the parent row is missing', async () => {
     const result = await channelMessageRepository.insertChannelThreadReply(baseInput);

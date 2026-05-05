@@ -166,6 +166,22 @@ describe('dmMessageRepository.restoreDmMessage', () => {
       expected: { count: 1, parentReplyCount: 5 },
     });
   });
+
+  it('locks the parent row for the duration of the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-parent', isActive: true, parentId: null, replyCount: 1 },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-replier', isActive: false, parentId: 'parent-1', replyCount: 0 },
+    ]);
+
+    await dmMessageRepository.restoreDmMessage('reply-1');
+
+    assert({
+      given: 'a DM restore parent re-read inside the tx',
+      should: 'invoke .for("update") against directMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 1,
+    });
+  });
 });
 
 describe('dmMessageRepository.purgeInactiveMessages', () => {
@@ -190,6 +206,47 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
       should: 'hard-delete only the stale tombstone (count 1) and leave both other rows in place',
       actual: { count, remaining },
       expected: { count: 1, remaining: ['active-keep', 'recent-keep'] },
+    });
+  });
+
+  it('cleans up orphaned file_conversations links AFTER the message rows are purged — but ONLY when no surviving DM still references the (fileId, conversationId) pair', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      // Two stale tombstones in conv-1 attaching the same file. Both purge,
+      // and no other DM references (file-shared, conv-1) — the link must go.
+      { id: 'stale-a', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-shared' },
+      { id: 'stale-b', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-shared' },
+      // Stale tombstone in conv-2 attaching file-still-used. The link must
+      // STAY because an active DM in the same conv still references it.
+      { id: 'stale-c', conversationId: 'conv-2', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-still-used' },
+      { id: 'active-keeper', conversationId: 'conv-2', senderId: 'u-1', isActive: true, deletedAt: null, parentId: null, fileId: 'file-still-used' },
+      // Stale tombstone with no fileId — should NOT contribute to the
+      // orphan-link cleanup at all.
+      { id: 'stale-text-only', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: null },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-shared', conversationId: 'conv-1' },
+      { fileId: 'file-still-used', conversationId: 'conv-2' },
+      // Untouched link in a third conversation — no purge candidate references
+      // it, so the cleanup query must not see it as a candidate at all.
+      { fileId: 'file-other', conversationId: 'conv-3' },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const remainingLinks = testDbState
+      .rows('fileConversations')
+      .map((l) => `${l.fileId}:${l.conversationId}`)
+      .sort();
+    assert({
+      given: 'four stale rows (two sharing an orphaned file link, one whose file is still referenced by an active DM, one text-only) plus an unrelated active DM',
+      should: 'purge all four stale rows, drop the (file-shared, conv-1) link (no surviving reference), AND keep both (file-still-used, conv-2) and the unrelated (file-other, conv-3) links intact',
+      actual: { count, remainingLinks },
+      expected: {
+        count: 4,
+        remainingLinks: ['file-other:conv-3', 'file-still-used:conv-2'],
+      },
     });
   });
 });
@@ -218,6 +275,19 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
       },
     ]);
   };
+
+  it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
+    seedActiveParent();
+
+    await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a DM parent validation read inside the insert tx',
+      should: 'invoke .for("update") against directMessages exactly once — the lock blocks a concurrent softDelete until this tx commits',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 1,
+    });
+  });
 
   it('rejects with parent_not_found when the parent is missing', async () => {
     const result = await dmMessageRepository.insertDmThreadReply(baseInput);
