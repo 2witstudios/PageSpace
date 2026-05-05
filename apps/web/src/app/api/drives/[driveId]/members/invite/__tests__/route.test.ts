@@ -437,6 +437,33 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
       });
 
+      // Codex P2: unverified-userId-path reroutes to handleEmailPath but used
+      // to hardcode permissions: [], silently dropping caller-supplied page
+      // permissions while returning kind: invited. The fix forwards the
+      // original permissions so the email path's existing 422 fires.
+      it('rejects 422 when permissions[] non-empty on unverified-userId path — adversarial silently-dropped-permissions path', async () => {
+        vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
+          email: 'unverified@example.com',
+          emailVerified: null,
+          suspendedAt: null,
+        } as never);
+
+        const response = await POST(
+          buildPost(mockDriveId, {
+            userId: 'temp_user_id',
+            role: 'MEMBER',
+            permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
+          }),
+          createContext(mockDriveId)
+        );
+
+        expect(response.status).toBe(422);
+        // Critically: nothing should have been written — no token, no member.
+        expect(createMagicLinkToken).not.toHaveBeenCalled();
+        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+        expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+      });
+
       it('verified target preserves Epic 2 behavior (auto-accept add path)', async () => {
         // findUserVerificationStatusById defaults to a verified user in beforeEach.
         const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));

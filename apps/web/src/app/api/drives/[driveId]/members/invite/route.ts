@@ -192,13 +192,18 @@ async function handleUserIdPath(args: {
       );
     }
     if (!targetStatus.emailVerified) {
+      // Forward the caller-supplied permissions verbatim. The email path
+      // returns 422 when `permissions.length > 0` for not-yet-registered
+      // targets — that's the correct behavior here too. Hardcoding `[]`
+      // would silently drop the permissions and return kind:invited,
+      // misleading admins into thinking page-level grants applied.
       return await handleEmailPath({
         request,
         body: {
           email: targetStatus.email,
           role,
           customRoleId: customRoleId ?? null,
-          permissions: [],
+          permissions,
         },
         drive,
         driveId,
