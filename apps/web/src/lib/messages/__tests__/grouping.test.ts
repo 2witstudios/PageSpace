@@ -65,4 +65,19 @@ describe('isFirstInGroup', () => {
       ),
     ).toBe(true);
   });
+
+  it('breaks the group when either timestamp is unparseable', () => {
+    expect(
+      isFirstInGroup(
+        { authorKey: 'u1', createdAt: 'not a date' },
+        { authorKey: 'u1', createdAt: t0 },
+      ),
+    ).toBe(true);
+    expect(
+      isFirstInGroup(
+        { authorKey: 'u1', createdAt: t0 },
+        { authorKey: 'u1', createdAt: 'not a date' },
+      ),
+    ).toBe(true);
+  });
 });

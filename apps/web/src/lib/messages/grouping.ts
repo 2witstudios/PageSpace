@@ -13,5 +13,6 @@ export function isFirstInGroup(
   if (current.authorKey !== previous.authorKey) return true;
   const currentMs = new Date(current.createdAt).getTime();
   const previousMs = new Date(previous.createdAt).getTime();
+  if (!Number.isFinite(currentMs) || !Number.isFinite(previousMs)) return true;
   return currentMs - previousMs > GROUP_BREAK_MS;
 }
