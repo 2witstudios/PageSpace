@@ -164,8 +164,11 @@ async function handleUserIdPath(args: {
   drive: DriveSummary;
   driveId: string;
   inviterUserId: string;
+  // Set when we arrived here via an email-payload fall-through. Lets the
+  // audit trail record the original email selector even after lookup.
+  sourceEmail?: string;
 }): Promise<Response> {
-  const { request, body, drive, driveId, inviterUserId } = args;
+  const { request, body, drive, driveId, inviterUserId, sourceEmail } = args;
   const { userId: invitedUserId, role, customRoleId, permissions } = body;
 
   const validPageIds = new Set(await driveInviteRepository.getValidPageIds(driveId));
@@ -233,6 +236,7 @@ async function handleUserIdPath(args: {
       invitedUserId,
       role,
       permissionsGranted,
+      sourceEmail,
     });
   } else {
     auditRequest(request, {
@@ -240,7 +244,12 @@ async function handleUserIdPath(args: {
       userId: inviterUserId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { targetUserId: invitedUserId, role, operation: 'invite' },
+      details: {
+        targetUserId: invitedUserId,
+        role,
+        operation: 'invite',
+        ...(sourceEmail ? { sourceEmail } : {}),
+      },
     });
   }
 
@@ -260,8 +269,8 @@ async function handleEmailPath(args: {
   inviterUserId: string;
 }): Promise<Response> {
   const { request, body, drive, driveId, inviterUserId } = args;
-  const { email: rawEmail, role, customRoleId, permissions } = body;
-  const email = rawEmail.trim().toLowerCase();
+  // Email arrives already trimmed + lowercased by the Zod schema's pipe.
+  const { email, role, customRoleId, permissions } = body;
 
   // Pair-scoped rate limit (drive + email): catches a single drive spamming one address.
   const driveRl = await checkDistributedRateLimit(
@@ -296,6 +305,15 @@ async function handleEmailPath(args: {
 
   const existingUser = await driveInviteRepository.findUserIdByEmail(email);
 
+  // A suspended user must not be added — even if they're verified — bypassing
+  // suspension via email lookup would let an admin re-grant access. Tested.
+  if (existingUser?.suspendedAt) {
+    return NextResponse.json(
+      { error: 'This account is suspended and cannot be invited.' },
+      { status: 403 }
+    );
+  }
+
   // Email maps to a verified user with no pending row → fall through to add path.
   if (existingUser && existingUser.emailVerified) {
     const alreadyAcceptedMember = await driveInviteRepository.findExistingMember(driveId, existingUser.id);
@@ -316,7 +334,19 @@ async function handleEmailPath(args: {
       drive,
       driveId,
       inviterUserId,
+      sourceEmail: email,
     });
+  }
+
+  // Page-level permissions for a not-yet-registered user have no target to
+  // attach to. Reject explicitly rather than silently dropping them.
+  if (permissions.length > 0) {
+    return NextResponse.json(
+      {
+        error: 'Page-level permissions cannot be granted to a user who has not joined yet. Invite first, then grant permissions after they accept.',
+      },
+      { status: 422 }
+    );
   }
 
   // Email maps to no user OR an unverified existing user (orphan from a prior
@@ -350,9 +380,9 @@ async function handleEmailPath(args: {
         { status: 400 }
       );
     }
-    loggers.api.error('Failed to create magic link token for drive invite', {
+    loggers.api.error('Failed to create magic link token for drive invite', undefined, {
       code: tokenResult.error.code,
-    } as never);
+    });
     return NextResponse.json({ error: 'Failed to add member' }, { status: 500 });
   }
 
@@ -367,14 +397,40 @@ async function handleEmailPath(args: {
   });
 
   const inviter = await driveInviteRepository.findInviterDisplay(inviterUserId);
+  // Magic-link tokens are CUID2-formatted (URL-safe alphanumeric); the
+  // encodeURIComponent call is defensive belt-and-suspenders, not required.
   const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(tokenResult.data.token)}`;
 
-  await sendPendingDriveInvitationEmail({
-    recipientEmail: email,
-    inviterName: inviter?.name ?? 'A teammate',
-    driveName: drive.name,
-    magicLinkUrl,
-  });
+  // If the email send fails, we must roll back the pending row — leaving an
+  // orphaned drive_members row without a sent invite would block re-invites
+  // (the next attempt would 409 on findActivePendingMemberByEmail).
+  try {
+    await sendPendingDriveInvitationEmail({
+      recipientEmail: email,
+      inviterName: inviter?.name ?? 'A teammate',
+      driveName: drive.name,
+      magicLinkUrl,
+    });
+  } catch (emailError) {
+    loggers.api.error(
+      'Failed to send pending drive invitation email; rolling back pending member row',
+      emailError instanceof Error ? emailError : new Error(String(emailError)),
+      { driveId, recipientEmail: email }
+    );
+    try {
+      await driveInviteRepository.deleteDriveMemberById(pendingMember.id);
+    } catch (rollbackError) {
+      loggers.api.error(
+        'Rollback of pending drive_members row failed after email send failure',
+        rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)),
+        { memberId: pendingMember.id, driveId }
+      );
+    }
+    return NextResponse.json(
+      { error: 'Failed to send invitation email. Please try again.' },
+      { status: 502 }
+    );
+  }
 
   trackDriveOperation(inviterUserId, 'invite_member', driveId, {
     invitedEmail: email,
@@ -389,10 +445,10 @@ async function handleEmailPath(args: {
     {
       driveId,
       driveName: drive.name,
+      targetUserId: newPendingUserId,
       targetUserEmail: email,
       role,
-      pending: true,
-    } as never,
+    },
     actorInfo
   );
 
@@ -420,8 +476,9 @@ async function emitJoinSideEffects(args: {
   invitedUserId: string;
   role: 'MEMBER' | 'ADMIN';
   permissionsGranted: number;
+  sourceEmail?: string;
 }): Promise<void> {
-  const { request, driveId, driveName, inviterUserId, invitedUserId, role, permissionsGranted } = args;
+  const { request, driveId, driveName, inviterUserId, invitedUserId, role, permissionsGranted, sourceEmail } = args;
 
   const payload = createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
     role,
@@ -470,6 +527,11 @@ async function emitJoinSideEffects(args: {
     userId: inviterUserId,
     resourceType: 'drive',
     resourceId: driveId,
-    details: { targetUserId: invitedUserId, role, operation: 'invite' },
+    details: {
+      targetUserId: invitedUserId,
+      role,
+      operation: 'invite',
+      ...(sourceEmail ? { sourceEmail } : {}),
+    },
   });
 }

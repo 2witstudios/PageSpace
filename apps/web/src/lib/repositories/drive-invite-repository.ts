@@ -144,12 +144,16 @@ export const driveInviteRepository = {
     return user?.email;
   },
 
-  async findUserIdByEmail(email: string): Promise<{ id: string; emailVerified: Date | null } | null> {
+  async findUserIdByEmail(
+    email: string
+  ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.email, email),
-      columns: { id: true, emailVerified: true },
+      columns: { id: true, emailVerified: true, suspendedAt: true },
     });
-    return user ? { id: user.id, emailVerified: user.emailVerified } : null;
+    return user
+      ? { id: user.id, emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
+      : null;
   },
 
   async findActivePendingMemberByEmail(driveId: string, email: string): Promise<{ id: string } | null> {
@@ -174,6 +178,10 @@ export const driveInviteRepository = {
       columns: { name: true, email: true },
     });
     return user ? { name: user.name, email: user.email } : null;
+  },
+
+  async deleteDriveMemberById(memberId: string): Promise<void> {
+    await db.delete(driveMembers).where(eq(driveMembers.id, memberId));
   },
 
   async createAcceptedMemberWithPermissions(input: {

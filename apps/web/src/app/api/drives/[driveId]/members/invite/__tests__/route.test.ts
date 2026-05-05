@@ -20,6 +20,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     findInviterDisplay: vi.fn(),
     createDriveMember: vi.fn(),
     createAcceptedMemberWithPermissions: vi.fn(),
+    deleteDriveMemberById: vi.fn(),
     updateDriveMemberRole: vi.fn(),
     getValidPageIds: vi.fn(),
     findPagePermission: vi.fn(),
@@ -182,6 +183,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       memberId: 'mem_new',
       permissionsGranted: 1,
     } as never);
+    vi.mocked(driveInviteRepository.deleteDriveMemberById).mockResolvedValue(undefined);
     vi.mocked(driveInviteRepository.updateDriveMemberRole).mockResolvedValue(undefined);
     vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
     vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
@@ -361,6 +363,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
         id: 'user_existing_verified',
         emailVerified: new Date(),
+        suspendedAt: null,
       } as never);
       vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
 
@@ -413,6 +416,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
         id: 'orphan_user',
         emailVerified: null,
+        suspendedAt: null,
       } as never);
 
       const response = await POST(
@@ -442,6 +446,100 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(json.existingMemberId).toBe('mem_pending_existing');
       expect(createMagicLinkToken).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when email maps to a suspended verified user (does NOT bypass via fall-through)', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'suspended_verified_user',
+        emailVerified: new Date(),
+        suspendedAt: new Date('2026-01-01'),
+      } as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'banned@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(403);
+      // Critical: must NOT have inserted a member row for the suspended user.
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when email maps to a suspended unverified user', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'suspended_unverified_user',
+        emailVerified: null,
+        suspendedAt: new Date('2026-01-01'),
+      } as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'orphan-suspended@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(403);
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects 422 when permissions array is non-empty on the email-pending path', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, {
+          email: 'newbie@example.com',
+          role: 'MEMBER',
+          permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
+        }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(422);
+      // Must not have created a token or member when we reject the request.
+      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('rolls back the pending member row when sendPendingDriveInvitationEmail throws', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
+        id: 'mem_pending_rollback',
+      } as never);
+      vi.mocked(sendPendingDriveInvitationEmail).mockRejectedValueOnce(new Error('SMTP unreachable'));
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'smtp-fail@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(502);
+      expect(driveInviteRepository.deleteDriveMemberById).toHaveBeenCalledWith('mem_pending_rollback');
+    });
+
+    it('preserves sourceEmail in the audit record when fall-through occurs', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'user_existing_verified',
+        emailVerified: new Date(),
+        suspendedAt: null,
+      } as never);
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
+
+      await POST(
+        buildPost(mockDriveId, { email: 'fall-through@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          eventType: 'authz.permission.granted',
+          details: expect.objectContaining({
+            targetUserId: 'user_existing_verified',
+            sourceEmail: 'fall-through@example.com',
+          }),
+        })
+      );
     });
 
     it('normalizes email to lowercase + trim before lookup AND storage', async () => {
@@ -642,7 +740,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
     });
 
-    it('logs member activity with target email on email path', async () => {
+    it('logs member activity with target email + magic-link-userId on email path', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
       await POST(
@@ -656,9 +754,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         expect.objectContaining({
           driveId: mockDriveId,
           driveName: 'Test Drive',
+          targetUserId: 'user_pending',
           targetUserEmail: 'newbie@example.com',
           role: 'MEMBER',
-          pending: true,
         }),
         expect.any(Object)
       );
