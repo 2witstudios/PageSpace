@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { ThreadUnreadBadge } from '@/components/inbox/ThreadUnreadBadge';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
 const fetcher = async (url: string) => {
@@ -185,6 +186,7 @@ export default function DMCenterList() {
                         {formatDistanceToNow(new Date(item.lastMessageAt), { addSuffix: false })}
                       </span>
                     )}
+                    <ThreadUnreadBadge source="dm" contextId={item.id} />
                     {item.unreadCount > 0 && (
                       <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium">
                         {item.unreadCount}

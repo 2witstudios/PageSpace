@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 import { useSocket } from './useSocket';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
 import type { InboxResponse } from '@pagespace/lib/types';
 
@@ -90,15 +91,31 @@ export function useInboxSocket({ driveId, hasLoadedRef: externalRef }: UseInboxS
       );
     };
 
+    // PR 5: thread_updated bumps a per-row "unread thread" badge in
+    // useThreadInboxStore WITHOUT touching the SWR cache or top-level unread
+    // count. The handler is intentionally separate so we can keep the existing
+    // dm/channel/read handler unchanged.
+    const handleThreadUpdated = (payload: InboxEventPayload) => {
+      if (payload.operation !== 'thread_updated' || !payload.rootMessageId) return;
+      if (!hasLoadedRef.current) return;
+      useThreadInboxStore.getState().bump({
+        source: payload.type,
+        contextId: payload.id,
+        rootMessageId: payload.rootMessageId,
+      });
+    };
+
     // Listen for all inbox event types
     socket.on('inbox:dm_updated', handleInboxUpdate);
     socket.on('inbox:channel_updated', handleInboxUpdate);
     socket.on('inbox:read_status_changed', handleInboxUpdate);
+    socket.on('inbox:thread_updated', handleThreadUpdated);
 
     return () => {
       socket.off('inbox:dm_updated', handleInboxUpdate);
       socket.off('inbox:channel_updated', handleInboxUpdate);
       socket.off('inbox:read_status_changed', handleInboxUpdate);
+      socket.off('inbox:thread_updated', handleThreadUpdated);
     };
   }, [socket, getCacheKey, mutate, hasLoadedRef]);
 
