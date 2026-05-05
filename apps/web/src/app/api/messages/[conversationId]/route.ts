@@ -6,6 +6,7 @@ import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
+import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
@@ -152,9 +153,13 @@ export async function GET(
     // Show oldest first in the response payload.
     messages.reverse();
 
+    // Enrich with denormalized quote snapshots; helper short-circuits when no
+    // row carries a quotedMessageId so this is a no-op for quote-free pages.
+    const enriched = await attachQuotedMessages(messages, 'dm');
+
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message', resourceId: conversationId });
 
-    return NextResponse.json({ messages });
+    return NextResponse.json({ messages: enriched });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
     return NextResponse.json(
@@ -220,6 +225,7 @@ export async function POST(
       attachmentMeta?: unknown;
       parentId?: unknown;
       alsoSendToParent?: unknown;
+      quotedMessageId?: unknown;
     };
 
     const rawContent = typeof body.content === 'string' ? body.content : '';
@@ -229,6 +235,8 @@ export async function POST(
     const trimmedParent = typeof body.parentId === 'string' ? body.parentId.trim() : '';
     const parentId = trimmedParent.length > 0 ? trimmedParent : null;
     const alsoSendToParent = body.alsoSendToParent === true;
+    const trimmedQuoted = typeof body.quotedMessageId === 'string' ? body.quotedMessageId.trim() : '';
+    const quotedMessageId = trimmedQuoted.length > 0 ? trimmedQuoted : null;
 
     if (content.length === 0 && !fileId) {
       return NextResponse.json(
@@ -301,6 +309,33 @@ export async function POST(
         return NextResponse.json(
           { error: 'File is not linked to this conversation' },
           { status: 403 }
+        );
+      }
+    }
+
+    // Quote-reply validation. Quotes are top-level only — the quoted DM must
+    // (a) belong to this conversation, (b) be active, and (c) itself be a
+    // top-level message (parentId IS NULL). Same-conversation gating is the
+    // only ACL check needed; participation was already verified above by
+    // findConversationForParticipant.
+    if (quotedMessageId) {
+      if (parentId) {
+        return NextResponse.json(
+          { error: 'Quote replies cannot be combined with thread replies' },
+          { status: 400 },
+        );
+      }
+      const quoted = await dmMessageRepository.findActiveMessage({
+        messageId: quotedMessageId,
+        conversationId,
+      });
+      if (!quoted) {
+        return NextResponse.json({ error: 'Quoted message not found' }, { status: 404 });
+      }
+      if (quoted.parentId !== null) {
+        return NextResponse.json(
+          { error: 'Threads are exactly one level deep' },
+          { status: 400 },
         );
       }
     }
@@ -484,13 +519,17 @@ export async function POST(
       return NextResponse.json({ message: result.reply });
     }
 
-    const newMessage = await dmMessageRepository.insertDmMessage({
+    const baseMessage = await dmMessageRepository.insertDmMessage({
       conversationId,
       senderId: userId,
       content,
       fileId,
       attachmentMeta,
+      quotedMessageId,
     });
+    // Enrich with the quote snapshot so the realtime payload and the JSON
+    // response carry the same denormalized shape the GET list returns.
+    const [newMessage] = await attachQuotedMessages([baseMessage], 'dm');
 
     auditRequest(request, {
       eventType: 'data.write',
