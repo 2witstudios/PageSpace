@@ -1201,6 +1201,28 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       expect(kickUserFromDrive).toHaveBeenCalled();
     });
 
+    it('should still return 200 if the page-room db lookup rejects post-commit (non-fatal kicks)', async () => {
+      // Drive-level kicks succeed; the db.select for page rooms throws.
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockRejectedValue(new Error('Page lookup blew up')),
+        }),
+      } as never);
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      // Drive-level kicks ran before the failure.
+      expect(kickUserFromDrive).toHaveBeenCalled();
+      // The error is logged, not propagated.
+      expect(loggers.api.error).toHaveBeenCalledWith(
+        'Failed to kick user from rooms (post-commit, non-fatal)',
+        expect.any(Error),
+      );
+    });
+
     it('should kick user from drive rooms', async () => {
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 

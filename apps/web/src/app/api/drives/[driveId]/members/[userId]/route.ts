@@ -341,22 +341,31 @@ export async function DELETE(
     }
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-    // This ensures the user stops receiving updates even if their socket is still connected
-
-    // First, kick from drive-level rooms
-    await Promise.all([
-      kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
-      kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
-    ]);
-
-    // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
-    const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
-    if (drivePages.length > 0) {
-      const pageKickPromises = drivePages.flatMap((page) => [
-        kickUserFromPage(page.id, targetUserId, 'member_removed'),
-        kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
+    // This ensures the user stops receiving updates even if their socket is still connected.
+    // Same best-effort contract as the broadcast above: the membership delete has
+    // already committed, so any post-commit failure here must be logged and not
+    // propagated as a 500 (would falsely signal failure on an applied removal).
+    try {
+      // First, kick from drive-level rooms
+      await Promise.all([
+        kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
+        kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
       ]);
-      await Promise.all(pageKickPromises);
+
+      // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
+      const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
+      if (drivePages.length > 0) {
+        const pageKickPromises = drivePages.flatMap((page) => [
+          kickUserFromPage(page.id, targetUserId, 'member_removed'),
+          kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
+        ]);
+        await Promise.all(pageKickPromises);
+      }
+    } catch (kickError) {
+      loggers.api.error(
+        'Failed to kick user from rooms (post-commit, non-fatal)',
+        kickError instanceof Error ? kickError : new Error(String(kickError)),
+      );
     }
 
     // Note: No in-app notification sent for removal - the broadcast event
