@@ -55,4 +55,20 @@ describe('UserSearch', () => {
     await user.click(await screen.findByRole('button', { name: /invite foo@bar\.com/i }));
     expect(onInviteEmail).toHaveBeenCalledWith('foo@bar.com');
   });
+
+  it('Lowercases email-shaped queries before hitting the search API (auth stores emails normalized)', async () => {
+    render(<UserSearch onSelect={vi.fn()} onInviteEmail={vi.fn()} />);
+    await typeQuery('Mixed.Case@Example.COM');
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+    const url = mockFetchWithAuth.mock.calls.at(-1)?.[0] as string;
+    expect(url).toContain(`q=${encodeURIComponent('mixed.case@example.com')}`);
+  });
+
+  it('Does NOT lowercase non-email queries', async () => {
+    render(<UserSearch onSelect={vi.fn()} onInviteEmail={vi.fn()} />);
+    await typeQuery('Alice');
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+    const url = mockFetchWithAuth.mock.calls.at(-1)?.[0] as string;
+    expect(url).toContain('q=Alice');
+  });
 });

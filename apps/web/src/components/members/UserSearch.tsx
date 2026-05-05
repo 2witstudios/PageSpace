@@ -39,7 +39,13 @@ export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
     const searchUsers = async () => {
       setLoading(true);
       try {
-        const response = await fetchWithAuth(`/api/users/search?q=${encodeURIComponent(debouncedQuery)}`);
+        // Auth normalizes emails to lowercase on signup, and the search API
+        // does an exact `eq(users.email, q)` match. Lowercase email-shaped
+        // queries here so a typed "User@Example.COM" still finds an existing
+        // account, instead of falling through to the new-user CTA.
+        const trimmed = debouncedQuery.trim();
+        const searchQuery = EMAIL_REGEX.test(trimmed) ? trimmed.toLowerCase() : debouncedQuery;
+        const response = await fetchWithAuth(`/api/users/search?q=${encodeURIComponent(searchQuery)}`);
         if (!response.ok) throw new Error('Search failed');
         const data = await response.json();
         setResults(data.users || []);
