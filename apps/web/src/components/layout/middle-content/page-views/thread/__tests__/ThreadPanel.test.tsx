@@ -289,10 +289,7 @@ describe('ThreadPanel', () => {
     const handler = mockSocketHandlers.get('new_message');
     expect(typeof handler).toBe('function');
 
-    // Distinct content per event makes leakage text-detectable: the message
-    // id is not rendered, so we can't probe by id. In production both bodies
-    // are identical (same user message, mirrored); using different strings
-    // here only matters to the test, not the contract under test.
+    // Distinct content per event so DOM-text probing can detect a leak (ids aren't rendered).
     act(() => {
       handler!({
         id: 'reply-1',

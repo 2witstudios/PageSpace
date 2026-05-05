@@ -85,8 +85,7 @@ describe('useThreadInboxStore', () => {
   });
 
   it('bump with null/undefined rootMessageId is a no-op at runtime', () => {
-    // The TS signature forbids null/undefined; assert runtime defensiveness so
-    // a malformed payload from the inbox socket can't poison the store.
+    // TS forbids null/undefined; assert runtime defensiveness against malformed socket payloads.
     useThreadInboxStore
       .getState()
       // @ts-expect-error — runtime defensiveness for malformed event payloads
@@ -144,8 +143,7 @@ describe('useThreadInboxStore', () => {
   });
 
   it('clearRoot for a non-existent root in an empty store is a no-op (does not throw)', () => {
-    // No prior bumps — store starts empty. clearRoot must not throw and must
-    // leave state observably unchanged.
+    // Empty store: clearRoot must not throw and must leave state untouched.
     useThreadInboxStore
       .getState()
       .clearRoot({ source: 'channel', contextId: 'page-1', rootMessageId: 'root-1' });
