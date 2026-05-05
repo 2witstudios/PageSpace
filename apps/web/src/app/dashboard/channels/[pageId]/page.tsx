@@ -16,7 +16,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
-import { MessageReactions, type Reaction } from '@/components/layout/middle-content/page-views/channel/MessageReactions';
+import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
