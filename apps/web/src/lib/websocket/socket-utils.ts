@@ -114,6 +114,18 @@ export interface InboxEventPayload {
   attachmentMeta?: AttachmentMeta | null;
 }
 
+/**
+ * Emitted on the channel/DM room after a thread reply commits so parent-stream
+ * viewers can update the parent's reply-count footer without refetching.
+ *
+ * Channel room: pageId.  DM room: `dm:${conversationId}`.
+ */
+export interface ThreadReplyCountUpdatedPayload {
+  rootId: string;
+  replyCount: number;
+  lastReplyAt: string;
+}
+
 // Presence types - re-export from shared lib
 export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/types';
 
@@ -575,6 +587,50 @@ export async function broadcastInboxEvent(userId: string, payload: InboxEventPay
       {
         event: 'inbox',
         channel: `notifications:${maskIdentifier(userId)}`,
+      }
+    );
+  }
+}
+
+/**
+ * Broadcasts thread_reply_count_updated to a channel or DM room so the parent
+ * footer (e.g. "3 replies · last reply 2m ago") stays live without a refetch.
+ *
+ * Failures are logged and swallowed — the originating insert has already
+ * committed, and a missed broadcast is recoverable on the next refresh.
+ */
+export async function broadcastThreadReplyCountUpdated(
+  channelId: string,
+  payload: ThreadReplyCountUpdatedPayload
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping thread reply count broadcast', {
+      event: 'thread_reply_count_updated',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId,
+      event: 'thread_reply_count_updated',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast thread_reply_count_updated',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'thread_reply_count_updated',
+        channel: maskIdentifier(channelId),
       }
     );
   }
