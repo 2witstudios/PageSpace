@@ -14,7 +14,7 @@ import {
 } from '@/components/ai/ui/conversation';
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageDropZone } from './MessageDropZone';
-import { MessageReactions, type Reaction } from './MessageReactions';
+import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
