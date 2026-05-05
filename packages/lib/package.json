@@ -146,6 +146,11 @@
       "import": "./dist/services/preview.js",
       "require": "./dist/services/preview.js"
     },
+    "./services/quote-enrichment": {
+      "types": "./dist/services/quote-enrichment.d.ts",
+      "import": "./dist/services/quote-enrichment.js",
+      "require": "./dist/services/quote-enrichment.js"
+    },
     "./services/storage-limits": {
       "types": "./dist/services/storage-limits.d.ts",
       "import": "./dist/services/storage-limits.js",
