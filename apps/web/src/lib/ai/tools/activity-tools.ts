@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, desc, gte, ne, isNull, inArray } from '@pagespace/db/operators'
+import { eq, and, or, desc, gte, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { drives } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
@@ -350,8 +350,10 @@ When summarizing multiple changes, group them thematically and describe the over
           }
         } else {
           // Single query to get all accessible drive IDs:
-          // 1. Drives user is a member of (via driveMembers)
+          // 1. Drives user is a member of (via driveMembers, accepted only)
           // 2. Drives user owns (via drives.ownerId)
+          // Pending invitees (acceptedAt IS NULL) must not surface drives they
+          // have not joined.
           const [memberDrives, ownedDrives] = await Promise.all([
             db
               .select({ driveId: driveMembers.driveId })
@@ -360,6 +362,7 @@ When summarizing multiple changes, group them thematically and describe the over
               .where(
                 and(
                   eq(driveMembers.userId, userId),
+                  isNotNull(driveMembers.acceptedAt),
                   eq(drives.isTrashed, false)
                 )
               ),

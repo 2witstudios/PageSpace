@@ -27,12 +27,13 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', isTrashed: 'isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId' },
+  driveMembers: { driveId: 'driveId', acceptedAt: 'acceptedAt' },
 }));
 vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: {},

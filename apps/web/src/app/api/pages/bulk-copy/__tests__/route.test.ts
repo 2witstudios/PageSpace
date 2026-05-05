@@ -90,13 +90,14 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
   desc: vi.fn((a: unknown) => a),
   isNull: vi.fn((a: unknown) => a),
+  isNotNull: vi.fn((a: unknown) => ({ _isNotNull: true, col: a })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', parentId: 'parentId', position: 'position', isTrashed: 'isTrashed' },
   drives: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId' },
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt' },
 }));
 
 // ── Imports (after mocks) ───────────────────────────────────────────────
@@ -358,6 +359,20 @@ describe('POST /api/pages/bulk-copy', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toMatch(/permission.*copy/i);
+    });
+
+    // Review C2 — pending ADMIN escalation. Adversarial pin against drift back
+    // to the role-only predicate that allowed pending invitees to write into
+    // a drive they had not joined.
+    it('rejects pending ADMIN (acceptedAt IS NULL) — adversarial pending-admin-can-bulk-copy-into-unaccepted-drive path', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(403);
+      const { isNotNull } = await import('@pagespace/db/operators');
+      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
     });
   });
 

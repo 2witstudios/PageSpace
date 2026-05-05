@@ -21,12 +21,13 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
   and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
+  isNotNull: vi.fn((field: unknown) => ({ field, type: 'isNotNull' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: {},
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: {},
+  driveMembers: { acceptedAt: 'driveMembers.acceptedAt' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -353,6 +354,30 @@ describe('POST /api/account/handle-drive', () => {
 
       // The query filters by driveId, so this should return null
       expect(response.status).toBe(400);
+    });
+
+    // Review C2 — borderline-CRIT. A leaving owner used to be able to transfer
+    // ownership to a never-accepted invitee. This test pins the gate that
+    // refuses pending admins as transfer targets.
+    it('rejects transfer to pending admin (acceptedAt IS NULL) — adversarial drive-ownership-transfer-to-pending-admin path', async () => {
+      // Simulate the gate filtering the pending row out — the query now
+      // requires acceptedAt IS NOT NULL so the pending admin is invisible.
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+      const { isNotNull } = await import('@pagespace/db/operators');
+      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
     });
   });
 

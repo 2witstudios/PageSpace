@@ -8,7 +8,7 @@
 
 import { generateText } from 'ai';
 import { db } from '@pagespace/db/db'
-import { eq, and, gte, desc, inArray } from '@pagespace/db/operators'
+import { eq, and, gte, desc, inArray, isNotNull } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members'
@@ -108,10 +108,12 @@ async function gatherRecentConversations(
   );
 
   // 2. Page agent conversations (chatMessages)
+  // acceptedAt IS NOT NULL filters pending invitations — a not-yet-accepted
+  // member must not see prior conversations from the inviting drive.
   const userDrives = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
+    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
   const driveIds = userDrives.map((d) => d.driveId);
 
   if (driveIds.length > 0) {
@@ -158,10 +160,11 @@ async function gatherRecentActivity(
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
+  // Same gate as gatherRecentConversations — exclude pending invitations.
   const userDrives = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(eq(driveMembers.userId, userId));
+    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
   const driveIds = userDrives.map((d) => d.driveId);
 
   if (driveIds.length === 0) return [];
