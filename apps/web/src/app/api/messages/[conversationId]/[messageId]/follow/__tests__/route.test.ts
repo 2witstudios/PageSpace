@@ -162,4 +162,18 @@ describe('DELETE /api/messages/[conversationId]/[messageId]/follow', () => {
     const res = await callDelete();
     expect(res.status).toBe(404);
   });
+
+  it('returns 401 when unauthenticated', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(authError(401));
+    const res = await callDelete();
+    expect(res.status).toBe(401);
+    expect(mockRemoveDmThreadFollower).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the message does not belong to this conversation', async () => {
+    mockFindMessageInConversation.mockResolvedValueOnce(null);
+    const res = await callDelete();
+    expect(res.status).toBe(404);
+    expect(mockRemoveDmThreadFollower).not.toHaveBeenCalled();
+  });
 });

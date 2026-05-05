@@ -215,6 +215,12 @@ export function ThreadPanel({
   const handleToggleFollow = useCallback(async () => {
     if (followInFlight) return;
     if (!followStateKnown) return;
+    // Snapshot the thread identity at the start of the request: if the user
+    // switches to another thread before the response arrives, we must NOT
+    // write the previous thread's optimistic state back into the store —
+    // optimisticFollowing takes precedence over server data, so leaking it
+    // across a thread switch would silently mislabel the new panel header.
+    const submitThreadKey = activeThreadKeyRef.current;
     const next = !isFollowing;
     setOptimisticFollowing(next);
     setFollowError(null);
@@ -226,6 +232,7 @@ export function ThreadPanel({
       if (!res.ok) {
         throw new Error(`Follow toggle failed: ${res.status}`);
       }
+      if (activeThreadKeyRef.current !== submitThreadKey) return;
       // Refresh SWR so the server-truth replaces the optimistic value on the
       // next render; mutate without revalidate is enough since we already
       // know the new state.
@@ -236,10 +243,13 @@ export function ThreadPanel({
       setOptimisticFollowing(undefined);
     } catch (err) {
       console.error('Follow toggle failed', err);
+      if (activeThreadKeyRef.current !== submitThreadKey) return;
       setOptimisticFollowing(!next);
       setFollowError('Could not update follow state');
     } finally {
-      setFollowInFlight(false);
+      if (activeThreadKeyRef.current === submitThreadKey) {
+        setFollowInFlight(false);
+      }
     }
   }, [followInFlight, followStateKnown, isFollowing, buildFollowUrl, mutate]);
 
