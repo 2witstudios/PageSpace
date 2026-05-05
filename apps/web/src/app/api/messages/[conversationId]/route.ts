@@ -443,7 +443,12 @@ export async function POST(
             )
         );
 
-        if (content.trim().length > 0) {
+        // The mention-targeted bump is only meaningful for thread-only DM
+        // replies. When `alsoSendToParent` is set, the mirror branch above
+        // already fired `dm_updated` to the other participant — duplicating
+        // it here would inflate their unread count by 2 instead of 1.
+        const isThreadOnlyReply = !result.mirror;
+        if (isThreadOnlyReply && content.trim().length > 0) {
           // DM mention IDs come from sender-controlled markup — the recipient
           // set MUST be intersected with the conversation's actual participants.
           // Without this, a sender could craft a `:user` mention for any user

@@ -476,6 +476,62 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     expect(recipients).toContain('user-bob');
   });
 
+  it('does NOT fire the targeted mention bump when alsoSendToParent is set (broad fan-out covers everyone)', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: { id: 'mirror-1', createdAt: replyCreatedAt },
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations
+      .mockResolvedValueOnce({
+        id: 'reply-1',
+        parentId: PARENT_ID,
+        content: 'hey @[Bob](user-bob:user)',
+        createdAt: replyCreatedAt.toISOString(),
+        user: { id: USER_ID, name: 'Sender', image: null },
+      })
+      .mockResolvedValueOnce({ id: 'mirror-1', mirroredFromId: 'reply-1', parentId: null });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: {
+        query: { pages: { findFirst: ReturnType<typeof vi.fn> } };
+        select: ReturnType<typeof vi.fn>;
+      };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValueOnce({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+
+    await callPost({
+      content: 'hey @[Bob](user-bob:user)',
+      parentId: PARENT_ID,
+      alsoSendToParent: true,
+    });
+
+    // When alsoSendToParent is set, the mirror's broad fan-out covers viewable
+    // members. The targeted mention bump is short-circuited so user-bob does
+    // NOT receive two channel_updated payloads for the same underlying event.
+    const channelUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'channel_updated'
+    );
+    const recipientCounts = channelUpdatedCalls.reduce<Record<string, number>>(
+      (acc, [uid]) => {
+        const id = uid as string;
+        acc[id] = (acc[id] ?? 0) + 1;
+        return acc;
+      },
+      {}
+    );
+    expect(recipientCounts['user-bob'] ?? 0).toBeLessThanOrEqual(1);
+  });
+
   it('does NOT emit channel_updated to a mentioned user who cannot view the channel', async () => {
     const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
     mockInsertChannelThreadReply.mockResolvedValueOnce({

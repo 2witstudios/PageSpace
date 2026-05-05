@@ -404,7 +404,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         },
       });
 
-      if (replyContent.trim().length > 0 && channel?.driveId) {
+      // The mention-targeted bump is only meaningful for thread-only replies.
+      // When `alsoSendToParent` is set, the mirror row triggers the broad
+      // `fanOutChannelInboxUpdate` below, which already reaches every viewable
+      // member including the mentioned user — running this targeted path too
+      // would deliver a duplicate `channel_updated` for the same underlying
+      // event, inflating the recipient's unread count by 2 instead of 1.
+      const isThreadOnlyReply = !mirrorWithRelations;
+      if (isThreadOnlyReply && replyContent.trim().length > 0 && channel?.driveId) {
         const mentionedUserIds = extractMentionedUserIds(replyContent);
         const candidateTargets = mentionedUserIds.filter(
           (id: string) => id !== userId && !followerSet.has(id)
