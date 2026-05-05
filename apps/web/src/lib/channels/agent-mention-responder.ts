@@ -51,6 +51,25 @@ interface AskAgentResult {
   error?: string;
 }
 
+export function isAskAgentResult(value: unknown): value is AskAgentResult {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  // Each declared field is optional, so undefined is allowed; any other
+  // non-matching type rejects the shape.
+  if (candidate.success !== undefined && typeof candidate.success !== 'boolean') {
+    return false;
+  }
+  if (candidate.response !== undefined && typeof candidate.response !== 'string') {
+    return false;
+  }
+  if (candidate.error !== undefined && typeof candidate.error !== 'string') {
+    return false;
+  }
+  return 'success' in candidate || 'response' in candidate || 'error' in candidate;
+}
+
 function convertMentionsToDisplayText(content: string): string {
   return content.replace(
     /@\[([^\]]{1,500})\]\(([^:)]{1,200}):([^)]{1,200})\)/g,
@@ -347,7 +366,7 @@ export async function triggerMentionedAgentResponses(
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
-        const askResult = (await askAgentExecute(
+        const rawAskResult: unknown = await askAgentExecute(
           {
             agentPath: `/${agent.title}`,
             agentId: agent.id,
@@ -372,7 +391,16 @@ export async function triggerMentionedAgentResponses(
               agentCallDepth: 0,
             } as ToolExecutionContext,
           }
-        )) as AskAgentResult;
+        );
+
+        if (!isAskAgentResult(rawAskResult)) {
+          channelMentionLogger.warn('Mentioned agent returned a malformed result; skipping', {
+            channelId: params.channelId,
+            agentId: agent.id,
+          });
+          continue;
+        }
+        const askResult = rawAskResult;
 
         if (!askResult.success || !askResult.response || !askResult.response.trim()) {
           channelMentionLogger.warn('Mentioned agent returned no response', {
