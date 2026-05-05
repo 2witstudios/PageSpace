@@ -35,6 +35,7 @@ const mockUpdateConversationLastRead = vi.fn();
 const mockInsertDmThreadReply = vi.fn();
 const mockListDmThreadReplies = vi.fn();
 const mockFindActiveMessage = vi.fn();
+const mockListDmThreadFollowers = vi.fn();
 vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   dmMessageRepository: {
     findConversationForParticipant: (...args: unknown[]) =>
@@ -52,6 +53,7 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
     insertDmThreadReply: (...args: unknown[]) => mockInsertDmThreadReply(...args),
     listDmThreadReplies: (...args: unknown[]) => mockListDmThreadReplies(...args),
     findActiveMessage: (...args: unknown[]) => mockFindActiveMessage(...args),
+    listDmThreadFollowers: (...args: unknown[]) => mockListDmThreadFollowers(...args),
   },
 }));
 
@@ -743,6 +745,8 @@ describe('GET /api/messages/[conversationId] (?parentId=)', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
+    // PR 5: GET also fetches followers to populate isFollowing.
+    mockListDmThreadFollowers.mockResolvedValue([]);
   });
 
   it('routes to listDmThreadReplies when ?parentId= is provided and the parent is top-level', async () => {
@@ -800,6 +804,8 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     vi.mocked(isEmailVerified).mockResolvedValue(true);
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+    mockListDmThreadFollowers.mockResolvedValue([]);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -843,8 +849,13 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     // No mirror → conversation preview should not bump for the thread-only reply.
     expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
     expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
-    // Thread-only reply does NOT touch the conversation inbox bump path.
-    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    // PR 5: thread-only reply with NO followers (default mock) emits no inbox events.
+    // Earlier assertion was "no inbox bumps at all"; now it remains true only because
+    // no followers exist — once followers are populated, thread_updated will fan out.
+    const dmUpdates = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'dm_updated'
+    );
+    expect(dmUpdates).toHaveLength(0);
 
     const broadcasts = fetchMock.mock.calls
       .filter(([url]) => typeof url === 'string' && url.includes('/api/broadcast'))
@@ -923,5 +934,35 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     const res = await callRoute({ content: 'x', parentId: 'reply-as-parent' });
 
     expect(res.status).toBe(400);
+  });
+
+  it('fans out thread_updated to DM thread followers but EXCLUDES the reply author', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertDmThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: {
+        id: 'reply-1',
+        parentId: PARENT_ID,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        content: 'in-thread',
+        createdAt: replyCreatedAt,
+      },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 2,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockListDmThreadFollowers.mockResolvedValueOnce([SENDER_ID, RECIPIENT_ID]);
+
+    await callRoute({ content: 'in-thread', parentId: PARENT_ID });
+
+    const threadUpdated = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'thread_updated'
+    );
+    expect(threadUpdated).toHaveLength(1);
+    const [recipientId, payload] = threadUpdated[0];
+    expect(recipientId).toBe(RECIPIENT_ID);
+    expect((payload as { rootMessageId: string }).rootMessageId).toBe(PARENT_ID);
   });
 });

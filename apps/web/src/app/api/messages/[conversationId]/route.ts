@@ -8,6 +8,7 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -95,11 +96,14 @@ export async function GET(
         );
       }
 
-      const replies = await dmMessageRepository.listDmThreadReplies({
-        rootId: parentId,
-        limit: limit + 1,
-        after: parsedAfter,
-      });
+      const [replies, followers] = await Promise.all([
+        dmMessageRepository.listDmThreadReplies({
+          rootId: parentId,
+          limit: limit + 1,
+          after: parsedAfter,
+        }),
+        dmMessageRepository.listDmThreadFollowers(parentId),
+      ]);
 
       const hasMore = replies.length > limit;
       const page = hasMore ? replies.slice(0, limit) : replies;
@@ -107,6 +111,8 @@ export async function GET(
       const nextCursor = hasMore && last
         ? `${last.createdAt.toISOString()}|${last.id}`
         : null;
+
+      const isFollowing = followers.includes(userId);
 
       auditRequest(request, {
         eventType: 'data.read',
@@ -116,7 +122,7 @@ export async function GET(
         details: { replyCount: page.length },
       });
 
-      return NextResponse.json({ messages: page, nextCursor, hasMore });
+      return NextResponse.json({ messages: page, nextCursor, hasMore, isFollowing });
     }
 
     const messages = await dmMessageRepository.listActiveMessages({
@@ -404,6 +410,60 @@ export async function POST(
         replyCount: result.replyCount,
         lastReplyAt: result.lastReplyAt.toISOString(),
       });
+
+      // PR 5: thread_updated inbox fan-out to followers, plus mentioned
+      // non-follower DM-level bumps. Mirrors the channel route's logic at a
+      // smaller scale — DMs only have two participants, so the "non-follower
+      // mention" path is rare but kept for symmetry. Failures are logged and
+      // swallowed; the DB commit is durable.
+      try {
+        const previewSource = buildLastMessagePreview(content, attachmentMeta);
+        const replyCreatedAt = result.lastReplyAt.toISOString();
+        const replySender = {
+          id: userId,
+          name: 'Member',
+        };
+
+        const followers = await dmMessageRepository.listDmThreadFollowers(result.rootId);
+        const followerSet = new Set(followers);
+
+        await Promise.all(
+          followers
+            .filter((followerId: string) => followerId !== userId)
+            .map((followerId: string) =>
+              broadcastInboxEvent(followerId, {
+                operation: 'thread_updated',
+                type: 'dm',
+                id: conversationId,
+                rootMessageId: result.rootId,
+                lastReplyAt: replyCreatedAt,
+                lastReplyPreview: previewSource,
+                lastReplySender: replySender,
+              })
+            )
+        );
+
+        if (content.trim().length > 0) {
+          const mentionedUserIds = extractMentionedUserIds(content);
+          const mentionTargets = mentionedUserIds.filter(
+            (id: string) => id !== userId && !followerSet.has(id)
+          );
+          await Promise.all(
+            mentionTargets.map((memberId: string) =>
+              broadcastInboxEvent(memberId, {
+                operation: 'dm_updated',
+                type: 'dm',
+                id: conversationId,
+                lastMessageAt: replyCreatedAt,
+                lastMessagePreview: previewSource,
+                attachmentMeta,
+              })
+            )
+          );
+        }
+      } catch (error) {
+        loggers.realtime.error('Failed to broadcast DM thread inbox update:', error as Error);
+      }
 
       return NextResponse.json({ message: result.reply });
     }
