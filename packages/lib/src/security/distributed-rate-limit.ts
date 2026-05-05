@@ -564,6 +564,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
+  DRIVE_INVITE_RESEND: {
+    maxAttempts: 3,
+    windowMs: 24 * 60 * 60 * 1000,
+    blockDurationMs: 24 * 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================
