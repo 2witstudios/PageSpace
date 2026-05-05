@@ -191,8 +191,9 @@ async function softDeleteMessage(messageId: string): Promise<number> {
 }
 
 async function restoreDmMessage(messageId: string): Promise<number> {
-  // Mirror of softDeleteMessage: flips isActive back to true and increments
-  // the parent's replyCount when the row is a thread reply.
+  // Mirror of softDeleteMessage. The parent counter is only bumped when the
+  // parent itself is still active — restoring an orphaned reply whose parent
+  // was deleted in the meantime must NOT inflate a tombstone's count.
   return db.transaction(async (tx) => {
     const result = await tx
       .update(directMessages)
@@ -210,12 +211,18 @@ async function restoreDmMessage(messageId: string): Promise<number> {
 
     const row = result[0];
     if (row?.parentId) {
-      await tx
-        .update(directMessages)
-        .set({
-          replyCount: sql`${directMessages.replyCount} + 1`,
-        })
-        .where(eq(directMessages.id, row.parentId));
+      const parent = await tx.query.directMessages.findFirst({
+        where: eq(directMessages.id, row.parentId),
+        columns: { id: true, isActive: true },
+      });
+      if (parent?.isActive) {
+        await tx
+          .update(directMessages)
+          .set({
+            replyCount: sql`${directMessages.replyCount} + 1`,
+          })
+          .where(eq(directMessages.id, row.parentId));
+      }
     }
 
     return result.length;
@@ -302,6 +309,9 @@ async function listActiveMessages(
   const baseFilters = [
     eq(directMessages.conversationId, input.conversationId),
     eq(directMessages.isActive, true),
+    // Top-level only. Threads are exactly one level deep, and reply visibility
+    // is owned by the thread panel — never the main DM stream.
+    isNull(directMessages.parentId),
   ];
 
   const where = input.before
@@ -388,16 +398,22 @@ async function insertDmThreadReply(
   input: InsertDmThreadReplyInput
 ): Promise<InsertDmThreadReplyResult> {
   return db.transaction(async (tx) => {
-    const parent = await tx.query.directMessages.findFirst({
-      where: eq(directMessages.id, input.parentId),
-      columns: {
-        id: true,
-        conversationId: true,
-        parentId: true,
-        senderId: true,
-        isActive: true,
-      },
-    });
+    // SELECT ... FOR UPDATE locks the parent row for the rest of this tx so a
+    // concurrent softDeleteMessage(parentId) blocks until our INSERT and
+    // replyCount UPDATE commit. Without this lock, the parent could flip
+    // isActive=false between validation and INSERT, leaving an orphaned reply
+    // attached to a tombstoned parent.
+    const [parent] = await tx
+      .select({
+        id: directMessages.id,
+        conversationId: directMessages.conversationId,
+        parentId: directMessages.parentId,
+        senderId: directMessages.senderId,
+        isActive: directMessages.isActive,
+      })
+      .from(directMessages)
+      .where(eq(directMessages.id, input.parentId))
+      .for('update');
 
     if (!parent || !parent.isActive) {
       return { kind: 'parent_not_found' };
@@ -468,7 +484,10 @@ async function insertDmThreadReply(
       mirror,
       rootId: input.parentId,
       replyCount: updatedParent.replyCount,
-      lastReplyAt: updatedParent.lastReplyAt!,
+      // We just SET lastReplyAt = reply.createdAt above, so the RETURNING value
+      // is non-null. Falling back to reply.createdAt makes that explicit
+      // instead of relying on a non-null assertion.
+      lastReplyAt: updatedParent.lastReplyAt ?? reply.createdAt,
     };
   });
 }

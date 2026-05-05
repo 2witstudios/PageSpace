@@ -38,3 +38,30 @@ describe('DM inactive filtering contract', () => {
     expect(readRoute('messages/threads/route.ts')).toContain('dm."isActive" = true');
   });
 });
+
+// Thread replies must NEVER inflate inbox/pulse/activity DM counts. Default
+// is "thread reply does not bump conversation unread"; PR 5 will reintroduce
+// thread-specific unread via thread_updated for explicit followers.
+describe('DM thread-reply isolation contract', () => {
+  it('given_unreadDmCounts_excludesThreadReplies', () => {
+    const parentNullPredicate = 'isNull(directMessages.parentId)';
+    const routes = [
+      'activity/summary/route.ts',
+      'pulse/route.ts',
+      'pulse/generate/route.ts',
+      'pulse/cron/route.ts',
+    ];
+
+    for (const route of routes) {
+      expect(readRoute(route)).toContain(parentNullPredicate);
+    }
+  });
+
+  it('given_messageThreadsInboxSql_excludesThreadReplies', () => {
+    const source = readRoute('messages/threads/route.ts');
+    // DM unread CTE
+    expect(source).toContain('dm."parentId" IS NULL');
+    // Channel "last message" CTE
+    expect(source).toContain('cm."parentId" IS NULL');
+  });
+});

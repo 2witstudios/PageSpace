@@ -110,7 +110,7 @@ vi.mock('@pagespace/db/schema/storage', () => ({
 
 import { db } from '@pagespace/db/db';
 import { directMessages, dmThreadFollowers } from '@pagespace/db/schema/social';
-import { asc, eq, gt, isNotNull, lt } from '@pagespace/db/operators';
+import { asc, eq, gt, isNotNull, isNull, lt } from '@pagespace/db/operators';
 import { dmMessageRepository } from '../dm-message-repository';
 
 // Riteway-style assert helper for the thread tests below.
@@ -209,21 +209,51 @@ describe('dmMessageRepository lifecycle', () => {
     });
   });
 
-  it('given_restoreOfThreadReply_incrementsParentReplyCount', async () => {
+  it('given_softDelete_returnsZero_whenAlreadyInactive', async () => {
+    // The where(isActive=true) filter makes a second delete a no-op; the route
+    // must use the returned count to skip duplicate audit + broadcast.
+    mockUpdateReturning.mockResolvedValueOnce([]);
+
+    const count = await dmMessageRepository.softDeleteMessage('already-deleted');
+
+    assert({
+      given: 'a soft-delete of an already-inactive DM',
+      should: 'return 0 so the route can 404 instead of re-broadcasting',
+      actual: count,
+      expected: 0,
+    });
+  });
+
+  it('given_restoreOfThreadReply_incrementsParentReplyCount_whenParentStillActive', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ id: 'reply-1', parentId: 'parent-1' }]);
+    mockDirectMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: true });
 
     const count = await dmMessageRepository.restoreDmMessage('reply-1');
 
     expect(count).toBe(1);
     const setCalls = mockUpdateSet.mock.calls.map((c) => c[0] as Record<string, unknown>);
     assert({
-      given: 'a restore of a DM thread reply',
+      given: 'a restore of a DM thread reply whose parent is still active',
       should: 'flip isActive=true and increment parent.replyCount in the same tx',
       actual: {
         firstSetIsActive: setCalls[0]?.isActive,
         secondHasReplyCount: 'replyCount' in (setCalls[1] ?? {}),
       },
       expected: { firstSetIsActive: true, secondHasReplyCount: true },
+    });
+  });
+
+  it('given_restoreOfThreadReply_skipsParentBump_whenParentSoftDeleted', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ id: 'reply-1', parentId: 'parent-1' }]);
+    mockDirectMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: false });
+
+    await dmMessageRepository.restoreDmMessage('reply-1');
+
+    assert({
+      given: 'a restore of a DM thread reply whose parent is itself soft-deleted',
+      should: 'flip isActive=true on the reply but skip the parent.replyCount bump',
+      actual: mockUpdateSet.mock.calls.length,
+      expected: 1,
     });
   });
 
@@ -265,6 +295,16 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
     attachmentMeta: null,
   };
 
+  // The helper validates the parent with `tx.select(...).from(...).where(...).for('update')`.
+  // This stubs the FOR UPDATE chain to return the supplied parent row.
+  const stubParentForUpdate = (parent: Record<string, unknown> | null) => {
+    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
+    const whereFn = vi.fn(() => ({ for: forFn }));
+    const fromFn = vi.fn(() => ({ where: whereFn }));
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
+    return { forFn, whereFn, fromFn };
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -289,8 +329,33 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
     );
   });
 
+  it('locks the parent row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot orphan the reply', async () => {
+    const { forFn } = stubParentForUpdate({
+      id: 'parent-1',
+      conversationId: 'conv-1',
+      parentId: null,
+      senderId: 'user-parent',
+      isActive: true,
+    });
+    mockInsertReturning.mockResolvedValueOnce([
+      { id: 'reply-1', createdAt: new Date(), parentId: 'parent-1' },
+    ]);
+    mockUpdateReturning.mockResolvedValueOnce([
+      { replyCount: 1, lastReplyAt: new Date() },
+    ]);
+
+    await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a DM parent validation read inside the insert tx',
+      should: 'invoke .for("update") so a concurrent softDelete blocks until this tx commits',
+      actual: forFn.mock.calls[0]?.[0],
+      expected: 'update',
+    });
+  });
+
   it('rejects with parent_not_found when the parent is missing or inactive', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce(undefined);
+    stubParentForUpdate(null);
 
     const result = await dmMessageRepository.insertDmThreadReply(baseInput);
 
@@ -302,8 +367,27 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
     });
   });
 
+  it('rejects with parent_not_found when the parent row exists but is soft-deleted (isActive=false)', async () => {
+    stubParentForUpdate({
+      id: 'parent-1',
+      conversationId: 'conv-1',
+      parentId: null,
+      senderId: 'user-parent',
+      isActive: false,
+    });
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a DM parent that has been soft-deleted',
+      should: 'return parent_not_found — clients cannot reply into a tombstoned thread',
+      actual: { kind: result.kind, insertCount: mockInsertValues.mock.calls.length },
+      expected: { kind: 'parent_not_found', insertCount: 0 },
+    });
+  });
+
   it('rejects with parent_wrong_conversation when the parent belongs to a different conversation', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       conversationId: 'other-conv',
       parentId: null,
@@ -322,7 +406,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 
   it('rejects with parent_not_top_level when the parent itself has parentId set (depth-2 attempt)', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       conversationId: 'conv-1',
       parentId: 'grandparent',
@@ -341,7 +425,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 
   it('inserts the reply with parentId set, bumps replyCount + lastReplyAt, and upserts both followers', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       conversationId: 'conv-1',
       parentId: null,
@@ -384,7 +468,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 
   it('dedupes followers when the parent author replies to their own DM thread', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       conversationId: 'conv-1',
       parentId: null,
@@ -413,7 +497,7 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 
   it('writes a second top-level row with mirroredFromId set when alsoSendToParent is true', async () => {
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({
+    stubParentForUpdate({
       id: 'parent-1',
       conversationId: 'conv-1',
       parentId: null,
@@ -459,10 +543,38 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 });
 
+describe('dmMessageRepository.listActiveMessages [thread-isolation]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // db.select().from().where().orderBy().limit() chain
+    const limitMock = vi.fn().mockResolvedValue([]);
+    const orderByMock = vi.fn(() => ({ limit: limitMock }));
+    const whereMock = vi.fn(() => ({ orderBy: orderByMock }));
+    mockSelectFrom.mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: mockSelectFrom } as never);
+  });
+
+  it('filters out replies by requiring parentId IS NULL — thread replies must NEVER leak into the main DM stream', async () => {
+    await dmMessageRepository.listActiveMessages({
+      conversationId: 'conv-1',
+      limit: 50,
+    });
+
+    assert({
+      given: 'a top-level DM messages fetch',
+      should: 'add an isNull(parentId) filter so thread replies do not leak into the main stream',
+      actual: vi.mocked(isNull).mock.calls.some(
+        ([field]) => field === directMessages.parentId
+      ),
+      expected: true,
+    });
+  });
+});
+
 describe('dmMessageRepository.listDmThreadReplies', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // The function uses db.select().from().where().orderBy().limit() chain.
+    // db.select().from().where().orderBy().limit() chain
     const limitMock = vi.fn().mockResolvedValue([]);
     const orderByMock = vi.fn(() => ({ limit: limitMock }));
     const whereMock = vi.fn(() => ({ orderBy: orderByMock }));
