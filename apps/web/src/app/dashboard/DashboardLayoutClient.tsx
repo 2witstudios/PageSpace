@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import Layout from "@/components/layout/Layout";
 import { PushNotificationManager } from "@/components/PushNotificationManager";
+import { PushActionHandler } from "@/components/PushActionHandler";
 import QuickCreatePalette from "@/components/create/QuickCreatePalette";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
@@ -36,6 +37,7 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
   return (
     <>
       <PushNotificationManager />
+      <PushActionHandler />
       <QuickCreatePalette />
       {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
     </>

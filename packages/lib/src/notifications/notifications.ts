@@ -6,12 +6,30 @@ import { notifications } from '@pagespace/db/schema/notifications';
 import { createId } from '@paralleldrive/cuid2';
 import { sendNotificationEmail } from '../services/notification-email-service';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
-import { sendPushNotification } from './push-notifications';
+import { sendPushNotification, type PushNotificationPayload } from './push-notifications';
 
 // Export types and guards
 export * from './types';
 export * from './guards';
 import type { NotificationType } from './types';
+
+async function sendBadgedPush(userId: string, payload: PushNotificationPayload) {
+  try {
+    const badge = await getUnreadNotificationCount(userId);
+    await sendPushNotification(userId, { ...payload, badge });
+  } catch (error) {
+    console.error('Failed to send badged push notification:', error);
+  }
+}
+
+async function sendSilentBadgeUpdate(userId: string) {
+  try {
+    const badge = await getUnreadNotificationCount(userId);
+    await sendPushNotification(userId, { silent: true, badge });
+  } catch (error) {
+    console.error('Failed to send silent badge update:', error);
+  }
+}
 
 async function broadcastNotification(userId: string, notification: unknown) {
   try {
@@ -60,8 +78,8 @@ export async function createNotification(params: CreateNotificationParams) {
     metadata: params.metadata || {},
   });
 
-  // Send push notification (fire-and-forget - don't block on push sending)
-  void sendPushNotification(params.userId, {
+  // Send push notification with current unread badge count (fire-and-forget)
+  void sendBadgedPush(params.userId, {
     title: params.title,
     body: params.message,
     data: {
@@ -71,8 +89,6 @@ export async function createNotification(params: CreateNotificationParams) {
       ...(params.driveId && { driveId: params.driveId }),
       ...params.metadata,
     },
-  }).catch((error) => {
-    console.error('Failed to send push notification:', error);
   });
 
   return notification[0];
@@ -132,7 +148,7 @@ export async function getUnreadCount(userId: string) {
 export async function markNotificationAsRead(notificationId: string, userId: string) {
   const updated = await db
     .update(notifications)
-    .set({ 
+    .set({
       isRead: true,
       readAt: new Date(),
     })
@@ -144,13 +160,15 @@ export async function markNotificationAsRead(notificationId: string, userId: str
     )
     .returning();
 
+  void sendSilentBadgeUpdate(userId);
+
   return updated[0];
 }
 
 export async function markAllNotificationsAsRead(userId: string) {
   await db
     .update(notifications)
-    .set({ 
+    .set({
       isRead: true,
       readAt: new Date(),
     })
@@ -160,6 +178,8 @@ export async function markAllNotificationsAsRead(userId: string) {
         eq(notifications.isRead, false)
       )
     );
+
+  void sendSilentBadgeUpdate(userId);
 }
 
 export async function markConnectionRequestActioned(
@@ -187,6 +207,8 @@ export async function markConnectionRequestActioned(
       },
     })
     .where(eq(notifications.id, notification.id));
+
+  void sendSilentBadgeUpdate(userId);
 }
 
 export async function deleteNotification(notificationId: string, userId: string) {
@@ -198,6 +220,8 @@ export async function deleteNotification(notificationId: string, userId: string)
         eq(notifications.userId, userId)
       )
     );
+
+  void sendSilentBadgeUpdate(userId);
 }
 
 export async function createPermissionNotification(
@@ -373,6 +397,18 @@ export async function createOrUpdateMessageNotification(
         conversationId,
         senderName,
         messagePreview,
+      },
+    });
+
+    // Push the updated DM so 2nd, 3rd, ... messages still surface and bump the badge
+    void sendBadgedPush(targetUserId, {
+      title: senderName ? `${senderName}` : 'New Direct Message',
+      body: messagePreview,
+      threadId: `dm:${conversationId}`,
+      data: {
+        notificationId: updatedNotification[0].id,
+        type: 'NEW_DIRECT_MESSAGE',
+        conversationId,
       },
     });
 
