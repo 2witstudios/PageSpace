@@ -280,6 +280,96 @@ describe('ThreadPanel', () => {
     });
   });
 
+  it('given alsoSendToParent twin events (reply + mirror), should append the reply but NOT the mirror to the thread list', async () => {
+    renderPanel({
+      fetcher: vi.fn(async () => ({ messages: [], hasMore: false, nextCursor: null })),
+    });
+    await waitFor(() => expect(screen.getByTestId('thread-divider-count')).toBeInTheDocument());
+
+    const handler = mockSocketHandlers.get('new_message');
+    expect(typeof handler).toBe('function');
+
+    // Distinct content per event so DOM-text probing can detect a leak (ids aren't rendered).
+    act(() => {
+      handler!({
+        id: 'reply-1',
+        content: 'reply-body-A',
+        createdAt: new Date('2026-05-05T12:00:00Z').toISOString(),
+        userId: 'u-other',
+        parentId: 'p1',
+        mirroredFromId: null,
+      });
+      handler!({
+        id: 'mirror-1',
+        content: 'mirror-body-B',
+        createdAt: new Date('2026-05-05T12:00:01Z').toISOString(),
+        userId: 'u-other',
+        parentId: null,
+        mirroredFromId: 'reply-1',
+      });
+    });
+
+    await waitFor(() => expect(screen.getAllByTestId('thread-reply').length).toBe(1));
+
+    const replies = screen.getAllByTestId('thread-reply');
+    const allText = replies.map((r) => r.textContent ?? '').join('\n');
+
+    expect({
+      given: 'reply (parentId=root) and mirror (parentId=null) twin events',
+      should:
+        'show exactly the reply in the thread list — the mirror is the page-side stream concern, not the panel',
+      actual: {
+        count: replies.length,
+        replyShown: allText.includes('reply-body-A'),
+        mirrorShown: allText.includes('mirror-body-B'),
+      },
+      expected: { count: 1, replyShown: true, mirrorShown: false },
+    }).toEqual({
+      given: 'reply (parentId=root) and mirror (parentId=null) twin events',
+      should:
+        'show exactly the reply in the thread list — the mirror is the page-side stream concern, not the panel',
+      actual: { count: 1, replyShown: true, mirrorShown: false },
+      expected: { count: 1, replyShown: true, mirrorShown: false },
+    });
+  });
+
+  it('given the same id is broadcast twice (network double-fire), should not duplicate', async () => {
+    renderPanel({
+      fetcher: vi.fn(async () => ({ messages: [], hasMore: false, nextCursor: null })),
+    });
+    await waitFor(() => expect(screen.getByTestId('thread-divider-count')).toBeInTheDocument());
+
+    const handler = mockSocketHandlers.get('new_message');
+    expect(typeof handler).toBe('function');
+
+    const payload = {
+      id: 'reply-dup',
+      content: 'doubled echo',
+      createdAt: new Date('2026-05-05T12:02:00Z').toISOString(),
+      userId: 'u-other',
+      parentId: 'p1',
+    };
+
+    act(() => {
+      handler!(payload);
+      handler!(payload);
+    });
+
+    await waitFor(() => expect(screen.getAllByTestId('thread-reply').length).toBe(1));
+
+    expect({
+      given: 'the same realtime id is broadcast twice',
+      should: 'render exactly one row (id-based dedupe in the realtime handler)',
+      actual: screen.getAllByTestId('thread-reply').length,
+      expected: 1,
+    }).toEqual({
+      given: 'the same realtime id is broadcast twice',
+      should: 'render exactly one row (id-based dedupe in the realtime handler)',
+      actual: 1,
+      expected: 1,
+    });
+  });
+
   it('given a realtime new_message arrives with a non-matching parentId, should NOT append it', async () => {
     renderPanel();
     await waitFor(() =>
