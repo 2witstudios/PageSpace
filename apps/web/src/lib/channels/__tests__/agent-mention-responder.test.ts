@@ -81,6 +81,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {
+  isAskAgentResult,
   triggerMentionedAgentResponses,
   type TriggerMentionedAgentResponsesParams,
 } from '../agent-mention-responder';
@@ -387,5 +388,84 @@ describe('agent-mention-responder', () => {
 
     expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given askAgentExecute returns a malformed value, persists nothing and skips the agent reply', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    // Boundary mock: simulate a future tool-shape change that no longer matches AskAgentResult.
+    mockAskAgentExecute.mockResolvedValueOnce({ unexpected: 'shape' });
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+  });
+
+  it('given askAgentExecute returns a result with a wrong-typed success field, persists nothing and skips', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    // Predicate must reject `success: 'true'` (string) — locks in the strict-type
+    // checks end-to-end, not just at the unit level.
+    mockAskAgentExecute.mockResolvedValueOnce({ success: 'true', response: 'ok' });
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Reply @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('isAskAgentResult', () => {
+  it('accepts the canonical success shape', () => {
+    expect(
+      isAskAgentResult({ success: true, response: 'hi', error: undefined })
+    ).toBe(true);
+  });
+
+  it('accepts a partial shape where only success is present', () => {
+    expect(isAskAgentResult({ success: false })).toBe(true);
+  });
+
+  it('accepts a partial shape where only error is present', () => {
+    expect(isAskAgentResult({ error: 'boom' })).toBe(true);
+  });
+
+  it('rejects an empty object — no recognizable AskAgentResult fields', () => {
+    expect(isAskAgentResult({})).toBe(false);
+  });
+
+  it('rejects null', () => {
+    expect(isAskAgentResult(null)).toBe(false);
+  });
+
+  it('rejects non-object primitives', () => {
+    expect(isAskAgentResult('ok')).toBe(false);
+    expect(isAskAgentResult(42)).toBe(false);
+    expect(isAskAgentResult(undefined)).toBe(false);
+  });
+
+  it('rejects when success is present but not boolean', () => {
+    expect(isAskAgentResult({ success: 'true' })).toBe(false);
+  });
+
+  it('rejects when response is present but not string', () => {
+    expect(isAskAgentResult({ success: true, response: 42 })).toBe(false);
+  });
+
+  it('rejects when error is present but not string', () => {
+    expect(isAskAgentResult({ success: false, error: { msg: 'x' } })).toBe(false);
   });
 });

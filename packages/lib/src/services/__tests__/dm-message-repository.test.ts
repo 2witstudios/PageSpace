@@ -618,6 +618,32 @@ describe('dmMessageRepository.listActiveMessages [reactions parity]', () => {
       },
     });
   });
+
+  it('hydrates sender, file, and reactions.user with the same column whitelist as channel-parity dmMessageWith', async () => {
+    await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
+
+    const call = mockDirectMessagesFindMany.mock.calls[0]?.[0] as {
+      with: {
+        sender: { columns: Record<string, true> };
+        file: { columns: Record<string, true> };
+        reactions: { with: { user: { columns: Record<string, true> } } };
+      };
+    };
+    assert({
+      given: 'a DM list fetch',
+      should: 'request sender, file, and reactions.user with the same column whitelist as the channel repo',
+      actual: {
+        senderCols: call.with.sender.columns,
+        fileCols: call.with.file.columns,
+        reactionUserCols: call.with.reactions.with.user.columns,
+      },
+      expected: {
+        senderCols: { id: true, name: true, image: true },
+        fileCols: { id: true, mimeType: true, sizeBytes: true },
+        reactionUserCols: { id: true, name: true },
+      },
+    });
+  });
 });
 
 describe('dmMessageRepository.listActiveMessages [thread-isolation]', () => {
@@ -646,12 +672,7 @@ describe('dmMessageRepository.listActiveMessages [thread-isolation]', () => {
 describe('dmMessageRepository.listDmThreadReplies', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // db.select().from().where().orderBy().limit() chain
-    const limitMock = vi.fn().mockResolvedValue([]);
-    const orderByMock = vi.fn(() => ({ limit: limitMock }));
-    const whereMock = vi.fn(() => ({ orderBy: orderByMock }));
-    mockSelectFrom.mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: mockSelectFrom } as never);
+    mockDirectMessagesFindMany.mockResolvedValue([]);
   });
 
   it('filters by parentId AND isActive=true and orders ascending by (createdAt, id)', async () => {
@@ -693,6 +714,32 @@ describe('dmMessageRepository.listDmThreadReplies', () => {
         id: gtCalls.some(([field, value]) => field === directMessages.id && value === after.id),
       },
       expected: { createdAt: true, id: true },
+    });
+  });
+
+  it('hydrates sender, file, and reactions relations so the thread panel renders parity with channel replies', async () => {
+    await dmMessageRepository.listDmThreadReplies({ rootId: 'parent-1', limit: 50 });
+
+    const call = mockDirectMessagesFindMany.mock.calls[0]?.[0] as {
+      with: {
+        sender: { columns: Record<string, true> };
+        file: { columns: Record<string, true> };
+        reactions: { with: { user: { columns: Record<string, true> } } };
+      };
+    };
+    assert({
+      given: 'a DM thread reply fetch',
+      should: 'request sender, file, and reactions.user with the same column whitelist as the channel repo',
+      actual: {
+        senderCols: call.with.sender.columns,
+        fileCols: call.with.file.columns,
+        reactionUserCols: call.with.reactions.with.user.columns,
+      },
+      expected: {
+        senderCols: { id: true, name: true, image: true },
+        fileCols: { id: true, mimeType: true, sizeBytes: true },
+        reactionUserCols: { id: true, name: true },
+      },
     });
   });
 });

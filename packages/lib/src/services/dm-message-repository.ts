@@ -12,6 +12,37 @@ import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelec
 import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
+// Mirrors `messageWith` in channel-message-repository.ts. Kept duplicated
+// because the author relation is named differently (`sender` here vs `user`
+// there) and the column lists are short enough that a shared helper would
+// only obscure the intent.
+const dmMessageWith = {
+  sender: {
+    columns: {
+      id: true,
+      name: true,
+      image: true,
+    },
+  },
+  file: {
+    columns: {
+      id: true,
+      mimeType: true,
+      sizeBytes: true,
+    },
+  },
+  reactions: {
+    with: {
+      user: {
+        columns: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  },
+} as const;
+
 export interface DmConversationParticipants {
   id: string;
   participant1Id: string;
@@ -342,13 +373,7 @@ async function listActiveMessages(input: ListActiveMessagesInput) {
 
   return db.query.directMessages.findMany({
     where: and(...baseFilters),
-    with: {
-      reactions: {
-        with: {
-          user: { columns: { id: true, name: true } },
-        },
-      },
-    },
+    with: dmMessageWith,
     orderBy: [desc(directMessages.createdAt)],
     limit: input.limit,
   });
@@ -527,9 +552,11 @@ export interface ListDmThreadRepliesInput {
   after?: { createdAt: Date; id: string };
 }
 
+export type DmMessageWithRelations = Awaited<ReturnType<typeof listDmThreadReplies>>[number];
+
 async function listDmThreadReplies(
   input: ListDmThreadRepliesInput
-): Promise<DmMessageRow[]> {
+) {
   const conditions = [
     eq(directMessages.parentId, input.rootId),
     eq(directMessages.isActive, true),
@@ -547,12 +574,12 @@ async function listDmThreadReplies(
     );
   }
 
-  return db
-    .select()
-    .from(directMessages)
-    .where(and(...conditions))
-    .orderBy(asc(directMessages.createdAt), asc(directMessages.id))
-    .limit(input.limit);
+  return db.query.directMessages.findMany({
+    where: and(...conditions),
+    with: dmMessageWith,
+    orderBy: [asc(directMessages.createdAt), asc(directMessages.id)],
+    limit: input.limit,
+  });
 }
 
 async function addDmThreadFollower(

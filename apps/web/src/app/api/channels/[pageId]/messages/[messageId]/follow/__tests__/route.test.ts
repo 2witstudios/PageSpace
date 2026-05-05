@@ -123,7 +123,7 @@ describe('POST /api/channels/[pageId]/messages/[messageId]/follow', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 400 when the message is itself a thread reply (followers attach to roots only)', async () => {
+  it('returns 400 with parent_not_top_level when the message is itself a thread reply (followers attach to roots only)', async () => {
     mockFindChannelMessageInPage.mockResolvedValueOnce({
       id: MSG_ID,
       pageId: PAGE_ID,
@@ -132,6 +132,8 @@ describe('POST /api/channels/[pageId]/messages/[messageId]/follow', () => {
     });
     const res = await callPost();
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'parent_not_top_level' });
+    expect(mockAddChannelThreadFollower).not.toHaveBeenCalled();
   });
 });
 
