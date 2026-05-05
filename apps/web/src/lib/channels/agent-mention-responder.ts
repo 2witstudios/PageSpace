@@ -11,7 +11,7 @@ import {
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
-import { buildThreadPreview } from '@/lib/channels/build-thread-preview';
+import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import type { ToolExecutionContext } from '@/lib/ai/core';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });

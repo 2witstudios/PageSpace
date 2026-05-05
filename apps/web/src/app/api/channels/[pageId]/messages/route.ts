@@ -11,7 +11,7 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
-import { buildThreadPreview } from '@/lib/channels/build-thread-preview';
+import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 interface ChannelInboxFanoutInput {

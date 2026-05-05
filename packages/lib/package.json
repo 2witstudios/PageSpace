@@ -141,6 +141,11 @@
       "import": "./dist/repositories/drive-repository.js",
       "require": "./dist/repositories/drive-repository.js"
     },
+    "./services/preview": {
+      "types": "./dist/services/preview.d.ts",
+      "import": "./dist/services/preview.js",
+      "require": "./dist/services/preview.js"
+    },
     "./services/storage-limits": {
       "types": "./dist/services/storage-limits.d.ts",
       "import": "./dist/services/storage-limits.js",
