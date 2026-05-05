@@ -163,6 +163,7 @@ Agent Triggers:
       try {
         let taskList: typeof taskLists.$inferSelect | undefined;
         let resultTask;
+        let resultTitle = '';
         let message: string;
 
         if (isUpdate) {
@@ -399,7 +400,7 @@ Agent Triggers:
           });
 
           // Build update object — title is owned by the linked page, synced separately below.
-          const updateData: Record<string, unknown> = {};
+          const updateData: Partial<typeof taskItems.$inferInsert> = {};
           let trimmedTitle: string | undefined;
           if (title !== undefined) {
             if (typeof title !== 'string' || title.trim().length === 0) {
@@ -617,7 +618,7 @@ Agent Triggers:
             }
           }
 
-          const updatedTitle = trimmedTitle ?? existingTask.page?.title ?? '';
+          resultTitle = trimmedTitle ?? existingTask.page?.title ?? '';
 
           // Broadcast update event
           await broadcastTaskEvent({
@@ -625,10 +626,10 @@ Agent Triggers:
             taskId: resultTask.id,
             userId,
             pageId: taskList.pageId || undefined,
-            data: { title: updatedTitle, note },
+            data: { title: resultTitle, note },
           });
 
-          message = `Updated task "${updatedTitle}"`;
+          message = `Updated task "${resultTitle}"`;
         } else {
           // CREATE new task - requires pageId of a TASK_LIST page
 
@@ -791,7 +792,7 @@ Agent Triggers:
 
           resultTask = result.task;
           const createdPage = result.page;
-          const createdTitle = createdPage.title;
+          resultTitle = createdPage.title;
 
           // Broadcast creation events
           await Promise.all([
@@ -801,12 +802,12 @@ Agent Triggers:
               taskListId: taskList.id,
               userId,
               pageId: pageId!,
-              data: { title: createdTitle, priority: resultTask.priority, pageId: createdPage.id },
+              data: { title: resultTitle, priority: resultTask.priority, pageId: createdPage.id },
             }),
             broadcastPageEvent(
               createPageEventPayload(taskListPage.driveId, createdPage.id, 'created', {
                 parentId: pageId,
-                title: createdTitle,
+                title: resultTitle,
                 type: 'DOCUMENT',
               }),
             ),
@@ -816,18 +817,18 @@ Agent Triggers:
           const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
           logPageActivity(userId, 'create', {
             id: createdPage.id,
-            title: createdTitle,
+            title: resultTitle,
             driveId: taskListPage.driveId,
           }, {
             ...aiContext,
             metadata: {
               ...aiContext.metadata,
               taskId: resultTask.id,
-              taskTitle: createdTitle,
+              taskTitle: resultTitle,
             },
           });
 
-          message = `Created task "${createdTitle}" with linked document page`;
+          message = `Created task "${resultTitle}" with linked document page`;
         }
 
         // Get all tasks for response with assignee relations
@@ -875,8 +876,6 @@ Agent Triggers:
           });
           driveId = taskListPage?.driveId;
         }
-
-        const resultTitle = allTasks.find(t => t.id === resultTask.id)?.page?.title ?? '';
 
         return {
           success: true,
