@@ -1,12 +1,10 @@
 import { NextResponse } from 'next/server';
-import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
-import { channelMessages } from '@pagespace/db/schema/chat';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -28,9 +26,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
   }
 
-  const message = await db.query.channelMessages.findFirst({
-    where: and(eq(channelMessages.id, messageId), eq(channelMessages.pageId, pageId)),
-  });
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
 
   if (!message) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -50,9 +46,11 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   }
 
   const editedAt = new Date();
-  await db.update(channelMessages)
-    .set({ content: content.trim(), editedAt })
-    .where(eq(channelMessages.id, messageId));
+  await channelMessageRepository.updateChannelMessageContent({
+    messageId,
+    content: content.trim(),
+    editedAt,
+  });
 
   auditRequest(req, {
     eventType: 'data.write',
@@ -98,9 +96,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
   }
 
-  const message = await db.query.channelMessages.findFirst({
-    where: and(eq(channelMessages.id, messageId), eq(channelMessages.pageId, pageId)),
-  });
+  const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId });
 
   if (!message) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -110,9 +106,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'You can only delete your own messages' }, { status: 403 });
   }
 
-  await db.update(channelMessages)
-    .set({ isActive: false })
-    .where(eq(channelMessages.id, messageId));
+  await channelMessageRepository.softDeleteChannelMessage(messageId);
 
   auditRequest(req, {
     eventType: 'data.delete',

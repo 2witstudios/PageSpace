@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, boolean, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, boolean, integer, index, uniqueIndex, primaryKey, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages, drives } from './core';
@@ -23,10 +23,19 @@ export const channelMessages = pgTable('channel_messages', {
     senderName: string;
     agentPageId?: string;
   } | null>(),
+  // Threading: parentId points at the thread root (top-level message). Replies are
+  // exactly one level deep, so a parent must itself have parentId IS NULL.
+  parentId: text('parentId').references((): AnyPgColumn => channelMessages.id, { onDelete: 'cascade' }),
+  replyCount: integer('replyCount').default(0).notNull(),
+  lastReplyAt: timestamp('lastReplyAt', { mode: 'date' }),
+  // When "Also send to channel" mirrors a thread reply to the top-level stream,
+  // the top-level copy carries mirroredFromId pointing at the thread reply's id.
+  mirroredFromId: text('mirroredFromId').references((): AnyPgColumn => channelMessages.id, { onDelete: 'set null' }),
 }, (table) => {
     return {
         pageIdx: index('channel_messages_page_id_idx').on(table.pageId),
         fileIdx: index('channel_messages_file_id_idx').on(table.fileId),
+        parentCreatedIdx: index('channel_messages_parent_created_idx').on(table.parentId, table.createdAt),
     }
 });
 
@@ -72,6 +81,31 @@ export const channelMessageReactionsRelations = relations(channelMessageReaction
     }),
     user: one(users, {
         fields: [channelMessageReactions.userId],
+        references: [users.id],
+    }),
+}));
+
+/**
+ * Followers of a channel thread root. Auto-populated when a user posts in the
+ * thread (parent author + every replier). Cascades on root delete so orphans
+ * cannot accumulate.
+ */
+export const channelThreadFollowers = pgTable('channel_thread_followers', {
+    rootMessageId: text('rootMessageId').notNull().references(() => channelMessages.id, { onDelete: 'cascade' }),
+    userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+    pk: primaryKey({ columns: [table.rootMessageId, table.userId] }),
+    userIdx: index('channel_thread_followers_user_id_idx').on(table.userId),
+}));
+
+export const channelThreadFollowersRelations = relations(channelThreadFollowers, ({ one }) => ({
+    rootMessage: one(channelMessages, {
+        fields: [channelThreadFollowers.rootMessageId],
+        references: [channelMessages.id],
+    }),
+    user: one(users, {
+        fields: [channelThreadFollowers.userId],
         references: [users.id],
     }),
 }));

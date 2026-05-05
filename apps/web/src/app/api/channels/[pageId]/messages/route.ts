@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, or, isNull, gt, lt, inArray } from '@pagespace/db/operators'
+import { eq, and, or, isNull, gt, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
-import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat'
-import { files } from '@pagespace/db/schema/storage';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -30,7 +29,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Check if user has view permission for this channel
   const canView = await canUserViewPage(userId, pageId);
   if (!canView) {
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'You need view permission to access this channel',
       details: 'Contact the channel owner to request access'
     }, { status: 403 });
@@ -41,8 +40,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const cursor = searchParams.get('cursor');
   const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 200);
 
-  // Build where clause with optional composite cursor (createdAt|id)
-  const conditions = [eq(channelMessages.pageId, pageId), eq(channelMessages.isActive, true)];
+  let parsedCursor: { createdAt: Date; id: string } | undefined;
   if (cursor) {
     const separatorIdx = cursor.lastIndexOf('|');
     if (separatorIdx === -1) {
@@ -53,46 +51,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     if (isNaN(cursorDate.getTime()) || !cursorId) {
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
     }
-    // Composite cursor: (createdAt < cursorDate) OR (createdAt = cursorDate AND id < cursorId)
-    conditions.push(
-      or(
-        lt(channelMessages.createdAt, cursorDate),
-        and(eq(channelMessages.createdAt, cursorDate), lt(channelMessages.id, cursorId))
-      )!
-    );
+    parsedCursor = { createdAt: cursorDate, id: cursorId };
   }
 
   // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
-  const messages = await db.query.channelMessages.findMany({
-    where: and(...conditions),
-    with: {
-      user: {
-        columns: {
-          id: true,
-          name: true,
-          image: true,
-        },
-      },
-      file: {
-        columns: {
-          id: true,
-          mimeType: true,
-          sizeBytes: true,
-        },
-      },
-      reactions: {
-        with: {
-          user: {
-            columns: {
-              id: true,
-              name: true,
-            },
-          },
-        },
-      },
-    },
-    orderBy: [desc(channelMessages.createdAt), desc(channelMessages.id)],
+  const messages = await channelMessageRepository.listChannelMessages({
+    pageId,
     limit: limit + 1,
+    cursor: parsedCursor,
   });
 
   const hasMore = messages.length > limit;
@@ -143,60 +109,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // If fileId is provided, verify it exists
   if (fileId) {
-    const file = await db.query.files.findFirst({
-      where: eq(files.id, fileId),
-    });
-    if (!file) {
+    const exists = await channelMessageRepository.fileExists(fileId);
+    if (!exists) {
       return NextResponse.json({ error: 'File not found' }, { status: 400 });
     }
   }
 
-  const [createdMessage] = await db.insert(channelMessages).values({
-    pageId: pageId,
-    userId: userId,
+  const createdMessage = await channelMessageRepository.insertChannelMessage({
+    pageId,
+    userId,
     content: messageContent,
     fileId: fileId || null,
     attachmentMeta: attachmentMeta || null,
-  }).returning();
+  });
 
   // Update sender's read status - sending a message means they've read the channel
-  await db
-    .insert(channelReadStatus)
-    .values({ userId, channelId: pageId, lastReadAt: new Date() })
-    .onConflictDoUpdate({
-      target: [channelReadStatus.userId, channelReadStatus.channelId],
-      set: { lastReadAt: new Date() },
-    });
-
-  const newMessage = await db.query.channelMessages.findFirst({
-      where: eq(channelMessages.id, createdMessage.id),
-      with: {
-          user: {
-              columns: {
-                  id: true,
-                  name: true,
-                  image: true,
-              }
-          },
-          file: {
-              columns: {
-                  id: true,
-                  mimeType: true,
-                  sizeBytes: true,
-              }
-          },
-          reactions: {
-              with: {
-                  user: {
-                      columns: {
-                          id: true,
-                          name: true,
-                      },
-                  },
-              },
-          },
-      }
+  await channelMessageRepository.upsertChannelReadStatus({
+    userId,
+    channelId: pageId,
+    readAt: new Date(),
   });
+
+  const newMessage = await channelMessageRepository.loadChannelMessageWithRelations(createdMessage.id);
 
   // Debug: Check what type the content is
   loggers.realtime.debug('Database returned content type:', { type: typeof newMessage?.content });
