@@ -17,12 +17,14 @@ vi.mock('@/lib/auth', () => ({
 
 const mockFindConversationForParticipant = vi.fn();
 const mockFindActiveMessage = vi.fn();
+const mockFindMessageInConversation = vi.fn();
 const mockAddDmThreadFollower = vi.fn();
 const mockRemoveDmThreadFollower = vi.fn();
 vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   dmMessageRepository: {
     findConversationForParticipant: (...args: unknown[]) => mockFindConversationForParticipant(...args),
     findActiveMessage: (...args: unknown[]) => mockFindActiveMessage(...args),
+    findMessageInConversation: (...args: unknown[]) => mockFindMessageInConversation(...args),
     addDmThreadFollower: (...args: unknown[]) => mockAddDmThreadFollower(...args),
     removeDmThreadFollower: (...args: unknown[]) => mockRemoveDmThreadFollower(...args),
   },
@@ -124,10 +126,11 @@ describe('DELETE /api/messages/[conversationId]/[messageId]/follow', () => {
       participant1Id: USER_ID,
       participant2Id: 'user_b',
     });
-    mockFindActiveMessage.mockResolvedValue({
+    mockFindMessageInConversation.mockResolvedValue({
       id: MSG_ID,
       conversationId: CONV_ID,
       parentId: null,
+      isActive: true,
     });
     mockRemoveDmThreadFollower.mockResolvedValue(undefined);
   });
@@ -137,6 +140,21 @@ describe('DELETE /api/messages/[conversationId]/[messageId]/follow', () => {
     expect(res.status).toBe(200);
     expect(mockRemoveDmThreadFollower).toHaveBeenCalledWith(MSG_ID, USER_ID);
     expect(await res.json()).toEqual({ following: false });
+  });
+
+  it('still removes the follower row when the parent has been soft-deleted (idempotent unfollow)', async () => {
+    // findMessageInConversation does NOT filter by isActive, so the route can
+    // unfollow a tombstoned thread root (which findActiveMessage would have
+    // returned null for, leaving stale subscriptions impossible to clear).
+    mockFindMessageInConversation.mockResolvedValueOnce({
+      id: MSG_ID,
+      conversationId: CONV_ID,
+      parentId: null,
+      isActive: false,
+    });
+    const res = await callDelete();
+    expect(res.status).toBe(200);
+    expect(mockRemoveDmThreadFollower).toHaveBeenCalledWith(MSG_ID, USER_ID);
   });
 
   it('returns 404 when the caller is not a participant', async () => {

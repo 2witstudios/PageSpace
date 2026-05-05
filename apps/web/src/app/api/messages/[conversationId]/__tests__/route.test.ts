@@ -936,6 +936,37 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('does NOT emit dm_updated to a mentioned non-participant (sender-controlled IDs cannot leak into other users\' inboxes)', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertDmThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: {
+        id: 'reply-1',
+        parentId: PARENT_ID,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        content: 'hi @[Outsider](user-outsider:user)',
+        createdAt: replyCreatedAt,
+      },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockListDmThreadFollowers.mockResolvedValueOnce([SENDER_ID]);
+
+    await callRoute({
+      content: 'hi @[Outsider](user-outsider:user)',
+      parentId: PARENT_ID,
+    });
+
+    const dmUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) => (payload as { operation: string }).operation === 'dm_updated'
+    );
+    const recipients = dmUpdatedCalls.map(([uid]) => uid);
+    expect(recipients).not.toContain('user-outsider');
+  });
+
   it('fans out thread_updated to DM thread followers but EXCLUDES the reply author', async () => {
     const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
     mockInsertDmThreadReply.mockResolvedValueOnce({

@@ -407,9 +407,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
       if (replyContent.trim().length > 0 && channel?.driveId) {
         const mentionedUserIds = extractMentionedUserIds(replyContent);
-        const mentionTargets = mentionedUserIds.filter(
+        const candidateTargets = mentionedUserIds.filter(
           (id: string) => id !== userId && !followerSet.has(id)
         );
+
+        // Mention IDs come from message text, which is sender-controlled — so
+        // before we broadcast a channel_updated payload (which leaks the channel
+        // id, drive id, preview, and sender name), every candidate must pass
+        // the channel's view-permission check. Without this gate a sender could
+        // craft mentions for arbitrary user IDs and surface this channel to
+        // users who have no access.
+        const viewabilityChecks = await Promise.all(
+          candidateTargets.map(async (id: string) => ({
+            id,
+            canView: await canUserViewPage(id, pageId),
+          }))
+        );
+        const mentionTargets = viewabilityChecks
+          .filter((entry) => entry.canView)
+          .map((entry) => entry.id);
 
         await Promise.all(
           mentionTargets.map((memberId: string) =>

@@ -431,7 +431,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     expect(payload.lastReplyAt).toBe(replyCreatedAt.toISOString());
   });
 
-  it('emits channel_updated to a mentioned non-follower (targeted bump rule)', async () => {
+  it('emits channel_updated to a mentioned non-follower who can view the channel', async () => {
     const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
     mockInsertChannelThreadReply.mockResolvedValueOnce({
       kind: 'ok',
@@ -450,8 +450,6 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       user: { id: USER_ID, name: 'Sender', image: null },
     });
     mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
-    // Override the pages findFirst stub for this test so the route can
-    // resolve the channel's driveId (which gates the mention bump).
     const dbModule = (await import('@pagespace/db/db')) as unknown as {
       db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
     };
@@ -460,6 +458,10 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       title: 'General',
       drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
     });
+    // Default canUserViewPage mock returns true, so the mentioned user passes
+    // the view-permission gate.
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
 
     await callPost({
       content: 'hey @[Bob](user-bob:user)',
@@ -472,6 +474,50 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     );
     const recipients = channelUpdatedCalls.map(([userId]) => userId);
     expect(recipients).toContain('user-bob');
+  });
+
+  it('does NOT emit channel_updated to a mentioned user who cannot view the channel', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'hey @[Stranger](user-outsider:user)',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValueOnce({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+    // Sender (USER_ID) passes; the mentioned outsider does not.
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+
+    await callPost({
+      content: 'hey @[Stranger](user-outsider:user)',
+      parentId: PARENT_ID,
+    });
+
+    const channelUpdatedCalls = mockBroadcastInboxEvent.mock.calls.filter(
+      ([, payload]) =>
+        (payload as { operation: string; type: string }).operation === 'channel_updated'
+    );
+    const recipients = channelUpdatedCalls.map(([uid]) => uid);
+    expect(recipients).not.toContain('user-outsider');
   });
 });
 

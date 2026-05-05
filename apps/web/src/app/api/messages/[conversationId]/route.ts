@@ -444,9 +444,20 @@ export async function POST(
         );
 
         if (content.trim().length > 0) {
+          // DM mention IDs come from sender-controlled markup — the recipient
+          // set MUST be intersected with the conversation's actual participants.
+          // Without this, a sender could craft a `:user` mention for any user
+          // id and trigger a `dm_updated` payload (containing the conversation
+          // id, preview, and attachment metadata) to fan out to non-participants.
+          const otherParticipantId =
+            conversation.participant1Id === userId
+              ? conversation.participant2Id
+              : conversation.participant1Id;
+          const allowedTargets = new Set<string>([otherParticipantId]);
           const mentionedUserIds = extractMentionedUserIds(content);
           const mentionTargets = mentionedUserIds.filter(
-            (id: string) => id !== userId && !followerSet.has(id)
+            (id: string) =>
+              id !== userId && !followerSet.has(id) && allowedTargets.has(id)
           );
           await Promise.all(
             mentionTargets.map((memberId: string) =>

@@ -156,6 +156,26 @@ async function findActiveMessage(
   return row ?? null;
 }
 
+/**
+ * Look up a DM message by id + conversationId WITHOUT filtering on isActive.
+ *
+ * Use this for operations that need to act on a message regardless of its
+ * tombstone state — e.g. unfollowing a thread after the parent has been soft
+ * deleted (`findActiveMessage` would return null and a stale subscription
+ * could never be cleared).
+ */
+async function findMessageInConversation(
+  input: ActiveMessageLookupInput
+): Promise<DmMessageRow | null> {
+  const row = await db.query.directMessages.findFirst({
+    where: and(
+      eq(directMessages.id, input.messageId),
+      eq(directMessages.conversationId, input.conversationId)
+    ),
+  });
+  return row ?? null;
+}
+
 async function softDeleteMessage(messageId: string): Promise<number> {
   // Soft-deleting a thread reply must decrement the parent's replyCount in the
   // same transaction so the footer count never drifts above the real number of
@@ -631,6 +651,7 @@ export const dmMessageRepository = {
   insertDmMessage,
   updateConversationLastMessage,
   findActiveMessage,
+  findMessageInConversation,
   softDeleteMessage,
   restoreDmMessage,
   purgeInactiveMessages,

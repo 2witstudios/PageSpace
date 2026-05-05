@@ -77,10 +77,12 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
 
-  // Use findActiveMessage to validate the message belongs to this conversation;
-  // a soft-deleted parent still allows unfollow so a user can clear stale
-  // subscriptions after the parent is tombstoned.
-  const message = await dmMessageRepository.findActiveMessage({
+  // DELETE intentionally uses the non-active variant so a tombstoned parent
+  // still allows unfollow — without it, soft-deleting a thread root would
+  // strand stale subscriptions that can never be cleared. We still scope the
+  // lookup to (messageId, conversationId) so this route cannot be used to
+  // probe for messages in other conversations.
+  const message = await dmMessageRepository.findMessageInConversation({
     messageId,
     conversationId,
   });
