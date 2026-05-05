@@ -400,7 +400,13 @@ Agent Triggers:
 
           // Build update object — title is owned by the linked page, synced separately below.
           const updateData: Record<string, unknown> = {};
-          const trimmedTitle: string | undefined = title !== undefined && title.trim().length > 0 ? title.trim() : undefined;
+          let trimmedTitle: string | undefined;
+          if (title !== undefined) {
+            if (typeof title !== 'string' || title.trim().length === 0) {
+              throw new Error('Title cannot be empty');
+            }
+            trimmedTitle = title.trim();
+          }
           if (description !== undefined) updateData.description = description;
           if (status !== undefined) {
             if (validConfigs.length > 0) {
@@ -482,18 +488,23 @@ Agent Triggers:
                 }
               }
 
-              // Handle multiple assignees
-              if (assigneeIds && assigneeIds.length > 0) {
+              // Handle multiple assignees — Array.isArray treats [] as a full replace,
+              // matching the REST PATCH route so callers can clear all assignees.
+              if (Array.isArray(assigneeIds)) {
                 await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
-                const rows = assigneeIds.map(a => ({
-                  taskId,
-                  ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
-                }));
-                await tx.insert(taskAssignees).values(rows);
+                const rows = assigneeIds
+                  .filter(a => a.id)
+                  .map(a => ({
+                    taskId,
+                    ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
+                  }));
+                if (rows.length > 0) {
+                  await tx.insert(taskAssignees).values(rows);
+                }
 
                 // Sync legacy fields
-                const firstUser = assigneeIds.find(a => a.type === 'user');
-                const firstAgent = assigneeIds.find(a => a.type === 'agent');
+                const firstUser = assigneeIds.find(a => a.type === 'user' && a.id);
+                const firstAgent = assigneeIds.find(a => a.type === 'agent' && a.id);
                 await tx.update(taskItems).set({
                   assigneeId: firstUser?.id || null,
                   assigneeAgentId: firstAgent?.id || null,

@@ -234,7 +234,7 @@ export const pageReadTools = {
             taskList = newTaskList;
           }
 
-          // Get all tasks ordered by position. Title lives on the linked page.
+          // Get all non-trashed tasks ordered by position. Title lives on the linked page.
           const tasks = await db
             .select({
               id: taskItems.id,
@@ -250,7 +250,10 @@ export const pageReadTools = {
             })
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
-            .where(eq(taskItems.taskListId, taskList.id))
+            .where(and(
+              eq(taskItems.taskListId, taskList.id),
+              eq(pages.isTrashed, false),
+            ))
             .orderBy(asc(taskItems.position));
 
           // Resolve available statuses for this task list. Falls back to
