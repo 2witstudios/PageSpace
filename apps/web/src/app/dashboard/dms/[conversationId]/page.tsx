@@ -21,7 +21,9 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply } from 'lucide-react';
+import { Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply, CornerUpLeft } from 'lucide-react';
+import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -60,6 +62,8 @@ interface Message {
   parentId?: string | null;
   replyCount?: number;
   lastReplyAt?: string | null;
+  quotedMessageId?: string | null;
+  quotedMessage?: QuotedMessageSnapshot | null;
 }
 
 interface DmConversation {
@@ -107,6 +111,9 @@ export default function InboxDMPage() {
   const [inputValue, setInputValue] = useState('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  // Active inline quote-reply target. Cleared on successful send or via the chip's X.
+  const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
+  const [quotedPreview, setQuotedPreview] = useState<{ authorName: string; snippet: string } | null>(null);
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
   const isMobile = useMobile();
@@ -332,6 +339,21 @@ export default function InboxDMPage() {
     }
   }, [conversationId]);
 
+  const handleStartQuote = useCallback((m: Message) => {
+    if (m.id.startsWith('temp-')) return;
+    const isOwn = m.senderId === user?.id;
+    const authorName = isOwn ? user?.name ?? 'You' : conversation?.otherUser?.displayName ?? conversation?.otherUser?.name ?? 'Member';
+    const snippet = m.content.length > 100 ? m.content.substring(0, 100) + '...' : m.content;
+    setQuotedMessageId(m.id);
+    setQuotedPreview({ authorName, snippet });
+    chatInputRef.current?.focus();
+  }, [user, conversation]);
+
+  const clearQuote = useCallback(() => {
+    setQuotedMessageId(null);
+    setQuotedPreview(null);
+  }, []);
+
   const handleTopLevelSubmit = async ({
     content,
     attachment,
@@ -341,7 +363,9 @@ export default function InboxDMPage() {
   }) => {
     if (!user || !conversationId) return;
 
+    const activeQuoteId = quotedMessageId;
     setInputValue('');
+    clearQuote();
 
     const attachmentMeta: AttachmentMeta | null = attachment
       ? {
@@ -365,16 +389,20 @@ export default function InboxDMPage() {
       createdAt: new Date().toISOString(),
       fileId: attachment?.id ?? null,
       attachmentMeta,
+      quotedMessageId: activeQuoteId,
     };
     setMessages((prev) => [...prev, optimistic]);
 
     try {
-      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta } = {
+      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta; quotedMessageId?: string } = {
         content,
       };
       if (attachment) {
         body.fileId = attachment.id;
         body.attachmentMeta = attachmentMeta!;
+      }
+      if (activeQuoteId) {
+        body.quotedMessageId = activeQuoteId;
       }
       const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
       const persistedMessage = response.message;
@@ -499,7 +527,10 @@ export default function InboxDMPage() {
                 previous ? { authorKey: previous.senderId, createdAt: previous.createdAt } : undefined,
               );
               const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
-              const showMenu = isOwnMessage && editingMessageId !== message.id;
+              const isRealMessage = !message.id.startsWith('temp-') && editingMessageId !== message.id;
+              // The menu opens for any real message (Quote reply is universal); Edit/Delete remain gated by ownership.
+              const showMenu = isRealMessage;
+              const showOwnerActions = isOwnMessage && isRealMessage;
               const replyCount = message.replyCount ?? 0;
               const showReplyInThread = !message.id.startsWith('temp-');
 
@@ -568,18 +599,26 @@ export default function InboxDMPage() {
                               </button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                              >
-                                <Pencil className="mr-2 h-4 w-4" /> Edit
+                              <DropdownMenuItem onClick={() => handleStartQuote(message)}>
+                                <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
                               </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onClick={() => handleDeleteMessage(message.id)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" /> Delete
-                              </DropdownMenuItem>
+                              {showOwnerActions && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                                  >
+                                    <Pencil className="mr-2 h-4 w-4" /> Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleDeleteMessage(message.id)}
+                                    className="text-destructive focus:text-destructive"
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                           )}
@@ -627,6 +666,9 @@ export default function InboxDMPage() {
                           ? 'bg-primary/5 dark:bg-primary/10 ml-8'
                           : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
                       }`}>
+                        {(message.quotedMessage || message.quotedMessageId) && (
+                          <MessageQuoteBlock quoted={message.quotedMessage ?? null} />
+                        )}
                         {message.content && (
                           <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
                             {renderMessageParts(convertToMessageParts(message.content))}
@@ -672,18 +714,26 @@ export default function InboxDMPage() {
                               </button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                              >
-                                <Pencil className="mr-2 h-4 w-4" /> Edit
+                              <DropdownMenuItem onClick={() => handleStartQuote(message)}>
+                                <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
                               </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onClick={() => handleDeleteMessage(message.id)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" /> Delete
-                              </DropdownMenuItem>
+                              {showOwnerActions && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                                  >
+                                    <Pencil className="mr-2 h-4 w-4" /> Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleDeleteMessage(message.id)}
+                                    className="text-destructive focus:text-destructive"
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         )}
@@ -732,6 +782,8 @@ export default function InboxDMPage() {
             onChange={setInputValue}
             onSubmit={handleTopLevelSubmit}
             attachmentsEnabled
+            quotedPreview={quotedPreview}
+            onClearQuote={clearQuote}
           />
         </div>
       </div>

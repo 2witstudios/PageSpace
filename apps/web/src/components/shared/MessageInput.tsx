@@ -52,6 +52,11 @@ export interface MessageInputProps {
   showAlsoSendToParent?: boolean;
   /** Placeholder text */
   placeholder?: string;
+  /** Author + snippet for the quote-reply chip rendered above the input row.
+      Parent owns the active quoted message id; this prop only drives the chip UI. */
+  quotedPreview?: { authorName: string; snippet: string } | null;
+  /** Dismiss the active quote — invoked when the user clicks the chip's X. */
+  onClearQuote?: () => void;
 }
 
 /**
@@ -80,6 +85,8 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
       parentId,
       showAlsoSendToParent = false,
       placeholder,
+      quotedPreview,
+      onClearQuote,
     },
     ref,
   ) {
@@ -112,6 +119,8 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
         parentId={parentId}
         showAlsoSendToParent={showAlsoSendToParent}
         editingSessionKey={buildEditingSessionKey(source, contextId, parentId)}
+        quotedPreview={quotedPreview}
+        onClearQuote={onClearQuote}
       />
     );
   },

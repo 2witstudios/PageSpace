@@ -16,8 +16,10 @@ import { ChannelInput, type ChannelInputRef, type FileAttachment } from './Chann
 import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import { Lock, Pencil, Trash2, Check, X, MoreHorizontal, CornerUpLeft } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   DropdownMenu,
@@ -52,6 +54,8 @@ interface MessageWithReactions extends MessageWithUser {
   file?: FileRelation | null;
   aiMeta?: AiMeta | null;
   editedAt?: string | null;
+  quotedMessageId?: string | null;
+  quotedMessage?: QuotedMessageSnapshot | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -73,6 +77,10 @@ function ChannelView({ page }: ChannelViewProps) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  // Active inline quote-reply target. Set when the user picks "Quote reply" from
+  // the message hover menu; cleared on successful send or via the chip's X.
+  const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
+  const [quotedPreview, setQuotedPreview] = useState<{ authorName: string; snippet: string } | null>(null);
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -128,7 +136,23 @@ function ChannelView({ page }: ChannelViewProps) {
     };
   }, [socket, connectionStatus, page.id]);
 
-  const handleSubmit = async (content: string, attachment?: FileAttachment) => {
+  const handleStartQuote = useCallback((m: MessageWithReactions) => {
+    if (m.id.startsWith('temp-')) return;
+    const snippet = m.content.length > 100 ? m.content.substring(0, 100) + '...' : m.content;
+    setQuotedMessageId(m.id);
+    setQuotedPreview({
+      authorName: m.aiMeta?.senderName || m.user?.name || 'Member',
+      snippet,
+    });
+    channelInputRef.current?.focus();
+  }, []);
+
+  const clearQuote = useCallback(() => {
+    setQuotedMessageId(null);
+    setQuotedPreview(null);
+  }, []);
+
+  const handleSubmit = async (content: string, attachment?: FileAttachment, activeQuoteId?: string | null) => {
     if (!user) return;
 
     if (!canEdit) {
@@ -161,6 +185,7 @@ function ChannelView({ page }: ChannelViewProps) {
         mimeType: attachment.mimeType,
         contentHash: attachment.contentHash,
       } : null,
+      quotedMessageId: activeQuoteId ?? null,
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
@@ -175,6 +200,7 @@ function ChannelView({ page }: ChannelViewProps) {
           mimeType: attachment.mimeType,
           contentHash: attachment.contentHash,
         } : undefined,
+        quotedMessageId: activeQuoteId ?? undefined,
       });
 
       // The new message will be received via the socket connection,
@@ -194,9 +220,10 @@ function ChannelView({ page }: ChannelViewProps) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
-    handleSubmit(inputValue, attachment);
+    handleSubmit(inputValue, attachment, quotedMessageId);
     channelInputRef.current?.clear();
     setInputValue('');
+    clearQuote();
   };
 
   // Load older messages when scrolling to top
@@ -435,7 +462,10 @@ function ChannelView({ page }: ChannelViewProps) {
                             : undefined,
                         );
                         const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
-                        const showMenu = isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id;
+                        const isRealMessage = !m.id.startsWith('temp-') && editingMessageId !== m.id;
+                        // The menu opens for any real message (Quote reply is universal); Edit/Delete remain gated by ownership inside the menu.
+                        const showMenu = isRealMessage;
+                        const showOwnerActions = isOwnMessage && isRealMessage;
                         return (
                         <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
                             {isFirst ? (
@@ -477,18 +507,26 @@ function ChannelView({ page }: ChannelViewProps) {
                                             </button>
                                           </DropdownMenuTrigger>
                                           <DropdownMenuContent align="end">
-                                            <DropdownMenuItem
-                                              onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                            >
-                                              <Pencil className="mr-2 h-4 w-4" /> Edit
+                                            <DropdownMenuItem onClick={() => handleStartQuote(m)}>
+                                              <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
                                             </DropdownMenuItem>
-                                            <DropdownMenuSeparator />
-                                            <DropdownMenuItem
-                                              onClick={() => handleDeleteMessage(m.id)}
-                                              className="text-destructive focus:text-destructive"
-                                            >
-                                              <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                            </DropdownMenuItem>
+                                            {showOwnerActions && (
+                                              <>
+                                                <DropdownMenuSeparator />
+                                                <DropdownMenuItem
+                                                  onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                                >
+                                                  <Pencil className="mr-2 h-4 w-4" /> Edit
+                                                </DropdownMenuItem>
+                                                <DropdownMenuSeparator />
+                                                <DropdownMenuItem
+                                                  onClick={() => handleDeleteMessage(m.id)}
+                                                  className="text-destructive focus:text-destructive"
+                                                >
+                                                  <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                                </DropdownMenuItem>
+                                              </>
+                                            )}
                                           </DropdownMenuContent>
                                         </DropdownMenu>
                                       )}
@@ -530,6 +568,9 @@ function ChannelView({ page }: ChannelViewProps) {
                                   </div>
                                 ) : (
                                   <>
+                                    {(m.quotedMessage || m.quotedMessageId) && (
+                                      <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
+                                    )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none">
                                         <StreamingMarkdown
@@ -600,6 +641,8 @@ function ChannelView({ page }: ChannelViewProps) {
                 driveId={page.driveId}
                 channelId={page.id}
                 attachmentsEnabled
+                quotedPreview={quotedPreview}
+                onClearQuote={clearQuote}
               />
             ) : (
               <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
