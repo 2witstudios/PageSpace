@@ -144,6 +144,88 @@ export const driveInviteRepository = {
     return user?.email;
   },
 
+  async findUserIdByEmail(
+    email: string
+  ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email),
+      columns: { id: true, emailVerified: true, suspendedAt: true },
+    });
+    return user
+      ? { id: user.id, emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
+      : null;
+  },
+
+  async findActivePendingMemberByEmail(driveId: string, email: string): Promise<{ id: string } | null> {
+    const results = await db
+      .select({ id: driveMembers.id })
+      .from(driveMembers)
+      .innerJoin(users, eq(users.id, driveMembers.userId))
+      .where(
+        and(
+          eq(driveMembers.driveId, driveId),
+          eq(users.email, email),
+          isNull(driveMembers.acceptedAt)
+        )
+      )
+      .limit(1);
+    return results.at(0) ?? null;
+  },
+
+  async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { name: true, email: true },
+    });
+    return user ? { name: user.name, email: user.email } : null;
+  },
+
+  async deleteDriveMemberById(memberId: string): Promise<void> {
+    await db.delete(driveMembers).where(eq(driveMembers.id, memberId));
+  },
+
+  async createAcceptedMemberWithPermissions(input: {
+    driveId: string;
+    userId: string;
+    role: 'MEMBER' | 'ADMIN';
+    customRoleId: string | null;
+    invitedBy: string;
+    permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+    grantedBy: string;
+    validPageIds: Set<string>;
+  }): Promise<{ memberId: string; permissionsGranted: number }> {
+    return db.transaction(async (tx) => {
+      const [member] = await tx
+        .insert(driveMembers)
+        .values({
+          driveId: input.driveId,
+          userId: input.userId,
+          role: input.role,
+          customRoleId: input.customRoleId,
+          invitedBy: input.invitedBy,
+          acceptedAt: new Date(),
+        })
+        .returning();
+
+      let permissionsGranted = 0;
+      for (const perm of input.permissions) {
+        if (!input.validPageIds.has(perm.pageId)) continue;
+        await tx.insert(pagePermissions).values({
+          pageId: perm.pageId,
+          userId: input.userId,
+          canView: perm.canView,
+          canEdit: perm.canEdit,
+          canShare: perm.canShare,
+          canDelete: false,
+          grantedBy: input.grantedBy,
+        });
+        permissionsGranted += 1;
+      }
+
+      return { memberId: member.id, permissionsGranted };
+    });
+  },
+
   async findPendingMembersForUser(userId: string) {
     return db
       .select({

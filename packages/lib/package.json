@@ -256,6 +256,11 @@
       "import": "./dist/services/email-service.js",
       "require": "./dist/services/email-service.js"
     },
+    "./services/notification-email-service": {
+      "types": "./dist/services/notification-email-service.d.ts",
+      "import": "./dist/services/notification-email-service.js",
+      "require": "./dist/services/notification-email-service.js"
+    },
     "./email-templates/VerificationEmail": {
       "types": "./dist/email-templates/VerificationEmail.d.ts",
       "import": "./dist/email-templates/VerificationEmail.js",

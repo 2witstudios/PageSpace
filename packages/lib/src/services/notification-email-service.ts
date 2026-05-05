@@ -267,6 +267,43 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
 }
 
 /**
+ * Strip CR/LF and other ASCII control characters from a string before
+ * interpolating it into an email subject or other header. Defends against
+ * header-injection attempts (e.g., "Eve\r\nBcc: attacker@evil.com").
+ */
+function stripHeaderControls(input: string): string {
+  // eslint-disable-next-line no-control-regex
+  return input.replace(/[\x00-\x1f\x7f]/g, '');
+}
+
+/**
+ * Send a "you've been invited to a drive" email to a recipient who does not
+ * yet hold an active session. The route mints a long-lived magic-link token,
+ * encodes it into magicLinkUrl, and hands it here. Errors propagate so the
+ * caller (the invite route) can decide whether to surface a 5xx.
+ */
+export async function sendPendingDriveInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  driveName: string;
+  magicLinkUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} invited you to ${safeDriveName} on PageSpace`,
+    react: DriveInvitationEmail({
+      userName: input.recipientEmail,
+      inviterName: safeInviterName,
+      driveName: safeDriveName,
+      acceptUrl: input.magicLinkUrl,
+    }),
+  });
+}
+
+/**
  * Send an email notification to a user
  * Fails gracefully without throwing to avoid breaking the notification creation
  */

@@ -18,12 +18,23 @@ import { secureCompare } from './secure-compare';
 // Token expiry: 5 minutes for magic links
 export const MAGIC_LINK_EXPIRY_MINUTES = 5;
 
+// Drive invitations sit in inboxes — 7 days is the long-lived expiry the
+// invite route uses when minting an email-payload magic link.
+export const INVITATION_LINK_EXPIRY_MINUTES = 60 * 24 * 7;
+
+// Hard ceiling on caller-supplied expiry to avoid effectively-immortal tokens.
+const MAX_EXPIRY_MINUTES = 60 * 24 * 30;
+
 // Input validation schemas
 const createMagicLinkSchema = z.object({
   email: z.string().email('Invalid email address'),
   platform: z.enum(['web', 'desktop']).optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  expiryMinutes: z.number().int().positive().max(
+    MAX_EXPIRY_MINUTES,
+    `expiryMinutes must not exceed ${MAX_EXPIRY_MINUTES} (30 days)`
+  ).optional(),
 }).refine(
   (data) => data.platform !== 'desktop' || !!data.deviceId,
   { message: 'deviceId is required for desktop platform' }
@@ -82,8 +93,9 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
     };
   }
 
-  const { email, platform, deviceId, deviceName } = parsed.data;
+  const { email, platform, deviceId, deviceName, expiryMinutes } = parsed.data;
   const normalizedEmail = email.toLowerCase().trim();
+  const effectiveExpiryMinutes = expiryMinutes ?? MAGIC_LINK_EXPIRY_MINUTES;
 
   // Check if user exists
   const existingUser = await db.query.users.findFirst({
@@ -157,7 +169,7 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
 
   // Generate secure token with ps_magic_ prefix
   const { token, hash, tokenPrefix } = generateToken('ps_magic');
-  const expiresAt = new Date(Date.now() + MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000);
+  const expiresAt = new Date(Date.now() + effectiveExpiryMinutes * 60 * 1000);
 
   // Build metadata for desktop platform support
   const metadata = platform === 'desktop' && deviceId
