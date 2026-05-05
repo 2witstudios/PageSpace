@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { UserSearch } from '@/components/members/UserSearch';
-import { ChevronLeft, UserPlus, User, RefreshCw, Shield } from 'lucide-react';
+import { ChevronLeft, UserPlus, User, RefreshCw, Shield, Mail } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -43,6 +43,7 @@ export default function InviteMemberPage() {
   const driveId = params.driveId as string;
 
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
   const [selectedUnifiedRole, setSelectedUnifiedRole] = useState<UnifiedRole>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
@@ -104,10 +105,17 @@ export default function InviteMemberPage() {
 
   const handleUserSelect = (user: SelectedUser) => {
     setSelectedUser(user);
+    setPendingEmail(null);
+  };
+
+  const handleInviteEmail = (email: string) => {
+    setPendingEmail(email);
+    setSelectedUser(null);
   };
 
   const handleClearUser = () => {
     setSelectedUser(null);
+    setPendingEmail(null);
     setPermissions(new Map());
     setSelectedUnifiedRole(null);
   };
@@ -121,84 +129,83 @@ export default function InviteMemberPage() {
   };
 
   const handleInvite = async () => {
-    if (!selectedUser) return;
+    if (!selectedUser && !pendingEmail) return;
 
-    // Map unified role back to backend model
     const backendRole = selectedUnifiedRole?.type === 'admin' ? 'ADMIN' : 'MEMBER';
     const backendCustomRoleId = selectedUnifiedRole?.type === 'custom'
       ? selectedUnifiedRole.roleId
       : null;
+    const isAdmin = selectedUnifiedRole?.type === 'admin';
 
-    // Skip permission validation for Admin
-    if (selectedUnifiedRole?.type === 'admin') {
-      setSaving(true);
-      try {
-        await post(`/api/drives/${driveId}/members/invite`, {
-          userId: selectedUser.userId,
-          role: 'ADMIN',
-          customRoleId: null,
-          permissions: [],
-        });
+    // Snapshot the email at submit time so the toast renders the right address
+    // even if pendingEmail changes before the async response resolves.
+    const submittedEmail = pendingEmail;
 
+    let payload: Record<string, unknown>;
+    if (pendingEmail) {
+      // Email-payload path: page permissions cannot be granted to a user who
+      // has not joined yet, so we always send an empty permissions array.
+      payload = {
+        email: pendingEmail,
+        role: backendRole,
+        customRoleId: backendCustomRoleId,
+        permissions: [],
+      };
+    } else if (isAdmin) {
+      payload = {
+        userId: selectedUser!.userId,
+        role: 'ADMIN',
+        customRoleId: null,
+        permissions: [],
+      };
+    } else {
+      const permissionArray = Array.from(permissions.entries())
+        .filter(([, perms]) => perms.canView || perms.canEdit || perms.canShare)
+        .map(([pageId, perms]) => ({
+          pageId,
+          canView: perms.canView,
+          canEdit: perms.canEdit,
+          canShare: perms.canShare,
+        }));
+
+      if (permissionArray.length === 0) {
         toast({
-          title: 'Success',
-          description: 'Admin invited successfully',
-        });
-
-        router.push(`/dashboard/${driveId}/members`);
-      } catch (error) {
-        if (error instanceof Error && 'requiresEmailVerification' in error) {
-          setShowVerificationAlert(true);
-          return;
-        }
-        console.error('Error adding member:', error);
-        toast({
-          title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to add member',
+          title: 'No permissions selected',
+          description: 'Please select at least one permission to grant',
           variant: 'destructive',
         });
-      } finally {
-        setSaving(false);
+        return;
       }
-      return;
-    }
 
-    // For non-admin, convert permissions map to array format
-    const permissionArray = Array.from(permissions.entries())
-      .filter(([, perms]) => perms.canView || perms.canEdit || perms.canShare)
-      .map(([pageId, perms]) => ({
-        pageId,
-        canView: perms.canView,
-        canEdit: perms.canEdit,
-        canShare: perms.canShare,
-      }));
-
-    if (permissionArray.length === 0) {
-      toast({
-        title: 'No permissions selected',
-        description: 'Please select at least one permission to grant',
-        variant: 'destructive',
-      });
-      return;
+      payload = {
+        userId: selectedUser!.userId,
+        role: backendRole,
+        customRoleId: backendCustomRoleId,
+        permissions: permissionArray,
+      };
     }
 
     setSaving(true);
     try {
-      await post(`/api/drives/${driveId}/members/invite`, {
-        userId: selectedUser.userId,
-        role: backendRole,
-        customRoleId: backendCustomRoleId,
-        permissions: permissionArray,
-      });
+      const response = await post<{ kind?: 'invited' | 'added'; email?: string }>(
+        `/api/drives/${driveId}/members/invite`,
+        payload
+      );
 
-      toast({
-        title: 'Success',
-        description: 'Member invited successfully',
-      });
+      if (response?.kind === 'invited' && submittedEmail) {
+        toast({
+          title: 'Invitation sent',
+          description: `Invitation sent to ${submittedEmail}`,
+        });
+      } else {
+        toast({
+          title: 'Success',
+          description: isAdmin ? 'Admin invited successfully' : 'Member invited successfully',
+        });
+      }
 
       router.push(`/dashboard/${driveId}/members`);
     } catch (error) {
-      // Check if this is a verification required error
       if (error instanceof Error && 'requiresEmailVerification' in error) {
         setShowVerificationAlert(true);
         return;
@@ -257,7 +264,9 @@ export default function InviteMemberPage() {
             <CardDescription>
               {selectedUser
                 ? 'User selected. You can change your selection below.'
-                : 'Search for a user to invite to this drive'
+                : pendingEmail
+                  ? 'No matching user — they will receive an email invitation.'
+                  : 'Search for a user to invite to this drive'
               }
             </CardDescription>
           </CardHeader>
@@ -285,14 +294,31 @@ export default function InviteMemberPage() {
                   Change User
                 </Button>
               </div>
+            ) : pendingEmail ? (
+              <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
+                <div className="flex items-center space-x-4">
+                  <Avatar className="w-12 h-12">
+                    <AvatarFallback>
+                      <Mail className="w-5 h-5" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="font-medium">{pendingEmail}</p>
+                    <p className="text-sm text-muted-foreground">Will receive an email invitation</p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleClearUser}>
+                  Change
+                </Button>
+              </div>
             ) : (
-              <UserSearch onSelect={handleUserSelect} />
+              <UserSearch onSelect={handleUserSelect} onInviteEmail={handleInviteEmail} />
             )}
           </CardContent>
         </Card>
 
-        {/* Role & Permissions - Only show when user is selected */}
-        {selectedUser && (
+        {/* Role & Permissions - Show when user is selected OR an email invitation is pending */}
+        {(selectedUser || pendingEmail) && (
           <>
             {/* Unified Role Selection Card */}
             <Card className="mb-6">
@@ -362,8 +388,8 @@ export default function InviteMemberPage() {
               </CardContent>
             </Card>
 
-            {/* Permissions Card - Hidden when Admin is selected */}
-            {selectedUnifiedRole?.type !== 'admin' && (
+            {/* Permissions Card - Hidden when Admin is selected or for pending email invites */}
+            {selectedUnifiedRole?.type !== 'admin' && !pendingEmail && (
               <Card className="mb-6">
                 <CardHeader>
                   <div className="flex items-center justify-between">

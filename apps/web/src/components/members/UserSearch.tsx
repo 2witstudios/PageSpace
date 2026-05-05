@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Search, User } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Mail, Search, User } from 'lucide-react';
 import { useDebounce } from '@/hooks/useDebounce';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
@@ -18,13 +19,20 @@ interface SearchResult {
 
 interface UserSearchProps {
   onSelect: (user: SearchResult) => void;
+  onInviteEmail?: (email: string) => void;
 }
 
-export function UserSearch({ onSelect }: UserSearchProps) {
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const debouncedQuery = useDebounce(query, 300);
+  // Sequence guard: typeahead can issue overlapping fetches; only the latest
+  // response is allowed to commit state so a slow earlier request can't clobber
+  // a newer one.
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     if (debouncedQuery.length < 2) {
@@ -32,18 +40,27 @@ export function UserSearch({ onSelect }: UserSearchProps) {
       return;
     }
 
+    const currentId = ++requestIdRef.current;
     const searchUsers = async () => {
       setLoading(true);
       try {
-        const response = await fetchWithAuth(`/api/users/search?q=${encodeURIComponent(debouncedQuery)}`);
+        // Auth normalizes emails to lowercase on signup, and the search API
+        // does an exact `eq(users.email, q)` match. Lowercase email-shaped
+        // queries here so a typed "User@Example.COM" still finds an existing
+        // account, instead of falling through to the new-user CTA.
+        const trimmed = debouncedQuery.trim();
+        const searchQuery = EMAIL_REGEX.test(trimmed) ? trimmed.toLowerCase() : debouncedQuery;
+        const response = await fetchWithAuth(`/api/users/search?q=${encodeURIComponent(searchQuery)}`);
         if (!response.ok) throw new Error('Search failed');
         const data = await response.json();
+        if (requestIdRef.current !== currentId) return;
         setResults(data.users || []);
       } catch (error) {
+        if (requestIdRef.current !== currentId) return;
         console.error('Error searching users:', error);
         setResults([]);
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === currentId) setLoading(false);
       }
     };
 
@@ -121,13 +138,33 @@ export function UserSearch({ onSelect }: UserSearchProps) {
       )}
 
       {/* No Results */}
-      {!loading && query.length >= 2 && results.length === 0 && (
-        <div className="text-center py-8 text-muted-foreground">
-          <User className="w-12 h-12 mx-auto mb-2 opacity-50" />
-          <p>No users found</p>
-          <p className="text-sm mt-1">Try searching by email address</p>
-        </div>
-      )}
+      {!loading && query.length >= 2 && results.length === 0 && (() => {
+        const normalizedEmail = query.trim().toLowerCase();
+        const isEmail = EMAIL_REGEX.test(normalizedEmail);
+        if (isEmail && onInviteEmail) {
+          return (
+            <div className="text-center py-8 text-muted-foreground">
+              <Mail className="w-12 h-12 mx-auto mb-2 opacity-50" />
+              <p>No matching user found</p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3"
+                onClick={() => onInviteEmail(normalizedEmail)}
+              >
+                Invite {normalizedEmail} to PageSpace
+              </Button>
+            </div>
+          );
+        }
+        return (
+          <div className="text-center py-8 text-muted-foreground">
+            <User className="w-12 h-12 mx-auto mb-2 opacity-50" />
+            <p>No users found</p>
+            <p className="text-sm mt-1">Try searching by email address</p>
+          </div>
+        );
+      })()}
     </div>
   );
 }

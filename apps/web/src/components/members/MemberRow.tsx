@@ -1,6 +1,6 @@
 'use client';
 
-import { Trash2, Eye, Edit, Share, User } from 'lucide-react';
+import { Trash2, Eye, Edit, Share, User, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -12,7 +12,7 @@ interface MemberRowProps {
     userId: string;
     role: string;
     invitedAt: string;
-    acceptedAt?: string;
+    acceptedAt: string | null;
     user: {
       id: string;
       email: string;
@@ -37,10 +37,13 @@ interface MemberRowProps {
   driveId: string;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;
+  onResend?: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
-  const displayName = member.profile?.displayName || member.user.name || 'Unknown User';
+export function MemberRow({ member, driveId, currentUserRole, onRemove, onResend }: MemberRowProps) {
+  const isPending = member.acceptedAt === null;
+  const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+  const displayName = member.profile?.displayName || member.user.name || member.user.email || 'Unknown User';
   const initials = displayName
     .split(' ')
     .map(n => n[0])
@@ -48,7 +51,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
     .toUpperCase()
     .slice(0, 2);
 
-  // Get color classes for custom role badges
   const getCustomRoleColorClasses = (color?: string | null) => {
     switch (color) {
       case 'blue':
@@ -72,8 +74,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
     }
   };
 
-  // Unified role badge - shows role name based on priority:
-  // Owner > Admin > Custom Role > Member (fallback)
   const getRoleBadge = () => {
     if (member.role === 'OWNER') {
       return (
@@ -96,7 +96,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
         </Badge>
       );
     }
-    // Fallback for members without a custom role assigned
     return (
       <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
         Member
@@ -107,13 +106,11 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
   return (
     <div className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
       <div className="flex items-center space-x-4">
-        {/* Avatar */}
         <Avatar>
           <AvatarImage src={member.profile?.avatarUrl} alt={displayName} />
           <AvatarFallback>{initials}</AvatarFallback>
         </Avatar>
 
-        {/* User Info */}
         <div>
           <div className="flex items-center space-x-2">
             <p className="font-medium">{displayName}</p>
@@ -121,36 +118,54 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
             {getRoleBadge()}
+            {isPending && (
+              <Badge
+                variant="outline"
+                className="border-yellow-500/50 bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300"
+              >
+                Pending
+              </Badge>
+            )}
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
-          
-          {/* Permission Summary */}
-          <div className="flex items-center space-x-4 mt-1">
-            {member.permissionCounts.view > 0 && (
-              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                <Eye className="w-3 h-3" />
-                <span>{member.permissionCounts.view} pages</span>
-              </div>
-            )}
-            {member.permissionCounts.edit > 0 && (
-              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                <Edit className="w-3 h-3" />
-                <span>{member.permissionCounts.edit} pages</span>
-              </div>
-            )}
-            {member.permissionCounts.share > 0 && (
-              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                <Share className="w-3 h-3" />
-                <span>{member.permissionCounts.share} pages</span>
-              </div>
-            )}
-          </div>
+
+          {!isPending && (
+            <div className="flex items-center space-x-4 mt-1">
+              {member.permissionCounts.view > 0 && (
+                <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                  <Eye className="w-3 h-3" />
+                  <span>{member.permissionCounts.view} pages</span>
+                </div>
+              )}
+              {member.permissionCounts.edit > 0 && (
+                <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                  <Edit className="w-3 h-3" />
+                  <span>{member.permissionCounts.edit} pages</span>
+                </div>
+              )}
+              {member.permissionCounts.share > 0 && (
+                <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                  <Share className="w-3 h-3" />
+                  <span>{member.permissionCounts.share} pages</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center space-x-2">
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        {canManage && isPending && onResend && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onResend}
+            title="Resend invitation"
+          >
+            <Mail className="w-4 h-4" />
+          </Button>
+        )}
+        {canManage && !isPending && (
           <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
             <Button
               variant="ghost"
@@ -161,13 +176,13 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
             </Button>
           </Link>
         )}
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && member.role !== 'OWNER' && (
+        {canManage && member.role !== 'OWNER' && (
           <Button
             variant="ghost"
             size="sm"
             onClick={onRemove}
             className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-            title="Remove Member"
+            title={isPending ? 'Revoke Invitation' : 'Remove Member'}
           >
             <Trash2 className="w-4 h-4" />
           </Button>

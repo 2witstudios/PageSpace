@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/useToast';
+import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface DriveMember {
@@ -13,7 +14,7 @@ interface DriveMember {
   userId: string;
   role: string;
   invitedAt: string;
-  acceptedAt?: string;
+  acceptedAt: string | null;
   user: {
     id: string;
     email: string;
@@ -40,21 +41,41 @@ interface DriveMembersProps {
   driveId: string;
 }
 
+interface DriveMemberSocketEvent {
+  driveId: string;
+  userId?: string;
+  operation?: string;
+}
+
+const DRIVE_MEMBER_EVENTS = [
+  'drive:member_added',
+  'drive:member_removed',
+  'drive:member_role_changed',
+] as const;
+
 export function DriveMembers({ driveId }: DriveMembersProps) {
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const { toast } = useToast();
+  const socket = useSocket();
+  // Sequence guard: socket events can fire fetchMembers while a prior fetch is
+  // in flight. Only the latest request commits state to avoid a stale response
+  // overwriting a newer one.
+  const requestSeqRef = useRef(0);
 
-  const fetchMembers = async () => {
+  const fetchMembers = useCallback(async () => {
+    const currentSeq = ++requestSeqRef.current;
     try {
       const response = await fetchWithAuth(`/api/drives/${driveId}/members`);
       if (!response.ok) throw new Error('Failed to fetch members');
       const data = await response.json();
+      if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
     } catch (error) {
+      if (currentSeq !== requestSeqRef.current) return;
       console.error('Error fetching members:', error);
       toast({
         title: 'Error',
@@ -62,32 +83,53 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      if (currentSeq === requestSeqRef.current) setLoading(false);
     }
-  };
+  }, [driveId, toast]);
 
   useEffect(() => {
     fetchMembers();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driveId]);
+  }, [fetchMembers]);
 
-  const handleRemoveMember = async (memberId: string) => {
-    if (!confirm('Are you sure you want to remove this member?')) return;
+  useEffect(() => {
+    if (!socket) return;
+
+    const handler = (event: DriveMemberSocketEvent) => {
+      if (event?.driveId !== driveId) return;
+      fetchMembers();
+    };
+
+    DRIVE_MEMBER_EVENTS.forEach((eventName) => {
+      socket.on(eventName, handler);
+    });
+
+    return () => {
+      DRIVE_MEMBER_EVENTS.forEach((eventName) => {
+        socket.off(eventName, handler);
+      });
+    };
+  }, [socket, driveId, fetchMembers]);
+
+  const handleRemoveMember = async (userId: string, isPending: boolean) => {
+    const message = isPending
+      ? 'Are you sure you want to revoke this invitation?'
+      : 'Are you sure you want to remove this member?';
+    if (!confirm(message)) return;
 
     try {
-      await del(`/api/drives/${driveId}/members/${memberId}`);
+      await del(`/api/drives/${driveId}/members/${userId}`);
+
+      setMembers((prev) => prev.filter((m) => m.userId !== userId));
 
       toast({
         title: 'Success',
-        description: 'Member removed successfully',
+        description: isPending ? 'Invitation revoked' : 'Member removed successfully',
       });
-
-      fetchMembers();
     } catch (error) {
       console.error('Error removing member:', error);
       toast({
         title: 'Error',
-        description: 'Failed to remove member',
+        description: isPending ? 'Failed to revoke invitation' : 'Failed to remove member',
         variant: 'destructive',
       });
     }
@@ -101,12 +143,15 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     );
   }
 
+  // Strict null check: undefined from a malformed payload must not classify as pending.
+  const acceptedMembers = members.filter((m) => m.acceptedAt != null);
+  const pendingMembers = members.filter((m) => m.acceptedAt === null);
+
   return (
     <div className="space-y-6">
-      {/* Header with Invite Button */}
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold">Members ({members.length})</h2>
+          <h2 className="text-lg font-semibold">Members ({acceptedMembers.length})</h2>
           <p className="text-sm text-gray-600 dark:text-gray-400">
             People with access to this drive
           </p>
@@ -119,25 +164,45 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         )}
       </div>
 
-      {/* Members List */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
-        {members.length === 0 ? (
+        {acceptedMembers.length === 0 ? (
           <div className="p-8 text-center text-gray-500 dark:text-gray-400">
             No members yet. Invite someone to collaborate!
           </div>
         ) : (
-          members.map((member) => (
+          acceptedMembers.map((member) => (
             <MemberRow
               key={member.id}
               member={member}
               driveId={driveId}
               currentUserRole={currentUserRole}
-              onRemove={() => handleRemoveMember(member.id)}
+              onRemove={() => handleRemoveMember(member.userId, false)}
             />
           ))
         )}
       </div>
 
+      {pendingMembers.length > 0 && (
+        <div>
+          <div className="mb-3">
+            <h2 className="text-lg font-semibold">Pending invitations ({pendingMembers.length})</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              People invited but not yet joined
+            </p>
+          </div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+            {pendingMembers.map((member) => (
+              <MemberRow
+                key={member.id}
+                member={member}
+                driveId={driveId}
+                currentUserRole={currentUserRole}
+                onRemove={() => handleRemoveMember(member.userId, true)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
