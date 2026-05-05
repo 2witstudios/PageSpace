@@ -394,9 +394,14 @@ export async function triggerMentionedAgentResponses(
         );
 
         if (!isAskAgentResult(rawAskResult)) {
-          channelMentionLogger.warn('Mentioned agent returned a malformed result; skipping', {
+          channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
             channelId: params.channelId,
             agentId: agent.id,
+            receivedType: typeof rawAskResult,
+            receivedKeys:
+              rawAskResult && typeof rawAskResult === 'object'
+                ? Object.keys(rawAskResult as Record<string, unknown>)
+                : null,
           });
           continue;
         }

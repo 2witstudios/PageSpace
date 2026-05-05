@@ -619,25 +619,28 @@ describe('dmMessageRepository.listActiveMessages [reactions parity]', () => {
     });
   });
 
-  it('hydrates sender and file alongside reactions (channel-parity dmMessageWith)', async () => {
+  it('hydrates sender, file, and reactions.user with the same column whitelist as channel-parity dmMessageWith', async () => {
     await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
 
     const call = mockDirectMessagesFindMany.mock.calls[0]?.[0] as {
       with: {
         sender: { columns: Record<string, true> };
         file: { columns: Record<string, true> };
+        reactions: { with: { user: { columns: Record<string, true> } } };
       };
     };
     assert({
       given: 'a DM list fetch',
-      should: 'request sender and file with the same column whitelist as the channel repo',
+      should: 'request sender, file, and reactions.user with the same column whitelist as the channel repo',
       actual: {
         senderCols: call.with.sender.columns,
         fileCols: call.with.file.columns,
+        reactionUserCols: call.with.reactions.with.user.columns,
       },
       expected: {
         senderCols: { id: true, name: true, image: true },
         fileCols: { id: true, mimeType: true, sizeBytes: true },
+        reactionUserCols: { id: true, name: true },
       },
     });
   });

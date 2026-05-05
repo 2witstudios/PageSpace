@@ -413,7 +413,8 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     );
     const recipients = threadUpdatedCalls.map(([userId]) => userId);
     // Explicit recipient set: only the non-author followers, exactly once each, never the reply author.
-    expect(recipients.sort()).toEqual(['follower-1', 'follower-2']);
+    // Sorting a copy detects ordering drift and duplicate emission without mutating the source array.
+    expect([...recipients].sort()).toEqual(['follower-1', 'follower-2']);
     expect(recipients).not.toContain(USER_ID);
 
     // Each thread_updated payload carries the new contract fields.
@@ -462,8 +463,16 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     );
     expect(threadUpdated).toHaveLength(0);
     // The reply-count fanout still happens regardless of follower set — it's
-    // scoped to viewers of the parent thread, not the follower list.
-    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalled();
+    // scoped to viewers of the parent thread, not the follower list. Pin the
+    // exact args so a regression that drops the bump is caught.
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalledWith(
+      PAGE_ID,
+      expect.objectContaining({
+        rootId: PARENT_ID,
+        replyCount: 1,
+        lastReplyAt: replyCreatedAt.toISOString(),
+      })
+    );
   });
 
   it('emits channel_updated to a mentioned non-follower who can view the channel', async () => {

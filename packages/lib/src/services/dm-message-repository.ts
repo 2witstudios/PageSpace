@@ -548,6 +548,8 @@ export interface ListDmThreadRepliesInput {
   after?: { createdAt: Date; id: string };
 }
 
+export type DmMessageWithRelations = Awaited<ReturnType<typeof listDmThreadReplies>>[number];
+
 async function listDmThreadReplies(
   input: ListDmThreadRepliesInput
 ) {

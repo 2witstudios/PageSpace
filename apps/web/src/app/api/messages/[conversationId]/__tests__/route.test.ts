@@ -1023,11 +1023,21 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
 
     const res = await callRoute({ content: 'lonely-reply', parentId: PARENT_ID });
 
+    // DM thread-reply path returns 200 (channel returns 201) — the two routes
+    // diverge here intentionally; do not "fix" the asymmetry without checking
+    // both route handlers.
     expect(res.status).toBe(200);
     const threadUpdated = mockBroadcastInboxEvent.mock.calls.filter(
       ([, payload]) => (payload as { operation: string }).operation === 'thread_updated'
     );
     expect(threadUpdated).toHaveLength(0);
-    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalled();
+    expect(mockBroadcastThreadReplyCountUpdated).toHaveBeenCalledWith(
+      `dm:${CONVERSATION_ID}`,
+      expect.objectContaining({
+        rootId: PARENT_ID,
+        replyCount: 1,
+        lastReplyAt: replyCreatedAt.toISOString(),
+      })
+    );
   });
 });
