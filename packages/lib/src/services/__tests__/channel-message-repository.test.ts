@@ -102,6 +102,7 @@ vi.mock('@pagespace/db/schema/chat', () => ({
     replyCount: 'channel_messages.replyCount',
     lastReplyAt: 'channel_messages.lastReplyAt',
     mirroredFromId: 'channel_messages.mirroredFromId',
+    quotedMessageId: 'channel_messages.quotedMessageId',
   },
   channelMessageReactions: {
     id: 'channel_message_reactions.id',
@@ -361,7 +362,29 @@ describe('channelMessageRepository.insertChannelMessage', () => {
         content: 'hello',
         fileId: 'file-1',
         attachmentMeta: { kind: 'image' },
+        quotedMessageId: null,
       },
+    });
+  });
+
+  it('persists an explicit quotedMessageId on the row when provided', async () => {
+    mockInsertReturning.mockResolvedValueOnce([{ id: 'msg-3' }]);
+
+    await channelMessageRepository.insertChannelMessage({
+      pageId: 'page-1',
+      userId: 'user-1',
+      content: 'inline quote reply',
+      fileId: null,
+      attachmentMeta: null,
+      quotedMessageId: 'quoted-msg-1',
+    });
+
+    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'an insert request with quotedMessageId set',
+      should: 'forward the value verbatim so the new row links to the quoted source',
+      actual: values.quotedMessageId,
+      expected: 'quoted-msg-1',
     });
   });
 

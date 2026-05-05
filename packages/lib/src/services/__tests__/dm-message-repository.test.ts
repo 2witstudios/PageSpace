@@ -110,6 +110,7 @@ vi.mock('@pagespace/db/schema/social', () => ({
     replyCount: 'direct_messages.replyCount',
     lastReplyAt: 'direct_messages.lastReplyAt',
     mirroredFromId: 'direct_messages.mirroredFromId',
+    quotedMessageId: 'direct_messages.quotedMessageId',
   },
   dmThreadFollowers: {
     rootMessageId: 'dm_thread_followers.rootMessageId',
@@ -879,6 +880,56 @@ describe('dmMessageRepository.removeDmReaction', () => {
 
 // Surface guard: keep the public API shape stable so consumers don't break.
 // Note: the route uses the existing `findActiveMessage` for the existence check
+describe('dmMessageRepository.insertDmMessage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInsertReturning.mockResolvedValue([{ id: 'msg-9' }]);
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning });
+    vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
+  });
+
+  it('persists an explicit quotedMessageId on the row when provided', async () => {
+    mockInsertReturning.mockResolvedValueOnce([{ id: 'msg-9' }]);
+
+    await dmMessageRepository.insertDmMessage({
+      conversationId: 'conv-1',
+      senderId: 'user-1',
+      content: 'inline quote reply',
+      fileId: null,
+      attachmentMeta: null,
+      quotedMessageId: 'quoted-dm-1',
+    });
+
+    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'an insert request with quotedMessageId set',
+      should: 'forward the value verbatim so the new DM links to the quoted source',
+      actual: values.quotedMessageId,
+      expected: 'quoted-dm-1',
+    });
+  });
+
+  it('writes null quotedMessageId when caller omits the field', async () => {
+    mockInsertReturning.mockResolvedValueOnce([{ id: 'msg-10' }]);
+
+    await dmMessageRepository.insertDmMessage({
+      conversationId: 'conv-1',
+      senderId: 'user-1',
+      content: 'plain text',
+      fileId: null,
+      attachmentMeta: null,
+    });
+
+    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'an insert request without a quotedMessageId',
+      should: 'still write the column as null rather than dropping it from the payload',
+      actual: values.quotedMessageId,
+      expected: null,
+    });
+  });
+});
+
 // (active-only, by design — soft-deleted DMs cannot accept reactions).
 describe('dmMessageRepository surface', () => {
   it('exports the reaction functions the DM routes need at parity with channels', () => {

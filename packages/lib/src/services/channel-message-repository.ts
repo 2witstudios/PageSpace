@@ -123,6 +123,7 @@ export interface InsertChannelMessageInput {
   content: string;
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
+  quotedMessageId?: string | null;
 }
 
 async function insertChannelMessage(
@@ -136,6 +137,7 @@ async function insertChannelMessage(
       content: input.content,
       fileId: input.fileId,
       attachmentMeta: input.attachmentMeta,
+      quotedMessageId: input.quotedMessageId ?? null,
     })
     .returning();
   return row;
