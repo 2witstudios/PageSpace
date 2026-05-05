@@ -64,4 +64,23 @@ describe('DM thread-reply isolation contract', () => {
     // Channel "last message" CTE
     expect(source).toContain('cm."parentId" IS NULL');
   });
+
+  // Anti-regression: a refactor that swaps isNull(...) for eq(..., null) is
+  // a real semantic bug — `parentId = NULL` is always false in Postgres, so
+  // the filter would silently match no rows and the inbox would re-inflate.
+  // None of these routes should ever contain `eq(directMessages.parentId, null)`.
+  it('given_unreadDmCounts_doesNotUseEqOnNullForParentId', () => {
+    const routes = [
+      'activity/summary/route.ts',
+      'pulse/route.ts',
+      'pulse/generate/route.ts',
+      'pulse/cron/route.ts',
+    ];
+
+    for (const route of routes) {
+      const source = readRoute(route);
+      expect(source).not.toContain('eq(directMessages.parentId, null)');
+      expect(source).not.toContain('eq(directMessages.parentId,null)');
+    }
+  });
 });
