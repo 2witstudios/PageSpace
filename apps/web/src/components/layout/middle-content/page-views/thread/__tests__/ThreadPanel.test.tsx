@@ -289,10 +289,14 @@ describe('ThreadPanel', () => {
     const handler = mockSocketHandlers.get('new_message');
     expect(typeof handler).toBe('function');
 
+    // Distinct content per event makes leakage text-detectable: the message
+    // id is not rendered, so we can't probe by id. In production both bodies
+    // are identical (same user message, mirrored); using different strings
+    // here only matters to the test, not the contract under test.
     act(() => {
       handler!({
         id: 'reply-1',
-        content: 'mirrored body',
+        content: 'reply-body-A',
         createdAt: new Date('2026-05-05T12:00:00Z').toISOString(),
         userId: 'u-other',
         parentId: 'p1',
@@ -300,7 +304,7 @@ describe('ThreadPanel', () => {
       });
       handler!({
         id: 'mirror-1',
-        content: 'mirrored body',
+        content: 'mirror-body-B',
         createdAt: new Date('2026-05-05T12:00:01Z').toISOString(),
         userId: 'u-other',
         parentId: null,
@@ -311,21 +315,24 @@ describe('ThreadPanel', () => {
     await waitFor(() => expect(screen.getAllByTestId('thread-reply').length).toBe(1));
 
     const replies = screen.getAllByTestId('thread-reply');
-    const replyText = replies.map((r) => r.textContent ?? '');
-    const mirrorLeaked = replyText.some((t) => t.includes('mirror-1'));
+    const allText = replies.map((r) => r.textContent ?? '').join('\n');
 
     expect({
       given: 'reply (parentId=root) and mirror (parentId=null) twin events',
       should:
         'show exactly the reply in the thread list — the mirror is the page-side stream concern, not the panel',
-      actual: { count: replies.length, mirrorInThread: mirrorLeaked },
-      expected: { count: 1, mirrorInThread: false },
+      actual: {
+        count: replies.length,
+        replyShown: allText.includes('reply-body-A'),
+        mirrorShown: allText.includes('mirror-body-B'),
+      },
+      expected: { count: 1, replyShown: true, mirrorShown: false },
     }).toEqual({
       given: 'reply (parentId=root) and mirror (parentId=null) twin events',
       should:
         'show exactly the reply in the thread list — the mirror is the page-side stream concern, not the panel',
-      actual: { count: 1, mirrorInThread: false },
-      expected: { count: 1, mirrorInThread: false },
+      actual: { count: 1, replyShown: true, mirrorShown: false },
+      expected: { count: 1, replyShown: true, mirrorShown: false },
     });
   });
 
