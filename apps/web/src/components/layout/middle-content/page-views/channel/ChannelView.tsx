@@ -20,6 +20,7 @@ import { Lock, Pencil, Trash2, Check, X, MoreHorizontal, CornerUpLeft } from 'lu
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
+import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   DropdownMenu,
@@ -79,8 +80,13 @@ function ChannelView({ page }: ChannelViewProps) {
   const [editContent, setEditContent] = useState('');
   // Active inline quote-reply target. Set when the user picks "Quote reply" from
   // the message hover menu; cleared on successful send or via the chip's X.
+  // The snapshot is captured at quote-start time so the optimistic insert can render the
+  // embed immediately, before the server's enriched response arrives.
   const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
-  const [quotedPreview, setQuotedPreview] = useState<{ authorName: string; snippet: string } | null>(null);
+  const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
+  const quotedPreview = activeQuotedSnapshot
+    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    : null;
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -138,21 +144,30 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleStartQuote = useCallback((m: MessageWithReactions) => {
     if (m.id.startsWith('temp-')) return;
-    const snippet = m.content.length > 100 ? m.content.substring(0, 100) + '...' : m.content;
     setQuotedMessageId(m.id);
-    setQuotedPreview({
+    setActiveQuotedSnapshot({
+      id: m.id,
+      authorId: m.user?.id ?? m.userId ?? null,
       authorName: m.aiMeta?.senderName || m.user?.name || 'Member',
-      snippet,
+      authorImage: m.user?.image ?? null,
+      contentSnippet: buildThreadPreview(m.content),
+      createdAt: m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt),
+      isActive: true,
     });
     channelInputRef.current?.focus();
   }, []);
 
   const clearQuote = useCallback(() => {
     setQuotedMessageId(null);
-    setQuotedPreview(null);
+    setActiveQuotedSnapshot(null);
   }, []);
 
-  const handleSubmit = async (content: string, attachment?: FileAttachment, activeQuoteId?: string | null) => {
+  const handleSubmit = async (
+    content: string,
+    attachment?: FileAttachment,
+    activeQuoteId?: string | null,
+    activeQuoteSnapshot?: QuotedMessageSnapshot | null,
+  ) => {
     if (!user) return;
 
     if (!canEdit) {
@@ -186,6 +201,9 @@ function ChannelView({ page }: ChannelViewProps) {
         contentHash: attachment.contentHash,
       } : null,
       quotedMessageId: activeQuoteId ?? null,
+      // Carry the snapshot through the optimistic phase so the embed renders
+      // immediately; the server's enriched payload will replace it.
+      quotedMessage: activeQuoteSnapshot ?? null,
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
@@ -220,7 +238,7 @@ function ChannelView({ page }: ChannelViewProps) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
-    handleSubmit(inputValue, attachment, quotedMessageId);
+    handleSubmit(inputValue, attachment, quotedMessageId, activeQuotedSnapshot);
     channelInputRef.current?.clear();
     setInputValue('');
     clearQuote();

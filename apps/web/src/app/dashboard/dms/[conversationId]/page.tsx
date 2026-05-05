@@ -24,6 +24,7 @@ import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply, CornerUpLeft } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
+import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -111,9 +112,14 @@ export default function InboxDMPage() {
   const [inputValue, setInputValue] = useState('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
-  // Active inline quote-reply target. Cleared on successful send or via the chip's X.
+  // Active inline quote-reply target. The snapshot is captured at quote-start time
+  // so the optimistic insert can render the embed immediately, before the server's
+  // enriched payload arrives.
   const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
-  const [quotedPreview, setQuotedPreview] = useState<{ authorName: string; snippet: string } | null>(null);
+  const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
+  const quotedPreview = activeQuotedSnapshot
+    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    : null;
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
   const isMobile = useMobile();
@@ -342,16 +348,26 @@ export default function InboxDMPage() {
   const handleStartQuote = useCallback((m: Message) => {
     if (m.id.startsWith('temp-')) return;
     const isOwn = m.senderId === user?.id;
-    const authorName = isOwn ? user?.name ?? 'You' : conversation?.otherUser?.displayName ?? conversation?.otherUser?.name ?? 'Member';
-    const snippet = m.content.length > 100 ? m.content.substring(0, 100) + '...' : m.content;
+    const authorName = isOwn
+      ? user?.name ?? 'You'
+      : conversation?.otherUser?.displayName ?? conversation?.otherUser?.name ?? 'Member';
+    const authorImage = isOwn ? null : conversation?.otherUser?.image ?? conversation?.otherUser?.avatarUrl ?? null;
     setQuotedMessageId(m.id);
-    setQuotedPreview({ authorName, snippet });
+    setActiveQuotedSnapshot({
+      id: m.id,
+      authorId: m.senderId,
+      authorName,
+      authorImage,
+      contentSnippet: buildThreadPreview(m.content),
+      createdAt: typeof m.createdAt === 'string' ? new Date(m.createdAt) : m.createdAt,
+      isActive: true,
+    });
     chatInputRef.current?.focus();
   }, [user, conversation]);
 
   const clearQuote = useCallback(() => {
     setQuotedMessageId(null);
-    setQuotedPreview(null);
+    setActiveQuotedSnapshot(null);
   }, []);
 
   const handleTopLevelSubmit = async ({
@@ -364,6 +380,7 @@ export default function InboxDMPage() {
     if (!user || !conversationId) return;
 
     const activeQuoteId = quotedMessageId;
+    const activeQuoteSnapshot = activeQuotedSnapshot;
     setInputValue('');
     clearQuote();
 
@@ -390,6 +407,9 @@ export default function InboxDMPage() {
       fileId: attachment?.id ?? null,
       attachmentMeta,
       quotedMessageId: activeQuoteId,
+      // Carry the snapshot through the optimistic phase so the embed renders
+      // immediately; the server's enriched payload will replace it.
+      quotedMessage: activeQuoteSnapshot ?? null,
     };
     setMessages((prev) => [...prev, optimistic]);
 
