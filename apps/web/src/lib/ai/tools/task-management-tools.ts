@@ -433,7 +433,9 @@ Agent Triggers:
           }
 
           let updateTitleDeferred: DeferredWorkflowTrigger | undefined;
-          const aiContextForTitle = await getAiContextWithActor(context as ToolExecutionContext);
+          const aiContextForTitle = trimmedTitle !== undefined
+            ? await getAiContextWithActor(context as ToolExecutionContext)
+            : null;
           try {
             resultTask = await db.transaction(async (tx) => {
               let updatedTask: typeof taskItems.$inferSelect = existingTask;
@@ -446,7 +448,7 @@ Agent Triggers:
               }
 
               // Sync title to the linked page (single source of truth).
-              if (trimmedTitle !== undefined) {
+              if (trimmedTitle !== undefined && aiContextForTitle) {
                 const [linkedPage] = await tx
                   .select({ revision: pages.revision })
                   .from(pages)
