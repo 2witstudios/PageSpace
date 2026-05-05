@@ -8,8 +8,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
-import { dmConversations, directMessages } from '@pagespace/db/schema/social';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
+import { dmConversations, directMessages, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
 export interface DmConversationParticipants {
@@ -157,20 +157,69 @@ async function findActiveMessage(
 }
 
 async function softDeleteMessage(messageId: string): Promise<number> {
-  const result = await db
-    .update(directMessages)
-    .set({
-      isActive: false,
-      deletedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(directMessages.id, messageId),
-        eq(directMessages.isActive, true)
+  // Soft-deleting a thread reply must decrement the parent's replyCount in the
+  // same transaction so the footer count never drifts above the real number of
+  // visible replies. GREATEST guards against a double soft-delete racing the
+  // counter into negative territory.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(directMessages)
+      .set({
+        isActive: false,
+        deletedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(directMessages.id, messageId),
+          eq(directMessages.isActive, true)
+        )
       )
-    )
-    .returning({ id: directMessages.id });
-  return result.length;
+      .returning({ id: directMessages.id, parentId: directMessages.parentId });
+
+    const row = result[0];
+    if (row?.parentId) {
+      await tx
+        .update(directMessages)
+        .set({
+          replyCount: sql`GREATEST(${directMessages.replyCount} - 1, 0)`,
+        })
+        .where(eq(directMessages.id, row.parentId));
+    }
+
+    return result.length;
+  });
+}
+
+async function restoreDmMessage(messageId: string): Promise<number> {
+  // Mirror of softDeleteMessage: flips isActive back to true and increments
+  // the parent's replyCount when the row is a thread reply.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(directMessages)
+      .set({
+        isActive: true,
+        deletedAt: null,
+      })
+      .where(
+        and(
+          eq(directMessages.id, messageId),
+          eq(directMessages.isActive, false)
+        )
+      )
+      .returning({ id: directMessages.id, parentId: directMessages.parentId });
+
+    const row = result[0];
+    if (row?.parentId) {
+      await tx
+        .update(directMessages)
+        .set({
+          replyCount: sql`${directMessages.replyCount} + 1`,
+        })
+        .where(eq(directMessages.id, row.parentId));
+    }
+
+    return result.length;
+  });
 }
 
 async function purgeInactiveMessages(olderThan: Date): Promise<number> {
@@ -308,6 +357,189 @@ async function updateConversationLastRead(
     .where(eq(dmConversations.id, input.conversationId));
 }
 
+// ---------------------------------------------------------------------------
+// Thread reply helpers
+// ---------------------------------------------------------------------------
+
+export interface InsertDmThreadReplyInput {
+  parentId: string;
+  conversationId: string;
+  senderId: string;
+  content: string;
+  fileId: string | null;
+  attachmentMeta: AttachmentMeta | null;
+  alsoSendToParent?: boolean;
+}
+
+export type InsertDmThreadReplyResult =
+  | {
+      kind: 'ok';
+      reply: DmMessageRow;
+      mirror: DmMessageRow | null;
+      rootId: string;
+      replyCount: number;
+      lastReplyAt: Date;
+    }
+  | { kind: 'parent_not_found' }
+  | { kind: 'parent_wrong_conversation' }
+  | { kind: 'parent_not_top_level' };
+
+async function insertDmThreadReply(
+  input: InsertDmThreadReplyInput
+): Promise<InsertDmThreadReplyResult> {
+  return db.transaction(async (tx) => {
+    const parent = await tx.query.directMessages.findFirst({
+      where: eq(directMessages.id, input.parentId),
+      columns: {
+        id: true,
+        conversationId: true,
+        parentId: true,
+        senderId: true,
+        isActive: true,
+      },
+    });
+
+    if (!parent || !parent.isActive) {
+      return { kind: 'parent_not_found' };
+    }
+    if (parent.conversationId !== input.conversationId) {
+      return { kind: 'parent_wrong_conversation' };
+    }
+    if (parent.parentId !== null) {
+      return { kind: 'parent_not_top_level' };
+    }
+
+    const [reply] = await tx
+      .insert(directMessages)
+      .values({
+        conversationId: input.conversationId,
+        senderId: input.senderId,
+        content: input.content,
+        fileId: input.fileId,
+        attachmentMeta: input.attachmentMeta,
+        parentId: input.parentId,
+      })
+      .returning();
+
+    const [updatedParent] = await tx
+      .update(directMessages)
+      .set({
+        replyCount: sql`${directMessages.replyCount} + 1`,
+        lastReplyAt: reply.createdAt,
+      })
+      .where(eq(directMessages.id, input.parentId))
+      .returning({
+        replyCount: directMessages.replyCount,
+        lastReplyAt: directMessages.lastReplyAt,
+      });
+
+    const followerRows =
+      parent.senderId === input.senderId
+        ? [{ rootMessageId: input.parentId, userId: input.senderId }]
+        : [
+            { rootMessageId: input.parentId, userId: parent.senderId },
+            { rootMessageId: input.parentId, userId: input.senderId },
+          ];
+
+    await tx
+      .insert(dmThreadFollowers)
+      .values(followerRows)
+      .onConflictDoNothing();
+
+    let mirror: DmMessageRow | null = null;
+    if (input.alsoSendToParent) {
+      const [mirrorRow] = await tx
+        .insert(directMessages)
+        .values({
+          conversationId: input.conversationId,
+          senderId: input.senderId,
+          content: input.content,
+          fileId: input.fileId,
+          attachmentMeta: input.attachmentMeta,
+          mirroredFromId: reply.id,
+        })
+        .returning();
+      mirror = mirrorRow;
+    }
+
+    return {
+      kind: 'ok',
+      reply,
+      mirror,
+      rootId: input.parentId,
+      replyCount: updatedParent.replyCount,
+      lastReplyAt: updatedParent.lastReplyAt!,
+    };
+  });
+}
+
+export interface ListDmThreadRepliesInput {
+  rootId: string;
+  limit: number;
+  // Composite cursor: only rows strictly newer than (createdAt, id) are returned.
+  after?: { createdAt: Date; id: string };
+}
+
+async function listDmThreadReplies(
+  input: ListDmThreadRepliesInput
+): Promise<DmMessageRow[]> {
+  const conditions = [
+    eq(directMessages.parentId, input.rootId),
+    eq(directMessages.isActive, true),
+  ];
+
+  if (input.after) {
+    conditions.push(
+      or(
+        gt(directMessages.createdAt, input.after.createdAt),
+        and(
+          eq(directMessages.createdAt, input.after.createdAt),
+          gt(directMessages.id, input.after.id)
+        )
+      )!
+    );
+  }
+
+  return db
+    .select()
+    .from(directMessages)
+    .where(and(...conditions))
+    .orderBy(asc(directMessages.createdAt), asc(directMessages.id))
+    .limit(input.limit);
+}
+
+async function addDmThreadFollower(
+  rootId: string,
+  userId: string
+): Promise<void> {
+  await db
+    .insert(dmThreadFollowers)
+    .values({ rootMessageId: rootId, userId })
+    .onConflictDoNothing();
+}
+
+async function removeDmThreadFollower(
+  rootId: string,
+  userId: string
+): Promise<void> {
+  await db
+    .delete(dmThreadFollowers)
+    .where(
+      and(
+        eq(dmThreadFollowers.rootMessageId, rootId),
+        eq(dmThreadFollowers.userId, userId)
+      )
+    );
+}
+
+async function listDmThreadFollowers(rootId: string): Promise<string[]> {
+  const rows = await db
+    .select({ userId: dmThreadFollowers.userId })
+    .from(dmThreadFollowers)
+    .where(eq(dmThreadFollowers.rootMessageId, rootId));
+  return rows.map((row) => row.userId);
+}
+
 export const dmMessageRepository = {
   findConversationForParticipant,
   validateAttachmentForDm,
@@ -315,9 +547,15 @@ export const dmMessageRepository = {
   updateConversationLastMessage,
   findActiveMessage,
   softDeleteMessage,
+  restoreDmMessage,
   purgeInactiveMessages,
   editActiveMessage,
   listActiveMessages,
   markActiveMessagesRead,
   updateConversationLastRead,
+  insertDmThreadReply,
+  listDmThreadReplies,
+  addDmThreadFollower,
+  removeDmThreadFollower,
+  listDmThreadFollowers,
 };
