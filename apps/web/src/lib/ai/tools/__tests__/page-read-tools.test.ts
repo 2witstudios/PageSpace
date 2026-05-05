@@ -471,9 +471,10 @@ describe('page-read-tools', () => {
           findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
         } as unknown as typeof mockDb.query.taskStatusConfigs;
 
-        // db.select().from().where().orderBy() for tasks
+        // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
         mockDb.select = vi.fn(() => ({
           from: vi.fn().mockReturnThis(),
+          innerJoin: vi.fn().mockReturnThis(),
           where: vi.fn().mockReturnThis(),
           orderBy: vi.fn().mockResolvedValue(
             opts.tasks.map((t, i) => ({

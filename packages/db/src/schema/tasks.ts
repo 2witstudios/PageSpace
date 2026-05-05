@@ -59,8 +59,8 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
 
 /**
  * Task Items - Individual tasks within a task list
- * For page-based task lists, each task has a linked document page (pageId)
- * For conversation-based task lists, description field is used instead
+ * Each task has a linked DOCUMENT page (pageId, NOT NULL) which owns the title.
+ * Read titles from the linked page; do not store them on task_items.
  *
  * Assignment (legacy single-assignee fields kept for backward compatibility):
  * - assigneeId: Human user assignment (references users.id) [DEPRECATED: use taskAssignees]
@@ -75,8 +75,7 @@ export const taskItems = pgTable('task_items', {
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   assigneeId: text('assigneeId').references(() => users.id, { onDelete: 'set null' }),
   assigneeAgentId: text('assigneeAgentId').references(() => pages.id, { onDelete: 'set null' }),
-  pageId: text('pageId').references(() => pages.id, { onDelete: 'cascade' }),
-  title: text('title').notNull(),
+  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
   description: text('description'),
   status: text('status').notNull().default('pending'),
   priority: text('priority', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),

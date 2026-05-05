@@ -45,7 +45,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
+  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description' },
   taskLists: { id: 'id', pageId: 'pageId' },
   taskStatusConfigs: { taskListId: 'taskListId' },
 }));
@@ -194,7 +194,6 @@ const createTaskFixture = (overrides: Partial<{
   assigneeId: overrides.assigneeId ?? 'user_123',
   assigneeAgentId: null,
   pageId: overrides.pageId ?? 'page_task',
-  title: overrides.title ?? 'Test Task',
   description: null,
   status: overrides.status ?? ('pending' as const),
   priority: overrides.priority ?? ('medium' as const),
@@ -207,7 +206,7 @@ const createTaskFixture = (overrides: Partial<{
   assignee: overrides.assignee ?? { id: 'user_123', name: 'Test User', image: null },
   assigneeAgent: null,
   user: { id: 'user_creator', name: 'Creator', image: null },
-  page: overrides.page ?? { id: 'page_task', title: 'Task Page', isTrashed: false },
+  page: overrides.page ?? { id: 'page_task', title: overrides.title ?? 'Test Task', isTrashed: false },
   taskList: overrides.taskList ?? { id: 'tasklist_1', pageId: 'page_tasklist', title: 'My Tasks' },
 });
 

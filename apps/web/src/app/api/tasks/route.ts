@@ -225,9 +225,9 @@ export async function GET(request: Request) {
     const filterConditions = [
       inArray(taskItems.taskListId, taskListIds),
       assigneeCondition,
-      // Exclude tasks whose linked page is trashed (pageId is null OR not in trashed list)
+      // Exclude tasks whose linked page is trashed
       trashedPageIds.length > 0
-        ? or(isNull(taskItems.pageId), not(inArray(taskItems.pageId, trashedPageIds)))
+        ? not(inArray(taskItems.pageId, trashedPageIds))
         : undefined,
     ].filter(Boolean);
 
@@ -245,13 +245,18 @@ export async function GET(request: Request) {
       endOfDay.setDate(endOfDay.getDate() + 1);
       filterConditions.push(lt(taskItems.createdAt, endOfDay));
     }
-    // Search filter (case-insensitive title/description)
+    // Search filter (case-insensitive title/description). Title lives on pages,
+    // so match it via a subquery against pages.title.
     if (params.search) {
       const escapedSearch = escapeLikePattern(params.search);
       const searchPattern = `%${escapedSearch}%`;
+      const titleMatchSubquery = db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(sql`${pages.title} ILIKE ${searchPattern} ESCAPE '\\'`);
       filterConditions.push(
         or(
-          sql`${taskItems.title} ILIKE ${searchPattern} ESCAPE '\\'`,
+          inArray(taskItems.pageId, titleMatchSubquery),
           sql`${taskItems.description} ILIKE ${searchPattern} ESCAPE '\\'`
         )
       );
@@ -373,6 +378,7 @@ export async function GET(request: Request) {
 
         return {
           ...task,
+          title: task.page?.title ?? '',
           driveId: pageInfo.driveId,
           taskListPageId: pageInfo.pageId,
           taskListPageTitle: pageInfo.taskListTitle,

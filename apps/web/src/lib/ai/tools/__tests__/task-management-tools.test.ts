@@ -176,6 +176,34 @@ describe('task-management-tools', () => {
       ).rejects.toThrow('Task not found');
     });
 
+    it('rejects empty/whitespace title on update', async () => {
+      mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+        id: 'task-1',
+        taskListId: 'list-1',
+        pageId: 'page-1',
+        page: { title: 'Existing' },
+      });
+      mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+        id: 'list-1',
+        pageId: 'tasklist-page-1',
+        userId: 'user-123',
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        taskManagementTools.update_task.execute!(
+          { taskId: 'task-1', title: '   ' },
+          context
+        )
+      ).rejects.toThrow('Title cannot be empty');
+    });
+
     it('throws error when task list not found', async () => {
       mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
         id: 'task-1',
