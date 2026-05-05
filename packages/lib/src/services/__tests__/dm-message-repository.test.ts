@@ -238,9 +238,19 @@ describe('dmMessageRepository lifecycle', () => {
     });
   });
 
+  // Helper for restore tests: stub the parent re-read inside the tx.
+  // restoreDmMessage uses `tx.select().from().where().for('update')`.
+  const stubRestoreParent = (parent: Record<string, unknown> | null) => {
+    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
+    const whereFn = vi.fn(() => ({ for: forFn }));
+    const fromFn = vi.fn(() => ({ where: whereFn }));
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
+    return { forFn };
+  };
+
   it('given_restoreOfThreadReply_incrementsParentReplyCount_whenParentStillActive', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ id: 'reply-1', parentId: 'parent-1' }]);
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: true });
+    stubRestoreParent({ id: 'parent-1', isActive: true });
 
     const count = await dmMessageRepository.restoreDmMessage('reply-1');
 
@@ -257,17 +267,31 @@ describe('dmMessageRepository lifecycle', () => {
     });
   });
 
-  it('given_restoreOfThreadReply_skipsParentBump_whenParentSoftDeleted', async () => {
+  it('given_restoreOfThreadReply_skipsParentBump_whenParentSoftDeleted_butStillReturns1', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ id: 'reply-1', parentId: 'parent-1' }]);
-    mockDirectMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: false });
+    stubRestoreParent({ id: 'parent-1', isActive: false });
+
+    const count = await dmMessageRepository.restoreDmMessage('reply-1');
+
+    assert({
+      given: 'a restore of a DM thread reply whose parent is itself soft-deleted',
+      should: 'flip isActive=true on the reply, skip the parent bump, AND still return 1',
+      actual: { count, updateCount: mockUpdateSet.mock.calls.length },
+      expected: { count: 1, updateCount: 1 },
+    });
+  });
+
+  it('given_restoreOfThreadReply_locksParentRow_FOR_UPDATE', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ id: 'reply-1', parentId: 'parent-1' }]);
+    const { forFn } = stubRestoreParent({ id: 'parent-1', isActive: true });
 
     await dmMessageRepository.restoreDmMessage('reply-1');
 
     assert({
-      given: 'a restore of a DM thread reply whose parent is itself soft-deleted',
-      should: 'flip isActive=true on the reply but skip the parent.replyCount bump',
-      actual: mockUpdateSet.mock.calls.length,
-      expected: 1,
+      given: 'a DM restore parent re-read inside the tx',
+      should: 'invoke .for("update") so a concurrent softDelete blocks until the restore commits',
+      actual: forFn.mock.calls[0]?.[0],
+      expected: 'update',
     });
   });
 

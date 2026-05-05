@@ -532,38 +532,64 @@ describe('channelMessageRepository.restoreChannelMessage', () => {
     });
   });
 
+  // Helper for restore tests: stub the parent re-read inside the tx.
+  // restoreChannelMessage uses `tx.select().from().where().for('update')` for
+  // the parent isActive check (mirrors the insert-side lock).
+  const stubParentSelectForUpdate = (parent: Record<string, unknown> | null) => {
+    const forFn = vi.fn().mockResolvedValue(parent ? [parent] : []);
+    const whereFn = vi.fn(() => ({ for: forFn }));
+    const fromFn = vi.fn(() => ({ where: whereFn }));
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as never);
+    return { forFn };
+  };
+
   it('increments the parent replyCount when the restored row is a thread reply AND the parent is still active', async () => {
     mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: true });
+    stubParentSelectForUpdate({ id: 'parent-1', isActive: true });
 
-    await channelMessageRepository.restoreChannelMessage('reply-1');
+    const count = await channelMessageRepository.restoreChannelMessage('reply-1');
 
     assert({
       given: 'a restore of a thread reply whose parent is still active',
-      should: 'run two updates — flip isActive=true, then increment parent.replyCount',
+      should: 'return 1 row restored AND run two updates (isActive flip + parent.replyCount bump)',
       actual: {
-        count: mockUpdateSet.mock.calls.length,
+        count,
+        updateCount: mockUpdateSet.mock.calls.length,
         secondHasReplyCount: 'replyCount' in (mockUpdateSet.mock.calls[1]?.[0] as Record<string, unknown> ?? {}),
       },
-      expected: { count: 2, secondHasReplyCount: true },
+      expected: { count: 1, updateCount: 2, secondHasReplyCount: true },
     });
   });
 
-  it('does NOT increment the parent counter when the parent has been soft-deleted in the meantime', async () => {
+  it('does NOT increment the parent counter when the parent has been soft-deleted in the meantime, but still returns 1 row restored', async () => {
     // Race scenario: reply was soft-deleted, parent was then soft-deleted, now
     // an admin restores the reply. Bumping a tombstoned parent's replyCount
     // would corrupt the counter the moment a future restore brings the parent
-    // back. Skip the bump.
+    // back. Skip the bump — but the reply IS restored, so return 1.
     mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
-    mockChannelMessagesFindFirst.mockResolvedValueOnce({ id: 'parent-1', isActive: false });
+    stubParentSelectForUpdate({ id: 'parent-1', isActive: false });
+
+    const count = await channelMessageRepository.restoreChannelMessage('reply-1');
+
+    assert({
+      given: 'a restore of a thread reply whose parent is itself soft-deleted',
+      should: 'flip isActive=true on the reply, skip the parent bump, AND still return 1',
+      actual: { count, updateCount: mockUpdateSet.mock.calls.length },
+      expected: { count: 1, updateCount: 1 },
+    });
+  });
+
+  it('locks the parent row for the restore tx (SELECT ... FOR UPDATE) so a concurrent soft-delete cannot race the bump', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ parentId: 'parent-1' }]);
+    const { forFn } = stubParentSelectForUpdate({ id: 'parent-1', isActive: true });
 
     await channelMessageRepository.restoreChannelMessage('reply-1');
 
     assert({
-      given: 'a restore of a thread reply whose parent is itself soft-deleted',
-      should: 'flip isActive=true on the reply but skip the parent.replyCount bump',
-      actual: mockUpdateSet.mock.calls.length,
-      expected: 1,
+      given: 'a restore parent re-read inside the tx',
+      should: 'invoke .for("update") so a concurrent softDelete blocks until the restore commits',
+      actual: forFn.mock.calls[0]?.[0],
+      expected: 'update',
     });
   });
 });

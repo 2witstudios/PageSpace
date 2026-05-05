@@ -193,7 +193,10 @@ async function softDeleteMessage(messageId: string): Promise<number> {
 async function restoreDmMessage(messageId: string): Promise<number> {
   // Mirror of softDeleteMessage. The parent counter is only bumped when the
   // parent itself is still active — restoring an orphaned reply whose parent
-  // was deleted in the meantime must NOT inflate a tombstone's count.
+  // was deleted in the meantime must NOT inflate a tombstone's count. The
+  // parent re-read uses SELECT ... FOR UPDATE so a concurrent
+  // softDeleteMessage(parentId) blocks until our bump commits — the race the
+  // insert-side lock prevents on the way in.
   return db.transaction(async (tx) => {
     const result = await tx
       .update(directMessages)
@@ -211,10 +214,11 @@ async function restoreDmMessage(messageId: string): Promise<number> {
 
     const row = result[0];
     if (row?.parentId) {
-      const parent = await tx.query.directMessages.findFirst({
-        where: eq(directMessages.id, row.parentId),
-        columns: { id: true, isActive: true },
-      });
+      const [parent] = await tx
+        .select({ id: directMessages.id, isActive: directMessages.isActive })
+        .from(directMessages)
+        .where(eq(directMessages.id, row.parentId))
+        .for('update');
       if (parent?.isActive) {
         await tx
           .update(directMessages)

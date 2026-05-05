@@ -214,6 +214,9 @@ async function restoreChannelMessage(messageId: string): Promise<number> {
   // Mirror of softDeleteChannelMessage. The parent counter is only bumped when
   // the parent itself is still active — restoring an orphaned reply whose
   // parent was deleted in the meantime must NOT inflate a tombstone's count.
+  // The parent re-read uses SELECT ... FOR UPDATE so a concurrent
+  // softDeleteChannelMessage(parentId) blocks until our bump commits — the
+  // race the insert-side lock prevents on the way in.
   return db.transaction(async (tx) => {
     const result = await tx
       .update(channelMessages)
@@ -228,10 +231,11 @@ async function restoreChannelMessage(messageId: string): Promise<number> {
 
     const row = result[0];
     if (row?.parentId) {
-      const parent = await tx.query.channelMessages.findFirst({
-        where: eq(channelMessages.id, row.parentId),
-        columns: { id: true, isActive: true },
-      });
+      const [parent] = await tx
+        .select({ id: channelMessages.id, isActive: channelMessages.isActive })
+        .from(channelMessages)
+        .where(eq(channelMessages.id, row.parentId))
+        .for('update');
       if (parent?.isActive) {
         await tx
           .update(channelMessages)
