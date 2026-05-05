@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+interface AssertParams {
+  given: string;
+  should: string;
+  actual: unknown;
+  expected: unknown;
+}
+
+const assert = ({ given, should, actual, expected }: AssertParams): void => {
+  const message = `Given ${given}, should ${should}`;
+  expect(actual, message).toEqual(expected);
+};
+
 const {
   mockUpdateSet,
   mockUpdateWhere,
@@ -12,6 +24,8 @@ const {
   mockInsertReturning,
   mockInsertOnConflictDoNothing,
   mockDirectMessagesFindFirst,
+  mockDirectMessagesFindMany,
+  mockReactionsFindFirst,
   mockSelectFrom,
 } = vi.hoisted(() => ({
   mockUpdateSet: vi.fn(),
@@ -25,6 +39,8 @@ const {
   mockInsertReturning: vi.fn(),
   mockInsertOnConflictDoNothing: vi.fn(),
   mockDirectMessagesFindFirst: vi.fn(),
+  mockDirectMessagesFindMany: vi.fn(),
+  mockReactionsFindFirst: vi.fn(),
   mockSelectFrom: vi.fn(),
 }));
 
@@ -34,7 +50,11 @@ vi.mock('@pagespace/db/db', () => ({
       dmConversations: { findFirst: vi.fn() },
       files: { findFirst: vi.fn() },
       fileConversations: { findFirst: vi.fn() },
-      directMessages: { findFirst: mockDirectMessagesFindFirst },
+      directMessages: {
+        findFirst: mockDirectMessagesFindFirst,
+        findMany: mockDirectMessagesFindMany,
+      },
+      dmMessageReactions: { findFirst: mockReactionsFindFirst },
     },
     insert: vi.fn(() => ({ values: mockInsertValues })),
     update: vi.fn(() => ({ set: mockUpdateSet })),
@@ -95,6 +115,12 @@ vi.mock('@pagespace/db/schema/social', () => ({
     rootMessageId: 'dm_thread_followers.rootMessageId',
     userId: 'dm_thread_followers.userId',
   },
+  dmMessageReactions: {
+    id: 'dm_message_reactions.id',
+    messageId: 'dm_message_reactions.messageId',
+    userId: 'dm_message_reactions.userId',
+    emoji: 'dm_message_reactions.emoji',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/storage', () => ({
@@ -109,21 +135,9 @@ vi.mock('@pagespace/db/schema/storage', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { directMessages, dmThreadFollowers } from '@pagespace/db/schema/social';
+import { directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { asc, eq, gt, isNotNull, isNull, lt } from '@pagespace/db/operators';
 import { dmMessageRepository } from '../dm-message-repository';
-
-// Riteway-style assert helper for the thread tests below.
-interface AssertParams {
-  given: string;
-  should: string;
-  actual: unknown;
-  expected: unknown;
-}
-const assert = ({ given, should, actual, expected }: AssertParams): void => {
-  const message = `Given ${given}, should ${should}`;
-  expect(actual, message).toEqual(expected);
-};
 
 describe('dmMessageRepository lifecycle', () => {
   beforeEach(() => {
@@ -543,15 +557,41 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Reactions parity (PR 2 of 5)
+// ---------------------------------------------------------------------------
+
+describe('dmMessageRepository.listActiveMessages [reactions parity]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDirectMessagesFindMany.mockResolvedValue([]);
+  });
+
+  it('joins the reactions relation with the user columns the broadcast payload needs', async () => {
+    await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
+
+    const call = mockDirectMessagesFindMany.mock.calls[0]?.[0] as {
+      with: { reactions: { with: { user: { columns: Record<string, true> } } } };
+    };
+    assert({
+      given: 'a DM list fetch',
+      should: 'request reactions with user.id and user.name so the DM page renders the same chip + tooltip shape as channels',
+      actual: {
+        hasReactions: !!call.with.reactions,
+        userColumns: call.with.reactions.with.user.columns,
+      },
+      expected: {
+        hasReactions: true,
+        userColumns: { id: true, name: true },
+      },
+    });
+  });
+});
+
 describe('dmMessageRepository.listActiveMessages [thread-isolation]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // db.select().from().where().orderBy().limit() chain
-    const limitMock = vi.fn().mockResolvedValue([]);
-    const orderByMock = vi.fn(() => ({ limit: limitMock }));
-    const whereMock = vi.fn(() => ({ orderBy: orderByMock }));
-    mockSelectFrom.mockReturnValue({ where: whereMock });
-    vi.mocked(db.select).mockReturnValue({ from: mockSelectFrom } as never);
+    mockDirectMessagesFindMany.mockResolvedValue([]);
   });
 
   it('filters out replies by requiring parentId IS NULL — thread replies must NEVER leak into the main DM stream', async () => {
@@ -696,6 +736,134 @@ describe('dmMessageRepository thread follower helpers', () => {
       should: 'return a flat string[] of user ids',
       actual: result,
       expected: ['user-a', 'user-b'],
+    });
+  });
+});
+
+describe('dmMessageRepository.addDmReaction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInsertReturning.mockResolvedValue([{ id: 'reaction-1' }]);
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning });
+    vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
+  });
+
+  it('writes (messageId, userId, emoji) verbatim and returns the inserted row', async () => {
+    mockInsertReturning.mockResolvedValueOnce([{ id: 'reaction-1' }]);
+
+    const result = await dmMessageRepository.addDmReaction({
+      messageId: 'msg-1',
+      userId: 'user-1',
+      emoji: '👍',
+    });
+
+    const values = mockInsertValues.mock.calls[0]?.[0] as Record<string, unknown>;
+    assert({
+      given: 'a DM reaction add request',
+      should: 'persist the triple (messageId, userId, emoji) and return the new row id (the unique index enforces no-dup at the DB layer)',
+      actual: { values, result },
+      expected: {
+        values: { messageId: 'msg-1', userId: 'user-1', emoji: '👍' },
+        result: { id: 'reaction-1' },
+      },
+    });
+  });
+});
+
+describe('dmMessageRepository.loadDmReactionWithUser', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fetches the reaction with the user relation so broadcasts include name+id without a re-fetch', async () => {
+    mockReactionsFindFirst.mockResolvedValueOnce({ id: 'reaction-1', user: { id: 'u', name: 'n' } });
+
+    await dmMessageRepository.loadDmReactionWithUser('reaction-1');
+
+    const call = mockReactionsFindFirst.mock.calls[0]?.[0] as {
+      with: { user: { columns: Record<string, true> } };
+    };
+    assert({
+      given: 'a freshly added DM reaction',
+      should: 'load the user relation (id, name) so the broadcast payload renders the actor without an extra round-trip',
+      actual: call.with.user.columns,
+      expected: { id: true, name: true },
+    });
+  });
+});
+
+describe('dmMessageRepository.removeDmReaction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDeleteReturning.mockResolvedValue([{ id: 'reaction-1' }]);
+    mockDeleteWhere.mockReturnValue({ returning: mockDeleteReturning });
+    vi.mocked(db.delete).mockReturnValue({ where: mockDeleteWhere } as never);
+  });
+
+  it('returns 0 when the delete matched no rows so the route can 404 on no-op', async () => {
+    mockDeleteReturning.mockResolvedValueOnce([]);
+
+    const removed = await dmMessageRepository.removeDmReaction({
+      messageId: 'msg-1',
+      userId: 'user-1',
+      emoji: '👍',
+    });
+
+    assert({
+      given: 'a delete that matched no rows (already removed or never existed)',
+      should: 'return 0 so the route can return 404 instead of pretending success',
+      actual: removed,
+      expected: 0,
+    });
+  });
+
+  it('scopes the delete to (messageId, userId, emoji) — never deletes another participant\'s reaction', async () => {
+    mockDeleteReturning.mockResolvedValueOnce([{ id: 'reaction-1' }]);
+
+    await dmMessageRepository.removeDmReaction({
+      messageId: 'msg-1',
+      userId: 'user-1',
+      emoji: '👍',
+    });
+
+    const eqCalls = vi.mocked(eq).mock.calls;
+    const hasMessageId = eqCalls.some(
+      ([field, value]) => field === dmMessageReactions.messageId && value === 'msg-1'
+    );
+    const hasUserId = eqCalls.some(
+      ([field, value]) => field === dmMessageReactions.userId && value === 'user-1'
+    );
+    const hasEmoji = eqCalls.some(
+      ([field, value]) => field === dmMessageReactions.emoji && value === '👍'
+    );
+    assert({
+      given: 'a reaction-removal request',
+      should: 'WHERE on all three of messageId, userId, and emoji so we only remove the requester\'s own reaction',
+      actual: { hasMessageId, hasUserId, hasEmoji },
+      expected: { hasMessageId: true, hasUserId: true, hasEmoji: true },
+    });
+  });
+});
+
+// Surface guard: keep the public API shape stable so consumers don't break.
+// Note: the route uses the existing `findActiveMessage` for the existence check
+// (active-only, by design — soft-deleted DMs cannot accept reactions).
+describe('dmMessageRepository surface', () => {
+  it('exports the reaction functions the DM routes need at parity with channels', () => {
+    const keys = Object.keys(dmMessageRepository);
+    assert({
+      given: 'the repository module',
+      should: 'expose addDmReaction, removeDmReaction, and loadDmReactionWithUser',
+      actual: {
+        addDmReaction: keys.includes('addDmReaction'),
+        removeDmReaction: keys.includes('removeDmReaction'),
+        loadDmReactionWithUser: keys.includes('loadDmReactionWithUser'),
+      },
+      expected: {
+        addDmReaction: true,
+        removeDmReaction: true,
+        loadDmReactionWithUser: true,
+      },
     });
   });
 });

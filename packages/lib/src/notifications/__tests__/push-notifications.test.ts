@@ -73,6 +73,7 @@ function setupUpdateChain() {
   return { setFn, whereFn };
 }
 
+
 function setupInsertChain() {
   const valuesFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as unknown as ReturnType<typeof db.insert>);
@@ -532,6 +533,9 @@ describe('APNs JWT token generation', () => {
     expect(result.errors.length).toBeGreaterThan(0);
   });
 
+  // DER trim branches need a stale JWT cache so crypto.createSign actually
+  // runs with our crafted DER signature. Earlier tests populate the
+  // module-level cache, so we advance system time past its expiry.
   it('handles DER signature with r > 32 bytes (trimming)', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
@@ -539,7 +543,6 @@ describe('APNs JWT token generation', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
-    // DER with 33-byte r (leading zero) and 32-byte s
     const rLen = 33;
     const sLen = 32;
     const derLen = 2 + rLen + 2 + sLen;
@@ -557,11 +560,149 @@ describe('APNs JWT token generation', () => {
       sign: vi.fn().mockReturnValue(der),
     };
     vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+    vi.mocked(global.fetch).mockResolvedValue({ ok: true, headers: new Headers() } as Response);
+    setupUpdateChain();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2099-01-01T00:00:00Z'));
+    try {
+      const result = await sendPushNotification('user-1', payload);
+      expect(mockSign.sign).toHaveBeenCalledTimes(1);
+      expect(result.sent + result.failed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('handles DER signature with s > 32 bytes (trimming)', async () => {
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
+
+    const rLen = 32;
+    const sLen = 33;
+    const derLen = 2 + rLen + 2 + sLen;
+    const der = Buffer.alloc(2 + derLen, 0);
+    der[0] = 0x30;
+    der[1] = derLen;
+    der[2] = 0x02;
+    der[3] = rLen;
+    der[4 + rLen] = 0x02;
+    der[4 + rLen + 1] = sLen;
+
+    const mockSign = {
+      update: vi.fn().mockReturnThis(),
+      end: vi.fn().mockReturnThis(),
+      sign: vi.fn().mockReturnValue(der),
+    };
+    vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+    vi.mocked(global.fetch).mockResolvedValue({ ok: true, headers: new Headers() } as Response);
+    setupUpdateChain();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2099-06-01T00:00:00Z'));
+    try {
+      const result = await sendPushNotification('user-1', payload);
+      expect(mockSign.sign).toHaveBeenCalledTimes(1);
+      expect(result.sent + result.failed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Silent (content-available) APNs payload
+// ---------------------------------------------------------------------------
+describe('silent push payload', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    global.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    delete process.env.APNS_TEAM_ID;
+    delete process.env.APNS_KEY_ID;
+    delete process.env.APNS_PRIVATE_KEY;
+    delete process.env.APNS_BUNDLE_ID;
+    delete process.env.NODE_ENV;
+  });
+
+  function primeApnsSign() {
+    const fakeSignature = Buffer.alloc(72, 0);
+    fakeSignature[0] = 0x30; fakeSignature[1] = 70;
+    fakeSignature[2] = 0x02; fakeSignature[3] = 32;
+    fakeSignature[36] = 0x02; fakeSignature[37] = 32;
+    const mockSign = {
+      update: vi.fn().mockReturnThis(),
+      end: vi.fn().mockReturnThis(),
+      sign: vi.fn().mockReturnValue(fakeSignature),
+    };
+    vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+  }
+
+  it('sends content-available silent payload with background priority', async () => {
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
+    primeApnsSign();
     vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
     setupUpdateChain();
 
-    const result = await sendPushNotification('user-1', payload);
-    // Should not throw - either sent or failed (depending on cache)
-    expect(result.sent + result.failed).toBe(1);
+    await sendPushNotification('user-1', { silent: true, badge: 3 });
+
+    const fetchMock = vi.mocked(global.fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0]!;
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers['apns-push-type']).toBe('background');
+    expect(headers['apns-priority']).toBe('5');
+
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.aps['content-available']).toBe(1);
+    expect(body.aps.badge).toBe(3);
+    expect(body.aps.alert).toBeUndefined();
+    expect(body.aps.sound).toBeUndefined();
+  });
+
+  it('sends silent payload without badge when badge is omitted', async () => {
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
+    primeApnsSign();
+    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
+    setupUpdateChain();
+
+    await sendPushNotification('user-1', { silent: true });
+
+    const fetchMock = vi.mocked(global.fetch);
+    const body = JSON.parse(((fetchMock.mock.calls[0]![1]) as RequestInit).body as string);
+    expect(body.aps['content-available']).toBe(1);
+    expect('badge' in body.aps).toBe(false);
+  });
+
+  it('uses production APNs host when NODE_ENV=production', async () => {
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    process.env.NODE_ENV = 'production';
+
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
+    primeApnsSign();
+    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
+    setupUpdateChain();
+
+    await sendPushNotification('user-1', payload);
+
+    const fetchMock = vi.mocked(global.fetch);
+    const [url] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain('api.push.apple.com');
+    expect(String(url)).not.toContain('sandbox');
   });
 });

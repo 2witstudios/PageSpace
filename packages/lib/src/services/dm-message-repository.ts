@@ -9,7 +9,7 @@
 
 import { db } from '@pagespace/db/db';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
-import { dmConversations, directMessages, dmThreadFollowers } from '@pagespace/db/schema/social';
+import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
 export interface DmConversationParticipants {
@@ -303,9 +303,7 @@ export interface ListActiveMessagesInput {
   before?: Date;
 }
 
-async function listActiveMessages(
-  input: ListActiveMessagesInput
-): Promise<DmMessageRow[]> {
+async function listActiveMessages(input: ListActiveMessagesInput) {
   const baseFilters = [
     eq(directMessages.conversationId, input.conversationId),
     eq(directMessages.isActive, true),
@@ -314,16 +312,22 @@ async function listActiveMessages(
     isNull(directMessages.parentId),
   ];
 
-  const where = input.before
-    ? and(...baseFilters, lt(directMessages.createdAt, input.before))
-    : and(...baseFilters);
+  if (input.before) {
+    baseFilters.push(lt(directMessages.createdAt, input.before));
+  }
 
-  return db
-    .select()
-    .from(directMessages)
-    .where(where)
-    .orderBy(desc(directMessages.createdAt))
-    .limit(input.limit);
+  return db.query.directMessages.findMany({
+    where: and(...baseFilters),
+    with: {
+      reactions: {
+        with: {
+          user: { columns: { id: true, name: true } },
+        },
+      },
+    },
+    orderBy: [desc(directMessages.createdAt)],
+    limit: input.limit,
+  });
 }
 
 export interface MarkMessagesReadInput {
@@ -559,6 +563,64 @@ async function listDmThreadFollowers(rootId: string): Promise<string[]> {
   return rows.map((row) => row.userId);
 }
 
+// ---------------------------------------------------------------------------
+// Reactions parity (PR 2 of 5)
+//
+// Mirrors the reaction surface from `channel-message-repository.ts` so the DM
+// route can reach feature parity. The reaction route uses the existing
+// `findActiveMessage` helper for the existence check so soft-deleted DMs
+// (isActive=false) cannot accept new reactions or have reactions removed —
+// keeping reaction visibility consistent with `listActiveMessages`.
+// ---------------------------------------------------------------------------
+
+export type DmReactionRow = InferSelectModel<typeof dmMessageReactions>;
+
+export interface DmReactionInput {
+  messageId: string;
+  userId: string;
+  emoji: string;
+}
+
+async function addDmReaction(input: DmReactionInput): Promise<DmReactionRow> {
+  const [row] = await db
+    .insert(dmMessageReactions)
+    .values({
+      messageId: input.messageId,
+      userId: input.userId,
+      emoji: input.emoji,
+    })
+    .returning();
+  return row;
+}
+
+async function loadDmReactionWithUser(reactionId: string) {
+  return db.query.dmMessageReactions.findFirst({
+    where: eq(dmMessageReactions.id, reactionId),
+    with: {
+      user: {
+        columns: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
+}
+
+async function removeDmReaction(input: DmReactionInput): Promise<number> {
+  const result = await db
+    .delete(dmMessageReactions)
+    .where(
+      and(
+        eq(dmMessageReactions.messageId, input.messageId),
+        eq(dmMessageReactions.userId, input.userId),
+        eq(dmMessageReactions.emoji, input.emoji)
+      )
+    )
+    .returning({ id: dmMessageReactions.id });
+  return result.length;
+}
+
 export const dmMessageRepository = {
   findConversationForParticipant,
   validateAttachmentForDm,
@@ -577,4 +639,7 @@ export const dmMessageRepository = {
   addDmThreadFollower,
   removeDmThreadFollower,
   listDmThreadFollowers,
+  addDmReaction,
+  loadDmReactionWithUser,
+  removeDmReaction,
 };
