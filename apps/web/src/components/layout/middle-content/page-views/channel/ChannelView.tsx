@@ -31,6 +31,7 @@ import {
   type AttachmentMeta,
   type FileRelation,
 } from '@/lib/attachment-utils';
+import { isFirstInGroup } from '@/lib/messages/grouping';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -391,7 +392,7 @@ function ChannelView({ page }: ChannelViewProps) {
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full">
         <div className="flex-grow overflow-hidden relative">
           <Conversation className="h-full">
-            <ConversationContent className="gap-4 max-w-4xl mx-auto p-4">
+            <ConversationContent className="max-w-4xl mx-auto p-4">
                     {hasMore && (
                       <div className="flex justify-center py-2">
                         <button
@@ -403,7 +404,7 @@ function ChannelView({ page }: ChannelViewProps) {
                         </button>
                       </div>
                     )}
-                    {messages.map((m) => {
+                    {messages.map((m, i) => {
                         const isAi = !!m.aiMeta;
                         const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;
                         const aiLabel = isAi
@@ -415,54 +416,79 @@ function ChannelView({ page }: ChannelViewProps) {
                           ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]
                           : m.user?.name?.[0];
                         const isOwnMessage = !isAi && m.userId === user?.id;
+                        const authorKey = isAi ? `ai:${m.aiMeta!.senderName}` : m.userId ?? '';
+                        const previous = messages[i - 1];
+                        const isFirst = isFirstInGroup(
+                          { authorKey, createdAt: m.createdAt },
+                          previous
+                            ? {
+                                authorKey: previous.aiMeta
+                                  ? `ai:${previous.aiMeta.senderName}`
+                                  : previous.userId ?? '',
+                                createdAt: previous.createdAt,
+                              }
+                            : undefined,
+                        );
+                        const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
+                        const showMenu = isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id;
                         return (
-                        <div key={m.id} className="flex items-start gap-4">
-                            <Avatar className="shrink-0">
-                                {!isAi && <AvatarImage src={m.user?.image || ''} />}
-                                <AvatarFallback>{avatarFallback}</AvatarFallback>
-                            </Avatar>
-                            <div className="flex flex-col min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-semibold text-sm">{displayName}</span>
-                                    {aiLabel && (
-                                      <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">
-                                        {aiLabel}
+                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                            {isFirst ? (
+                              <Avatar className="shrink-0">
+                                  {!isAi && <AvatarImage src={m.user?.image || ''} />}
+                                  <AvatarFallback>{avatarFallback}</AvatarFallback>
+                              </Avatar>
+                            ) : (
+                              <div className="size-8 shrink-0 relative" aria-hidden>
+                                <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
+                                  {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                            )}
+                            <div className="flex flex-col min-w-0 flex-1 relative">
+                                {isFirst && (
+                                  <div className="flex items-center gap-2">
+                                      <span className="font-semibold text-sm">{displayName}</span>
+                                      {aiLabel && (
+                                        <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">
+                                          {aiLabel}
+                                        </span>
+                                      )}
+                                      <span className="text-xs text-muted-foreground">
+                                          {new Date(m.createdAt).toLocaleTimeString()}
                                       </span>
-                                    )}
-                                    <span className="text-xs text-muted-foreground">
-                                        {new Date(m.createdAt).toLocaleTimeString()}
-                                    </span>
-                                    {m.editedAt && (
-                                      <span className="text-xs text-muted-foreground italic">(Edited)</span>
-                                    )}
-                                    {isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id && (
-                                      <DropdownMenu>
-                                        <DropdownMenuTrigger asChild>
-                                          <button
-                                            aria-label="Message options"
-                                            className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                            type="button"
-                                          >
-                                            <MoreHorizontal size={14} aria-hidden />
-                                          </button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end">
-                                          <DropdownMenuItem
-                                            onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                          >
-                                            <Pencil className="mr-2 h-4 w-4" /> Edit
-                                          </DropdownMenuItem>
-                                          <DropdownMenuSeparator />
-                                          <DropdownMenuItem
-                                            onClick={() => handleDeleteMessage(m.id)}
-                                            className="text-destructive focus:text-destructive"
-                                          >
-                                            <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                          </DropdownMenuItem>
-                                        </DropdownMenuContent>
-                                      </DropdownMenu>
-                                    )}
-                                </div>
+                                      {m.editedAt && (
+                                        <span className="text-xs text-muted-foreground italic">(Edited)</span>
+                                      )}
+                                      {showMenu && (
+                                        <DropdownMenu>
+                                          <DropdownMenuTrigger asChild>
+                                            <button
+                                              aria-label="Message options"
+                                              className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                              type="button"
+                                            >
+                                              <MoreHorizontal size={14} aria-hidden />
+                                            </button>
+                                          </DropdownMenuTrigger>
+                                          <DropdownMenuContent align="end">
+                                            <DropdownMenuItem
+                                              onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                            >
+                                              <Pencil className="mr-2 h-4 w-4" /> Edit
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem
+                                              onClick={() => handleDeleteMessage(m.id)}
+                                              className="text-destructive focus:text-destructive"
+                                            >
+                                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                            </DropdownMenuItem>
+                                          </DropdownMenuContent>
+                                        </DropdownMenu>
+                                      )}
+                                  </div>
+                                )}
                                 {editingMessageId === m.id ? (
                                   <div className="mt-1 flex flex-col gap-2">
                                     <textarea
@@ -497,16 +523,49 @@ function ChannelView({ page }: ChannelViewProps) {
                                       <span className="opacity-60">Enter to save · Esc to cancel</span>
                                     </div>
                                   </div>
-                                ) : m.content ? (
-                                  <div className="prose prose-sm dark:prose-invert max-w-none">
-                                    <StreamingMarkdown
-                                      content={m.content}
-                                      isStreaming={false}
-                                    />
-                                  </div>
-                                ) : null}
+                                ) : (
+                                  <>
+                                    {m.content && (
+                                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                                        <StreamingMarkdown
+                                          content={m.content}
+                                          isStreaming={false}
+                                        />
+                                      </div>
+                                    )}
+                                    {!isFirst && m.editedAt && (
+                                      <span className="text-xs text-muted-foreground italic">(Edited)</span>
+                                    )}
+                                  </>
+                                )}
                                 <MessageAttachment message={m} />
-                                {/* Reactions */}
+                                {!isFirst && showMenu && (
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <button
+                                        aria-label="Message options"
+                                        className="absolute top-0 right-0 p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                        type="button"
+                                      >
+                                        <MoreHorizontal size={14} aria-hidden />
+                                      </button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem
+                                        onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                      >
+                                        <Pencil className="mr-2 h-4 w-4" /> Edit
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onClick={() => handleDeleteMessage(m.id)}
+                                        className="text-destructive focus:text-destructive"
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                )}
                                 {user && !m.id.startsWith('temp-') && (
                                   <MessageReactions
                                     reactions={m.reactions || []}

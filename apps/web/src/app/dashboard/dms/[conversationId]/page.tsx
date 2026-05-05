@@ -28,6 +28,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { isFirstInGroup } from '@/lib/messages/grouping';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -369,70 +370,87 @@ export default function InboxDMPage() {
       {/* Messages */}
       <div className="flex-grow overflow-hidden relative">
         <Conversation className="h-full">
-          <ConversationContent className="gap-4 max-w-4xl mx-auto p-4">
-            {messages.map((message) => {
+          <ConversationContent className="max-w-4xl mx-auto p-4">
+            {messages.map((message, i) => {
               const isOwnMessage = message.senderId === user?.id;
               const senderName = isOwnMessage ? 'You' : displayName;
               const senderAvatar = isOwnMessage ? user?.name : displayName;
+              const previous = messages[i - 1];
+              const isFirst = isFirstInGroup(
+                { authorKey: message.senderId, createdAt: message.createdAt },
+                previous ? { authorKey: previous.senderId, createdAt: previous.createdAt } : undefined,
+              );
+              const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
+              const showMenu = isOwnMessage && editingMessageId !== message.id;
 
               return (
-                <div key={message.id} className="flex items-start gap-4">
-                  <Avatar className="h-10 w-10 flex-shrink-0">
-                    {isOwnMessage ? (
-                      <AvatarFallback className="bg-primary text-primary-foreground">
-                        {senderAvatar?.charAt(0).toUpperCase()}
-                      </AvatarFallback>
-                    ) : (
-                      <>
-                        <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
-                        <AvatarFallback>{senderAvatar?.charAt(0).toUpperCase()}</AvatarFallback>
-                      </>
-                    )}
-                  </Avatar>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-sm">{senderName}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(message.createdAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                <div key={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                  {isFirst ? (
+                    <Avatar className="h-10 w-10 flex-shrink-0">
+                      {isOwnMessage ? (
+                        <AvatarFallback className="bg-primary text-primary-foreground">
+                          {senderAvatar?.charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      ) : (
+                        <>
+                          <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
+                          <AvatarFallback>{senderAvatar?.charAt(0).toUpperCase()}</AvatarFallback>
+                        </>
+                      )}
+                    </Avatar>
+                  ) : (
+                    <div className="h-10 w-10 flex-shrink-0 relative" aria-hidden>
+                      <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
+                        {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
-                      {message.isEdited && (
-                        <span className="text-xs text-muted-foreground italic">(edited)</span>
-                      )}
-                      {message.isRead && isOwnMessage && (
-                        <span className="text-xs text-muted-foreground">Read</span>
-                      )}
-                      {isOwnMessage && editingMessageId !== message.id && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              aria-label="Message options"
-                              className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                              type="button"
-                            >
-                              <MoreHorizontal size={14} aria-hidden />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                            >
-                              <Pencil className="mr-2 h-4 w-4" /> Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteMessage(message.id)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" /> Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
                     </div>
+                  )}
+
+                  <div className="flex-1 min-w-0 relative">
+                    {isFirst && (
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-sm">{senderName}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(message.createdAt).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                        {message.isEdited && (
+                          <span className="text-xs text-muted-foreground italic">(edited)</span>
+                        )}
+                        {message.isRead && isOwnMessage && (
+                          <span className="text-xs text-muted-foreground">Read</span>
+                        )}
+                        {showMenu && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                aria-label="Message options"
+                                className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                                type="button"
+                              >
+                                <MoreHorizontal size={14} aria-hidden />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteMessage(message.id)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" /> Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </div>
+                    )}
 
                     {editingMessageId === message.id ? (
                       <div className="mt-1 flex flex-col gap-2">
@@ -480,7 +498,44 @@ export default function InboxDMPage() {
                           </div>
                         )}
                         <MessageAttachment message={message} />
+                        {!isFirst && (
+                          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                            {message.isEdited && (
+                              <span className="italic">(edited)</span>
+                            )}
+                            {message.isRead && isOwnMessage && (
+                              <span>Read</span>
+                            )}
+                          </div>
+                        )}
                       </div>
+                    )}
+                    {!isFirst && showMenu && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            aria-label="Message options"
+                            className="absolute top-0 right-0 p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            type="button"
+                          >
+                            <MoreHorizontal size={14} aria-hidden />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" /> Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => handleDeleteMessage(message.id)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     )}
                     {user && !message.id.startsWith('temp-') && (
                       <MessageReactions
