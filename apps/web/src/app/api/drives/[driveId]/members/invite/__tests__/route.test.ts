@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -156,7 +156,9 @@ const userIdBody = {
 };
 
 describe('POST /api/drives/[driveId]/members/invite', () => {
-  afterAll(() => {
+  afterEach(() => {
+    // Restore env per-test so a test that deletes WEB_APP_URL/NEXT_PUBLIC_APP_URL
+    // doesn't poison subsequent tests in this file.
     process.env = { ...ORIGINAL_ENV };
   });
 
@@ -341,16 +343,26 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         acceptedAt: new Date(),
       } as never);
 
-      await POST(
+      const response = await POST(
         buildPost(mockDriveId, { ...userIdBody, role: 'ADMIN' }),
         createContext(mockDriveId)
       );
+      const json = await response.json();
 
+      expect(response.status).toBe(200);
+      expect(json.kind).toBe('added');
+      expect(json.memberId).toBe('mem_existing');
       expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith(
         'mem_existing',
         'ADMIN',
         null
       );
+    });
+
+    it('does not call findUserIdByEmail on the userId path (paths are disjoint)', async () => {
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      expect(driveInviteRepository.findUserIdByEmail).not.toHaveBeenCalled();
+      expect(driveInviteRepository.findActivePendingMemberByEmail).not.toHaveBeenCalled();
     });
   });
 
@@ -412,7 +424,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
     });
 
-    it('routes unverified existing user (orphan) through invitation flow, not auto-accept', async () => {
+    it('routes unverified existing user (emailVerified: null) through invitation flow, not auto-accept', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
         id: 'orphan_user',
         emailVerified: null,
@@ -427,8 +439,37 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(json.kind).toBe('invited');
-      expect(createMagicLinkToken).toHaveBeenCalled();
-      expect(sendPendingDriveInvitationEmail).toHaveBeenCalled();
+      expect(createMagicLinkToken).toHaveBeenCalledWith({
+        email: 'orphan@example.com',
+        expiryMinutes: 60 * 24 * 7,
+      });
+      expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientEmail: 'orphan@example.com' })
+      );
+    });
+
+    it('returns 409 when email maps to a verified user already accepted in the drive', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
+        id: 'already_member',
+        emailVerified: new Date(),
+        suspendedAt: null,
+      } as never);
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'mem_already_accepted',
+        userId: 'already_member',
+        acceptedAt: new Date('2026-01-01'),
+      } as never);
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'existing@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      const json = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(json.existingMemberId).toBe('mem_already_accepted');
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      expect(driveInviteRepository.updateDriveMemberRole).not.toHaveBeenCalled();
     });
 
     it('returns 409 with existingMemberId when active pending row exists', async () => {
@@ -572,9 +613,14 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
   describe('rate limiting', () => {
     it('returns 429 with Retry-After: 900 when global per-email limit exceeded', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
-      vi.mocked(checkDistributedRateLimit)
-        .mockResolvedValueOnce({ allowed: true }) // pair-scoped passes
-        .mockResolvedValueOnce({ allowed: false, retryAfter: 900 }); // global blocks
+      // Dispatch by key prefix instead of call order so the test doesn't break
+      // if the route reorders its rate-limit calls.
+      vi.mocked(checkDistributedRateLimit).mockImplementation(async (key) => {
+        if (key.startsWith('drive_invite:email:')) {
+          return { allowed: false, retryAfter: 900 };
+        }
+        return { allowed: true };
+      });
 
       const response = await POST(
         buildPost(mockDriveId, { email: 'spam@example.com', role: 'MEMBER', permissions: [] }),
@@ -585,9 +631,11 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
 
     it('returns 429 with Retry-After: 900 when (driveId, email) pair limit exceeded', async () => {
-      vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({
-        allowed: false,
-        retryAfter: 900,
+      vi.mocked(checkDistributedRateLimit).mockImplementation(async (key) => {
+        if (key.startsWith('drive_invite:drive:')) {
+          return { allowed: false, retryAfter: 900 };
+        }
+        return { allowed: true };
       });
 
       const response = await POST(
@@ -678,9 +726,11 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         acceptedAt: new Date(),
       } as never);
 
-      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
 
+      expect(response.status).toBe(200);
       expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEventToRecipients).not.toHaveBeenCalled();
     });
 
     it('sends in-app drive notification on fresh accepted join', async () => {
