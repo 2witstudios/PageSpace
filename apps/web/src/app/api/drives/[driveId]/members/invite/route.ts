@@ -14,10 +14,7 @@ import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activ
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import {
-  createMagicLinkToken,
-  INVITATION_LINK_EXPIRY_MINUTES,
-} from '@pagespace/lib/auth/magic-link-service';
+import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import {
   checkDistributedRateLimit,
@@ -336,7 +333,12 @@ async function handleEmailPath(args: {
     );
   }
 
-  const pendingForEmail = await driveInviteRepository.findActivePendingMemberByEmail(driveId, email);
+  const now = new Date();
+  const pendingForEmail = await driveInviteRepository.findActivePendingInviteByDriveAndEmail(
+    driveId,
+    email,
+    now,
+  );
   if (pendingForEmail) {
     return NextResponse.json(
       { error: 'An invitation is already pending for this email.', existingMemberId: pendingForEmail.id },
@@ -392,7 +394,8 @@ async function handleEmailPath(args: {
   }
 
   // Email maps to no user OR an unverified existing user (orphan from a prior
-  // revoked invite). Both paths route through the invitation flow.
+  // revoked invite). Both paths route through the consent-screen invitation
+  // flow — no users row is created at invite-send time.
   const appUrl = resolveAppUrl();
   if (!appUrl) {
     loggers.api.error(
@@ -404,68 +407,72 @@ async function handleEmailPath(args: {
     );
   }
 
-  const tokenResult = await createMagicLinkToken({
-    email,
-    expiryMinutes: INVITATION_LINK_EXPIRY_MINUTES,
-  });
+  const { token, tokenHash, expiresAt } = createInviteToken({ now });
 
-  if (!tokenResult.ok) {
-    if (tokenResult.error.code === 'USER_SUSPENDED') {
-      return NextResponse.json(
-        { error: 'This account is suspended and cannot be invited.' },
-        { status: 403 }
-      );
-    }
-    if (tokenResult.error.code === 'VALIDATION_FAILED') {
-      return NextResponse.json(
-        { error: tokenResult.error.message },
-        { status: 400 }
-      );
-    }
-    loggers.api.error('Failed to create magic link token for drive invite', undefined, {
-      code: tokenResult.error.code,
+  let pendingInvite: { id: string };
+  try {
+    pendingInvite = await driveInviteRepository.createPendingInvite({
+      tokenHash,
+      email,
+      driveId,
+      role,
+      invitedBy: inviterUserId,
+      expiresAt,
+      now,
     });
+  } catch (insertError) {
+    // The active-pending pre-check above filters out unexpired-unconsumed rows,
+    // and createPendingInvite sweeps expired-unconsumed rows for the same
+    // (driveId, email) pair inside its transaction. The only path to a unique
+    // violation here is a concurrent re-invite race — surface as 409.
+    const message = insertError instanceof Error ? insertError.message : String(insertError);
+    const isUniqueViolation =
+      message.includes('pending_invites_active_drive_email_idx') ||
+      message.includes('pending_invites_token_hash_unique') ||
+      message.includes('duplicate key');
+    if (isUniqueViolation) {
+      return NextResponse.json(
+        { error: 'An invitation is already pending for this email.' },
+        { status: 409 }
+      );
+    }
+    loggers.api.error(
+      'Failed to persist pending invite',
+      insertError instanceof Error ? insertError : new Error(String(insertError)),
+      { driveId }
+    );
     return NextResponse.json({ error: 'Failed to add member' }, { status: 500 });
   }
 
-  const newPendingUserId = tokenResult.data.userId;
-  const pendingMember = await driveInviteRepository.createDriveMember({
-    driveId,
-    userId: newPendingUserId,
-    role,
-    customRoleId: customRoleId ?? null,
-    invitedBy: inviterUserId,
-    acceptedAt: null,
-  });
-
   const inviter = await driveInviteRepository.findInviterDisplay(inviterUserId);
-  // Magic-link tokens are CUID2-formatted (URL-safe alphanumeric); the
-  // encodeURIComponent call is defensive belt-and-suspenders, not required.
-  const magicLinkUrl = `${appUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(tokenResult.data.token)}`;
+  // ps_invite_* tokens are URL-safe (cuid2 alnum); encodeURIComponent is
+  // defensive belt-and-suspenders.
+  const inviteUrl = `${appUrl}/invite/${encodeURIComponent(token)}`;
 
-  // If the email send fails, we must roll back the pending row — leaving an
-  // orphaned drive_members row without a sent invite would block re-invites
-  // (the next attempt would 409 on findActivePendingMemberByEmail).
+  // If the email send fails, we must roll back the pending_invites row — an
+  // orphaned row without a sent invite would block legitimate re-invites
+  // (the partial unique index covers consumedAt IS NULL regardless of
+  // expiresAt).
   try {
     await sendPendingDriveInvitationEmail({
       recipientEmail: email,
       inviterName: inviter?.name ?? 'A teammate',
       driveName: drive.name,
-      magicLinkUrl,
+      magicLinkUrl: inviteUrl,
     });
   } catch (emailError) {
     loggers.api.error(
-      'Failed to send pending drive invitation email; rolling back pending member row',
+      'Failed to send pending drive invitation email; rolling back pending invite row',
       emailError instanceof Error ? emailError : new Error(String(emailError)),
       { driveId, recipientEmail: email }
     );
     try {
-      await driveInviteRepository.deleteDriveMemberById(pendingMember.id);
+      await driveInviteRepository.deletePendingInvite(pendingInvite.id);
     } catch (rollbackError) {
       loggers.api.error(
-        'Rollback of pending drive_members row failed after email send failure',
+        'Rollback of pending_invites row failed after email send failure',
         rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)),
-        { memberId: pendingMember.id, driveId }
+        { inviteId: pendingInvite.id, driveId }
       );
     }
     return NextResponse.json(
@@ -480,19 +487,10 @@ async function handleEmailPath(args: {
     pending: true,
   });
 
-  const actorInfo = await getActorInfo(inviterUserId);
-  logMemberActivity(
-    inviterUserId,
-    'member_add',
-    {
-      driveId,
-      driveName: drive.name,
-      targetUserId: newPendingUserId,
-      targetUserEmail: email,
-      role,
-    },
-    actorInfo
-  );
+  // Pending invites have no targetUserId — the audit event captures this
+  // event keyed on email below. logMemberActivity is intentionally skipped
+  // on this path (its targetUserId param would have to be a synthetic
+  // placeholder, which historically caused PII-aliasing bugs).
 
   auditRequest(request, {
     eventType: 'authz.permission.granted',
@@ -504,7 +502,7 @@ async function handleEmailPath(args: {
 
   return NextResponse.json({
     kind: 'invited',
-    memberId: pendingMember.id,
+    memberId: pendingInvite.id,
     email,
     message: `Invitation sent to ${email}`,
   });
