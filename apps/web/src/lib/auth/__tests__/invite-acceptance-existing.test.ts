@@ -3,11 +3,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   driveInviteRepository: {
     findPendingInviteByTokenHash: vi.fn(),
-    markInviteConsumed: vi.fn(),
-    createDriveMember: vi.fn(),
-    findUserVerificationStatusById: vi.fn(),
+    consumeInviteAndCreateMembership: vi.fn(),
     findExistingMember: vi.fn(),
-    deleteDriveMemberById: vi.fn(),
   },
 }));
 
@@ -31,20 +28,10 @@ const baseInvite = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(driveInviteRepository.markInviteConsumed).mockResolvedValue(true);
   vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
-  vi.mocked(driveInviteRepository.deleteDriveMemberById).mockResolvedValue(undefined);
-  vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
-    id: 'mem_new',
-    driveId: 'drive_1',
-    userId: 'user_jane',
-    role: 'MEMBER',
-    customRoleId: null,
-    invitedBy: 'user_alice',
-    invitedAt: NOW,
-    acceptedAt: NOW,
-    lastAccessedAt: null,
-  } as never);
+  vi.mocked(driveInviteRepository.consumeInviteAndCreateMembership).mockResolvedValue({
+    memberId: 'mem_new',
+  });
 });
 
 describe('acceptInviteForExistingUser', () => {
@@ -57,8 +44,7 @@ describe('acceptInviteForExistingUser', () => {
       now: NOW,
     });
     expect(result).toEqual({ ok: false, error: 'EMAIL_MISMATCH' });
-    expect(driveInviteRepository.markInviteConsumed).not.toHaveBeenCalled();
-    expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+    expect(driveInviteRepository.consumeInviteAndCreateMembership).not.toHaveBeenCalled();
   });
 
   it('returns ALREADY_MEMBER when the user is already an accepted member of the drive', async () => {
@@ -74,11 +60,10 @@ describe('acceptInviteForExistingUser', () => {
       now: NOW,
     });
     expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER' });
-    expect(driveInviteRepository.markInviteConsumed).not.toHaveBeenCalled();
-    expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+    expect(driveInviteRepository.consumeInviteAndCreateMembership).not.toHaveBeenCalled();
   });
 
-  it('consumes the invite and inserts driveMembers with acceptedAt=now on the happy path', async () => {
+  it('consumes the invite and inserts driveMembers transactionally on the happy path', async () => {
     vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
     const result = await acceptInviteForExistingUser({
       token: 'ps_invite_x',
@@ -90,10 +75,18 @@ describe('acceptInviteForExistingUser', () => {
       ok: true,
       data: { driveId: 'drive_1', driveName: 'Acme', memberId: 'mem_new' },
     });
-    expect(driveInviteRepository.markInviteConsumed).toHaveBeenCalledWith('inv_1');
+    expect(driveInviteRepository.consumeInviteAndCreateMembership).toHaveBeenCalledWith({
+      inviteId: 'inv_1',
+      legacyMemberId: null,
+      driveId: 'drive_1',
+      userId: 'user_jane',
+      role: 'MEMBER',
+      invitedBy: 'user_alice',
+      acceptedAt: NOW,
+    });
   });
 
-  it('deletes a legacy pending drive_members row (acceptedAt=null) before inserting the fresh accepted membership', async () => {
+  it('passes legacy pending drive_members id (acceptedAt=null) so the helper deletes it inside the transaction', async () => {
     vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
     vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
       id: 'mem_legacy_pending',
@@ -108,10 +101,14 @@ describe('acceptInviteForExistingUser', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(driveInviteRepository.deleteDriveMemberById).toHaveBeenCalledWith('mem_legacy_pending');
-    expect(driveInviteRepository.markInviteConsumed).toHaveBeenCalledWith('inv_1');
-    expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
-      expect.objectContaining({ driveId: 'drive_1', userId: 'user_jane', acceptedAt: NOW })
+    expect(driveInviteRepository.consumeInviteAndCreateMembership).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inviteId: 'inv_1',
+        legacyMemberId: 'mem_legacy_pending',
+        driveId: 'drive_1',
+        userId: 'user_jane',
+        acceptedAt: NOW,
+      })
     );
   });
 

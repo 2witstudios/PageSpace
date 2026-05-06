@@ -65,21 +65,20 @@ export const acceptInviteForNewUser = async ({
     return { ok: false, error: 'EMAIL_MISMATCH' };
   }
 
-  const consumed = await driveInviteRepository.markInviteConsumed(invite.id);
-  if (!consumed) return { ok: false, error: 'TOKEN_CONSUMED' };
-
-  const member = await driveInviteRepository.createDriveMember({
+  const result = await driveInviteRepository.consumeInviteAndCreateMembership({
+    inviteId: invite.id,
+    legacyMemberId: null,
     driveId: invite.driveId,
     userId,
     role: invite.role,
-    customRoleId: null,
     invitedBy: invite.invitedBy,
     acceptedAt: now,
   });
+  if ('reason' in result) return { ok: false, error: result.reason };
 
   return {
     ok: true,
-    data: { driveId: invite.driveId, driveName: invite.driveName, memberId: member.id },
+    data: { driveId: invite.driveId, driveName: invite.driveName, memberId: result.memberId },
   };
 };
 
@@ -114,33 +113,28 @@ export const acceptInviteForExistingUser = async ({
   }
 
   const existing = await driveInviteRepository.findExistingMember(invite.driveId, userId);
-  if (existing) {
-    if (existing.acceptedAt !== null) {
-      return { ok: false, error: 'ALREADY_MEMBER' };
-    }
-    // Legacy pending row from the pre-cutover model (drive_members keyed on
-    // userId with acceptedAt = null). Task 12's data migration deletes these,
-    // but during the deploy window — or if a user was missed — we must clean
-    // up the ghost row before inserting the fresh accepted membership;
-    // otherwise the unique (driveId, userId) constraint fires after the
-    // invite is already consumed and the user is stuck.
-    await driveInviteRepository.deleteDriveMemberById(existing.id);
+  if (existing && existing.acceptedAt !== null) {
+    return { ok: false, error: 'ALREADY_MEMBER' };
   }
+  // existing && existing.acceptedAt === null means there's a legacy pending
+  // row from the pre-cutover model (drive_members keyed on userId with
+  // acceptedAt = null). Task 12's data migration wipes these, but we still
+  // delete it inside the same transaction below so the unique
+  // (driveId, userId) constraint cannot fire on the fresh insert.
 
-  const consumed = await driveInviteRepository.markInviteConsumed(invite.id);
-  if (!consumed) return { ok: false, error: 'TOKEN_CONSUMED' };
-
-  const member = await driveInviteRepository.createDriveMember({
+  const result = await driveInviteRepository.consumeInviteAndCreateMembership({
+    inviteId: invite.id,
+    legacyMemberId: existing && existing.acceptedAt === null ? existing.id : null,
     driveId: invite.driveId,
     userId,
     role: invite.role,
-    customRoleId: null,
     invitedBy: invite.invitedBy,
     acceptedAt: now,
   });
+  if ('reason' in result) return { ok: false, error: result.reason };
 
   return {
     ok: true,
-    data: { driveId: invite.driveId, driveName: invite.driveName, memberId: member.id },
+    data: { driveId: invite.driveId, driveName: invite.driveName, memberId: result.memberId },
   };
 };

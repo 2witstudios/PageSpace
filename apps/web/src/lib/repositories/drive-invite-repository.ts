@@ -293,6 +293,56 @@ export const driveInviteRepository = {
     return updated.length > 0;
   },
 
+  // Transactional: consume the invite and create the accepted membership in
+  // one atomic step. If the membership insert fails, the invite consumption
+  // is rolled back so the user can retry. legacyMemberId, when supplied, is
+  // a pre-cutover drive_members row (acceptedAt=null) that is deleted inside
+  // the same transaction so the unique (driveId, userId) constraint cannot
+  // fire on the new insert.
+  async consumeInviteAndCreateMembership(input: {
+    inviteId: string;
+    legacyMemberId: string | null;
+    driveId: string;
+    userId: string;
+    role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    invitedBy: string;
+    acceptedAt: Date;
+  }): Promise<{ memberId: string } | { reason: 'TOKEN_CONSUMED' }> {
+    return db.transaction(async (tx) => {
+      const consumed = await tx
+        .update(pendingInvites)
+        .set({ consumedAt: input.acceptedAt })
+        .where(
+          and(
+            eq(pendingInvites.id, input.inviteId),
+            isNull(pendingInvites.consumedAt)
+          )
+        )
+        .returning({ id: pendingInvites.id });
+      if (consumed.length === 0) {
+        return { reason: 'TOKEN_CONSUMED' as const };
+      }
+
+      if (input.legacyMemberId) {
+        await tx.delete(driveMembers).where(eq(driveMembers.id, input.legacyMemberId));
+      }
+
+      const [member] = await tx
+        .insert(driveMembers)
+        .values({
+          driveId: input.driveId,
+          userId: input.userId,
+          role: input.role,
+          customRoleId: null,
+          invitedBy: input.invitedBy,
+          acceptedAt: input.acceptedAt,
+        })
+        .returning({ id: driveMembers.id });
+
+      return { memberId: member.id };
+    });
+  },
+
   async deletePendingInvite(id: string): Promise<void> {
     await db.delete(pendingInvites).where(eq(pendingInvites.id, id));
   },
