@@ -14,13 +14,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockSelectChain = vi.hoisted(() => ({ from: vi.fn() }));
 const mockInsertChain = vi.hoisted(() => ({ values: vi.fn() }));
 const mockUpdateChain = vi.hoisted(() => ({ set: vi.fn() }));
+const mockDeleteChain = vi.hoisted(() => ({ where: vi.fn() }));
 const mockUsersFindFirst = vi.hoisted(() => vi.fn());
+const mockTransaction = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(() => mockSelectChain),
     insert: vi.fn(() => mockInsertChain),
     update: vi.fn(() => mockUpdateChain),
+    delete: vi.fn(() => mockDeleteChain),
+    transaction: mockTransaction,
     query: { users: { findFirst: mockUsersFindFirst } },
   },
 }));
@@ -28,6 +32,8 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
+  gt: vi.fn((field, value) => ({ kind: 'gt', field, value })),
+  lte: vi.fn((field, value) => ({ kind: 'lte', field, value })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
 }));
@@ -54,6 +60,20 @@ vi.mock('@pagespace/db/schema/members', () => ({
     id: 'pagePermissions.id',
     pageId: 'pagePermissions.pageId',
     userId: 'pagePermissions.userId',
+  },
+}));
+
+vi.mock('@pagespace/db/schema/pending-invites', () => ({
+  pendingInvites: {
+    id: 'pendingInvites.id',
+    tokenHash: 'pendingInvites.tokenHash',
+    email: 'pendingInvites.email',
+    driveId: 'pendingInvites.driveId',
+    role: 'pendingInvites.role',
+    invitedBy: 'pendingInvites.invitedBy',
+    expiresAt: 'pendingInvites.expiresAt',
+    consumedAt: 'pendingInvites.consumedAt',
+    createdAt: 'pendingInvites.createdAt',
   },
 }));
 
@@ -333,6 +353,301 @@ describe('driveInviteRepository.acceptPendingMember', () => {
   it('given a concurrent acceptance has already set acceptedAt, the conditional UPDATE matches zero rows and returns false', async () => {
     setupConditionalUpdate([]);
     expect(await driveInviteRepository.acceptPendingMember('mem_already_accepted')).toBe(false);
+  });
+});
+
+describe('driveInviteRepository.findPendingInviteByTokenHash', () => {
+  const setupSelectJoinJoinLimit = (rows: unknown[]) => {
+    const limit = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ limit });
+    const innerJoin2 = vi.fn().mockReturnValue({ where });
+    const innerJoin1 = vi.fn().mockReturnValue({ innerJoin: innerJoin2 });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin: innerJoin1 });
+    return { innerJoin1, innerJoin2, where, limit };
+  };
+
+  it('given a tokenHash that matches an active row, returns the joined drive name + inviter name', async () => {
+    const row = {
+      id: 'inv_1',
+      email: 'invitee@example.com',
+      driveId: 'drive_1',
+      role: 'MEMBER',
+      invitedBy: 'inviter_1',
+      expiresAt: new Date('2030-01-01'),
+      consumedAt: null,
+      driveName: 'Alpha',
+      inviterName: 'Jane',
+    };
+    setupSelectJoinJoinLimit([row]);
+
+    const result = await driveInviteRepository.findPendingInviteByTokenHash('hash_xyz');
+
+    expect(result).toEqual(row);
+  });
+
+  it('given a tokenHash that does not match any row, returns null', async () => {
+    setupSelectJoinJoinLimit([]);
+    expect(await driveInviteRepository.findPendingInviteByTokenHash('missing')).toBeNull();
+  });
+});
+
+describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
+  const setupSelectLimitWhere = (rows: unknown[]) => {
+    const limit = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ limit });
+    mockSelectChain.from = vi.fn().mockReturnValue({ where });
+    return { where, limit };
+  };
+
+  it('given an unconsumed unexpired row, returns it (filtered by drive + email + consumedAt IS NULL + expiresAt > now)', async () => {
+    const now = new Date('2026-05-06T12:00:00.000Z');
+    const row = { id: 'inv_active' };
+    const { where } = setupSelectLimitWhere([row]);
+
+    expect(
+      await driveInviteRepository.findActivePendingInviteByDriveAndEmail('drive_1', 'a@b.com', now)
+    ).toEqual(row);
+
+    expect(isNull).toHaveBeenCalledWith('pendingInvites.consumedAt');
+    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    expect(args?.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'eq', field: 'pendingInvites.driveId', value: 'drive_1' }),
+        expect.objectContaining({ kind: 'eq', field: 'pendingInvites.email', value: 'a@b.com' }),
+        expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
+        expect.objectContaining({ kind: 'gt', field: 'pendingInvites.expiresAt', value: now }),
+      ])
+    );
+  });
+
+  it('given no active row exists (expired-unconsumed rows must NOT be returned), returns null', async () => {
+    setupSelectLimitWhere([]);
+    expect(
+      await driveInviteRepository.findActivePendingInviteByDriveAndEmail(
+        'drive_1',
+        'a@b.com',
+        new Date()
+      )
+    ).toBeNull();
+  });
+});
+
+describe('driveInviteRepository.markInviteConsumed', () => {
+  const setupConditionalUpdate = (returnRows: { id: string }[]) => {
+    const returning = vi.fn().mockResolvedValue(returnRows);
+    const where = vi.fn().mockReturnValue({ returning });
+    const set = vi.fn().mockReturnValue({ where });
+    mockUpdateChain.set = set;
+    return { set, where };
+  };
+
+  it('given an unconsumed invite, sets consumedAt to now and returns true', async () => {
+    const now = new Date('2026-05-06T12:00:00.000Z');
+    const { set, where } = setupConditionalUpdate([{ id: 'inv_1' }]);
+
+    expect(await driveInviteRepository.markInviteConsumed({ inviteId: 'inv_1', now })).toBe(true);
+    expect(set).toHaveBeenCalledWith({ consumedAt: now });
+    expect(isNull).toHaveBeenCalledWith('pendingInvites.consumedAt');
+    const whereArg = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    expect(whereArg?.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'eq', field: 'pendingInvites.id', value: 'inv_1' }),
+        expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
+      ])
+    );
+  });
+
+  it('given a concurrent consume already happened, returns false (zero rows updated)', async () => {
+    setupConditionalUpdate([]);
+    expect(
+      await driveInviteRepository.markInviteConsumed({ inviteId: 'inv_done', now: new Date() })
+    ).toBe(false);
+  });
+});
+
+describe('driveInviteRepository.deletePendingInvite', () => {
+  it('given an invite id, deletes the row scoped by id', async () => {
+    const where = vi.fn().mockResolvedValue(undefined);
+    mockDeleteChain.where = where;
+
+    await driveInviteRepository.deletePendingInvite('inv_1');
+
+    expect(where).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'eq', field: 'pendingInvites.id', value: 'inv_1' })
+    );
+  });
+});
+
+describe('driveInviteRepository.findUserToSStatusByEmail', () => {
+  it('given an email that maps to a user with tosAcceptedAt set, returns the id + tosAcceptedAt', async () => {
+    const tosAcceptedAt = new Date('2025-01-01');
+    mockUsersFindFirst.mockResolvedValueOnce({ id: 'user_1', tosAcceptedAt });
+
+    expect(await driveInviteRepository.findUserToSStatusByEmail('A@B.com')).toEqual({
+      id: 'user_1',
+      tosAcceptedAt,
+    });
+  });
+
+  it('given an email that maps to a user with tosAcceptedAt null, returns the id + null', async () => {
+    mockUsersFindFirst.mockResolvedValueOnce({ id: 'user_pending', tosAcceptedAt: null });
+    expect(await driveInviteRepository.findUserToSStatusByEmail('a@b.com')).toEqual({
+      id: 'user_pending',
+      tosAcceptedAt: null,
+    });
+  });
+
+  it('given an unknown email, returns null', async () => {
+    mockUsersFindFirst.mockResolvedValueOnce(undefined);
+    expect(await driveInviteRepository.findUserToSStatusByEmail('nobody@nowhere.com')).toBeNull();
+  });
+});
+
+describe('driveInviteRepository.createPendingInvite', () => {
+  // Wires db.transaction(callback) to invoke the callback with a tx mock and
+  // return its resolved value, mirroring Drizzle's runtime behavior.
+  const setupTxInsertSweep = (insertedRow: unknown) => {
+    const txDeleteWhere = vi.fn().mockResolvedValue(undefined);
+    const txDelete = vi.fn().mockReturnValue({ where: txDeleteWhere });
+    const txInsertReturning = vi.fn().mockResolvedValue([insertedRow]);
+    const txInsertValues = vi.fn().mockReturnValue({ returning: txInsertReturning });
+    const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
+
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const tx = { delete: txDelete, insert: txInsert };
+      return cb(tx);
+    });
+
+    return { txDeleteWhere, txInsertValues, txInsertReturning };
+  };
+
+  it('given a fresh insert input, sweeps expired-unconsumed rows for (driveId, email) then inserts the new row', async () => {
+    const inserted = { id: 'inv_new' };
+    const { txDeleteWhere, txInsertValues } = setupTxInsertSweep(inserted);
+    const expiresAt = new Date('2030-01-01');
+    const now = new Date('2026-05-06T12:00:00.000Z');
+
+    const result = await driveInviteRepository.createPendingInvite({
+      tokenHash: 'h1',
+      email: 'a@b.com',
+      driveId: 'drive_1',
+      role: 'MEMBER',
+      invitedBy: 'inviter_1',
+      expiresAt,
+      now,
+    });
+
+    expect(result).toEqual(inserted);
+    expect(txInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tokenHash: 'h1',
+        email: 'a@b.com',
+        driveId: 'drive_1',
+        role: 'MEMBER',
+        invitedBy: 'inviter_1',
+        expiresAt,
+      })
+    );
+    // The sweep deletes expired-unconsumed rows for the (driveId, email) pair.
+    expect(txDeleteWhere).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'and',
+        conditions: expect.arrayContaining([
+          expect.objectContaining({ kind: 'eq', field: 'pendingInvites.driveId', value: 'drive_1' }),
+          expect.objectContaining({ kind: 'eq', field: 'pendingInvites.email', value: 'a@b.com' }),
+          expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
+          expect.objectContaining({ kind: 'lte', field: 'pendingInvites.expiresAt', value: now }),
+        ]),
+      })
+    );
+  });
+});
+
+describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
+  const setupTx = ({
+    consumeReturning,
+    insertReturning,
+    insertThrows,
+  }: {
+    consumeReturning: { id: string }[];
+    insertReturning?: { id: string }[];
+    insertThrows?: Error;
+  }) => {
+    const txUpdateReturning = vi.fn().mockResolvedValue(consumeReturning);
+    const txUpdateWhere = vi.fn().mockReturnValue({ returning: txUpdateReturning });
+    const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
+    const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
+
+    const txInsertReturning = insertThrows
+      ? vi.fn().mockRejectedValue(insertThrows)
+      : vi.fn().mockResolvedValue(insertReturning ?? []);
+    const txInsertValues = vi.fn().mockReturnValue({ returning: txInsertReturning });
+    const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
+
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const tx = { update: txUpdate, insert: txInsert };
+      return cb(tx);
+    });
+
+    return { txUpdateSet, txUpdateWhere, txInsertValues };
+  };
+
+  const baseInput = {
+    inviteId: 'inv_1',
+    driveId: 'drive_1',
+    userId: 'user_new',
+    role: 'MEMBER' as const,
+    invitedBy: 'inviter_1',
+    acceptedAt: new Date('2026-05-06T12:00:00.000Z'),
+  };
+
+  it('given an unconsumed invite, atomically consumes it and inserts the drive_members row, returns ok + memberId', async () => {
+    const { txUpdateSet, txInsertValues } = setupTx({
+      consumeReturning: [{ id: 'inv_1' }],
+      insertReturning: [{ id: 'mem_new' }],
+    });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: true, memberId: 'mem_new' });
+    const setArg = txUpdateSet.mock.calls[0]?.[0] as { consumedAt?: Date };
+    expect(setArg?.consumedAt).toEqual(baseInput.acceptedAt);
+    expect(txInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        driveId: 'drive_1',
+        userId: 'user_new',
+        role: 'MEMBER',
+        invitedBy: 'inviter_1',
+        acceptedAt: baseInput.acceptedAt,
+      })
+    );
+  });
+
+  it('given the conditional consume matches zero rows (already consumed), returns ok=false reason=TOKEN_CONSUMED and skips the insert', async () => {
+    const { txInsertValues } = setupTx({ consumeReturning: [] });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: false, reason: 'TOKEN_CONSUMED' });
+    expect(txInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('given the drive_members insert throws on a unique-violation (unique drive_user_key), returns ok=false reason=ALREADY_MEMBER', async () => {
+    const uniqueViolation = new Error('duplicate key value violates unique constraint "drive_members_drive_user_key"');
+    setupTx({ consumeReturning: [{ id: 'inv_1' }], insertThrows: uniqueViolation });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: false, reason: 'ALREADY_MEMBER' });
+  });
+
+  it('given a non-unique-violation error, propagates so the caller can 500 (transaction rollback handles consume)', async () => {
+    const otherError = new Error('connection lost');
+    setupTx({ consumeReturning: [{ id: 'inv_1' }], insertThrows: otherError });
+
+    await expect(
+      driveInviteRepository.consumeInviteAndCreateMembership(baseInput)
+    ).rejects.toThrow('connection lost');
   });
 });
 
