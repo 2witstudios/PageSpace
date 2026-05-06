@@ -59,9 +59,9 @@ export function MessageHoverToolbar({
   const showQuote = canQuoteReply && !!onQuoteReply;
   const showEdit = canEdit && !!onEdit;
   const showDelete = canDelete && !!onDelete;
-  const hasOverflow = showQuote || showEdit || showDelete;
+  const hasOverflow = showEdit || showDelete;
   const showReplyInThread = canReplyInThread && !!onReplyInThread;
-  const hasAny = canReact || showReplyInThread || hasOverflow;
+  const hasAny = canReact || showQuote || showReplyInThread || hasOverflow;
   if (!hasAny) return null;
 
   const handleEmojiSelect = (emoji: string) => {
@@ -108,6 +108,16 @@ export function MessageHoverToolbar({
           </button>
         </EmojiPickerPopover>
       )}
+      {showQuote && (
+        <button
+          type="button"
+          aria-label="Quote reply"
+          onClick={onQuoteReply}
+          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <CornerUpLeft size={14} aria-hidden />
+        </button>
+      )}
       {showReplyInThread && (
         <button
           type="button"
@@ -130,22 +140,14 @@ export function MessageHoverToolbar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {showQuote && (
-              <DropdownMenuItem onClick={onQuoteReply}>
-                <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
-              </DropdownMenuItem>
-            )}
             {showEdit && (
-              <>
-                {showQuote && <DropdownMenuSeparator />}
-                <DropdownMenuItem onClick={onEdit}>
-                  <Pencil className="mr-2 h-4 w-4" /> Edit
-                </DropdownMenuItem>
-              </>
+              <DropdownMenuItem onClick={onEdit}>
+                <Pencil className="mr-2 h-4 w-4" /> Edit
+              </DropdownMenuItem>
             )}
             {showDelete && (
               <>
-                {(showQuote || showEdit) && <DropdownMenuSeparator />}
+                {showEdit && <DropdownMenuSeparator />}
                 <DropdownMenuItem
                   onClick={onDelete}
                   className="text-destructive focus:text-destructive"
