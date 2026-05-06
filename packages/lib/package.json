@@ -301,6 +301,16 @@
       "import": "./dist/auth/magic-link-service.js",
       "require": "./dist/auth/magic-link-service.js"
     },
+    "./auth/invite-token": {
+      "types": "./dist/auth/invite-token.d.ts",
+      "import": "./dist/auth/invite-token.js",
+      "require": "./dist/auth/invite-token.js"
+    },
+    "./services/invite-predicates": {
+      "types": "./dist/services/invite-predicates.d.ts",
+      "import": "./dist/services/invite-predicates.js",
+      "require": "./dist/services/invite-predicates.js"
+    },
     "./types": {
       "types": "./dist/types.d.ts",
       "import": "./dist/types.js",

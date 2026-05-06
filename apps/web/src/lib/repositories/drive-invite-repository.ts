@@ -318,6 +318,10 @@ export const driveInviteRepository = {
     return updated.length > 0;
   },
 
+  async deletePendingInvite(id: string): Promise<void> {
+    await db.delete(pendingInvites).where(eq(pendingInvites.id, id));
+  },
+
   async findActivePendingInviteByDriveAndEmail(
     driveId: string,
     email: string
