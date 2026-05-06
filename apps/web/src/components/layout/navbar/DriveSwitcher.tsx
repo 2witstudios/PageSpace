@@ -155,6 +155,13 @@ export default function DriveSwitcher() {
                 placeholder="Search drives..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // Radix DropdownMenu typeahead steals focus on printable keys —
+                  // swallow them so the input keeps focus while typing.
+                  if (!["Escape", "Tab", "ArrowDown", "ArrowUp"].includes(e.key)) {
+                    e.stopPropagation();
+                  }
+                }}
                 className="h-8 pl-8"
                 autoFocus
               />
