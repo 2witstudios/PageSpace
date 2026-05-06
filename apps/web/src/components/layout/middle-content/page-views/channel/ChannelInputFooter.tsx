@@ -22,7 +22,7 @@ import {
   AtSign,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { EmojiPickerPopover } from '@/components/ui/emoji-picker';
+import { EmojiPicker } from '@/components/ui/emoji-picker';
 
 export interface ChannelInputFooterProps {
   /** Callback when formatting button clicked */
@@ -176,36 +176,42 @@ export function ChannelInputFooter({
         </Tooltip>
 
         {/* Emoji picker */}
-        <EmojiPickerPopover
-          open={emojiPickerOpen}
-          onOpenChange={setEmojiPickerOpen}
-          onEmojiSelect={(emoji) => {
-            onEmojiSelect?.(emoji);
-            setEmojiPickerOpen(false);
-          }}
-          side="top"
-          align="start"
-          showQuickReactions={false}
-        >
+        <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={disabled}
-                className={cn(
-                  'h-8 w-8 p-0',
-                  'text-muted-foreground hover:text-foreground',
-                  'hover:bg-muted/50'
-                )}
-              >
-                <Smile className="h-4 w-4" />
-                <span className="sr-only">Emoji</span>
-              </Button>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={disabled}
+                  className={cn(
+                    'h-8 w-8 p-0',
+                    'text-muted-foreground hover:text-foreground',
+                    'hover:bg-muted/50'
+                  )}
+                >
+                  <Smile className="h-4 w-4" />
+                  <span className="sr-only">Emoji</span>
+                </Button>
+              </PopoverTrigger>
             </TooltipTrigger>
             <TooltipContent side="top">Add emoji</TooltipContent>
           </Tooltip>
-        </EmojiPickerPopover>
+          <PopoverContent
+            side="top"
+            align="start"
+            className="w-auto p-0"
+            sideOffset={8}
+          >
+            <EmojiPicker
+              onEmojiSelect={(emoji) => {
+                onEmojiSelect?.(emoji);
+                setEmojiPickerOpen(false);
+              }}
+              showQuickReactions={false}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Right group - Attachments + thread also-send toggle */}
