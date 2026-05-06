@@ -26,7 +26,8 @@ export type InviteAcceptanceError =
   | 'TOKEN_NOT_FOUND'
   | 'TOKEN_EXPIRED'
   | 'TOKEN_CONSUMED'
-  | 'EMAIL_MISMATCH';
+  | 'EMAIL_MISMATCH'
+  | 'ALREADY_MEMBER';
 
 export interface AcceptedInviteData {
   driveId: string;
@@ -62,6 +63,59 @@ export const acceptInviteForNewUser = async ({
   }
   if (!isEmailMatchingInvite({ inviteEmail: invite.email, userEmail })) {
     return { ok: false, error: 'EMAIL_MISMATCH' };
+  }
+
+  const consumed = await driveInviteRepository.markInviteConsumed(invite.id);
+  if (!consumed) return { ok: false, error: 'TOKEN_CONSUMED' };
+
+  const member = await driveInviteRepository.createDriveMember({
+    driveId: invite.driveId,
+    userId,
+    role: invite.role,
+    customRoleId: null,
+    invitedBy: invite.invitedBy,
+    acceptedAt: now,
+  });
+
+  return {
+    ok: true,
+    data: { driveId: invite.driveId, driveName: invite.driveName, memberId: member.id },
+  };
+};
+
+interface AcceptInviteForExistingUserInput {
+  token: string;
+  userId: string;
+  userEmail: string;
+  now: Date;
+}
+
+// For users who already have an account and arrive at /auth/login?invite=<token>.
+// Mirrors acceptInviteForNewUser but additionally rejects ALREADY_MEMBER if the
+// user already holds a non-pending membership in the target drive — re-clicking
+// an old invite link must not silently re-add the user.
+export const acceptInviteForExistingUser = async ({
+  token,
+  userId,
+  userEmail,
+  now,
+}: AcceptInviteForExistingUserInput): Promise<InviteAcceptanceResult> => {
+  const invite = await driveInviteRepository.findPendingInviteByTokenHash(hashToken(token));
+  if (!invite) return { ok: false, error: 'TOKEN_NOT_FOUND' };
+
+  if (isInviteConsumed({ consumedAt: invite.consumedAt })) {
+    return { ok: false, error: 'TOKEN_CONSUMED' };
+  }
+  if (isInviteExpired({ expiresAt: invite.expiresAt, now })) {
+    return { ok: false, error: 'TOKEN_EXPIRED' };
+  }
+  if (!isEmailMatchingInvite({ inviteEmail: invite.email, userEmail })) {
+    return { ok: false, error: 'EMAIL_MISMATCH' };
+  }
+
+  const existing = await driveInviteRepository.findExistingMember(invite.driveId, userId);
+  if (existing && existing.acceptedAt !== null) {
+    return { ok: false, error: 'ALREADY_MEMBER' };
   }
 
   const consumed = await driveInviteRepository.markInviteConsumed(invite.id);

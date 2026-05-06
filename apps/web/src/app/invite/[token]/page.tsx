@@ -27,8 +27,12 @@ export default async function InvitePage({ params }: PageProps) {
   }
 
   const { driveName, inviterName, role, email, isExistingUser } = resolution.data;
+  // Existing users are routed through /invite/[token]/accept, which gates on
+  // a live session and runs acceptInviteForExistingUser. If the session check
+  // fails, the route redirects to /auth/signin with a `next=` param so the
+  // user returns here automatically post-login.
   const ctaHref = isExistingUser
-    ? `/auth/login?invite=${encodeURIComponent(token)}`
+    ? `/invite/${encodeURIComponent(token)}/accept`
     : `/auth/signup?invite=${encodeURIComponent(token)}`;
   const ctaLabel = isExistingUser ? 'Sign in to join' : 'Create account & join';
 
