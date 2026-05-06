@@ -295,6 +295,75 @@ describe('AgentIntegrationsPanel', () => {
     expect(items.length).toBe(1);
   });
 
+  // --- Select All button ---
+  it('calls PUT with all tool ids when Select All is clicked', async () => {
+    const grantSingleTool: SafeGrant = {
+      ...grantWithTools,
+      id: 'grant-partial',
+      allowedTools: ['list_repos'],
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantSingleTool],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^select all$/i }));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-partial',
+        expect.objectContaining({ allowedTools: ['create_issue', 'list_repos'] })
+      );
+    });
+  });
+
+  // --- Deselect All button ---
+  it('calls PUT with empty array when Deselect All is clicked', async () => {
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantWithTools],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^deselect all$/i }));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-1',
+        expect.objectContaining({ allowedTools: [] })
+      );
+    });
+  });
+
+  // --- Empty tool list rendering ---
+  it('renders fallback message when provider exposes no tools', () => {
+    const grantEmptyTools: SafeGrant = {
+      ...grantWithTools,
+      id: 'grant-empty',
+      connection: {
+        id: 'conn-1',
+        name: 'GitHub Integration',
+        status: 'active',
+        provider: { slug: 'github', name: 'GitHub', tools: [] },
+      },
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantEmptyTools],
+    });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+    expect(screen.getByText(/this integration does not expose any tools/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^select all$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^deselect all$/i })).toBeDisabled();
+  });
+
   // --- Tool filtering: unchecking last tool sends empty array ---
   it('sends an empty allowedTools array when the last checked tool is unchecked', async () => {
     const grantSingleTool: SafeGrant = {
