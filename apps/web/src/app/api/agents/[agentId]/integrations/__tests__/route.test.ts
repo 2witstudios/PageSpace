@@ -81,3 +81,155 @@ describe('GET /api/agents/[agentId]/integrations audit', () => {
     );
   });
 });
+
+describe('GET /api/agents/[agentId]/integrations response shape', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  it('exposes sanitized provider tools and strips execution config', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: ['list_repos'],
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'GitHub Integration',
+          status: 'active',
+          provider: {
+            slug: 'github',
+            name: 'GitHub',
+            config: {
+              tools: [
+                {
+                  id: 'list_repos',
+                  name: 'list_repos',
+                  description: 'List repositories',
+                  category: 'read',
+                  inputSchema: { type: 'object' },
+                  execution: { type: 'http', config: { method: 'GET', pathTemplate: '/user/repos' } },
+                  rateLimit: { requestsPerMinute: 60 },
+                },
+                {
+                  id: 'create_issue',
+                  name: 'create_issue',
+                  description: 'Create an issue',
+                  category: 'write',
+                  inputSchema: { type: 'object' },
+                  execution: { type: 'http', config: { method: 'POST', pathTemplate: '/repos/{owner}/{repo}/issues' } },
+                },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+
+    const body = await response.json();
+    expect(body.grants).toHaveLength(1);
+    const provider = body.grants[0].connection.provider;
+    expect(provider.tools).toEqual([
+      { id: 'list_repos', name: 'list_repos', description: 'List repositories', category: 'read' },
+      { id: 'create_issue', name: 'create_issue', description: 'Create an issue', category: 'write' },
+    ]);
+    expect(provider.tools[0]).not.toHaveProperty('execution');
+    expect(provider.tools[0]).not.toHaveProperty('inputSchema');
+    expect(provider.tools[0]).not.toHaveProperty('rateLimit');
+  });
+
+  it('drops malformed tool entries while keeping well-formed ones', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'Mixed Integration',
+          status: 'active',
+          provider: {
+            slug: 'mixed',
+            name: 'Mixed',
+            config: {
+              tools: [
+                null,
+                { id: 'good_tool', name: 'good_tool', description: 'works', category: 'read' },
+                { id: 42, name: 'bad_tool', description: 'bad id type', category: 'read' },
+                { id: 'no_category', name: 'no_category', description: 'missing category' },
+                { id: 'bad_cat', name: 'bad_cat', description: 'bogus category', category: 'super_user' },
+                'just-a-string',
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.grants[0].connection.provider.tools).toEqual([
+      { id: 'good_tool', name: 'good_tool', description: 'works', category: 'read' },
+    ]);
+  });
+
+  it.each([
+    ['null config', { config: null }],
+    ['missing tools key', { config: {} }],
+    ['non-array tools', { config: { tools: 'oops' } }],
+    ['object tools', { config: { tools: { id: 'x' } } }],
+  ])('returns an empty tools array when provider has %s', async (_label, providerExtras) => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'Custom Integration',
+          status: 'active',
+          provider: {
+            slug: 'custom',
+            name: 'Custom',
+            ...providerExtras,
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.grants[0].connection.provider.tools).toEqual([]);
+  });
+});

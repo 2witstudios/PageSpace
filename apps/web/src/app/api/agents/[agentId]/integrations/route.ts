@@ -8,9 +8,38 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
+import type { ToolDefinition } from '@pagespace/lib/integrations/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+
+type SafeProviderTool = Pick<ToolDefinition, 'id' | 'name' | 'description' | 'category'>;
+
+const VALID_CATEGORIES: ReadonlySet<ToolDefinition['category']> = new Set([
+  'read',
+  'write',
+  'admin',
+  'dangerous',
+]);
+
+const isWellFormedTool = (t: unknown): t is ToolDefinition =>
+  !!t &&
+  typeof t === 'object' &&
+  typeof (t as ToolDefinition).id === 'string' &&
+  typeof (t as ToolDefinition).name === 'string' &&
+  typeof (t as ToolDefinition).description === 'string' &&
+  VALID_CATEGORIES.has((t as ToolDefinition).category);
+
+const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
+  const rawTools = (config as { tools?: unknown } | null)?.tools;
+  if (!Array.isArray(rawTools)) return [];
+  return rawTools.filter(isWellFormedTool).map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    category: t.category,
+  }));
+};
 
 const createGrantSchema = z.object({
   connectionId: z.string().min(1),
@@ -62,6 +91,7 @@ export async function GET(
           provider: g.connection.provider ? {
             slug: g.connection.provider.slug,
             name: g.connection.provider.name,
+            tools: sanitizeProviderTools(g.connection.provider.config),
           } : null,
         } : null,
       })),
