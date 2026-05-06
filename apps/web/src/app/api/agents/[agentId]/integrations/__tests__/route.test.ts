@@ -149,7 +149,12 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     expect(provider.tools[0]).not.toHaveProperty('rateLimit');
   });
 
-  it('returns an empty tools array when provider config is missing or malformed', async () => {
+  it.each([
+    ['null config', { config: null }],
+    ['missing tools key', { config: {} }],
+    ['non-array tools', { config: { tools: 'oops' } }],
+    ['object tools', { config: { tools: { id: 'x' } } }],
+  ])('returns an empty tools array when provider has %s', async (_label, providerExtras) => {
     mockListGrantsByAgent.mockResolvedValue([
       {
         id: 'grant-1',
@@ -167,7 +172,7 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
           provider: {
             slug: 'custom',
             name: 'Custom',
-            config: null,
+            ...providerExtras,
           },
         },
       },
@@ -178,6 +183,7 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
       { params: Promise.resolve({ agentId: mockAgentId }) }
     );
 
+    expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.grants[0].connection.provider.tools).toEqual([]);
   });
