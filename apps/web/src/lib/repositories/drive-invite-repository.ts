@@ -239,50 +239,6 @@ export const driveInviteRepository = {
     });
   },
 
-  async findPendingMembersForUser(userId: string) {
-    return db
-      .select({
-        id: driveMembers.id,
-        driveId: driveMembers.driveId,
-        role: driveMembers.role,
-        driveName: drives.name,
-      })
-      .from(driveMembers)
-      .innerJoin(drives, eq(drives.id, driveMembers.driveId))
-      .where(
-        and(
-          eq(driveMembers.userId, userId),
-          isNull(driveMembers.acceptedAt)
-        )
-      );
-  },
-
-  // REVIEW: confirm overwrite acceptable for compliance.
-  // Overwrites the original invitedAt instead of persisting a separate
-  // lastInvitedAt column. The product surface ("last sent N minutes ago")
-  // only needs the most recent send time. If audit/legal later needs the
-  // original-invite timestamp, add a lastInvitedAt column and stop overwriting.
-  async bumpInvitedAt(memberId: string): Promise<void> {
-    await db
-      .update(driveMembers)
-      .set({ invitedAt: new Date() })
-      .where(eq(driveMembers.id, memberId));
-  },
-
-  async acceptPendingMember(memberId: string): Promise<boolean> {
-    const updated = await db
-      .update(driveMembers)
-      .set({ acceptedAt: new Date() })
-      .where(
-        and(
-          eq(driveMembers.id, memberId),
-          isNull(driveMembers.acceptedAt)
-        )
-      )
-      .returning({ id: driveMembers.id });
-    return updated.length > 0;
-  },
-
   async createPendingInvite(input: {
     tokenHash: string;
     email: string;

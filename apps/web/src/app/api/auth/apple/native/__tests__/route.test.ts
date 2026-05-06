@@ -118,10 +118,6 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -134,7 +130,6 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const createNativeRequest = (body: Record<string, unknown> = {}) =>
   new Request('http://localhost/api/auth/apple/native', {
@@ -733,44 +728,4 @@ describe('POST /api/auth/apple/native', () => {
     });
   });
 
-  describe('post-login pending invite acceptance', () => {
-    beforeEach(() => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValue([]);
-    });
-
-    it('given a successful login, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
-      await POST(createNativeRequest(validPayload));
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('new-user-id');
-      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
-      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
-      expect(acceptOrder).toBeGreaterThan(sessionOrder);
-    });
-
-    it('given the helper throws, revokes the just-created session and returns 500', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
-
-      const response = await POST(createNativeRequest(validPayload));
-
-      expect(response.status).toBe(500);
-      expect(sessionService.revokeSession).toHaveBeenCalledWith(
-        'ps_sess_mock_token',
-        'pending_invite_acceptance_failed'
-      );
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'pending_invite_acceptance_failed'
-      );
-    });
-
-    it('given the helper resolves, the original response is unchanged', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
-      ]);
-
-      const response = await POST(createNativeRequest(validPayload));
-
-      expect(response.status).toBe(200);
-    });
-  });
 });

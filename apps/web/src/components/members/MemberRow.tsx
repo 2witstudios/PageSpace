@@ -1,6 +1,6 @@
 'use client';
 
-import { Trash2, Eye, Edit, Share, User, Mail } from 'lucide-react';
+import { Trash2, Eye, Edit, Share, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -37,10 +37,9 @@ interface MemberRowProps {
   driveId: string;
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
   onRemove: () => void;
-  onResend?: () => void;
 }
 
-export function MemberRow({ member, driveId, currentUserRole, onRemove, onResend }: MemberRowProps) {
+export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
   const isPending = member.acceptedAt === null;
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const displayName = member.profile?.displayName || member.user.name || member.user.email || 'Unknown User';
@@ -155,16 +154,6 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove, onResend
       </div>
 
       <div className="flex items-center space-x-2">
-        {canManage && isPending && onResend && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onResend}
-            title="Resend invitation"
-          >
-            <Mail className="w-4 h-4" />
-          </Button>
-        )}
         {canManage && !isPending && (
           <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
             <Button

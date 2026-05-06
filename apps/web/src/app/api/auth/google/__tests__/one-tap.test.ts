@@ -117,10 +117,6 @@ vi.mock('@/lib/auth', () => ({
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';

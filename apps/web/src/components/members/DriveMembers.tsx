@@ -7,7 +7,7 @@ import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/useToast';
 import { useSocket } from '@/hooks/useSocket';
-import { del, fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface DriveMember {
   id: string;
@@ -110,26 +110,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     };
   }, [socket, driveId, fetchMembers]);
 
-  const handleResendInvitation = async (userId: string) => {
-    try {
-      await post(`/api/drives/${driveId}/members/${userId}/resend`);
-      toast({
-        title: 'Success',
-        description: 'Invitation resent. A new invitation email has been sent.',
-      });
-      // Refetch so invitedAt-derived UI ("last sent N minutes ago") updates.
-      fetchMembers();
-    } catch (error) {
-      const description =
-        error instanceof Error ? error.message : 'Failed to resend invitation';
-      toast({
-        title: 'Error',
-        description,
-        variant: 'destructive',
-      });
-    }
-  };
-
   const handleRemoveMember = async (userId: string, isPending: boolean) => {
     const message = isPending
       ? 'Are you sure you want to revoke this invitation?'
@@ -218,7 +198,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
                 driveId={driveId}
                 currentUserRole={currentUserRole}
                 onRemove={() => handleRemoveMember(member.userId, true)}
-                onResend={() => handleResendInvitation(member.userId)}
               />
             ))}
           </div>

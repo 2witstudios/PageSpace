@@ -160,92 +160,14 @@ describe('DriveMembers', () => {
     EVENTS.forEach((e) => expect(socket.__count(e)).toBe(0));
   });
 
-  describe('Resend invitation', () => {
-    it('Given a pending row\'s Resend is clicked, POSTs to the resend endpoint with empty body', async () => {
-      mockFetchWithAuth.mockImplementation(() =>
-        okMembers([member({ userId: 'p1', acceptedAt: null })])
-      );
-      mockPost.mockResolvedValue({});
+  it('Given a pending row, no Resend button is rendered (resend was retired with the broad-sweep cutover)', async () => {
+    mockFetchWithAuth.mockImplementation(() =>
+      okMembers([member({ userId: 'p1', acceptedAt: null })])
+    );
 
-      render(<DriveMembers driveId="drive-1" />);
-      await screen.findByText('Pending invitations (1)');
+    render(<DriveMembers driveId="drive-1" />);
+    await screen.findByText('Pending invitations (1)');
 
-      await userEvent.setup().click(screen.getByRole('button', { name: /resend invitation/i }));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/members/p1/resend')
-      );
-    });
-
-    it('Given a 200 response, toasts success and refetches members', async () => {
-      mockFetchWithAuth.mockImplementation(() =>
-        okMembers([member({ userId: 'p1', acceptedAt: null })])
-      );
-      mockPost.mockResolvedValue({ success: true });
-
-      render(<DriveMembers driveId="drive-1" />);
-      await screen.findByText('Pending invitations (1)');
-      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
-
-      await userEvent.setup().click(screen.getByRole('button', { name: /resend invitation/i }));
-
-      await waitFor(() =>
-        expect(stableToast).toHaveBeenCalledWith(
-          expect.objectContaining({
-            description: expect.stringMatching(/invitation resent/i),
-          })
-        )
-      );
-      // Refetch fires so invitedAt-derived UI updates.
-      await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(2));
-    });
-
-    it('Given a 429 response, surfaces the rate-limit error message in a destructive toast', async () => {
-      mockFetchWithAuth.mockImplementation(() =>
-        okMembers([member({ userId: 'p1', acceptedAt: null })])
-      );
-      mockPost.mockRejectedValue(
-        Object.assign(new Error('Too many resend attempts. Please try again later.'), {
-          status: 429,
-        })
-      );
-
-      render(<DriveMembers driveId="drive-1" />);
-      await screen.findByText('Pending invitations (1)');
-
-      await userEvent.setup().click(screen.getByRole('button', { name: /resend invitation/i }));
-
-      await waitFor(() =>
-        expect(stableToast).toHaveBeenCalledWith(
-          expect.objectContaining({
-            variant: 'destructive',
-            description: expect.stringMatching(/too many resend/i),
-          })
-        )
-      );
-      // No refetch on failure.
-      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
-    });
-
-    it('Given a generic error, surfaces the message in a destructive toast', async () => {
-      mockFetchWithAuth.mockImplementation(() =>
-        okMembers([member({ userId: 'p1', acceptedAt: null })])
-      );
-      mockPost.mockRejectedValue(new Error('Network down'));
-
-      render(<DriveMembers driveId="drive-1" />);
-      await screen.findByText('Pending invitations (1)');
-
-      await userEvent.setup().click(screen.getByRole('button', { name: /resend invitation/i }));
-
-      await waitFor(() =>
-        expect(stableToast).toHaveBeenCalledWith(
-          expect.objectContaining({
-            variant: 'destructive',
-            description: expect.stringMatching(/network down/i),
-          })
-        )
-      );
-    });
+    expect(screen.queryByRole('button', { name: /resend invitation/i })).not.toBeInTheDocument();
   });
 });

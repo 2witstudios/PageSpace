@@ -91,10 +91,6 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 import { POST } from '../route';
 import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -106,7 +102,6 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const validPayload = {
   response: { id: 'cred-1', rawId: 'raw', type: 'public-key' },
@@ -640,42 +635,4 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
   });
 
-  describe('post-login pending invite acceptance', () => {
-    it('given a successful login, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
-      await POST(createRequest());
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('user-1');
-      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
-      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
-      expect(acceptOrder).toBeGreaterThan(sessionOrder);
-    });
-
-    it('given the helper throws, revokes the just-created session and returns 500', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
-
-      const response = await POST(createRequest());
-
-      expect(response.status).toBe(500);
-      expect(sessionService.revokeSession).toHaveBeenCalledWith(
-        'ps_sess_mock_session_token',
-        'pending_invite_acceptance_failed'
-      );
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'pending_invite_acceptance_failed'
-      );
-    });
-
-    it('given the helper resolves with non-empty list, redirect/response is unchanged', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
-      ]);
-
-      const response = await POST(createRequest());
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.redirectUrl).toBe('/dashboard');
-    });
-  });
 });

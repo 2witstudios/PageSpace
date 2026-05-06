@@ -18,10 +18,6 @@ import { secureCompare } from './secure-compare';
 // Token expiry: 5 minutes for magic links
 export const MAGIC_LINK_EXPIRY_MINUTES = 5;
 
-// Drive invitations sit in inboxes — 7 days is the long-lived expiry the
-// invite route uses when minting an email-payload magic link.
-export const INVITATION_LINK_EXPIRY_MINUTES = 60 * 24 * 7;
-
 // Hard ceiling on caller-supplied expiry to avoid effectively-immortal tokens.
 const MAX_EXPIRY_MINUTES = 60 * 24 * 30;
 

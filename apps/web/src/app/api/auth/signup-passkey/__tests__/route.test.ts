@@ -76,10 +76,6 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
 }));
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 vi.mock('@/lib/auth/invite-acceptance', () => ({
   acceptInviteForNewUser: vi.fn(),
 }));
@@ -95,7 +91,6 @@ import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
 
 const validPayload = {
@@ -544,10 +539,11 @@ describe('POST /api/auth/signup-passkey', () => {
     });
   });
 
-  describe('post-login pending invite acceptance', () => {
+  describe('inviteToken plumbing', () => {
     beforeEach(() => {
-      // Restore validateSession default — earlier tests in the file override it
-      // with mockResolvedValue(null) which clearAllMocks does not reset.
+      // Earlier suites in this file override validateSession with
+      // mockResolvedValue(null); vi.clearAllMocks() does not restore default
+      // implementations, so re-prime it here.
       // @ts-expect-error - partial mock data
       vi.mocked(sessionService.validateSession).mockResolvedValue({
         sessionId: 'mock-session-id',
@@ -558,48 +554,8 @@ describe('POST /api/auth/signup-passkey', () => {
         scopes: ['*'],
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       });
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValue([]);
     });
 
-    it('given a successful signup, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
-      await POST(createRequest());
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('new-user-1');
-      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
-      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
-      expect(acceptOrder).toBeGreaterThan(sessionOrder);
-    });
-
-    it('given the helper throws, revokes the just-created session and returns 500', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
-
-      const response = await POST(createRequest());
-
-      expect(response.status).toBe(500);
-      expect(sessionService.revokeSession).toHaveBeenCalledWith(
-        'ps_sess_mock_session_token',
-        'pending_invite_acceptance_failed'
-      );
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'pending_invite_acceptance_failed'
-      );
-    });
-
-    it('given the helper resolves, redirect/response is unchanged', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
-      ]);
-
-      const response = await POST(createRequest());
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-    });
-  });
-
-  describe('inviteToken plumbing', () => {
     it('given inviteToken absent, does not call acceptInviteForNewUser and uses provisioned drive redirect', async () => {
       const response = await POST(createRequest());
       const body = await response.json();

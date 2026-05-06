@@ -24,7 +24,6 @@ import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -221,15 +220,6 @@ export async function GET(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
-
-    // Accept any pending drive invitations now that the session is live.
-    try {
-      await acceptUserPendingInvitations(user.id);
-    } catch (error) {
-      loggers.auth.error('Failed to accept pending invitations on Google callback', error as Error, { userId: user.id });
-      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
-      return NextResponse.redirect(new URL('/auth/signin?error=server_error', baseUrl));
-    }
 
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);

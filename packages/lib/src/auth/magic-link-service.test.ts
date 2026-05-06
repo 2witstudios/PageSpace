@@ -7,7 +7,6 @@ import {
   createMagicLinkToken,
   verifyMagicLinkToken,
   MAGIC_LINK_EXPIRY_MINUTES,
-  INVITATION_LINK_EXPIRY_MINUTES,
 } from './magic-link-service';
 import { hashToken } from './token-utils';
 
@@ -274,15 +273,6 @@ describe('Magic Link Service', () => {
           expected: 'VALIDATION_FAILED',
         });
       }
-    });
-
-    it('exports INVITATION_LINK_EXPIRY_MINUTES = 7 days', () => {
-      assert({
-        given: 'the magic-link-service module',
-        should: 'export INVITATION_LINK_EXPIRY_MINUTES = 60 * 24 * 7',
-        actual: INVITATION_LINK_EXPIRY_MINUTES,
-        expected: 60 * 24 * 7,
-      });
     });
 
     // Review H1 — multi-token isolation. Pre-fix, createMagicLinkToken ran a

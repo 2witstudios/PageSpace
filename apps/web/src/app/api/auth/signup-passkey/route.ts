@@ -16,7 +16,6 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
 
 const verifySchema = z.object({
@@ -211,18 +210,6 @@ export async function POST(req: Request) {
 
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
-
-    // Accept any pending drive invitations now that the session is live.
-    try {
-      await acceptUserPendingInvitations(userId);
-    } catch (error) {
-      loggers.auth.error('Failed to accept pending invitations on passkey signup', error as Error, { userId });
-      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
-      return NextResponse.json(
-        { error: 'Server error' },
-        { status: 500 }
-      );
-    }
 
     // Targeted invite acceptance via the new pendingInvites pipe. Failure is
     // NON-FATAL — the signup still completes; the dashboard surfaces

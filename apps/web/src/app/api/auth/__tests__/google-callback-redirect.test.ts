@@ -142,10 +142,6 @@ vi.mock('@/lib/auth', async () => {
   };
 });
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
