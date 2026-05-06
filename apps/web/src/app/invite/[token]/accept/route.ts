@@ -33,6 +33,17 @@ export async function GET(
     return NextResponse.redirect(`${origin}/dashboard?inviteError=TOKEN_NOT_FOUND`, { status: 303 });
   }
 
+  // Defense-in-depth: authenticateSessionRequest already rejects suspended
+  // users at the session layer, but reading suspendedAt here makes the gate
+  // explicit and survives any future refactor of the auth helpers. A
+  // suspended user must not consume a pending invite.
+  if (status.suspendedAt) {
+    return NextResponse.redirect(
+      `${origin}/dashboard?inviteError=ACCOUNT_SUSPENDED`,
+      { status: 303 },
+    );
+  }
+
   const result = await acceptInviteForExistingUser({
     token,
     userId: auth.userId,

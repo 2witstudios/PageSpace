@@ -1,5 +1,5 @@
 {
-  "id": "72dae04d-71a9-4ae7-bb54-e106d88bc396",
+  "id": "92d4cbac-943b-41ff-851f-6be87d001208",
   "prevId": "17ed8c65-94fe-4672-b5ce-a8aeb256d477",
   "version": "7",
   "dialect": "postgresql",
@@ -13749,21 +13749,6 @@
         }
       },
       "indexes": {
-        "pending_invites_token_hash_idx": {
-          "name": "pending_invites_token_hash_idx",
-          "columns": [
-            {
-              "expression": "token_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "pending_invites_drive_id_idx": {
           "name": "pending_invites_drive_id_idx",
           "columns": [

@@ -16,7 +16,8 @@ export const pendingInvites = pgTable('pending_invites', {
   consumedAt: timestamp('consumed_at', { mode: 'date' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
-  tokenHashIdx: index('pending_invites_token_hash_idx').on(table.tokenHash),
+  // Note: token_hash already has an implicit unique B-tree index from
+  // its UNIQUE constraint, so no explicit index is needed for lookup.
   driveIdx: index('pending_invites_drive_id_idx').on(table.driveId),
   expiresAtIdx: index('pending_invites_expires_at_idx').on(table.expiresAt),
   activeDriveEmailIdx: uniqueIndex('pending_invites_active_drive_email_idx')

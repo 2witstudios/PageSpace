@@ -144,6 +144,14 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   }
 
   // Strict null check: undefined from a malformed payload must not classify as pending.
+  // Post the GDPR + zero-trust invite migration, drive_members rows are only
+  // created at acceptance time (acceptedAt is always set on insert), so
+  // pendingMembers will normally be empty here. Pending invitations now live
+  // in the pending_invites table and are not surfaced through the members API
+  // — that's an intentional follow-up (see tasks/drive-invite-gdpr-zero-trust.md
+  // "Out of scope: Members-UI pending-invites list"). The block below remains
+  // so that any legacy acceptedAt=null row that survives the migration cutover
+  // is still surfaced rather than silently hidden.
   const acceptedMembers = members.filter((m) => m.acceptedAt != null);
   const pendingMembers = members.filter((m) => m.acceptedAt === null);
 

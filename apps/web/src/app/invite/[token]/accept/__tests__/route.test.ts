@@ -122,6 +122,24 @@ describe('GET /invite/[token]/accept', () => {
     );
   });
 
+  it('given a suspended account, redirects to /dashboard?inviteError=ACCOUNT_SUSPENDED and does not consume', async () => {
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_suspended'));
+    vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
+      email: 'invitee@example.com',
+      emailVerified: new Date('2025-01-01'),
+      suspendedAt: new Date('2026-01-01'),
+    } as never);
+
+    const response = await GET(buildGet('tok'), ctx('tok'));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('Location')).toBe(
+      'https://app.example.com/dashboard?inviteError=ACCOUNT_SUSPENDED',
+    );
+    expect(acceptInviteForExistingUser).not.toHaveBeenCalled();
+  });
+
   it('given ALREADY_MEMBER, redirects to /dashboard?inviteError=ALREADY_MEMBER', async () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_dup'));

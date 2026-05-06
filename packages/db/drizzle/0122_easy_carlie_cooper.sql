@@ -23,7 +23,6 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "pending_invites_token_hash_idx" ON "pending_invites" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "pending_invites_drive_id_idx" ON "pending_invites" USING btree ("drive_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "pending_invites_expires_at_idx" ON "pending_invites" USING btree ("expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "pending_invites_active_drive_email_idx" ON "pending_invites" USING btree ("drive_id","email") WHERE "pending_invites"."consumed_at" IS NULL;
