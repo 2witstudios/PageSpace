@@ -60,11 +60,17 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'repositories/drive-invite-repository.ts',
     'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; createDriveMember/findExistingMember/updateDriveMemberRole/acceptPendingMember operate by composite key or memberId and do not branch on acceptedAt). Pending invitation state moved out of drive_members into pending_invites by the GDPR + zero-trust epic, so the legacy IS NULL filter on drive_members no longer exists in this file.',
   ],
-  [
-    'auth/invite-acceptance.ts',
-    'Acceptance pipe — only references driveMembers in a docstring describing the underlying insert (delegates to consumeInviteAndCreateMembership in the repository, which is allow-listed above). The pipe itself does not read drive_members; it composes pure predicates and the transactional repo helper.',
-  ],
 ]);
+
+// Strip JS comments before regex matching so a file that only mentions
+// driveMembers in a docstring (e.g., describing an underlying repository
+// insert) doesn't trip the gate. Block-comment + line-comment removal is
+// good enough — driveMembers is unlikely to appear in a string literal.
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;
 const ACCEPTED_AT_GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
@@ -183,7 +189,8 @@ describe('Drive Member acceptedAt Gate Coverage', () => {
       const violations: string[] = [];
 
       for (const file of libFiles) {
-        const content = readFileSync(file, 'utf-8');
+        const raw = readFileSync(file, 'utf-8');
+        const content = stripComments(raw);
         if (!DRIVE_MEMBERS_REFERENCE.test(content)) continue;
         if (ACCEPTED_AT_GATE.test(content)) continue;
         const logical = toLibLogicalPath(file);
