@@ -133,7 +133,7 @@ function getEmailTemplate(data: NotificationEmailData, user: { name: string; ema
           userName: user.name,
           senderName: (data.metadata.senderName as string) || 'Someone',
           messagePreview: (data.metadata.messagePreview as string) || 'New message received',
-          viewUrl: `${appUrl}/dashboard/messages/${data.metadata.conversationId}`,
+          viewUrl: `${appUrl}/dashboard/dms/${data.metadata.conversationId}`,
           unsubscribeUrl,
         }),
       };

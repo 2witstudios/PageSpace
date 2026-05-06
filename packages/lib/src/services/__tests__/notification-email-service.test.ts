@@ -52,6 +52,7 @@ vi.mock('../../auth/token-utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { sendEmail } from '../email-service';
+import { DirectMessageEmail } from '../../email-templates/DirectMessageEmail';
 import { sendNotificationEmail, sendPendingDriveInvitationEmail } from '../notification-email-service';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -130,6 +131,9 @@ describe('notification-email-service', () => {
 
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       subject: expect.stringContaining('Bob'),
+    }));
+    expect(DirectMessageEmail).toHaveBeenCalledWith(expect.objectContaining({
+      viewUrl: expect.stringContaining('/dashboard/dms/c1'),
     }));
   });
 
