@@ -519,6 +519,15 @@ export default function InboxDMPage() {
     />
   ) : null;
 
+  let lastReadOwnIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.senderId === user?.id && m.isRead) {
+      lastReadOwnIndex = i;
+      break;
+    }
+  }
+
   return (
     <div className="flex h-full w-full">
     <MessageDropZone inputRef={chatInputRef} enabled className="flex flex-col h-full flex-1 min-w-0">
@@ -556,6 +565,7 @@ export default function InboxDMPage() {
               const showOwnerActions = isOwnMessage && isRealMessage;
               const replyCount = message.replyCount ?? 0;
               const showReplyInThread = !message.id.startsWith('temp-');
+              const isLastRead = i === lastReadOwnIndex;
 
               return (
                 <div key={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
@@ -593,7 +603,7 @@ export default function InboxDMPage() {
                         {message.isEdited && (
                           <span className="text-xs text-muted-foreground italic">(edited)</span>
                         )}
-                        {message.isRead && isOwnMessage && (
+                        {isLastRead && isOwnMessage && (
                           <span className="text-xs text-muted-foreground">Read</span>
                         )}
                       </div>
@@ -644,12 +654,12 @@ export default function InboxDMPage() {
                           </div>
                         )}
                         <MessageAttachment message={message} />
-                        {!isFirst && (message.isEdited || (message.isRead && isOwnMessage)) && (
+                        {!isFirst && (message.isEdited || (isLastRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             {message.isEdited && (
                               <span className="italic">(edited)</span>
                             )}
-                            {message.isRead && isOwnMessage && (
+                            {isLastRead && isOwnMessage && (
                               <span>Read</span>
                             )}
                           </div>
