@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isAIChatPage, isDocumentPage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
+import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
@@ -372,7 +372,7 @@ export const pageWriteTools = {
    * Replace specific line(s) in a document
    */
   replace_lines: tool({
-    description: 'Replace one or more lines in a document with new content. Specify start and end line numbers (1-based indexing).',
+    description: 'Replace one or more lines in a document or code page with new content. Specify start and end line numbers (1-based indexing).',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().describe('The unique ID of the page to edit'),
@@ -431,10 +431,11 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to edit this document');
         }
 
-        // Format content for AI line-based editing, then split into lines
-        // Markdown pages already have natural line structure; HTML pages need addLineBreaksForAI
-        const isMarkdown = page.contentMode === 'markdown';
-        const formattedContent = isMarkdown
+        // Format content for AI line-based editing, then split into lines.
+        // CODE and markdown pages have natural line structure (and CODE may contain
+        // raw HTML/XML that addLineBreaksForAI would mangle); HTML documents need it.
+        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
+        const formattedContent = isRawText
           ? (page.content || '')
           : addLineBreaksForAI(page.content || '');
         const lines = formattedContent.split('\n');
