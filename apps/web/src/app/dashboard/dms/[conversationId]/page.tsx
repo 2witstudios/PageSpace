@@ -580,7 +580,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0 relative pr-28">
+                  <div className="flex-1 min-w-0 relative group-hover/msg:pt-7 transition-[padding] duration-100">
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
@@ -688,6 +688,7 @@ export default function InboxDMPage() {
                         canQuoteReply={true}
                         reactions={message.reactions}
                         currentUserId={user?.id}
+                        className="top-0"
                         onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
                         onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
                         onQuoteReply={() => handleStartQuote(message)}

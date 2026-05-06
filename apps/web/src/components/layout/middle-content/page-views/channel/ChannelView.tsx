@@ -519,7 +519,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1 relative pr-28">
+                            <div className="flex flex-col min-w-0 flex-1 relative group-hover/msg:pt-7 transition-[padding] duration-100">
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -622,6 +622,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canQuoteReply={true}
                                     reactions={m.reactions}
                                     currentUserId={user?.id}
+                                    className="top-0"
                                     onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
                                     onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
                                     onQuoteReply={() => handleStartQuote(m)}
