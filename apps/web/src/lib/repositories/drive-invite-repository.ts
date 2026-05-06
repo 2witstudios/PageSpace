@@ -9,6 +9,7 @@ import { eq, and, isNotNull, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -266,6 +267,73 @@ export const driveInviteRepository = {
       .update(driveMembers)
       .set({ invitedAt: new Date() })
       .where(eq(driveMembers.id, memberId));
+  },
+
+  async createPendingInvite(data: {
+    tokenHash: string;
+    email: string;
+    driveId: string;
+    role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    invitedBy: string;
+    expiresAt: Date;
+  }) {
+    const results = await db.insert(pendingInvites).values(data).returning();
+    return results[0];
+  },
+
+  async findPendingInviteByTokenHash(tokenHash: string) {
+    const results = await db
+      .select({
+        id: pendingInvites.id,
+        driveId: pendingInvites.driveId,
+        email: pendingInvites.email,
+        role: pendingInvites.role,
+        expiresAt: pendingInvites.expiresAt,
+        consumedAt: pendingInvites.consumedAt,
+        driveName: drives.name,
+        inviterName: users.name,
+      })
+      .from(pendingInvites)
+      .innerJoin(drives, eq(drives.id, pendingInvites.driveId))
+      .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
+      .where(eq(pendingInvites.tokenHash, tokenHash))
+      .limit(1);
+    return results.at(0) ?? null;
+  },
+
+  // Atomic single-use: WHERE consumedAt IS NULL inside the UPDATE prevents
+  // the read-then-write race that would let two concurrent requests both
+  // observe the row as unconsumed and both succeed at acceptance.
+  async markInviteConsumed(id: string): Promise<boolean> {
+    const updated = await db
+      .update(pendingInvites)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(pendingInvites.id, id),
+          isNull(pendingInvites.consumedAt)
+        )
+      )
+      .returning({ id: pendingInvites.id });
+    return updated.length > 0;
+  },
+
+  async findActivePendingInviteByDriveAndEmail(
+    driveId: string,
+    email: string
+  ): Promise<{ id: string } | null> {
+    const results = await db
+      .select({ id: pendingInvites.id })
+      .from(pendingInvites)
+      .where(
+        and(
+          eq(pendingInvites.driveId, driveId),
+          eq(pendingInvites.email, email),
+          isNull(pendingInvites.consumedAt)
+        )
+      )
+      .limit(1);
+    return results.at(0) ?? null;
   },
 
   async acceptPendingMember(memberId: string): Promise<boolean> {

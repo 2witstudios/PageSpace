@@ -57,6 +57,19 @@ vi.mock('@pagespace/db/schema/members', () => ({
   },
 }));
 
+vi.mock('@pagespace/db/schema/pending-invites', () => ({
+  pendingInvites: {
+    id: 'pendingInvites.id',
+    tokenHash: 'pendingInvites.tokenHash',
+    email: 'pendingInvites.email',
+    driveId: 'pendingInvites.driveId',
+    role: 'pendingInvites.role',
+    invitedBy: 'pendingInvites.invitedBy',
+    expiresAt: 'pendingInvites.expiresAt',
+    consumedAt: 'pendingInvites.consumedAt',
+  },
+}));
+
 import { driveInviteRepository } from '../drive-invite-repository';
 import { isNotNull, isNull } from '@pagespace/db/operators';
 
@@ -333,6 +346,120 @@ describe('driveInviteRepository.acceptPendingMember', () => {
   it('given a concurrent acceptance has already set acceptedAt, the conditional UPDATE matches zero rows and returns false', async () => {
     setupConditionalUpdate([]);
     expect(await driveInviteRepository.acceptPendingMember('mem_already_accepted')).toBe(false);
+  });
+});
+
+describe('driveInviteRepository.createPendingInvite', () => {
+  it('inserts the row with all invite fields and returns the inserted row', async () => {
+    const data = {
+      tokenHash: 'hash_abc',
+      email: 'jane@example.com',
+      driveId: 'drive_1',
+      role: 'MEMBER' as const,
+      invitedBy: 'inviter',
+      expiresAt: new Date('2026-05-08T00:00:00.000Z'),
+    };
+    const inserted = { id: 'inv_new', consumedAt: null, createdAt: new Date(), ...data };
+    const { values } = setupInsert([inserted]);
+
+    const result = await driveInviteRepository.createPendingInvite(data);
+
+    expect(values).toHaveBeenCalledWith(expect.objectContaining(data));
+    expect(result).toMatchObject(data);
+  });
+});
+
+describe('driveInviteRepository.findPendingInviteByTokenHash', () => {
+  const setupDoubleJoinLimit = (rows: unknown[]) => {
+    const limit = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ limit });
+    const innerJoin2 = vi.fn().mockReturnValue({ where });
+    const innerJoin1 = vi.fn().mockReturnValue({ innerJoin: innerJoin2 });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin: innerJoin1 });
+    return { innerJoin1, innerJoin2, where, limit };
+  };
+
+  it('returns the joined row with driveName and inviterName when an invite matches the hash', async () => {
+    const row = {
+      id: 'inv_1',
+      driveId: 'drive_1',
+      email: 'jane@example.com',
+      role: 'MEMBER',
+      expiresAt: new Date('2026-05-08T00:00:00.000Z'),
+      consumedAt: null,
+      driveName: 'Acme',
+      inviterName: 'Alice',
+    };
+    const { where, limit } = setupDoubleJoinLimit([row]);
+
+    expect(await driveInviteRepository.findPendingInviteByTokenHash('hash_abc')).toEqual(row);
+    expect(limit).toHaveBeenCalledWith(1);
+    const arg = where.mock.calls[0]?.[0] as { kind?: string; field?: string; value?: string };
+    expect(arg).toMatchObject({ kind: 'eq', field: 'pendingInvites.tokenHash', value: 'hash_abc' });
+  });
+
+  it('returns null when no invite matches the hash', async () => {
+    setupDoubleJoinLimit([]);
+    expect(await driveInviteRepository.findPendingInviteByTokenHash('missing')).toBeNull();
+  });
+});
+
+describe('driveInviteRepository.markInviteConsumed', () => {
+  const setupConditionalUpdate = (returnRows: { id: string }[]) => {
+    const returning = vi.fn().mockResolvedValue(returnRows);
+    const where = vi.fn().mockReturnValue({ returning });
+    const set = vi.fn().mockReturnValue({ where });
+    mockUpdateChain.set = set;
+    return { set, where, returning };
+  };
+
+  it('given an id where consumedAt IS NULL, sets consumedAt and returns true', async () => {
+    const { set, where } = setupConditionalUpdate([{ id: 'inv_1' }]);
+
+    const result = await driveInviteRepository.markInviteConsumed('inv_1');
+
+    expect(result).toBe(true);
+    const setArg = set.mock.calls[0]?.[0] as { consumedAt?: Date };
+    expect(setArg?.consumedAt).toBeInstanceOf(Date);
+    expect(isNull).toHaveBeenCalledWith('pendingInvites.consumedAt');
+    const whereArg = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    expect(whereArg?.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'eq', field: 'pendingInvites.id', value: 'inv_1' }),
+        expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
+      ])
+    );
+  });
+
+  it('given a concurrent consumption has already set consumedAt, the conditional UPDATE matches zero rows and returns false', async () => {
+    setupConditionalUpdate([]);
+    expect(await driveInviteRepository.markInviteConsumed('inv_already_consumed')).toBe(false);
+  });
+});
+
+describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
+  it('returns the row when an unconsumed invite matches drive+email', async () => {
+    const row = { id: 'inv_active' };
+    const { where } = setupSelectLimit([row]);
+
+    expect(
+      await driveInviteRepository.findActivePendingInviteByDriveAndEmail('drive_1', 'jane@example.com')
+    ).toEqual(row);
+    const arg = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
+    expect(arg?.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'eq', field: 'pendingInvites.driveId', value: 'drive_1' }),
+        expect.objectContaining({ kind: 'eq', field: 'pendingInvites.email', value: 'jane@example.com' }),
+        expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
+      ])
+    );
+  });
+
+  it('returns null when no active invite matches', async () => {
+    setupSelectLimit([]);
+    expect(
+      await driveInviteRepository.findActivePendingInviteByDriveAndEmail('drive_1', 'nobody@example.com')
+    ).toBeNull();
   });
 });
 
