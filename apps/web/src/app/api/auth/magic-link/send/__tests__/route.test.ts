@@ -28,7 +28,7 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   createMagicLinkToken: vi.fn().mockResolvedValue({
     ok: true,
-    data: { token: 'mock-magic-token', isNewUser: false },
+    data: { token: 'mock-magic-token' },
   }),
 }));
 
@@ -119,7 +119,7 @@ describe('POST /api/auth/magic-link/send', () => {
     vi.mocked(createMagicLinkToken).mockResolvedValue({
       ok: true,
       // @ts-expect-error - partial mock data
-      data: { token: 'mock-magic-token', isNewUser: false },
+      data: { token: 'mock-magic-token' },
     });
   });
 
@@ -438,7 +438,6 @@ describe('POST /api/auth/magic-link/send', () => {
         'Magic link email sent',
         {
           email: 'te***@example.com',
-          isNewUser: false,
           ip: '127.0.0.1',
         }
       );
@@ -454,7 +453,6 @@ describe('POST /api/auth/magic-link/send', () => {
           eventType: 'auth.token.created',
           details: expect.objectContaining({
             tokenType: 'magic_link',
-            isNewUser: false,
           }),
         })
       );
