@@ -58,6 +58,11 @@ const expiredConnection: SafeConnection = {
   provider: { id: 'p2', slug: 'slack', name: 'Slack', description: null },
 };
 
+const githubProviderTools = [
+  { id: 'create_issue', name: 'create_issue', description: 'Create a new issue', category: 'write' as const },
+  { id: 'list_repos', name: 'list_repos', description: 'List repositories', category: 'read' as const },
+];
+
 const grantWithTools: SafeGrant = {
   id: 'grant-1',
   agentId: 'agent-1',
@@ -67,7 +72,7 @@ const grantWithTools: SafeGrant = {
   readOnly: false,
   rateLimitOverride: null,
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub' } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools } },
 };
 
 const grantNoTools: SafeGrant = {
@@ -79,7 +84,7 @@ const grantNoTools: SafeGrant = {
   readOnly: true,
   rateLimitOverride: { requestsPerMinute: 30 },
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub' } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools } },
 };
 
 function mockHooksDefault(overrides: {
@@ -231,20 +236,22 @@ describe('AgentIntegrationsPanel', () => {
     });
   });
 
-  // --- Tool filtering: shows allowed tools ---
-  it('displays tool filter section when grant has allowedTools', () => {
+  // --- Tool filtering: shows allowed tools as checkboxes ---
+  it('renders provider tools as a checkbox list when grant has allowedTools', () => {
     mockHooksDefault({
       userConnections: [activeConnection],
       grants: [grantWithTools],
     });
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
-    expect(screen.getByText(/tool access/i)).toBeInTheDocument();
-    expect(screen.getByText('create_issue')).toBeInTheDocument();
-    expect(screen.getByText('list_repos')).toBeInTheDocument();
+    expect(screen.getByLabelText('create_issue')).toBeChecked();
+    expect(screen.getByLabelText('list_repos')).toBeChecked();
+    expect(screen.getByText('Create a new issue')).toBeInTheDocument();
+    expect(screen.getByText('List repositories')).toBeInTheDocument();
+    expect(screen.getByText(/selected 2 of 2 tools/i)).toBeInTheDocument();
   });
 
   // --- Tool filtering: update allowed tools ---
-  it('calls PUT to update allowedTools when a tool chip is removed', async () => {
+  it('calls PUT to update allowedTools when a tool checkbox is unchecked', async () => {
     mockHooksDefault({
       userConnections: [activeConnection],
       grants: [grantWithTools],
@@ -254,9 +261,7 @@ describe('AgentIntegrationsPanel', () => {
 
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
 
-    // Find the remove button for create_issue tool
-    const removeButton = screen.getByRole('button', { name: /remove create_issue/i });
-    await user.click(removeButton);
+    await user.click(screen.getByLabelText('create_issue'));
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
@@ -266,14 +271,16 @@ describe('AgentIntegrationsPanel', () => {
     });
   });
 
-  // --- Tool filtering: all tools when allowedTools is null ---
-  it('shows "All tools" indicator when allowedTools is null', () => {
+  // --- Tool filtering: null allowedTools means all checked ---
+  it('renders all tools as checked when allowedTools is null', () => {
     mockHooksDefault({
       userConnections: [activeConnection],
       grants: [grantNoTools],
     });
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
-    expect(screen.getByText(/all tools/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('create_issue')).toBeChecked();
+    expect(screen.getByLabelText('list_repos')).toBeChecked();
+    expect(screen.getByText(/selected 2 of 2 tools/i)).toBeInTheDocument();
   });
 
   // --- Deduplication ---
@@ -288,8 +295,8 @@ describe('AgentIntegrationsPanel', () => {
     expect(items.length).toBe(1);
   });
 
-  // --- Tool filtering: removing last tool sets allowedTools to null ---
-  it('sets allowedTools to null when the last tool is removed', async () => {
+  // --- Tool filtering: unchecking last tool sends empty array ---
+  it('sends an empty allowedTools array when the last checked tool is unchecked', async () => {
     const grantSingleTool: SafeGrant = {
       ...grantWithTools,
       id: 'grant-single',
@@ -304,13 +311,12 @@ describe('AgentIntegrationsPanel', () => {
 
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
 
-    const removeButton = screen.getByRole('button', { name: /remove create_issue/i });
-    await user.click(removeButton);
+    await user.click(screen.getByLabelText('create_issue'));
 
     await waitFor(() => {
       expect(mockPut).toHaveBeenCalledWith(
         '/api/agents/agent-1/integrations/grant-single',
-        expect.objectContaining({ allowedTools: null })
+        expect.objectContaining({ allowedTools: [] })
       );
     });
   });

@@ -3,11 +3,12 @@
 import { useState, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Plug2, AlertCircle, X } from 'lucide-react';
+import { Plug2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentGrants, useUserConnections, useDriveConnections } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
@@ -18,6 +19,16 @@ interface AgentIntegrationsPanelProps {
   pageId: string;
   driveId: string;
 }
+
+type ProviderTool = NonNullable<NonNullable<SafeGrant['connection']>['provider']>['tools'][number];
+
+const getProviderTools = (grant: SafeGrant): ProviderTool[] =>
+  grant.connection?.provider?.tools ?? [];
+
+const getEffectiveAllowed = (grant: SafeGrant, tools: ProviderTool[]): Set<string> =>
+  grant.allowedTools === null
+    ? new Set(tools.map((t) => t.id))
+    : new Set(grant.allowedTools);
 
 export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPanelProps) {
   const { grants, isLoading: loadingGrants, error: grantsError, mutate: mutateGrants } = useAgentGrants(pageId);
@@ -30,7 +41,6 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
   const isLoading = loadingGrants || loadingUser || loadingDrive;
   const error = grantsError || userError || driveError;
 
-  // Merge user + drive connections, deduplicate by id (O(n) with Map)
   const allConnections = useMemo(() => {
     const seen = new Map<string, SafeConnection>();
     for (const c of userConnections) seen.set(c.id, c);
@@ -40,7 +50,6 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
     return Array.from(seen.values());
   }, [userConnections, driveConnections]);
 
-  // Map connectionId -> grant for quick lookup
   const grantByConnectionId = useMemo(
     () => new Map(grants.map((g) => [g.connectionId, g])),
     [grants]
@@ -71,7 +80,6 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
 
   const handleUpdateGrant = async (grant: SafeGrant, updates: {
     readOnly?: boolean;
-    rateLimitOverride?: { requestsPerMinute?: number } | null;
     allowedTools?: string[] | null;
   }) => {
     setUpdatingGrant(grant.id);
@@ -85,15 +93,37 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
     }
   };
 
+  const handleToggleTool = (grant: SafeGrant, toolId: string, checked: boolean) => {
+    const tools = getProviderTools(grant);
+    const current = getEffectiveAllowed(grant, tools);
+    if (checked) {
+      current.add(toolId);
+    } else {
+      current.delete(toolId);
+    }
+    handleUpdateGrant(grant, {
+      allowedTools: tools.filter((t) => current.has(t.id)).map((t) => t.id),
+    });
+  };
+
+  const handleSelectAllTools = (grant: SafeGrant) => {
+    const tools = getProviderTools(grant);
+    handleUpdateGrant(grant, { allowedTools: tools.map((t) => t.id) });
+  };
+
+  const handleDeselectAllTools = (grant: SafeGrant) => {
+    handleUpdateGrant(grant, { allowedTools: [] });
+  };
+
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex items-center gap-2 text-lg">
           <Plug2 className="h-4 w-4" />
-          External Integrations
+          Integration Tools
         </CardTitle>
         <CardDescription>
-          Enable external API connections for this agent.
+          Enable external integrations and choose which of their tools the agent can use.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -120,6 +150,8 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
               const grant = grantByConnectionId.get(connection.id);
               const isEnabled = !!grant;
               const isActive = connection.status === 'active';
+              const tools = grant ? getProviderTools(grant) : [];
+              const allowed = grant ? getEffectiveAllowed(grant, tools) : new Set<string>();
 
               return (
                 <div key={connection.id} className="border rounded-lg">
@@ -151,7 +183,6 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                     />
                   </div>
 
-                  {/* Expanded config when enabled */}
                   {grant && (
                     <div className="border-t px-3 py-3 space-y-3 bg-muted/30">
                       <div className="flex items-center justify-between">
@@ -165,64 +196,73 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                           onCheckedChange={(readOnly) => handleUpdateGrant(grant, { readOnly })}
                         />
                       </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`ratelimit-${grant.id}`} className="text-xs">
-                          Rate limit (req/min, optional)
-                        </Label>
-                        <Input
-                          key={`ratelimit-${grant.id}-${grant.rateLimitOverride?.requestsPerMinute ?? 'default'}`}
-                          id={`ratelimit-${grant.id}`}
-                          type="number"
-                          min={1}
-                          max={1000}
-                          placeholder="Default"
-                          className="h-7 text-xs"
-                          defaultValue={grant.rateLimitOverride?.requestsPerMinute ?? ''}
-                          disabled={updatingGrant === grant.id}
-                          onBlur={(e) => {
-                            const raw = e.target.value.trim();
-                            const parsed = raw === '' ? null : parseInt(raw, 10);
-                            const val = parsed != null && !Number.isNaN(parsed)
-                              ? Math.max(1, Math.min(1000, parsed))
-                              : parsed;
-                            if (val != null && !Number.isNaN(val)) {
-                              e.target.value = String(val);
-                            }
-                            const current = grant.rateLimitOverride?.requestsPerMinute ?? null;
-                            if (val !== current && (val === null || !Number.isNaN(val))) {
-                              handleUpdateGrant(grant, {
-                                rateLimitOverride: val != null ? { requestsPerMinute: val } : null,
-                              });
-                            }
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Tool access</Label>
-                        {grant.allowedTools ? (
-                          <div className="flex flex-wrap gap-1">
-                            {grant.allowedTools.map((tool) => (
-                              <Badge key={tool} variant="secondary" className="text-xs gap-1 pr-1">
-                                {tool}
-                                <button
-                                  type="button"
-                                  aria-label={`Remove ${tool}`}
-                                  disabled={updatingGrant === grant.id}
-                                  className="ml-0.5 rounded-full hover:bg-muted-foreground/20 p-0.5"
-                                  onClick={() => {
-                                    const updated = grant.allowedTools!.filter((t) => t !== tool);
-                                    handleUpdateGrant(grant, {
-                                      allowedTools: updated.length > 0 ? updated : null,
-                                    });
-                                  }}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </Badge>
-                            ))}
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Tools</Label>
+                          <div className="flex space-x-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={updatingGrant === grant.id || tools.length === 0}
+                              onClick={() => handleSelectAllTools(grant)}
+                            >
+                              Select All
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={updatingGrant === grant.id || tools.length === 0}
+                              onClick={() => handleDeselectAllTools(grant)}
+                            >
+                              Deselect All
+                            </Button>
                           </div>
+                        </div>
+                        {tools.length === 0 ? (
+                          <p className="text-xs text-muted-foreground py-2">
+                            This integration does not expose any tools.
+                          </p>
                         ) : (
-                          <p className="text-xs text-muted-foreground">All tools</p>
+                          <>
+                            <div className="space-y-2">
+                              {tools.map((tool) => {
+                                const id = `tool-${grant.id}-${tool.id}`;
+                                return (
+                                  <div
+                                    key={tool.id}
+                                    className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50"
+                                  >
+                                    <Checkbox
+                                      id={id}
+                                      checked={allowed.has(tool.id)}
+                                      disabled={updatingGrant === grant.id}
+                                      onCheckedChange={(checked) =>
+                                        handleToggleTool(grant, tool.id, checked === true)
+                                      }
+                                      className="mt-1"
+                                    />
+                                    <div className="flex-1">
+                                      <label
+                                        htmlFor={id}
+                                        className="text-sm font-medium cursor-pointer"
+                                      >
+                                        {tool.name}
+                                      </label>
+                                      <p className="text-xs text-muted-foreground">
+                                        {tool.description}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Selected {allowed.size} of {tools.length} tools
+                            </p>
+                          </>
                         )}
                       </div>
                     </div>

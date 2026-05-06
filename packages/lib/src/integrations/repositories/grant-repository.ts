@@ -17,6 +17,7 @@ type GrantWithConnection = IntegrationToolGrant & {
     provider: {
       slug: string;
       name: string;
+      config: unknown;
     } | null;
   } | null;
 };

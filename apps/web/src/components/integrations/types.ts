@@ -59,6 +59,12 @@ export interface SafeGrant {
     provider: {
       slug: string;
       name: string;
+      tools: {
+        id: string;
+        name: string;
+        description: string;
+        category: 'read' | 'write' | 'admin' | 'dangerous';
+      }[];
     } | null;
   } | null;
 }
