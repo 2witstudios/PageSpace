@@ -112,10 +112,14 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
 
   const handleSelectAllTools = (grant: SafeGrant) => {
     const tools = getProviderTools(grant);
-    handleUpdateGrant(grant, { allowedTools: tools.map((t) => t.id) });
+    const allIds = tools.map((t) => t.id);
+    const current = grant.allowedTools;
+    if (current && current.length === allIds.length && allIds.every((id) => current.includes(id))) return;
+    handleUpdateGrant(grant, { allowedTools: allIds });
   };
 
   const handleDeselectAllTools = (grant: SafeGrant) => {
+    if (Array.isArray(grant.allowedTools) && grant.allowedTools.length === 0) return;
     handleUpdateGrant(grant, { allowedTools: [] });
   };
 

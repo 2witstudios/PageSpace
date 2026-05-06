@@ -13,6 +13,19 @@ import type { ToolDefinition } from '@pagespace/lib/integrations/types';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+type SafeProviderTool = Pick<ToolDefinition, 'id' | 'name' | 'description' | 'category'>;
+
+const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
+  const rawTools = (config as { tools?: unknown } | null)?.tools;
+  if (!Array.isArray(rawTools)) return [];
+  return (rawTools as ToolDefinition[]).map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    category: t.category,
+  }));
+};
+
 const createGrantSchema = z.object({
   connectionId: z.string().min(1),
   allowedTools: z.array(z.string()).nullable().optional().default(null),
@@ -63,16 +76,7 @@ export async function GET(
           provider: g.connection.provider ? {
             slug: g.connection.provider.slug,
             name: g.connection.provider.name,
-            tools: (() => {
-              const rawTools = (g.connection.provider.config as { tools?: unknown } | null)?.tools;
-              if (!Array.isArray(rawTools)) return [];
-              return (rawTools as ToolDefinition[]).map((t) => ({
-                id: t.id,
-                name: t.name,
-                description: t.description,
-                category: t.category,
-              }));
-            })(),
+            tools: sanitizeProviderTools(g.connection.provider.config),
           } : null,
         } : null,
       })),
