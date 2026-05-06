@@ -47,10 +47,13 @@ export function MessageHoverToolbar({
   className,
 }: MessageHoverToolbarProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
-  const hasOverflow =
-    (canQuoteReply && !!onQuoteReply) ||
-    (canEdit && !!onEdit) ||
-    (canDelete && !!onDelete);
+  const showQuote = canQuoteReply && !!onQuoteReply;
+  const showEdit = canEdit && !!onEdit;
+  const showDelete = canDelete && !!onDelete;
+  const hasOverflow = showQuote || showEdit || showDelete;
+  const showReplyInThread = canReplyInThread && !!onReplyInThread;
+  const hasAny = canReact || showReplyInThread || hasOverflow;
+  if (!hasAny) return null;
 
   return (
     <div
@@ -84,7 +87,7 @@ export function MessageHoverToolbar({
           </button>
         </EmojiPickerPopover>
       )}
-      {canReplyInThread && onReplyInThread && (
+      {showReplyInThread && (
         <button
           type="button"
           aria-label="Reply in thread"
@@ -106,22 +109,22 @@ export function MessageHoverToolbar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canQuoteReply && onQuoteReply && (
+            {showQuote && (
               <DropdownMenuItem onClick={onQuoteReply}>
                 <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
               </DropdownMenuItem>
             )}
-            {canEdit && onEdit && (
+            {showEdit && (
               <>
-                {canQuoteReply && onQuoteReply && <DropdownMenuSeparator />}
+                {showQuote && <DropdownMenuSeparator />}
                 <DropdownMenuItem onClick={onEdit}>
                   <Pencil className="mr-2 h-4 w-4" /> Edit
                 </DropdownMenuItem>
               </>
             )}
-            {canDelete && onDelete && (
+            {showDelete && (
               <>
-                <DropdownMenuSeparator />
+                {(showQuote || showEdit) && <DropdownMenuSeparator />}
                 <DropdownMenuItem
                   onClick={onDelete}
                   className="text-destructive focus:text-destructive"
