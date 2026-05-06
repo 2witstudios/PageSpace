@@ -134,41 +134,27 @@ describe('magic-link-service', () => {
       expect(mockDeleteWhere).not.toHaveBeenCalled();
     });
 
-    it('should create new user when email not found', async () => {
+    it('returns NO_ACCOUNT_FOUND when email has no users row (auto-create removed by GDPR + zero-trust epic)', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const mockReturning = vi.fn().mockResolvedValue([{ id: 'new-user-1' }]);
-      const mockValues = vi.fn(() => ({ returning: mockReturning }));
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-      vi.mocked(db.delete).mockReturnValue({ where: vi.fn() } as never);
 
       const result = await createMagicLinkToken({ email: 'new@test.com' });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('NO_ACCOUNT_FOUND');
       }
+      // No insert into users — magic-link is login-only.
+      expect(db.insert).not.toHaveBeenCalled();
     });
 
-    it('should handle unique constraint violation (race condition)', async () => {
+    it('does not call db.insert(users) on the unknown-email path (no user-creation race exists any more)', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const mockReturning = vi.fn().mockRejectedValue(new Error('unique constraint'));
-      const mockValues = vi.fn(() => ({ returning: mockReturning }));
-      // First call: insert fails, second call: select finds user, third call: delete, fourth: insert token
-      let insertCallCount = 0;
-      vi.mocked(db.insert).mockImplementation(() => {
-        insertCallCount++;
-        if (insertCallCount === 1) {
-          return { values: mockValues } as never;
-        }
-        return { values: vi.fn() } as never;
-      });
-      const mockWhere = vi.fn().mockResolvedValue([{ id: 'existing-user' }]);
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
-      vi.mocked(db.delete).mockReturnValue({ where: vi.fn() } as never);
 
-      const result = await createMagicLinkToken({ email: 'race@test.com' });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-      }
+      await createMagicLinkToken({ email: 'race@test.com' });
+
+      // The previous race-recovery path that re-selected the user after a
+      // unique-constraint violation is dead code — magic-link no longer
+      // attempts an INSERT on the users table.
+      expect(db.insert).not.toHaveBeenCalled();
     });
   });
 
