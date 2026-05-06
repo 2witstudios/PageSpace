@@ -184,8 +184,13 @@ export function PasskeySignupButton({
     return null;
   }
 
-  const isButtonDisabled =
-    disabled || isRegistering || isSupported === null || !acceptedTos;
+  // The collapsed CTA must NOT block on `acceptedTos` — the ToS checkbox only
+  // renders inside the expanded form, so blocking the trigger would make
+  // signup unreachable. The submit button (inside the expanded form) gates on
+  // `acceptedTos` separately below.
+  const isExpandTriggerDisabled =
+    disabled || isRegistering || isSupported === null;
+  const isSubmitDisabled = isExpandTriggerDisabled || !acceptedTos;
 
   return (
     <div className={cn('w-full', className)}>
@@ -199,7 +204,7 @@ export function PasskeySignupButton({
           >
             <Button
               onClick={() => setIsExpanded(true)}
-              disabled={isButtonDisabled}
+              disabled={isExpandTriggerDisabled}
               className="w-full"
             >
               <Fingerprint className="mr-2 h-4 w-4" />
@@ -274,7 +279,7 @@ export function PasskeySignupButton({
               </Button>
               <Button
                 onClick={handleSignup}
-                disabled={isButtonDisabled || !name.trim() || !email.trim()}
+                disabled={isSubmitDisabled || !name.trim() || !email.trim()}
                 className="flex-1"
               >
                 {isRegistering ? (

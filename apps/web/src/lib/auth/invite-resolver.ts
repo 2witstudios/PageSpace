@@ -43,8 +43,14 @@ export const resolveInviteContext = async ({
     return { ok: false, error: 'EXPIRED' };
   }
 
+  // Classify by ACCOUNT PRESENCE, not ToS acceptance state. OAuth/magic-link
+  // users (and rows from before the ToS column existed) have null
+  // tosAcceptedAt yet are real existing accounts — gating on
+  // tosAcceptedAt would route them to /auth/signup where signup-passkey
+  // returns EMAIL_EXISTS and the invite becomes unclaimable. The accept
+  // gateway handles ToS re-prompting separately if/when needed.
   const tosStatus = await driveInviteRepository.findUserToSStatusByEmail(invite.email);
-  const isExistingUser = tosStatus?.tosAcceptedAt != null;
+  const isExistingUser = tosStatus !== null;
 
   return {
     ok: true,

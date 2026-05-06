@@ -82,18 +82,22 @@ describe('resolveInviteContext', () => {
     });
   });
 
-  it('given an active row + a user with tosAcceptedAt null, returns ok with isExistingUser=false', async () => {
+  it('given an active row + a user record exists with tosAcceptedAt null (OAuth / magic-link user), returns ok with isExistingUser=true', async () => {
     vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
     vi.mocked(driveInviteRepository.findUserToSStatusByEmail).mockResolvedValue({
-      id: 'user_pending',
+      id: 'user_oauth',
       tosAcceptedAt: null,
     });
 
     const result = await resolveInviteContext({ token: 'tok', now });
 
+    // Classification is by account presence, not ToS state — OAuth/magic-link
+    // users have null tosAcceptedAt yet must be routed through the existing-
+    // user CTA, otherwise signup returns EMAIL_EXISTS and the invite becomes
+    // unclaimable.
     expect(result).toEqual({
       ok: true,
-      data: expect.objectContaining({ isExistingUser: false }),
+      data: expect.objectContaining({ isExistingUser: true }),
     });
   });
 
