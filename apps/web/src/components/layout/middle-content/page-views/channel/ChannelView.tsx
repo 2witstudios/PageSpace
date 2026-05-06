@@ -134,10 +134,26 @@ function ChannelView({ page }: ChannelViewProps) {
       });
     };
 
+    const handleThreadCountUpdated = (data: {
+      rootId: string;
+      replyCount: number;
+      lastReplyAt: string;
+    }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.rootId
+            ? { ...m, replyCount: data.replyCount, lastReplyAt: data.lastReplyAt }
+            : m,
+        ),
+      );
+    };
+
     socket.on('new_message', handleNewMessage);
+    socket.on('thread_reply_count_updated', handleThreadCountUpdated);
 
     return () => {
       socket.off('new_message', handleNewMessage);
+      socket.off('thread_reply_count_updated', handleThreadCountUpdated);
     };
   }, [socket, connectionStatus, page.id]);
 
