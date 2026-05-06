@@ -58,15 +58,16 @@ const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
 const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
   [
     'repositories/drive-invite-repository.ts',
-    'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; findActivePendingMemberByEmail intentionally filters IS NULL to surface pending rows; createDriveMember/findExistingMember/updateDriveMemberRole operate by composite key or memberId and do not branch on acceptedAt).',
+    'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; createDriveMember/findExistingMember/updateDriveMemberRole/acceptPendingMember operate by composite key or memberId and do not branch on acceptedAt). Pending invitation state moved out of drive_members into pending_invites by the GDPR + zero-trust epic, so the legacy IS NULL filter on drive_members no longer exists in this file.',
+  ],
+  [
+    'auth/invite-acceptance.ts',
+    'Acceptance pipe — only references driveMembers in a docstring describing the underlying insert (delegates to consumeInviteAndCreateMembership in the repository, which is allow-listed above). The pipe itself does not read drive_members; it composes pure predicates and the transactional repo helper.',
   ],
 ]);
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;
 const ACCEPTED_AT_GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
-// findActivePendingMemberByEmail intentionally filters IS NULL — that file is
-// allow-listed via LIB_ACCEPTED_AT_GATE_EXEMPT, so this constant is unused
-// today but documents the inverse case for future reviewers.
 
 function collectRouteFiles(dir: string): string[] {
   const results: string[] = [];
