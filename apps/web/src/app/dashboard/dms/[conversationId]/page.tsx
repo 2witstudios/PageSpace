@@ -15,25 +15,19 @@ import { MessageDropZone } from '@/components/layout/middle-content/page-views/c
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
+import { MessageHoverActions } from '@/components/shared/MessageHoverActions';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { isFirstInGroup } from '@/lib/messages/grouping';
 
 const fetcher = async (url: string) => {
@@ -498,13 +492,15 @@ export default function InboxDMPage() {
                 { authorKey: message.senderId, createdAt: message.createdAt },
                 previous ? { authorKey: previous.senderId, createdAt: previous.createdAt } : undefined,
               );
-              const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
-              const showMenu = isOwnMessage && editingMessageId !== message.id;
+              const rowSpacing = i === 0 ? '' : isFirst ? 'mt-3' : 'mt-0.5';
+              const isTemp = message.id.startsWith('temp-');
+              const isEditing = editingMessageId === message.id;
+              const isAuthorEditable = isOwnMessage && !isTemp && !isEditing;
               const replyCount = message.replyCount ?? 0;
-              const showReplyInThread = !message.id.startsWith('temp-');
+              const canReplyHere = !isTemp;
 
               return (
-                <div key={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                <div key={message.id} className={`group/msg relative flex items-start gap-4 ${rowSpacing}`}>
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (
@@ -519,14 +515,10 @@ export default function InboxDMPage() {
                       )}
                     </Avatar>
                   ) : (
-                    <div className="h-10 w-10 flex-shrink-0 relative" aria-hidden>
-                      <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
-                        {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
+                    <div className="h-10 w-10 flex-shrink-0" aria-hidden />
                   )}
 
-                  <div className="flex-1 min-w-0 relative">
+                  <div className="flex-1 min-w-0">
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
@@ -542,52 +534,10 @@ export default function InboxDMPage() {
                         {message.isRead && isOwnMessage && (
                           <span className="text-xs text-muted-foreground">Read</span>
                         )}
-                        <div className="ml-auto flex items-center gap-1">
-                          {showReplyInThread && (
-                            <button
-                              type="button"
-                              aria-label="Reply in thread"
-                              data-testid={`reply-in-thread-${message.id}`}
-                              onClick={() =>
-                                openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                              }
-                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              <MessageSquareReply size={14} aria-hidden />
-                            </button>
-                          )}
-                          {showMenu && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                aria-label="Message options"
-                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                type="button"
-                              >
-                                <MoreHorizontal size={14} aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                              >
-                                <Pencil className="mr-2 h-4 w-4" /> Edit
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onClick={() => handleDeleteMessage(message.id)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" /> Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                          )}
-                        </div>
                       </div>
                     )}
 
-                    {editingMessageId === message.id ? (
+                    {isEditing ? (
                       <div className="mt-1 flex flex-col gap-2">
                         <textarea
                           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
@@ -645,50 +595,6 @@ export default function InboxDMPage() {
                         )}
                       </div>
                     )}
-                    {!isFirst && (
-                      <div className="absolute top-0 right-0 flex items-center gap-1">
-                        {showReplyInThread && (
-                          <button
-                            type="button"
-                            aria-label="Reply in thread"
-                            data-testid={`reply-in-thread-${message.id}`}
-                            onClick={() =>
-                              openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                            }
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            <MessageSquareReply size={14} aria-hidden />
-                          </button>
-                        )}
-                        {showMenu && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                aria-label="Message options"
-                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                type="button"
-                              >
-                                <MoreHorizontal size={14} aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                              >
-                                <Pencil className="mr-2 h-4 w-4" /> Edit
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onClick={() => handleDeleteMessage(message.id)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" /> Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </div>
-                    )}
                     {replyCount > 0 && (
                       <button
                         type="button"
@@ -704,7 +610,7 @@ export default function InboxDMPage() {
                           : ''}
                       </button>
                     )}
-                    {user && !message.id.startsWith('temp-') && (
+                    {user && !isTemp && (
                       <MessageReactions
                         reactions={message.reactions || []}
                         currentUserId={user.id}
@@ -713,6 +619,21 @@ export default function InboxDMPage() {
                       />
                     )}
                   </div>
+                  {!isEditing && (
+                    <MessageHoverActions
+                      messageId={message.id}
+                      canReact={canReplyHere}
+                      canReply={canReplyHere}
+                      canEdit={isAuthorEditable}
+                      canDelete={isAuthorEditable}
+                      onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                      onReplyInThread={() =>
+                        openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
+                      }
+                      onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                      onDelete={() => handleDeleteMessage(message.id)}
+                    />
+                  )}
                 </div>
               );
             })}

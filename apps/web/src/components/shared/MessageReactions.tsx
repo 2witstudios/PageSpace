@@ -1,15 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
 import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
-import { EmojiPickerPopover } from '@/components/ui/emoji-picker';
-import { Plus } from 'lucide-react';
 
 export interface Reaction {
   id: string;
@@ -22,17 +19,12 @@ export interface Reaction {
 }
 
 export interface MessageReactionsProps {
-  /** Reactions on this message */
   reactions: Reaction[];
-  /** Current user ID */
   currentUserId: string;
-  /** Called when adding a reaction */
   onAddReaction: (emoji: string) => void;
-  /** Called when removing a reaction */
   onRemoveReaction: (emoji: string) => void;
-  /** Whether the user can add reactions */
+  /** Whether the current user is allowed to toggle their own reactions */
   canReact?: boolean;
-  /** Additional class names */
   className?: string;
 }
 
@@ -43,15 +35,6 @@ interface GroupedReaction {
   hasReacted: boolean;
 }
 
-/**
- * MessageReactions - Display and manage reactions on a message
- *
- * Features:
- * - Grouped reaction chips with counts
- * - Hover tooltip showing who reacted
- * - Click to toggle own reaction
- * - Add reaction button with emoji picker
- */
 export function MessageReactions({
   reactions,
   currentUserId,
@@ -60,9 +43,6 @@ export function MessageReactions({
   canReact = true,
   className,
 }: MessageReactionsProps) {
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  // Group reactions by emoji
   const groupedReactions = useMemo<GroupedReaction[]>(() => {
     const groups = new Map<string, GroupedReaction>();
 
@@ -84,17 +64,14 @@ export function MessageReactions({
       }
     }
 
-    // Sort by count descending, then by emoji
     return Array.from(groups.values()).sort((a, b) => {
       if (b.count !== a.count) return b.count - a.count;
       return a.emoji.localeCompare(b.emoji);
     });
   }, [reactions, currentUserId]);
 
-  // Handle clicking a reaction chip
   const handleReactionClick = (group: GroupedReaction) => {
     if (!canReact) return;
-
     if (group.hasReacted) {
       onRemoveReaction(group.emoji);
     } else {
@@ -102,21 +79,6 @@ export function MessageReactions({
     }
   };
 
-  // Handle selecting emoji from picker
-  const handleEmojiSelect = (emoji: string) => {
-    // Check if already reacted with this emoji
-    const existing = groupedReactions.find((g) => g.emoji === emoji);
-    if (existing?.hasReacted) {
-      // Already reacted, remove it
-      onRemoveReaction(emoji);
-    } else {
-      // Add new reaction
-      onAddReaction(emoji);
-    }
-    setPickerOpen(false);
-  };
-
-  // Format user names for tooltip
   const formatUserNames = (users: { id: string; name: string | null }[]) => {
     const names = users
       .map((u) => (u.id === currentUserId ? 'You' : u.name || 'Unknown'))
@@ -129,13 +91,10 @@ export function MessageReactions({
     return names.join(', ');
   };
 
-  if (groupedReactions.length === 0 && !canReact) {
-    return null;
-  }
+  if (groupedReactions.length === 0) return null;
 
   return (
     <div className={cn('flex flex-wrap items-center gap-1 mt-1', className)}>
-      {/* Reaction chips */}
       {groupedReactions.map((group) => (
         <Tooltip key={group.emoji}>
           <TooltipTrigger asChild>
@@ -149,7 +108,7 @@ export function MessageReactions({
                 group.hasReacted
                   ? 'bg-primary/10 border-primary/30 text-primary hover:bg-primary/20'
                   : 'bg-muted/50 border-border/50 text-muted-foreground hover:bg-muted',
-                !canReact && 'cursor-default opacity-80'
+                !canReact && 'cursor-default opacity-80',
               )}
             >
               <span className="text-sm">{group.emoji}</span>
@@ -161,30 +120,6 @@ export function MessageReactions({
           </TooltipContent>
         </Tooltip>
       ))}
-
-      {/* Add reaction button */}
-      {canReact && (
-        <EmojiPickerPopover
-          open={pickerOpen}
-          onOpenChange={setPickerOpen}
-          onEmojiSelect={handleEmojiSelect}
-          side="top"
-          align="start"
-        >
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              'h-6 w-6 p-0 rounded-full',
-              'text-muted-foreground hover:text-foreground',
-              'hover:bg-muted/50',
-            )}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span className="sr-only">Add reaction</span>
-          </Button>
-        </EmojiPickerPopover>
-      )}
     </div>
   );
 }

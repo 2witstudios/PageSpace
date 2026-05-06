@@ -15,18 +15,13 @@ import {
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
+import { MessageHoverActions } from '@/components/shared/MessageHoverActions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Pencil, Trash2, Check, X, MoreHorizontal } from 'lucide-react';
+import { Lock, Check, X } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import {
   type AttachmentMeta,
   type FileRelation,
@@ -65,9 +60,12 @@ function ChannelView({ page }: ChannelViewProps) {
   const connectionStatus = useSocketStore((state) => state.connectionStatus);
   const connect = useSocketStore((state) => state.connect);
 
+  const openThread = useThreadPanelStore((state) => state.openThread);
+
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
+  const canReact = permissions?.canView || false;
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -434,23 +432,23 @@ function ChannelView({ page }: ChannelViewProps) {
                               }
                             : undefined,
                         );
-                        const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
-                        const showMenu = isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id;
+                        const rowSpacing = i === 0 ? '' : isFirst ? 'mt-3' : 'mt-0.5';
+                        const isTemp = m.id.startsWith('temp-');
+                        const isEditing = editingMessageId === m.id;
+                        const isAuthorEditable = isOwnMessage && !isTemp && !isEditing;
+                        const canReplyHere = !isAi && !isTemp;
+                        const canReactHere = canReact && !isTemp;
                         return (
-                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                        <div key={m.id} className={`group/msg relative flex items-start gap-4 ${rowSpacing}`}>
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
                                   <AvatarFallback>{avatarFallback}</AvatarFallback>
                               </Avatar>
                             ) : (
-                              <div className="size-8 shrink-0 relative" aria-hidden>
-                                <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
-                                  {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </span>
-                              </div>
+                              <div className="size-8 shrink-0" aria-hidden />
                             )}
-                            <div className="flex flex-col min-w-0 flex-1 relative">
+                            <div className="flex flex-col min-w-0 flex-1">
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -465,36 +463,9 @@ function ChannelView({ page }: ChannelViewProps) {
                                       {m.editedAt && (
                                         <span className="text-xs text-muted-foreground italic">(Edited)</span>
                                       )}
-                                      {showMenu && (
-                                        <DropdownMenu>
-                                          <DropdownMenuTrigger asChild>
-                                            <button
-                                              aria-label="Message options"
-                                              className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                              type="button"
-                                            >
-                                              <MoreHorizontal size={14} aria-hidden />
-                                            </button>
-                                          </DropdownMenuTrigger>
-                                          <DropdownMenuContent align="end">
-                                            <DropdownMenuItem
-                                              onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                            >
-                                              <Pencil className="mr-2 h-4 w-4" /> Edit
-                                            </DropdownMenuItem>
-                                            <DropdownMenuSeparator />
-                                            <DropdownMenuItem
-                                              onClick={() => handleDeleteMessage(m.id)}
-                                              className="text-destructive focus:text-destructive"
-                                            >
-                                              <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                            </DropdownMenuItem>
-                                          </DropdownMenuContent>
-                                        </DropdownMenu>
-                                      )}
                                   </div>
                                 )}
-                                {editingMessageId === m.id ? (
+                                {isEditing ? (
                                   <div className="mt-1 flex flex-col gap-2">
                                     <textarea
                                       className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
@@ -544,43 +515,31 @@ function ChannelView({ page }: ChannelViewProps) {
                                   </>
                                 )}
                                 <MessageAttachment message={m} />
-                                {!isFirst && showMenu && (
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <button
-                                        aria-label="Message options"
-                                        className="absolute top-0 right-0 p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                        type="button"
-                                      >
-                                        <MoreHorizontal size={14} aria-hidden />
-                                      </button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                      <DropdownMenuItem
-                                        onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                      >
-                                        <Pencil className="mr-2 h-4 w-4" /> Edit
-                                      </DropdownMenuItem>
-                                      <DropdownMenuSeparator />
-                                      <DropdownMenuItem
-                                        onClick={() => handleDeleteMessage(m.id)}
-                                        className="text-destructive focus:text-destructive"
-                                      >
-                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                      </DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
-                                )}
-                                {user && !m.id.startsWith('temp-') && (
+                                {user && !isTemp && (
                                   <MessageReactions
                                     reactions={m.reactions || []}
                                     currentUserId={user.id}
                                     onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
                                     onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
-                                    canReact={permissions?.canView || false}
+                                    canReact={canReactHere}
                                   />
                                 )}
                             </div>
+                            {!isEditing && (
+                              <MessageHoverActions
+                                messageId={m.id}
+                                canReact={canReactHere}
+                                canReply={canReplyHere}
+                                canEdit={isAuthorEditable}
+                                canDelete={isAuthorEditable}
+                                onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                onReplyInThread={() =>
+                                  openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                }
+                                onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                onDelete={() => handleDeleteMessage(m.id)}
+                              />
+                            )}
                         </div>
                         );
                     })}
