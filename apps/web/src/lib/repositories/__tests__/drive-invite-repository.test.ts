@@ -268,53 +268,10 @@ describe('driveInviteRepository.findUserEmail', () => {
   });
 });
 
-describe('driveInviteRepository.findPendingMembersForUser', () => {
-  const setupSelectJoinWhere = (rows: unknown[]) => {
-    const where = vi.fn().mockResolvedValue(rows);
-    const innerJoin = vi.fn().mockReturnValue({ where });
-    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin });
-    return { innerJoin, where };
-  };
-
-  it('given a user with two pending rows across two drives, returns both with drive names joined in', async () => {
-    const rows = [
-      { id: 'mem_a', driveId: 'drive_a', role: 'MEMBER', driveName: 'Alpha' },
-      { id: 'mem_b', driveId: 'drive_b', role: 'ADMIN', driveName: 'Beta' },
-    ];
-    const { where } = setupSelectJoinWhere(rows);
-
-    const result = await driveInviteRepository.findPendingMembersForUser('user_1');
-
-    expect(result).toEqual(rows);
-    expect(isNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
-    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
-    expect(args?.conditions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'eq', field: 'driveMembers.userId', value: 'user_1' }),
-        expect.objectContaining({ kind: 'isNull', field: 'driveMembers.acceptedAt' }),
-      ])
-    );
-  });
-
-  it('given a user with no pending rows, returns an empty array', async () => {
-    setupSelectJoinWhere([]);
-    expect(await driveInviteRepository.findPendingMembersForUser('user_1')).toEqual([]);
-  });
-
-  it('given a user with both pending and accepted rows, the isNull(acceptedAt) clause filters to only pending', async () => {
-    const pendingOnly = [{ id: 'mem_p', driveId: 'drive_p', role: 'MEMBER', driveName: 'Pending' }];
-    const { where } = setupSelectJoinWhere(pendingOnly);
-
-    const result = await driveInviteRepository.findPendingMembersForUser('user_1');
-
-    expect(result).toEqual(pendingOnly);
-    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
-    const hasIsNull = (args?.conditions ?? []).some(
-      (c) => (c as { kind?: string }).kind === 'isNull'
-    );
-    expect(hasIsNull).toBe(true);
-  });
-});
+// findPendingMembersForUser and findActivePendingMemberByEmail were deleted —
+// pending state moved out of driveMembers into pending_invites. The CRUD for
+// the new table is covered above (createPendingInvite, findPendingInviteByTokenHash,
+// markInviteConsumed, findActivePendingInviteByDriveAndEmail, deletePendingInvite).
 
 describe('driveInviteRepository.acceptPendingMember', () => {
   const setupConditionalUpdate = (returnRows: { id: string }[]) => {

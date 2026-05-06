@@ -76,12 +76,6 @@ describe('Magic Link Service', () => {
           expected: true,
         });
 
-        assert({
-          given: 'an email for existing user',
-          should: 'return isNewUser: false',
-          actual: result.data.isNewUser,
-          expected: false,
-        });
       }
     });
 
@@ -148,13 +142,6 @@ describe('Magic Link Service', () => {
       if (result.ok) {
         // Track dynamically created user for cleanup
         dynamicallyCreatedUserIds.push(result.data.userId);
-
-        assert({
-          given: 'an email for non-existent user',
-          should: 'return isNewUser: true',
-          actual: result.data.isNewUser,
-          expected: true,
-        });
       }
     });
 
@@ -353,12 +340,6 @@ describe('Magic Link Service', () => {
           expected: testUserId,
         });
 
-        assert({
-          given: 'a valid magic link token for existing user',
-          should: 'return isNewUser: false',
-          actual: verifyResult.data.isNewUser,
-          expected: false,
-        });
       }
     });
 

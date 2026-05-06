@@ -127,7 +127,7 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     vi.clearAllMocks();
     vi.mocked(verifyMagicLinkToken).mockResolvedValue({
       ok: true,
-      data: { userId: 'user-1', isNewUser: false, metadata: desktopMetadata },
+      data: { userId: 'user-1', metadata: desktopMetadata },
     });
   });
 
@@ -157,18 +157,7 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     }));
   });
 
-  it('provisions Getting Started drive for new desktop users', async () => {
-    vi.mocked(verifyMagicLinkToken).mockResolvedValue({
-      ok: true,
-      data: { userId: 'user-1', isNewUser: true, metadata: desktopMetadata },
-    });
-
-    await GET(createVerifyRequest());
-
-    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-1');
-  });
-
-  it('does not provision drive for existing desktop users', async () => {
+  it('does not provision drive on desktop magic-link (login-only after GDPR cutover)', async () => {
     await GET(createVerifyRequest());
 
     expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
@@ -177,7 +166,7 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
   it('falls through to web flow when no desktop metadata', async () => {
     vi.mocked(verifyMagicLinkToken).mockResolvedValue({
       ok: true,
-      data: { userId: 'user-1', isNewUser: false, metadata: null },
+      data: { userId: 'user-1', metadata: null },
     });
 
     const response = await GET(createVerifyRequest());
@@ -187,15 +176,4 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     expect(createExchangeCode).not.toHaveBeenCalled();
   });
 
-  it('includes welcome param for new users', async () => {
-    vi.mocked(verifyMagicLinkToken).mockResolvedValue({
-      ok: true,
-      data: { userId: 'user-1', isNewUser: true, metadata: desktopMetadata },
-    });
-
-    const response = await GET(createVerifyRequest());
-
-    const location = response.headers.get('Location') || '';
-    expect(location).toContain('welcome=true');
-  });
 });

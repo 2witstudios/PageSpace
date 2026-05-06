@@ -104,7 +104,6 @@ describe('magic-link-service', () => {
       if (result.ok) {
         expect(result.data.token).toBe('ps_magic_testtoken123');
         expect(result.data.userId).toBe('user-1');
-        expect(result.data.isNewUser).toBe(false);
       }
     });
 
@@ -145,7 +144,6 @@ describe('magic-link-service', () => {
       const result = await createMagicLinkToken({ email: 'new@test.com' });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.data.isNewUser).toBe(true);
       }
     });
 
@@ -170,7 +168,6 @@ describe('magic-link-service', () => {
       const result = await createMagicLinkToken({ email: 'race@test.com' });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.data.isNewUser).toBe(false);
       }
     });
   });
@@ -341,7 +338,6 @@ describe('magic-link-service', () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.data.userId).toBe('user-1');
-        expect(result.data.isNewUser).toBe(true); // emailVerified is null
       }
     });
   });

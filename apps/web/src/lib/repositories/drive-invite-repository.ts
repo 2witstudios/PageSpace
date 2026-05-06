@@ -169,22 +169,6 @@ export const driveInviteRepository = {
       : null;
   },
 
-  async findActivePendingMemberByEmail(driveId: string, email: string): Promise<{ id: string } | null> {
-    const results = await db
-      .select({ id: driveMembers.id })
-      .from(driveMembers)
-      .innerJoin(users, eq(users.id, driveMembers.userId))
-      .where(
-        and(
-          eq(driveMembers.driveId, driveId),
-          eq(users.email, email),
-          isNull(driveMembers.acceptedAt)
-        )
-      )
-      .limit(1);
-    return results.at(0) ?? null;
-  },
-
   async findUserToSStatusByEmail(email: string): Promise<{ tosAcceptedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.email, email),
@@ -245,24 +229,6 @@ export const driveInviteRepository = {
 
       return { memberId: member.id, permissionsGranted };
     });
-  },
-
-  async findPendingMembersForUser(userId: string) {
-    return db
-      .select({
-        id: driveMembers.id,
-        driveId: driveMembers.driveId,
-        role: driveMembers.role,
-        driveName: drives.name,
-      })
-      .from(driveMembers)
-      .innerJoin(drives, eq(drives.id, driveMembers.driveId))
-      .where(
-        and(
-          eq(driveMembers.userId, userId),
-          isNull(driveMembers.acceptedAt)
-        )
-      );
   },
 
   // REVIEW: confirm overwrite acceptable for compliance.

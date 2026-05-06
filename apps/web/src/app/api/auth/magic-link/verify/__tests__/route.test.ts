@@ -45,7 +45,7 @@ vi.mock('@pagespace/lib/auth/constants', () => ({
 vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   verifyMagicLinkToken: vi.fn().mockResolvedValue({
     ok: true,
-    data: { userId: 'test-user-id', isNewUser: false },
+    data: { userId: 'test-user-id' },
   }),
 }));
 
@@ -121,7 +121,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(verifyMagicLinkToken).mockResolvedValue({
       ok: true,
-      data: { userId: 'test-user-id', isNewUser: false },
+      data: { userId: 'test-user-id' },
     });
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
     // @ts-expect-error - partial mock data
@@ -357,60 +357,16 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
   });
 
-  describe('new user drive provisioning', () => {
-    it('provisions drive for new users and redirects to it', async () => {
+  describe('drive provisioning (magic-link is login-only post-GDPR-cutover)', () => {
+    // Magic-link no longer creates new users — NO_ACCOUNT_FOUND is returned for
+    // unknown emails (createMagicLinkToken in magic-link-service.ts). Every
+    // verifyMagicLinkToken success therefore corresponds to an existing user,
+    // and isNewUser is hard-coded to false in the route. Drive provisioning
+    // happens at /auth/signup, not here.
+    it('never provisions a Getting Started drive on magic-link verify', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: true,
-        data: { userId: 'test-user-id', isNewUser: true },
-      });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
-        driveId: 'provisioned-drive-id',
-        created: true,
-      });
-
-      const response = await GET(createVerifyRequest('valid-token'));
-      const location = response.headers.get('Location')!;
-
-      expect(location).toContain('/dashboard/provisioned-drive-id');
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
-    });
-
-    it('uses default dashboard path when drive provisioning returns null', async () => {
-      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
-        ok: true,
-        data: { userId: 'test-user-id', isNewUser: true },
-      });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
-
-      const response = await GET(createVerifyRequest('valid-token'));
-      const location = response.headers.get('Location')!;
-
-      expect(location).toContain('/dashboard');
-    });
-
-    it('continues with default dashboard when drive provisioning fails', async () => {
-      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
-        ok: true,
-        data: { userId: 'test-user-id', isNewUser: true },
-      });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
-
-      const response = await GET(createVerifyRequest('valid-token'));
-      const location = response.headers.get('Location')!;
-
-      expect(location).toContain('/dashboard');
-      expect(location).not.toContain('provisioned');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
-        new Error('DB error'),
-        { userId: 'test-user-id' }
-      );
-    });
-
-    it('does not provision drive for existing users', async () => {
-      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
-        ok: true,
-        data: { userId: 'test-user-id', isNewUser: false },
+        data: { userId: 'test-user-id' },
       });
 
       await GET(createVerifyRequest('valid-token'));
@@ -598,7 +554,6 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: {
           userId: 'test-user-id',
-          isNewUser: false,
           metadata: JSON.stringify({ platform: 'desktop', deviceId: 'dev-1' }),
         },
       });

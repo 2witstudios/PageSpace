@@ -60,22 +60,28 @@ export type MagicLinkError =
   | { code: 'TOKEN_EXPIRED' }
   | { code: 'TOKEN_ALREADY_USED' }
   | { code: 'TOKEN_NOT_FOUND' }
-  | { code: 'USER_SUSPENDED'; userId: string };
+  | { code: 'USER_SUSPENDED'; userId: string }
+  | { code: 'NO_ACCOUNT_FOUND' };
 
 export type CreateMagicLinkResult =
-  | { ok: true; data: { token: string; userId: string; isNewUser: boolean } }
+  | { ok: true; data: { token: string; userId: string } }
   | { ok: false; error: MagicLinkError };
 
 export type VerifyMagicLinkResult =
-  | { ok: true; data: { userId: string; isNewUser: boolean; metadata?: string | null } }
+  | { ok: true; data: { userId: string; metadata?: string | null } }
   | { ok: false; error: MagicLinkError };
 
 /**
  * Create a magic link token for passwordless authentication.
  *
- * Given an email for existing user, generates ps_magic_* token with 5-minute expiry.
- * Given an email for non-existent user, creates pending signup token.
- * Given a suspended user, returns USER_SUSPENDED error.
+ * Given an email for an existing user, generates a ps_magic_* token with the
+ * configured expiry. Given a suspended user, returns USER_SUSPENDED. Given an
+ * email with no matching user, returns NO_ACCOUNT_FOUND — magic-links are
+ * an existing-account login mechanism only. Account creation now happens
+ * exclusively through the explicit /auth/signup flow with affirmative ToS
+ * acceptance (GDPR + zero-trust requirement). Drive invites no longer issue
+ * magic-links; they live in pending_invites and are accepted via the
+ * /invite/[token]/accept gateway.
  *
  * @param input - Unknown input, validated with Zod
  * @returns Result with token or error
@@ -103,58 +109,19 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
     columns: { id: true, suspendedAt: true },
   });
 
+  if (!existingUser) {
+    return { ok: false, error: { code: 'NO_ACCOUNT_FOUND' } };
+  }
+
   // If user is suspended, reject
-  if (existingUser?.suspendedAt) {
+  if (existingUser.suspendedAt) {
     return {
       ok: false,
       error: { code: 'USER_SUSPENDED', userId: existingUser.id },
     };
   }
 
-  let userId: string;
-  let isNewUser = false;
-
-  if (existingUser) {
-    userId = existingUser.id;
-  } else {
-    // Create a temporary user for magic link signup
-    // The user will be marked as pending until they complete verification
-    // Handle race condition where concurrent requests try to create the same user
-    try {
-      const [newUser] = await db.insert(users).values({
-        id: createId(),
-        name: normalizedEmail.split('@')[0] ?? 'New User',
-        email: normalizedEmail,
-        provider: 'email',
-        role: 'user',
-        tokenVersion: 1,
-      }).returning();
-      userId = newUser.id;
-      isNewUser = true;
-    } catch (error: unknown) {
-      // Handle unique constraint violation - another request created the user
-      const isConstraintViolation =
-        error instanceof Error &&
-        (error.message.includes('unique constraint') ||
-          error.message.includes('duplicate key') ||
-          error.message.includes('UNIQUE constraint'));
-
-      if (isConstraintViolation) {
-        const [existingUserAfterRace] = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, normalizedEmail));
-
-        if (!existingUserAfterRace) {
-          throw error; // Unexpected state, rethrow
-        }
-        userId = existingUserAfterRace.id;
-        isNewUser = false;
-      } else {
-        throw error;
-      }
-    }
-  }
+  const userId = existingUser.id;
 
   // Review H1: do NOT delete prior unused magic_link tokens here. The blind
   // type-wide cleanup invalidated multi-token scenarios — a 7-day drive
@@ -183,14 +150,14 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
 
   return {
     ok: true,
-    data: { token, userId, isNewUser },
+    data: { token, userId },
   };
 }
 
 /**
  * Verify a magic link token and return user info.
  *
- * Given a valid token, returns userId and isNewUser flag.
+ * Given a valid token, returns the userId.
  * Given an expired token, returns TOKEN_EXPIRED error.
  * Given a used token, returns TOKEN_ALREADY_USED error.
  * Given a suspended user, returns USER_SUSPENDED error.
@@ -281,11 +248,8 @@ export async function verifyMagicLinkToken(input: unknown): Promise<VerifyMagicL
     return { ok: false, error: { code: 'TOKEN_ALREADY_USED' } };
   }
 
-  // Determine if this is a new user (no email verified yet)
-  const isNewUser = record.user.emailVerified === null;
-
   return {
     ok: true,
-    data: { userId: record.userId, isNewUser, metadata: record.metadata },
+    data: { userId: record.userId, metadata: record.metadata },
   };
 }

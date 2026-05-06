@@ -58,7 +58,11 @@ export async function GET(req: Request) {
       return redirectWithError(errorCode);
     }
 
-    const { userId, isNewUser, metadata } = result.data;
+    const { userId, metadata } = result.data;
+    // Magic-link signup was removed (GDPR + zero-trust epic); every verified
+    // user here is by definition existing. Retained as a const for the
+    // downstream desktop/welcome/analytics call sites that still surface it.
+    const isNewUser = false;
 
     // Parse desktop metadata if present (stored when magic link was sent from desktop app)
     let desktopMeta: DesktopMagicLinkMetadata | null = null;

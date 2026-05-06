@@ -154,7 +154,9 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create magic link token (handles both existing and new users)
+    // Create magic link token. Magic-link is now an existing-account login path
+    // only (NO_ACCOUNT_FOUND for unknown emails). Account creation moved
+    // exclusively to /auth/signup with affirmative ToS acceptance.
     // Pass platform/deviceId so the verify route can redirect desktop apps via deep link
     const result = await createMagicLinkToken({
       email: normalizedEmail,
@@ -211,14 +213,12 @@ export async function POST(req: Request) {
 
       loggers.auth.info('Magic link email sent', {
         email: maskEmail(normalizedEmail),
-        isNewUser: result.data.isNewUser,
         ip: clientIP,
       });
       auditRequest(req, {
         eventType: 'auth.token.created',
         details: {
           tokenType: 'magic_link',
-          isNewUser: result.data.isNewUser,
         },
       });
     } catch (error) {
