@@ -298,6 +298,7 @@ export const driveInviteRepository = {
         role: pendingInvites.role,
         expiresAt: pendingInvites.expiresAt,
         consumedAt: pendingInvites.consumedAt,
+        invitedBy: pendingInvites.invitedBy,
         driveName: drives.name,
         inviterName: users.name,
       })

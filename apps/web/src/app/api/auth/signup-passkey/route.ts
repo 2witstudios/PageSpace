@@ -17,6 +17,7 @@ import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/au
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
+import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -31,6 +32,7 @@ const verifySchema = z.object({
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  inviteToken: z.string().min(1).optional(),
 });
 
 /**
@@ -210,7 +212,33 @@ export async function POST(req: Request) {
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Accept any pending drive invitations now that the session is live.
+    // Run targeted invite acceptance first when the user arrived via /invite/[token].
+    // Failure modes here are non-fatal: signup itself succeeded, the user has a
+    // session, and we surface the error to the client as a redirect query param
+    // so the dashboard can render a non-blocking toast. We intentionally do NOT
+    // revoke the session for invite-acceptance failures.
+    let inviteAcceptedDriveId: string | null = null;
+    let inviteAcceptanceError: string | null = null;
+    if (validation.data.inviteToken) {
+      const result = await acceptInviteForNewUser({
+        token: validation.data.inviteToken,
+        userId,
+        userEmail: email,
+        now: new Date(),
+      });
+      if (result.ok) {
+        inviteAcceptedDriveId = result.data.driveId;
+      } else {
+        inviteAcceptanceError = result.error;
+        loggers.auth.warn('Invite acceptance failed during passkey signup', {
+          userId,
+          error: result.error,
+        });
+      }
+    }
+
+    // Legacy broad sweep — kept until task 10 wires the targeted login pipe and
+    // we can delete acceptUserPendingInvitations across all auth routes.
     try {
       await acceptUserPendingInvitations(userId);
     } catch (error) {
@@ -269,16 +297,23 @@ export async function POST(req: Request) {
       `csrf_token=${newCsrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`
     );
 
-    // Determine redirect URL
-    const dashboardPath = provisionedDrive
-      ? `/dashboard/${provisionedDrive.driveId}`
-      : '/dashboard';
+    // Determine redirect URL — invite acceptance takes precedence over the
+    // freshly-provisioned getting-started drive so the user lands in the drive
+    // they were invited to.
+    const dashboardPath = inviteAcceptedDriveId
+      ? `/dashboard/${inviteAcceptedDriveId}`
+      : provisionedDrive
+        ? `/dashboard/${provisionedDrive.driveId}`
+        : '/dashboard';
+    const redirectQuery = inviteAcceptanceError
+      ? `?welcome=true&inviteError=${encodeURIComponent(inviteAcceptanceError)}`
+      : '?welcome=true';
 
     return NextResponse.json(
       {
         success: true,
         userId,
-        redirectUrl: `${dashboardPath}?welcome=true`,
+        redirectUrl: `${dashboardPath}${redirectQuery}`,
         csrfToken: newCsrfToken,
         ...(platform === 'desktop' && { sessionToken }),
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),

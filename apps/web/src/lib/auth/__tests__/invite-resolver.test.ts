@@ -21,7 +21,8 @@ const baseInvite = {
   email: 'jane@example.com',
   role: 'MEMBER' as const,
   expiresAt: FUTURE,
-  consumedAt: null,
+  consumedAt: null as Date | null,
+  invitedBy: 'user_alice',
   driveName: 'Acme',
   inviterName: 'Alice',
 };

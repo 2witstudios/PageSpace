@@ -379,7 +379,7 @@ describe('driveInviteRepository.findPendingInviteByTokenHash', () => {
     return { innerJoin1, innerJoin2, where, limit };
   };
 
-  it('returns the joined row with driveName and inviterName when an invite matches the hash', async () => {
+  it('returns the joined row with driveName, inviterName, and invitedBy when an invite matches the hash', async () => {
     const row = {
       id: 'inv_1',
       driveId: 'drive_1',
@@ -387,6 +387,7 @@ describe('driveInviteRepository.findPendingInviteByTokenHash', () => {
       role: 'MEMBER',
       expiresAt: new Date('2026-05-08T00:00:00.000Z'),
       consumedAt: null,
+      invitedBy: 'user_alice',
       driveName: 'Acme',
       inviterName: 'Alice',
     };

@@ -26,8 +26,11 @@ interface PasskeySignupButtonProps {
   disabled?: boolean;
   /** When set, pre-fills and locks (disables) the email input. Used when the
    *  user arrived via /invite/[token]; signing up with a different email would
-   *  break the email-bound invite acceptance gate (task 9). */
+   *  break the email-bound invite acceptance gate. */
   lockedEmail?: string;
+  /** Forwarded to /api/auth/signup-passkey so the server can run
+   *  acceptInviteForNewUser post-session. */
+  inviteToken?: string;
 }
 
 export function PasskeySignupButton({
@@ -39,6 +42,7 @@ export function PasskeySignupButton({
   className,
   disabled = false,
   lockedEmail,
+  inviteToken,
 }: PasskeySignupButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
@@ -126,6 +130,7 @@ export function PasskeySignupButton({
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
           acceptedTos,
+          ...(inviteToken ? { inviteToken } : {}),
           ...platformFields,
         }),
       });
@@ -179,7 +184,7 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, refreshToken, email, name, acceptedTos, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, acceptedTos, inviteToken, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {

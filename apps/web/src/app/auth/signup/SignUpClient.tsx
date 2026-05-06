@@ -25,13 +25,14 @@ interface InviteContext {
 
 interface SignUpClientProps {
   inviteContext: InviteContext | null;
+  inviteToken: string | null;
 }
 
-export function SignUpClient({ inviteContext }: SignUpClientProps) {
+export function SignUpClient({ inviteContext, inviteToken }: SignUpClientProps) {
   if (isOnPrem()) {
     return <OnPremSignUpRedirect />;
   }
-  return <CloudSignUp inviteContext={inviteContext} />;
+  return <CloudSignUp inviteContext={inviteContext} inviteToken={inviteToken} />;
 }
 
 function OnPremSignUpRedirect() {
@@ -42,7 +43,13 @@ function OnPremSignUpRedirect() {
   return null;
 }
 
-function CloudSignUp({ inviteContext }: { inviteContext: InviteContext | null }) {
+function CloudSignUp({
+  inviteContext,
+  inviteToken,
+}: {
+  inviteContext: InviteContext | null;
+  inviteToken: string | null;
+}) {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
@@ -120,6 +127,7 @@ function CloudSignUp({ inviteContext }: { inviteContext: InviteContext | null })
             onLoadingChange={setPasskeyLoading}
             disabled={isAnyLoading}
             lockedEmail={inviteContext?.email}
+            inviteToken={inviteToken ?? undefined}
           />
         </motion.div>
       )}
