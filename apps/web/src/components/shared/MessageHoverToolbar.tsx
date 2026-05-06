@@ -12,10 +12,10 @@ import {
 import { EmojiPickerPopover } from '@/components/ui/emoji-picker';
 import type { Reaction } from '@/components/shared/MessageReactions';
 import {
-  CornerUpLeft,
   MessageSquareReply,
   MoreHorizontal,
   Pencil,
+  Quote,
   Smile,
   Trash2,
 } from 'lucide-react';
@@ -115,7 +115,7 @@ export function MessageHoverToolbar({
           onClick={onQuoteReply}
           className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
         >
-          <CornerUpLeft size={14} aria-hidden />
+          <Quote size={14} aria-hidden />
         </button>
       )}
       {showReplyInThread && (
