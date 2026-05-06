@@ -333,7 +333,11 @@ async function handleEmailPath(args: {
     );
   }
 
-  const activeInvite = await driveInviteRepository.findActivePendingInviteByDriveAndEmail(driveId, email);
+  const activeInvite = await driveInviteRepository.findActivePendingInviteByDriveAndEmail(
+    driveId,
+    email,
+    new Date()
+  );
   if (activeInvite) {
     return NextResponse.json(
       { error: 'An invitation is already pending for this email.', existingInviteId: activeInvite.id },

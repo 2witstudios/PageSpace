@@ -712,7 +712,8 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(driveInviteRepository.findActivePendingInviteByDriveAndEmail).toHaveBeenCalledWith(
         mockDriveId,
-        'foo@example.com'
+        'foo@example.com',
+        expect.any(Date)
       );
       expect(driveInviteRepository.findUserIdByEmail).toHaveBeenCalledWith('foo@example.com');
       expect(driveInviteRepository.createPendingInvite).toHaveBeenCalledWith(

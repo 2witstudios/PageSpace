@@ -7,6 +7,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     createDriveMember: vi.fn(),
     findUserVerificationStatusById: vi.fn(),
     findExistingMember: vi.fn(),
+    deleteDriveMemberById: vi.fn(),
   },
 }));
 
@@ -32,6 +33,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(driveInviteRepository.markInviteConsumed).mockResolvedValue(true);
   vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
+  vi.mocked(driveInviteRepository.deleteDriveMemberById).mockResolvedValue(undefined);
   vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
     id: 'mem_new',
     driveId: 'drive_1',
@@ -89,6 +91,28 @@ describe('acceptInviteForExistingUser', () => {
       data: { driveId: 'drive_1', driveName: 'Acme', memberId: 'mem_new' },
     });
     expect(driveInviteRepository.markInviteConsumed).toHaveBeenCalledWith('inv_1');
+  });
+
+  it('deletes a legacy pending drive_members row (acceptedAt=null) before inserting the fresh accepted membership', async () => {
+    vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
+    vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+      id: 'mem_legacy_pending',
+      acceptedAt: null,
+    } as never);
+
+    const result = await acceptInviteForExistingUser({
+      token: 'ps_invite_x',
+      userId: 'user_jane',
+      userEmail: 'jane@example.com',
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(driveInviteRepository.deleteDriveMemberById).toHaveBeenCalledWith('mem_legacy_pending');
+    expect(driveInviteRepository.markInviteConsumed).toHaveBeenCalledWith('inv_1');
+    expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'drive_1', userId: 'user_jane', acceptedAt: NOW })
+    );
   });
 
   it('returns TOKEN_NOT_FOUND when no invite matches the hash', async () => {

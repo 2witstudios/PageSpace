@@ -30,6 +30,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
+  gt: vi.fn((field, value) => ({ kind: 'gt', field, value })),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -71,7 +72,7 @@ vi.mock('@pagespace/db/schema/pending-invites', () => ({
 }));
 
 import { driveInviteRepository } from '../drive-invite-repository';
-import { isNotNull, isNull } from '@pagespace/db/operators';
+import { isNotNull, isNull, gt } from '@pagespace/db/operators';
 
 const setupSelectLimit = (rows: unknown[]) => {
   const limit = vi.fn().mockResolvedValue(rows);
@@ -396,12 +397,18 @@ describe('driveInviteRepository.markInviteConsumed', () => {
 });
 
 describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
-  it('returns the row when an unconsumed invite matches drive+email', async () => {
+  const NOW = new Date('2026-05-06T00:00:00.000Z');
+
+  it('returns the row when an unconsumed, unexpired invite matches drive+email', async () => {
     const row = { id: 'inv_active' };
     const { where } = setupSelectLimit([row]);
 
     expect(
-      await driveInviteRepository.findActivePendingInviteByDriveAndEmail('drive_1', 'jane@example.com')
+      await driveInviteRepository.findActivePendingInviteByDriveAndEmail(
+        'drive_1',
+        'jane@example.com',
+        NOW
+      )
     ).toEqual(row);
     const arg = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
     expect(arg?.conditions).toEqual(
@@ -409,6 +416,7 @@ describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
         expect.objectContaining({ kind: 'eq', field: 'pendingInvites.driveId', value: 'drive_1' }),
         expect.objectContaining({ kind: 'eq', field: 'pendingInvites.email', value: 'jane@example.com' }),
         expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
+        expect.objectContaining({ kind: 'gt', field: 'pendingInvites.expiresAt', value: NOW }),
       ])
     );
   });
@@ -416,8 +424,26 @@ describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
   it('returns null when no active invite matches', async () => {
     setupSelectLimit([]);
     expect(
-      await driveInviteRepository.findActivePendingInviteByDriveAndEmail('drive_1', 'nobody@example.com')
+      await driveInviteRepository.findActivePendingInviteByDriveAndEmail(
+        'drive_1',
+        'nobody@example.com',
+        NOW
+      )
     ).toBeNull();
+  });
+
+  it('expired-but-unconsumed rows do not block the lookup (gt filter on expiresAt)', async () => {
+    // The mock returns whatever rows we feed in; the assertion here is that
+    // the WHERE clause INCLUDES gt(expiresAt, now). The actual filter is
+    // enforced at the DB level — we just verify the repo built the query.
+    setupSelectLimit([]);
+
+    await driveInviteRepository.findActivePendingInviteByDriveAndEmail(
+      'drive_1',
+      'jane@example.com',
+      NOW
+    );
+    expect(gt).toHaveBeenCalledWith('pendingInvites.expiresAt', NOW);
   });
 });
 

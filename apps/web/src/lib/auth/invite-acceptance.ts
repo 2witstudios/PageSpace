@@ -114,8 +114,17 @@ export const acceptInviteForExistingUser = async ({
   }
 
   const existing = await driveInviteRepository.findExistingMember(invite.driveId, userId);
-  if (existing && existing.acceptedAt !== null) {
-    return { ok: false, error: 'ALREADY_MEMBER' };
+  if (existing) {
+    if (existing.acceptedAt !== null) {
+      return { ok: false, error: 'ALREADY_MEMBER' };
+    }
+    // Legacy pending row from the pre-cutover model (drive_members keyed on
+    // userId with acceptedAt = null). Task 12's data migration deletes these,
+    // but during the deploy window — or if a user was missed — we must clean
+    // up the ghost row before inserting the fresh accepted membership;
+    // otherwise the unique (driveId, userId) constraint fires after the
+    // invite is already consumed and the user is stuck.
+    await driveInviteRepository.deleteDriveMemberById(existing.id);
   }
 
   const consumed = await driveInviteRepository.markInviteConsumed(invite.id);

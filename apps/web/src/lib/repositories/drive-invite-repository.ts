@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull, isNull } from '@pagespace/db/operators'
+import { eq, and, isNotNull, isNull, gt } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -297,9 +297,13 @@ export const driveInviteRepository = {
     await db.delete(pendingInvites).where(eq(pendingInvites.id, id));
   },
 
+  // "Active" = unconsumed AND not yet expired. An expired-but-unconsumed row
+  // is no longer reachable through the consent flow (the resolver returns
+  // EXPIRED) and must NOT block a fresh invite to the same (drive, email) pair.
   async findActivePendingInviteByDriveAndEmail(
     driveId: string,
-    email: string
+    email: string,
+    now: Date
   ): Promise<{ id: string } | null> {
     const results = await db
       .select({ id: pendingInvites.id })
@@ -308,7 +312,8 @@ export const driveInviteRepository = {
         and(
           eq(pendingInvites.driveId, driveId),
           eq(pendingInvites.email, email),
-          isNull(pendingInvites.consumedAt)
+          isNull(pendingInvites.consumedAt),
+          gt(pendingInvites.expiresAt, now)
         )
       )
       .limit(1);
