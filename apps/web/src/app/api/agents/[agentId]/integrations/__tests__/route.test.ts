@@ -81,3 +81,104 @@ describe('GET /api/agents/[agentId]/integrations audit', () => {
     );
   });
 });
+
+describe('GET /api/agents/[agentId]/integrations response shape', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  it('exposes sanitized provider tools and strips execution config', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: ['list_repos'],
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'GitHub Integration',
+          status: 'active',
+          provider: {
+            slug: 'github',
+            name: 'GitHub',
+            config: {
+              tools: [
+                {
+                  id: 'list_repos',
+                  name: 'list_repos',
+                  description: 'List repositories',
+                  category: 'read',
+                  inputSchema: { type: 'object' },
+                  execution: { type: 'http', config: { method: 'GET', pathTemplate: '/user/repos' } },
+                  rateLimit: { requestsPerMinute: 60 },
+                },
+                {
+                  id: 'create_issue',
+                  name: 'create_issue',
+                  description: 'Create an issue',
+                  category: 'write',
+                  inputSchema: { type: 'object' },
+                  execution: { type: 'http', config: { method: 'POST', pathTemplate: '/repos/{owner}/{repo}/issues' } },
+                },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+
+    const body = await response.json();
+    expect(body.grants).toHaveLength(1);
+    const provider = body.grants[0].connection.provider;
+    expect(provider.tools).toEqual([
+      { id: 'list_repos', name: 'list_repos', description: 'List repositories', category: 'read' },
+      { id: 'create_issue', name: 'create_issue', description: 'Create an issue', category: 'write' },
+    ]);
+    expect(provider.tools[0]).not.toHaveProperty('execution');
+    expect(provider.tools[0]).not.toHaveProperty('inputSchema');
+    expect(provider.tools[0]).not.toHaveProperty('rateLimit');
+  });
+
+  it('returns an empty tools array when provider config is missing or malformed', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'Custom Integration',
+          status: 'active',
+          provider: {
+            slug: 'custom',
+            name: 'Custom',
+            config: null,
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+
+    const body = await response.json();
+    expect(body.grants[0].connection.provider.tools).toEqual([]);
+  });
+});
