@@ -686,7 +686,10 @@ export default function InboxDMPage() {
                         canDelete={showOwnerActions}
                         canReplyInThread={showReplyInThread}
                         canQuoteReply={true}
+                        reactions={message.reactions}
+                        currentUserId={user?.id}
                         onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                        onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
                         onQuoteReply={() => handleStartQuote(message)}
                         onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
                         onDelete={() => handleDeleteMessage(message.id)}

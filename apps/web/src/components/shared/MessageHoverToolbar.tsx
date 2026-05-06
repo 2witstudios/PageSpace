@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { EmojiPickerPopover } from '@/components/ui/emoji-picker';
+import type { Reaction } from '@/components/shared/MessageReactions';
 import {
   CornerUpLeft,
   MessageSquareReply,
@@ -25,7 +26,12 @@ export interface MessageHoverToolbarProps {
   canDelete: boolean;
   canReplyInThread: boolean;
   canQuoteReply: boolean;
+  /** Existing reactions on the message — used to make picker selection toggle. */
+  reactions?: Reaction[];
+  /** Current user id — used together with `reactions` for toggle behavior. */
+  currentUserId?: string;
   onAddReaction: (emoji: string) => void;
+  onRemoveReaction?: (emoji: string) => void;
   onQuoteReply?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
@@ -39,7 +45,10 @@ export function MessageHoverToolbar({
   canDelete,
   canReplyInThread,
   canQuoteReply,
+  reactions,
+  currentUserId,
   onAddReaction,
+  onRemoveReaction,
   onQuoteReply,
   onEdit,
   onDelete,
@@ -55,13 +64,28 @@ export function MessageHoverToolbar({
   const hasAny = canReact || showReplyInThread || hasOverflow;
   if (!hasAny) return null;
 
+  const handleEmojiSelect = (emoji: string) => {
+    const alreadyReacted =
+      !!currentUserId &&
+      !!reactions?.some((r) => r.emoji === emoji && r.userId === currentUserId);
+    if (alreadyReacted && onRemoveReaction) {
+      onRemoveReaction(emoji);
+    } else {
+      onAddReaction(emoji);
+    }
+    setPickerOpen(false);
+  };
+
   return (
     <div
       className={cn(
         'absolute -top-3 right-2 z-10',
         'flex items-center gap-0.5 p-0.5',
         'rounded-md border border-border bg-popover shadow-sm',
+        // Hover devices: hidden by default, shown on hover/focus or when picker is open.
+        // Touch / no-hover devices: always visible so message actions remain reachable.
         'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100',
+        '[@media(hover:none)]:opacity-100',
         'transition-opacity',
         pickerOpen && 'opacity-100',
         className,
@@ -71,10 +95,7 @@ export function MessageHoverToolbar({
         <EmojiPickerPopover
           open={pickerOpen}
           onOpenChange={setPickerOpen}
-          onEmojiSelect={(emoji) => {
-            onAddReaction(emoji);
-            setPickerOpen(false);
-          }}
+          onEmojiSelect={handleEmojiSelect}
           side="top"
           align="end"
         >

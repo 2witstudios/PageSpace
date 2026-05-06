@@ -720,7 +720,10 @@ export default function InboxChannelPage() {
                         canDelete={isOwnMessage}
                         canReplyInThread={!isAi}
                         canQuoteReply={false}
+                        reactions={m.reactions}
+                        currentUserId={user?.id}
                         onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                        onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
                         onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
                         onDelete={() => handleDeleteMessage(m.id)}
                         onReplyInThread={() =>

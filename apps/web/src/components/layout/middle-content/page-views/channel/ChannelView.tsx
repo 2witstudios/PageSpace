@@ -604,7 +604,10 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canDelete={showOwnerActions}
                                     canReplyInThread={!isAi && !m.id.startsWith('temp-')}
                                     canQuoteReply={true}
+                                    reactions={m.reactions}
+                                    currentUserId={user?.id}
                                     onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                    onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
                                     onQuoteReply={() => handleStartQuote(m)}
                                     onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
                                     onDelete={() => handleDeleteMessage(m.id)}
