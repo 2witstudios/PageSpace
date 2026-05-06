@@ -174,7 +174,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
     "lint": "eslint src",
-    "promote-admin": "tsx src/promote-admin.ts"
+    "promote-admin": "tsx src/promote-admin.ts",
+    "migrate-pending-invites": "tsx src/migrate-pending-invites.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
