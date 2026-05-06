@@ -271,7 +271,7 @@ describe('AgentIntegrationsPanel', () => {
     });
   });
 
-  // --- Tool filtering: null allowedTools means all checked ---
+  // --- Tool filtering: null allowedTools means all non-dangerous checked ---
   it('renders all tools as checked when allowedTools is null', () => {
     mockHooksDefault({
       userConnections: [activeConnection],
@@ -281,6 +281,51 @@ describe('AgentIntegrationsPanel', () => {
     expect(screen.getByLabelText('create_issue')).toBeChecked();
     expect(screen.getByLabelText('list_repos')).toBeChecked();
     expect(screen.getByText(/selected 2 of 2 tools/i)).toBeInTheDocument();
+  });
+
+  // --- Tool filtering: dangerous tools stay unchecked under null allowedTools ---
+  it('keeps dangerous tools unchecked when allowedTools is null', async () => {
+    const grantWithDangerousTool: SafeGrant = {
+      ...grantNoTools,
+      id: 'grant-dangerous',
+      allowedTools: null,
+      connection: {
+        id: 'conn-1',
+        name: 'GitHub Integration',
+        status: 'active',
+        provider: {
+          slug: 'github',
+          name: 'GitHub',
+          tools: [
+            ...githubProviderTools,
+            { id: 'delete_repo', name: 'delete_repo', description: 'Delete a repository', category: 'dangerous' },
+          ],
+        },
+      },
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantWithDangerousTool],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.getByLabelText('create_issue')).toBeChecked();
+    expect(screen.getByLabelText('list_repos')).toBeChecked();
+    expect(screen.getByLabelText('delete_repo')).not.toBeChecked();
+    expect(screen.getByText(/selected 2 of 3 tools/i)).toBeInTheDocument();
+
+    // Unchecking a non-dangerous tool must NOT silently include the dangerous one
+    await user.click(screen.getByLabelText('list_repos'));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-dangerous',
+        expect.objectContaining({ allowedTools: ['create_issue'] })
+      );
+    });
   });
 
   // --- Deduplication ---

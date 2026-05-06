@@ -25,9 +25,13 @@ type ProviderTool = NonNullable<NonNullable<SafeGrant['connection']>['provider']
 const getProviderTools = (grant: SafeGrant): ProviderTool[] =>
   grant.connection?.provider?.tools ?? [];
 
+// When allowedTools is null, the runtime gate (is-tool-allowed.ts) permits every
+// non-dangerous tool but blocks dangerous ones until they are explicitly listed.
+// Mirror that here so the UI does not silently elevate dangerous tools when the
+// user makes a routine edit that promotes the implicit list to an explicit one.
 const getEffectiveAllowed = (grant: SafeGrant, tools: ProviderTool[]): Set<string> =>
   grant.allowedTools === null
-    ? new Set(tools.map((t) => t.id))
+    ? new Set(tools.filter((t) => t.category !== 'dangerous').map((t) => t.id))
     : new Set(grant.allowedTools);
 
 export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPanelProps) {

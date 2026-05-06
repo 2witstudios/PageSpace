@@ -63,13 +63,16 @@ export async function GET(
           provider: g.connection.provider ? {
             slug: g.connection.provider.slug,
             name: g.connection.provider.name,
-            tools: ((g.connection.provider.config as { tools?: ToolDefinition[] } | null)?.tools ?? [])
-              .map((t) => ({
+            tools: (() => {
+              const rawTools = (g.connection.provider.config as { tools?: unknown } | null)?.tools;
+              if (!Array.isArray(rawTools)) return [];
+              return (rawTools as ToolDefinition[]).map((t) => ({
                 id: t.id,
                 name: t.name,
                 description: t.description,
                 category: t.category,
-              })),
+              }));
+            })(),
           } : null,
         } : null,
       })),
