@@ -149,6 +149,51 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     expect(provider.tools[0]).not.toHaveProperty('rateLimit');
   });
 
+  it('drops malformed tool entries while keeping well-formed ones', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'Mixed Integration',
+          status: 'active',
+          provider: {
+            slug: 'mixed',
+            name: 'Mixed',
+            config: {
+              tools: [
+                null,
+                { id: 'good_tool', name: 'good_tool', description: 'works', category: 'read' },
+                { id: 42, name: 'bad_tool', description: 'bad id type', category: 'read' },
+                { id: 'no_category', name: 'no_category', description: 'missing category' },
+                { id: 'bad_cat', name: 'bad_cat', description: 'bogus category', category: 'super_user' },
+                'just-a-string',
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.grants[0].connection.provider.tools).toEqual([
+      { id: 'good_tool', name: 'good_tool', description: 'works', category: 'read' },
+    ]);
+  });
+
   it.each([
     ['null config', { config: null }],
     ['missing tools key', { config: {} }],

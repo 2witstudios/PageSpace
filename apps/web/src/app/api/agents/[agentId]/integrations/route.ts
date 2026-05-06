@@ -15,10 +15,25 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 type SafeProviderTool = Pick<ToolDefinition, 'id' | 'name' | 'description' | 'category'>;
 
+const VALID_CATEGORIES: ReadonlySet<ToolDefinition['category']> = new Set([
+  'read',
+  'write',
+  'admin',
+  'dangerous',
+]);
+
+const isWellFormedTool = (t: unknown): t is ToolDefinition =>
+  !!t &&
+  typeof t === 'object' &&
+  typeof (t as ToolDefinition).id === 'string' &&
+  typeof (t as ToolDefinition).name === 'string' &&
+  typeof (t as ToolDefinition).description === 'string' &&
+  VALID_CATEGORIES.has((t as ToolDefinition).category);
+
 const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
   const rawTools = (config as { tools?: unknown } | null)?.tools;
   if (!Array.isArray(rawTools)) return [];
-  return (rawTools as ToolDefinition[]).map((t) => ({
+  return rawTools.filter(isWellFormedTool).map((t) => ({
     id: t.id,
     name: t.name,
     description: t.description,
