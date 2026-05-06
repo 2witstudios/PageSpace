@@ -622,6 +622,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canQuoteReply={true}
                                     reactions={m.reactions}
                                     currentUserId={user?.id}
+                                    className={!isFirst ? 'top-0' : undefined}
                                     onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
                                     onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
                                     onQuoteReply={() => handleStartQuote(m)}

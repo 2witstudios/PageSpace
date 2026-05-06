@@ -688,6 +688,7 @@ export default function InboxDMPage() {
                         canQuoteReply={true}
                         reactions={message.reactions}
                         currentUserId={user?.id}
+                        className={!isFirst ? 'top-0' : undefined}
                         onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
                         onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
                         onQuoteReply={() => handleStartQuote(message)}
