@@ -2,6 +2,7 @@
 
 ## Active Epics
 
+- [Drive Invite GDPR + Zero-Trust](tasks/drive-invite-gdpr-zero-trust.md) — stop creating `users` rows at invite-send time; route invitees through standard signup/login with affirmative ToS acceptance and zero-auth-power tokens, eliminating the magic-link-as-invite path and the `acceptedAt IS NULL` pending-membership semantic.
 - [Inline Quote Replies](tasks/inline-quote-replies.md) — Slack/Twitter-style inline quote-reply embeds in channels and DMs via additive `quotedMessageId` self-FK + read-time enrichment helper; orthogonal to the just-shipped thread panel.
 - [DM File Attachments](tasks/dm-file-attachments.md) — bring DM conversations to channel parity for file attachments via a `fileConversations` join table, nullable `files.driveId`, and shared upload/token/processor/composer/renderer infrastructure.
 - [Multiplayer AI Chat Streaming](tasks/multiplayer-ai-chat-streaming.md) — Socket-notified, HTTP-joined AI stream sharing: all page viewers see live ghost text and "X is waiting for AI response…" indicators in real-time.
