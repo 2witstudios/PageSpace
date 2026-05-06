@@ -259,6 +259,28 @@ describe('driveInviteRepository.updatePagePermission', () => {
   });
 });
 
+describe('driveInviteRepository.findUserToSStatusByEmail', () => {
+  it('returns the tosAcceptedAt timestamp when the user exists', async () => {
+    const ts = new Date('2026-04-01T00:00:00.000Z');
+    mockUsersFindFirst.mockResolvedValueOnce({ tosAcceptedAt: ts });
+    expect(await driveInviteRepository.findUserToSStatusByEmail('jane@example.com')).toEqual({
+      tosAcceptedAt: ts,
+    });
+  });
+
+  it('returns the row with tosAcceptedAt=null for users that exist but have not accepted ToS (legacy orphans)', async () => {
+    mockUsersFindFirst.mockResolvedValueOnce({ tosAcceptedAt: null });
+    expect(await driveInviteRepository.findUserToSStatusByEmail('orphan@example.com')).toEqual({
+      tosAcceptedAt: null,
+    });
+  });
+
+  it('returns null when no user matches the email', async () => {
+    mockUsersFindFirst.mockResolvedValueOnce(undefined);
+    expect(await driveInviteRepository.findUserToSStatusByEmail('missing@example.com')).toBeNull();
+  });
+});
+
 describe('driveInviteRepository.findUserEmail', () => {
   it('returns the user email when found, undefined otherwise', async () => {
     mockUsersFindFirst.mockResolvedValueOnce({ email: 'jane@example.com' });
