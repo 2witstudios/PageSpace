@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { Hash, ExternalLink, Lock, Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply } from 'lucide-react';
+import { Hash, ExternalLink, Lock, Check, X } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -18,15 +18,9 @@ import { type ChannelInputRef, type FileAttachment } from '@/components/layout/m
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
+import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useSocketStore } from '@/stores/useSocketStore';
 import {
   type AttachmentMeta,
@@ -637,7 +631,7 @@ export default function InboxChannelPage() {
                     {!isAi && <AvatarImage src={m.user?.image || ''} />}
                     <AvatarFallback>{avatarFallback}</AvatarFallback>
                   </Avatar>
-                  <div className="flex flex-col min-w-0 flex-1">
+                  <div className="flex flex-col min-w-0 flex-1 relative">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-sm">{displayName}</span>
                       {aiLabel && (
@@ -651,48 +645,6 @@ export default function InboxChannelPage() {
                       {m.editedAt && (
                         <span className="text-xs text-muted-foreground italic">(Edited)</span>
                       )}
-                      <div className="ml-auto flex items-center gap-1">
-                        {!isAi && !m.id.startsWith('temp-') && (
-                          <button
-                            type="button"
-                            aria-label="Reply in thread"
-                            data-testid={`reply-in-thread-${m.id}`}
-                            onClick={() =>
-                              openThread({ source: 'channel', contextId: pageId, parentId: m.id })
-                            }
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            <MessageSquareReply size={14} aria-hidden />
-                          </button>
-                        )}
-                      {isOwnMessage && !m.id.startsWith('temp-') && editingMessageId !== m.id && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              aria-label="Message options"
-                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                              type="button"
-                            >
-                              <MoreHorizontal size={14} aria-hidden />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                            >
-                              <Pencil className="mr-2 h-4 w-4" /> Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteMessage(m.id)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" /> Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                      </div>
                     </div>
                     {editingMessageId === m.id ? (
                       <div className="mt-1 flex flex-col gap-2">
@@ -752,7 +704,6 @@ export default function InboxChannelPage() {
                           : ''}
                       </button>
                     )}
-                    {/* Reactions */}
                     {user && !m.id.startsWith('temp-') && (
                       <MessageReactions
                         reactions={m.reactions || []}
@@ -760,6 +711,24 @@ export default function InboxChannelPage() {
                         onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
                         onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
                         canReact={permissions?.canView || false}
+                      />
+                    )}
+                    {!m.id.startsWith('temp-') && editingMessageId !== m.id && (
+                      <MessageHoverToolbar
+                        canReact={permissions?.canView || false}
+                        canEdit={isOwnMessage}
+                        canDelete={isOwnMessage}
+                        canReplyInThread={!isAi}
+                        canQuoteReply={false}
+                        reactions={m.reactions}
+                        currentUserId={user?.id}
+                        onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                        onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                        onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                        onDelete={() => handleDeleteMessage(m.id)}
+                        onReplyInThread={() =>
+                          openThread({ source: 'channel', contextId: pageId, parentId: m.id })
+                        }
                       />
                     )}
                   </div>
