@@ -406,14 +406,30 @@ async function handleEmailPath(args: {
   }
 
   const { token, tokenHash, expiresAt } = createInviteToken({ now: new Date() });
-  const pendingInvite = await driveInviteRepository.createPendingInvite({
-    tokenHash,
-    email,
-    driveId,
-    role,
-    invitedBy: inviterUserId,
-    expiresAt,
-  });
+  let pendingInvite;
+  try {
+    pendingInvite = await driveInviteRepository.createPendingInvite({
+      tokenHash,
+      email,
+      driveId,
+      role,
+      invitedBy: inviterUserId,
+      expiresAt,
+    });
+  } catch (error) {
+    // Race window: a concurrent request slipped past the active-pending check
+    // and inserted a row first. The partial unique index on (driveId, email)
+    // WHERE consumedAt IS NULL fires here. Surface as 409 so the client can
+    // present a meaningful error instead of a generic 500.
+    const isUnique = error instanceof Error && /unique constraint|duplicate key/i.test(error.message);
+    if (isUnique) {
+      return NextResponse.json(
+        { error: 'An invitation is already pending for this email.' },
+        { status: 409 }
+      );
+    }
+    throw error;
+  }
 
   const inviter = await driveInviteRepository.findInviterDisplay(inviterUserId);
   // Invite tokens are CUID2-formatted (URL-safe alphanumeric); encodeURIComponent

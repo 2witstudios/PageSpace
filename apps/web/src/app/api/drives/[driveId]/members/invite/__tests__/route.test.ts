@@ -661,6 +661,23 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
+    it('returns 409 (not 500) when a concurrent request races past the active-pending check and the unique index fires', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(driveInviteRepository.createPendingInvite).mockRejectedValueOnce(
+        new Error('duplicate key value violates unique constraint "pending_invites_drive_email_active_unique"')
+      );
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'race@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+      const json = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(json.error).toMatch(/already pending/i);
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
     it('rolls back the pending_invites row when sendPendingDriveInvitationEmail throws', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
       vi.mocked(driveInviteRepository.createPendingInvite).mockResolvedValue({
