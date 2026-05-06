@@ -49,6 +49,7 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
     getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
     isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
     isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
+    isCodePage: vi.fn((type) => type === 'CODE'),
 }));
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
     parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),
@@ -283,6 +284,47 @@ describe('page-write-tools', () => {
           updates: { content: 'Line 1\nNew Line 2\nLine 3' },
           updatedFields: ['content'],
           context: expect.objectContaining({ userId: 'user-123', isAiGenerated: true }),
+        })
+      );
+    });
+
+    it('replaces lines in CODE page without HTML mangling', async () => {
+      // CODE pages may contain raw HTML/XML source. addLineBreaksForAI must NOT
+      // run on them, so the saved content should preserve angle brackets verbatim.
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'index.html',
+        type: 'CODE',
+        content: '<div>old</div>\n<p>keep</p>',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'index.html', pageId: 'page-1', startLine: 1, content: '<div>new</div>' },
+        context
+      );
+
+      if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
+      const success = result as { success: boolean };
+      expect(success.success).toBe(true);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'page-1',
+          operation: 'update',
+          updates: { content: '<div>new</div>\n<p>keep</p>' },
         })
       );
     });

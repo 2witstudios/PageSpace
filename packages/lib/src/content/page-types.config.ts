@@ -180,7 +180,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       canBeConverted: false,
       supportsRealtime: true,
       supportsVersioning: true,
-      supportsAI: false,
+      supportsAI: true,
     },
     defaultContent: () => '',
     uiComponent: 'CodePageView',

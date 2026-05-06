@@ -47,6 +47,7 @@ CONTEXT:
 PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
 • DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
+• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
 • CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
 • TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
@@ -97,6 +98,7 @@ CONTEXT:
 PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
 • DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
+• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
 • CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
 • TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.

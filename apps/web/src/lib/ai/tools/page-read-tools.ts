@@ -7,7 +7,7 @@ import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
-import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-types.config';
+import { getPageTypeEmoji, isFolderPage, isCodePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
@@ -543,10 +543,11 @@ export const pageReadTools = {
           };
         }
 
-        // Format content for AI line-based editing, then split into lines
-        // Markdown pages already have natural line structure; HTML pages need addLineBreaksForAI
-        const isMarkdown = page.contentMode === 'markdown';
-        const formattedContent = isMarkdown
+        // Format content for AI line-based editing, then split into lines.
+        // CODE and markdown pages have natural line structure (and CODE may contain
+        // raw HTML/XML that addLineBreaksForAI would mangle); HTML documents need it.
+        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
+        const formattedContent = isRawText
           ? (page.content || '')
           : addLineBreaksForAI(page.content || '');
         const allLines = formattedContent.split('\n');
