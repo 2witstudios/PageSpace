@@ -3,9 +3,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { AnimatePresence, motion } from 'motion/react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -38,6 +40,7 @@ export function PasskeySignupButton({
   const [isExpanded, setIsExpanded] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [acceptedTos, setAcceptedTos] = useState(false);
 
   useEffect(() => {
     onLoadingChange?.(isRegistering);
@@ -56,6 +59,11 @@ export function PasskeySignupButton({
 
     if (!email.includes('@') || !email.split('@')[1]?.includes('.')) {
       toast.error('Please enter a valid email address');
+      return;
+    }
+
+    if (!acceptedTos) {
+      toast.error('Please accept the Terms of Service and Privacy Policy to continue');
       return;
     }
 
@@ -108,7 +116,7 @@ export function PasskeySignupButton({
           response: regResponse,
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
-          acceptedTos: true,
+          acceptedTos,
           ...platformFields,
         }),
       });
@@ -162,7 +170,7 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, refreshToken, email, name, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, acceptedTos, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
@@ -224,6 +232,29 @@ export function PasskeySignupButton({
                 disabled={isRegistering}
               />
             </div>
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="passkey-tos"
+                checked={acceptedTos}
+                onCheckedChange={(value) => setAcceptedTos(value === true)}
+                disabled={isRegistering}
+                className="mt-0.5"
+              />
+              <Label
+                htmlFor="passkey-tos"
+                className="text-xs font-normal leading-snug text-muted-foreground"
+              >
+                I agree to the{' '}
+                <Link href="/terms" className="underline hover:text-foreground" target="_blank">
+                  Terms of Service
+                </Link>{' '}
+                and{' '}
+                <Link href="/privacy" className="underline hover:text-foreground" target="_blank">
+                  Privacy Policy
+                </Link>
+                .
+              </Label>
+            </div>
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -235,7 +266,7 @@ export function PasskeySignupButton({
               </Button>
               <Button
                 onClick={handleSignup}
-                disabled={isButtonDisabled || !name.trim() || !email.trim()}
+                disabled={isButtonDisabled || !name.trim() || !email.trim() || !acceptedTos}
                 className="flex-1"
               >
                 {isRegistering ? (

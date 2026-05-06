@@ -157,21 +157,8 @@ function CloudSignUp() {
         </p>
       </motion.div>
 
-      <motion.p
-        className="mt-4 text-center text-xs text-muted-foreground/70"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.6, duration: 0.3 }}
-      >
-        By signing up, you agree to our{" "}
-        <Link href="/terms" className="underline hover:text-muted-foreground">
-          Terms
-        </Link>{" "}
-        and{" "}
-        <Link href="/privacy" className="underline hover:text-muted-foreground">
-          Privacy Policy
-        </Link>
-      </motion.p>
+      {/* ToS acceptance is now an explicit checkbox inside PasskeySignupButton — */}
+      {/* the previous footer text was non-binding and duplicated that gate. */}
     </AuthShell>
   );
 }
