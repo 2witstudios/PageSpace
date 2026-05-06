@@ -51,6 +51,7 @@ const nextConfig: NextConfig = {
     return [
       { source: '/dashboard/inbox/channel/:pageId', destination: '/dashboard/channels/:pageId', permanent: false },
       { source: '/dashboard/inbox/dm/:conversationId', destination: '/dashboard/dms/:conversationId', permanent: false },
+      { source: '/dashboard/messages/:conversationId', destination: '/dashboard/dms/:conversationId', permanent: false },
       { source: '/dashboard/inbox/new', destination: '/dashboard/dms/new', permanent: false },
       { source: '/dashboard/inbox', destination: '/dashboard/dms', permanent: false },
       { source: '/dashboard/:driveId/inbox', destination: '/dashboard/:driveId/channels', permanent: false },
