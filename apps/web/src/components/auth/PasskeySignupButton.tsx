@@ -24,6 +24,10 @@ interface PasskeySignupButtonProps {
   onLoadingChange?: (isLoading: boolean) => void;
   className?: string;
   disabled?: boolean;
+  /** When set, pre-fills and locks (disables) the email input. Used when the
+   *  user arrived via /invite/[token]; signing up with a different email would
+   *  break the email-bound invite acceptance gate (task 9). */
+  lockedEmail?: string;
 }
 
 export function PasskeySignupButton({
@@ -34,13 +38,18 @@ export function PasskeySignupButton({
   onLoadingChange,
   className,
   disabled = false,
+  lockedEmail,
 }: PasskeySignupButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(Boolean(lockedEmail));
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(lockedEmail ?? '');
   const [acceptedTos, setAcceptedTos] = useState(false);
+
+  useEffect(() => {
+    if (lockedEmail !== undefined) setEmail(lockedEmail);
+  }, [lockedEmail]);
 
   useEffect(() => {
     onLoadingChange?.(isRegistering);
@@ -229,7 +238,7 @@ export function PasskeySignupButton({
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={isRegistering}
+                disabled={isRegistering || lockedEmail !== undefined}
               />
             </div>
             <div className="flex items-start gap-2">
