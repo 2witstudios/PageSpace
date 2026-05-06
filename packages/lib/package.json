@@ -346,6 +346,11 @@
       "import": "./dist/services/drive-search-service.js",
       "require": "./dist/services/drive-search-service.js"
     },
+    "./services/invite-predicates": {
+      "types": "./dist/services/invite-predicates.d.ts",
+      "import": "./dist/services/invite-predicates.js",
+      "require": "./dist/services/invite-predicates.js"
+    },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
       "import": "./dist/validators/id-validators.js",
@@ -855,6 +860,9 @@
       ],
       "services/drive-search-service": [
         "./dist/services/drive-search-service.d.ts"
+      ],
+      "services/invite-predicates": [
+        "./dist/services/invite-predicates.d.ts"
       ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"
