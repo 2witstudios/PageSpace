@@ -185,6 +185,14 @@ export const driveInviteRepository = {
     return results.at(0) ?? null;
   },
 
+  async findUserToSStatusByEmail(email: string): Promise<{ tosAcceptedAt: Date | null } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email),
+      columns: { tosAcceptedAt: true },
+    });
+    return user ? { tosAcceptedAt: user.tosAcceptedAt } : null;
+  },
+
   async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
