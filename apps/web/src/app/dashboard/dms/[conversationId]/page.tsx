@@ -15,13 +15,14 @@ import { MessageDropZone } from '@/components/layout/middle-content/page-views/c
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
+import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Pencil, Trash2, Check, X, MoreHorizontal, MessageSquareReply, CornerUpLeft } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
@@ -30,13 +31,6 @@ import { ThreadPanel } from '@/components/layout/middle-content/page-views/threa
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { isFirstInGroup } from '@/lib/messages/grouping';
 
 const fetcher = async (url: string) => {
@@ -559,8 +553,6 @@ export default function InboxDMPage() {
               );
               const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
               const isRealMessage = !message.id.startsWith('temp-') && editingMessageId !== message.id;
-              // The menu opens for any real message (Quote reply is universal); Edit/Delete remain gated by ownership.
-              const showMenu = isRealMessage;
               const showOwnerActions = isOwnMessage && isRealMessage;
               const replyCount = message.replyCount ?? 0;
               const showReplyInThread = !message.id.startsWith('temp-');
@@ -604,56 +596,6 @@ export default function InboxDMPage() {
                         {message.isRead && isOwnMessage && (
                           <span className="text-xs text-muted-foreground">Read</span>
                         )}
-                        <div className="ml-auto flex items-center gap-1">
-                          {showReplyInThread && (
-                            <button
-                              type="button"
-                              aria-label="Reply in thread"
-                              data-testid={`reply-in-thread-${message.id}`}
-                              onClick={() =>
-                                openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                              }
-                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              <MessageSquareReply size={14} aria-hidden />
-                            </button>
-                          )}
-                          {showMenu && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                aria-label="Message options"
-                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                type="button"
-                              >
-                                <MoreHorizontal size={14} aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleStartQuote(message)}>
-                                <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
-                              </DropdownMenuItem>
-                              {showOwnerActions && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                                  >
-                                    <Pencil className="mr-2 h-4 w-4" /> Edit
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => handleDeleteMessage(message.id)}
-                                    className="text-destructive focus:text-destructive"
-                                  >
-                                    <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                          )}
-                        </div>
                       </div>
                     )}
 
@@ -692,21 +634,17 @@ export default function InboxDMPage() {
                         </div>
                       </div>
                     ) : (
-                      <div className={`p-3 rounded-lg max-w-full ${
-                        isOwnMessage
-                          ? 'bg-primary/5 dark:bg-primary/10 ml-8'
-                          : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
-                      }`}>
+                      <>
                         {(message.quotedMessage || message.quotedMessageId) && (
                           <MessageQuoteBlock quoted={message.quotedMessage ?? null} />
                         )}
                         {message.content && (
-                          <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
+                          <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
                             {renderMessageParts(convertToMessageParts(message.content))}
                           </div>
                         )}
                         <MessageAttachment message={message} />
-                        {!isFirst && (
+                        {!isFirst && (message.isEdited || (message.isRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             {message.isEdited && (
                               <span className="italic">(edited)</span>
@@ -716,59 +654,7 @@ export default function InboxDMPage() {
                             )}
                           </div>
                         )}
-                      </div>
-                    )}
-                    {!isFirst && (
-                      <div className="absolute top-0 right-0 flex items-center gap-1">
-                        {showReplyInThread && (
-                          <button
-                            type="button"
-                            aria-label="Reply in thread"
-                            data-testid={`reply-in-thread-${message.id}`}
-                            onClick={() =>
-                              openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                            }
-                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            <MessageSquareReply size={14} aria-hidden />
-                          </button>
-                        )}
-                        {showMenu && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                aria-label="Message options"
-                                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                type="button"
-                              >
-                                <MoreHorizontal size={14} aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleStartQuote(message)}>
-                                <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
-                              </DropdownMenuItem>
-                              {showOwnerActions && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                                  >
-                                    <Pencil className="mr-2 h-4 w-4" /> Edit
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => handleDeleteMessage(message.id)}
-                                    className="text-destructive focus:text-destructive"
-                                  >
-                                    <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </div>
+                      </>
                     )}
                     {replyCount > 0 && (
                       <button
@@ -791,6 +677,22 @@ export default function InboxDMPage() {
                         currentUserId={user.id}
                         onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
                         onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
+                      />
+                    )}
+                    {isRealMessage && (
+                      <MessageHoverToolbar
+                        canReact={true}
+                        canEdit={showOwnerActions}
+                        canDelete={showOwnerActions}
+                        canReplyInThread={showReplyInThread}
+                        canQuoteReply={true}
+                        onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                        onQuoteReply={() => handleStartQuote(message)}
+                        onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                        onDelete={() => handleDeleteMessage(message.id)}
+                        onReplyInThread={() =>
+                          openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
+                        }
                       />
                     )}
                   </div>

@@ -15,26 +15,22 @@ import {
 import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
+import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Pencil, Trash2, Check, X, MoreHorizontal, CornerUpLeft } from 'lucide-react';
+import { Lock, Check, X } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import {
   type AttachmentMeta,
   type FileRelation,
 } from '@/lib/attachment-utils';
 import { isFirstInGroup } from '@/lib/messages/grouping';
+import { formatDistanceToNow } from 'date-fns';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -57,6 +53,8 @@ interface MessageWithReactions extends MessageWithUser {
   editedAt?: string | null;
   quotedMessageId?: string | null;
   quotedMessage?: QuotedMessageSnapshot | null;
+  replyCount?: number;
+  lastReplyAt?: string | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -69,6 +67,7 @@ function ChannelView({ page }: ChannelViewProps) {
   const socket = useSocketStore((state) => state.socket);
   const connectionStatus = useSocketStore((state) => state.connectionStatus);
   const connect = useSocketStore((state) => state.connect);
+  const openThread = useThreadPanelStore((state) => state.openThread);
 
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
@@ -488,9 +487,8 @@ function ChannelView({ page }: ChannelViewProps) {
                         );
                         const rowSpacing = i === 0 ? '' : isFirst ? 'mt-4' : 'mt-0.5';
                         const isRealMessage = !m.id.startsWith('temp-') && editingMessageId !== m.id;
-                        // The menu opens for any real message (Quote reply is universal); Edit/Delete remain gated by ownership inside the menu.
-                        const showMenu = isRealMessage;
                         const showOwnerActions = isOwnMessage && isRealMessage;
+                        const replyCount = m.replyCount ?? 0;
                         return (
                         <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
                             {isFirst ? (
@@ -519,41 +517,6 @@ function ChannelView({ page }: ChannelViewProps) {
                                       </span>
                                       {m.editedAt && (
                                         <span className="text-xs text-muted-foreground italic">(Edited)</span>
-                                      )}
-                                      {showMenu && (
-                                        <DropdownMenu>
-                                          <DropdownMenuTrigger asChild>
-                                            <button
-                                              aria-label="Message options"
-                                              className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                              type="button"
-                                            >
-                                              <MoreHorizontal size={14} aria-hidden />
-                                            </button>
-                                          </DropdownMenuTrigger>
-                                          <DropdownMenuContent align="end">
-                                            <DropdownMenuItem onClick={() => handleStartQuote(m)}>
-                                              <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
-                                            </DropdownMenuItem>
-                                            {showOwnerActions && (
-                                              <>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem
-                                                  onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                                >
-                                                  <Pencil className="mr-2 h-4 w-4" /> Edit
-                                                </DropdownMenuItem>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem
-                                                  onClick={() => handleDeleteMessage(m.id)}
-                                                  className="text-destructive focus:text-destructive"
-                                                >
-                                                  <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                                </DropdownMenuItem>
-                                              </>
-                                            )}
-                                          </DropdownMenuContent>
-                                        </DropdownMenu>
                                       )}
                                   </div>
                                 )}
@@ -610,40 +573,20 @@ function ChannelView({ page }: ChannelViewProps) {
                                   </>
                                 )}
                                 <MessageAttachment message={m} />
-                                {!isFirst && showMenu && (
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <button
-                                        aria-label="Message options"
-                                        className="absolute top-0 right-0 p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                                        type="button"
-                                      >
-                                        <MoreHorizontal size={14} aria-hidden />
-                                      </button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                      <DropdownMenuItem onClick={() => handleStartQuote(m)}>
-                                        <CornerUpLeft className="mr-2 h-4 w-4" /> Quote reply
-                                      </DropdownMenuItem>
-                                      {showOwnerActions && (
-                                        <>
-                                          <DropdownMenuSeparator />
-                                          <DropdownMenuItem
-                                            onClick={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                          >
-                                            <Pencil className="mr-2 h-4 w-4" /> Edit
-                                          </DropdownMenuItem>
-                                          <DropdownMenuSeparator />
-                                          <DropdownMenuItem
-                                            onClick={() => handleDeleteMessage(m.id)}
-                                            className="text-destructive focus:text-destructive"
-                                          >
-                                            <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                          </DropdownMenuItem>
-                                        </>
-                                      )}
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
+                                {replyCount > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                    }
+                                    data-testid={`thread-footer-${m.id}`}
+                                    className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                  >
+                                    {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+                                    {m.lastReplyAt
+                                      ? ` · last reply ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                                      : ''}
+                                  </button>
                                 )}
                                 {user && !m.id.startsWith('temp-') && (
                                   <MessageReactions
@@ -652,6 +595,22 @@ function ChannelView({ page }: ChannelViewProps) {
                                     onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
                                     onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
                                     canReact={permissions?.canView || false}
+                                  />
+                                )}
+                                {isRealMessage && (
+                                  <MessageHoverToolbar
+                                    canReact={permissions?.canView || false}
+                                    canEdit={showOwnerActions}
+                                    canDelete={showOwnerActions}
+                                    canReplyInThread={!isAi && !m.id.startsWith('temp-')}
+                                    canQuoteReply={true}
+                                    onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                    onQuoteReply={() => handleStartQuote(m)}
+                                    onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                    onDelete={() => handleDeleteMessage(m.id)}
+                                    onReplyInThread={() =>
+                                      openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                    }
                                   />
                                 )}
                             </div>
