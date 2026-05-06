@@ -3,143 +3,93 @@
  *
  * Before this cutover, drive invites parked pending state in two places:
  *   1. A `users` row created at invite-send time (with `tosAcceptedAt = null`,
- *      `emailVerified = null`, provider='email', name derived from the email)
+ *      `emailVerified = null`, `provider = 'email'`, name derived from the email)
  *   2. A `drive_members` row referencing that user with `acceptedAt = null`
  *
  * After the cutover, pending state lives in the new `pending_invites` table
- * and the user row is only created at affirmative signup. This script:
+ * and the user row is only created at affirmative signup. There is NO clean
+ * way to re-issue a usable invite from the legacy data alone — the original
+ * raw token was never persisted (only its hash lived in `verification_tokens`,
+ * which the magic-link service has since rotated through normal expiry). So
+ * the migration is a clean wipe rather than an in-place port:
  *
- *   1. Ports every `drive_members` row with `acceptedAt IS NULL` into a fresh
- *      `pending_invites` row (new tokenHash, 48h expiry from now). The
- *      original `drive_members` row is then deleted.
+ *   1. Delete every `drive_members` row with `acceptedAt IS NULL`. These were
+ *      orphan-pending rows; the recipient never received a usable token after
+ *      the cutover and the partial unique index on `pending_invites` would
+ *      otherwise block admins from re-inviting the same email to the same drive.
  *
- *   2. Deletes orphan `users` rows whose only state is "created by old invite
- *      path with no auth credentials" — no passkeys, no `tosAcceptedAt`,
- *      no `emailVerified`. The script intentionally avoids deleting any user
- *      who has linked content elsewhere (page authorship, sessions, comments,
- *      etc.); the conservative check is "has at least one passkey OR
- *      `tosAcceptedAt IS NOT NULL` OR `emailVerified IS NOT NULL`".
+ *   2. Delete users created exclusively by the old invite path: provider='email',
+ *      no passkeys, `tosAcceptedAt IS NULL`, `emailVerified IS NULL`, and no
+ *      remaining `drive_members` rows. Conservative — any auth credential or
+ *      verified email or accepted membership leaves the row intact.
  *
- *   3. Emits a list of emails whose invites were ported. The new tokens are
- *      generated but no email is sent — admins are expected to re-send
- *      invites through the normal /api/drives/[driveId]/members/invite flow
- *      so the recipient gets a notification with the new /invite/<token> URL.
+ *   3. Emit the (driveId, email) pairs that were wiped so admins can re-invite
+ *      through the normal /api/drives/[driveId]/members/invite flow, which
+ *      produces a usable /invite/<token> URL via the standard delivery path.
  *
- * Run with: pnpm tsx packages/db/src/migrate-pending-invites.ts
+ * Run with: pnpm --filter @pagespace/db migrate-pending-invites
  *
  * The script is idempotent: re-running it against migrated data finds zero
- * rows to migrate and zero orphans to delete.
+ * pending rows and zero orphans.
  */
 
-import { createHash, randomBytes } from 'crypto';
-import { eq, and, isNull, isNotNull, or, ne } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { db } from './db';
-import { users } from './schema/auth';
+import { users, passkeys } from './schema/auth';
 import { driveMembers } from './schema/members';
-import { pendingInvites } from './schema/pending-invites';
-import { passkeys } from './schema/auth';
-import { createId } from '@paralleldrive/cuid2';
-
-const EXPIRY_MS = 48 * 60 * 60 * 1000;
-
-function generateInviteTokenHash(): string {
-  // Match the prefix + length convention used by createInviteToken so the
-  // hashes line up if a token were generated through the live primitive.
-  const random = randomBytes(24).toString('base64url');
-  const token = `ps_invite_${random}`;
-  return createHash('sha3-256').update(token).digest('hex');
-}
 
 interface MigrationResult {
-  pendingRowsScanned: number;
-  invitesCreated: number;
-  driveMembersDeleted: number;
+  pendingMembersDeleted: number;
   orphanUsersDeleted: number;
-  portedEmails: string[];
+  wipedInvites: Array<{ driveId: string; email: string }>;
 }
 
 export async function migratePendingInvites(): Promise<MigrationResult> {
   const result: MigrationResult = {
-    pendingRowsScanned: 0,
-    invitesCreated: 0,
-    driveMembersDeleted: 0,
+    pendingMembersDeleted: 0,
     orphanUsersDeleted: 0,
-    portedEmails: [],
+    wipedInvites: [],
   };
 
   const pendingRows = await db
     .select({
       memberId: driveMembers.id,
       driveId: driveMembers.driveId,
-      userId: driveMembers.userId,
-      role: driveMembers.role,
-      invitedBy: driveMembers.invitedBy,
       email: users.email,
     })
     .from(driveMembers)
     .innerJoin(users, eq(users.id, driveMembers.userId))
     .where(isNull(driveMembers.acceptedAt));
 
-  result.pendingRowsScanned = pendingRows.length;
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + EXPIRY_MS);
-
   for (const row of pendingRows) {
-    if (!row.invitedBy) {
-      // Pre-cutover invariant: invitedBy was nullable on driveMembers but
-      // pendingInvites requires it. If it's null, we can't preserve invitation
-      // authority — skip and let admins manually re-invite.
-      continue;
-    }
-
-    await db.transaction(async (tx) => {
-      await tx.insert(pendingInvites).values({
-        id: createId(),
-        tokenHash: generateInviteTokenHash(),
-        email: row.email.trim().toLowerCase(),
-        driveId: row.driveId,
-        role: row.role,
-        invitedBy: row.invitedBy as string,
-        expiresAt,
-      });
-
-      await tx.delete(driveMembers).where(eq(driveMembers.id, row.memberId));
-    });
-
-    result.invitesCreated += 1;
-    result.driveMembersDeleted += 1;
-    result.portedEmails.push(row.email);
+    await db.delete(driveMembers).where(eq(driveMembers.id, row.memberId));
+    result.pendingMembersDeleted += 1;
+    result.wipedInvites.push({ driveId: row.driveId, email: row.email });
   }
 
-  // Find orphan users: created by the old invite path, never authenticated.
-  // Conservative check — leaves any user who has any auth credential or any
-  // ToS acceptance or any verified email intact.
+  // Find orphan users: created by the old invite path with provider='email',
+  // never authenticated, never accepted ToS, no passkeys, and (after the
+  // delete above) no remaining drive_members rows. Conservative — any auth
+  // credential or verified email leaves the row intact.
   const orphans = await db
     .select({ id: users.id, email: users.email })
     .from(users)
     .leftJoin(passkeys, eq(passkeys.userId, users.id))
     .where(
       and(
+        eq(users.provider, 'email'),
         isNull(users.tosAcceptedAt),
         isNull(users.emailVerified),
-        isNull(passkeys.id),
-        // Don't touch the dummy/system user if any specific id sentinel is
-        // used; absence of passkeys + tosAcceptedAt + emailVerified is
-        // already the strongest possible orphan signal.
-        ne(users.email, '')
+        isNull(passkeys.id)
       )
     );
 
   for (const orphan of orphans) {
-    // Only delete if the user has no remaining drive_members rows (we already
-    // deleted pending ones above; an accepted membership wouldn't have made
-    // sense for a user with no email verification, but check defensively).
     const remaining = await db
       .select({ id: driveMembers.id })
       .from(driveMembers)
       .where(eq(driveMembers.userId, orphan.id))
       .limit(1);
-
     if (remaining.length > 0) continue;
 
     await db.delete(users).where(eq(users.id, orphan.id));
@@ -152,14 +102,14 @@ export async function migratePendingInvites(): Promise<MigrationResult> {
 async function main() {
   const result = await migratePendingInvites();
   console.log('drive-invite migration complete:');
-  console.log(`  pending drive_members rows scanned: ${result.pendingRowsScanned}`);
-  console.log(`  pending_invites rows created:       ${result.invitesCreated}`);
-  console.log(`  drive_members rows deleted:         ${result.driveMembersDeleted}`);
+  console.log(`  pending drive_members rows deleted: ${result.pendingMembersDeleted}`);
   console.log(`  orphan users deleted:               ${result.orphanUsersDeleted}`);
-  if (result.portedEmails.length > 0) {
+  if (result.wipedInvites.length > 0) {
     console.log('');
-    console.log('Emails whose invites were ported (admins should re-send via the invite UI):');
-    for (const email of result.portedEmails) console.log(`  ${email}`);
+    console.log('Wiped legacy invites — admins should re-invite via the invite UI:');
+    for (const { driveId, email } of result.wipedInvites) {
+      console.log(`  drive=${driveId}  email=${email}`);
+    }
   }
 }
 
@@ -172,7 +122,3 @@ if (require.main === module) {
     }
   );
 }
-
-// Suppress unused-import warnings for operators only used inside the script.
-void or;
-void isNotNull;
