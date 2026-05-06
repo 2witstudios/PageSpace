@@ -80,6 +80,10 @@ vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
   acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('@/lib/auth/invite-acceptance', () => ({
+  acceptInviteForNewUser: vi.fn(),
+}));
+
 import { POST } from '../route';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -92,6 +96,7 @@ import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
+import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
 
 const validPayload = {
   email: 'user@example.com',
@@ -591,6 +596,63 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
+    });
+  });
+
+  describe('inviteToken plumbing', () => {
+    it('given inviteToken absent, does not call acceptInviteForNewUser and uses provisioned drive redirect', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(acceptInviteForNewUser).not.toHaveBeenCalled();
+      expect(body.redirectUrl).toBe('/dashboard/drive-1?welcome=true');
+    });
+
+    it('given inviteToken present and acceptance succeeds, redirects to /dashboard/<driveId>?welcome=true (overrides provisioning)', async () => {
+      vi.mocked(acceptInviteForNewUser).mockResolvedValue({
+        ok: true,
+        data: { driveId: 'drive_invited', driveName: 'Invited Workspace', memberId: 'mem_new' },
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(acceptInviteForNewUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token: 'ps_invite_xyz',
+          userId: 'new-user-1',
+          userEmail: 'user@example.com',
+        }),
+      );
+      expect(body.redirectUrl).toBe('/dashboard/drive_invited?welcome=true');
+    });
+
+    it('given inviteToken present and acceptance fails (EMAIL_MISMATCH), signup still succeeds with inviteError query param (NON-FATAL)', async () => {
+      vi.mocked(acceptInviteForNewUser).mockResolvedValue({
+        ok: false,
+        error: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.redirectUrl).toContain('inviteError=EMAIL_MISMATCH');
+      // Critical: session is NOT revoked when invite acceptance fails.
+      expect(sessionService.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it('given inviteToken present and acceptance throws, signup still succeeds with TOKEN_NOT_FOUND inviteError', async () => {
+      vi.mocked(acceptInviteForNewUser).mockRejectedValue(new Error('connection lost'));
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.redirectUrl).toContain('inviteError=TOKEN_NOT_FOUND');
     });
   });
 });
