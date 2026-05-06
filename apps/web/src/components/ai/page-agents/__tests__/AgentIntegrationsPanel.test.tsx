@@ -387,6 +387,44 @@ describe('AgentIntegrationsPanel', () => {
     });
   });
 
+  // --- No-op short-circuits ---
+  it('does not call PUT when Select All matches current allowedTools', async () => {
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantWithTools],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^select all$/i }));
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
+  it('does not call PUT when Deselect All matches an already-empty allowedTools', async () => {
+    const grantEmpty: SafeGrant = {
+      ...grantWithTools,
+      id: 'grant-empty-allowed',
+      allowedTools: [],
+    };
+    mockHooksDefault({
+      userConnections: [activeConnection],
+      grants: [grantEmpty],
+    });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /^deselect all$/i }));
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
   // --- Empty tool list rendering ---
   it('renders fallback message when provider exposes no tools', () => {
     const grantEmptyTools: SafeGrant = {
