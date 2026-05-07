@@ -351,6 +351,11 @@
       "import": "./dist/services/invite-predicates.js",
       "require": "./dist/services/invite-predicates.js"
     },
+    "./services/invites": {
+      "types": "./dist/services/invites/index.d.ts",
+      "import": "./dist/services/invites/index.js",
+      "require": "./dist/services/invites/index.js"
+    },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
       "import": "./dist/validators/id-validators.js",
