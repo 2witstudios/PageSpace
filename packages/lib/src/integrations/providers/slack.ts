@@ -105,6 +105,7 @@ export const slackProvider: IntegrationProviderConfig = {
         mapping: {
           id: 'id',
           name: 'name',
+          user: 'user',
           topic: 'topic.value',
           purpose: 'purpose.value',
           num_members: 'num_members',

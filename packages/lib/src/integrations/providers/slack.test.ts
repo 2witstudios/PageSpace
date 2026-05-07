@@ -173,6 +173,10 @@ describe('slackProvider', () => {
       expect(tool.outputTransform!.mapping).toHaveProperty('name');
       expect(tool.outputTransform!.maxLength).toBe(500);
     });
+
+    it('given an IM-shaped channel, should map the user field so DMs are identifiable', () => {
+      expect(tool.outputTransform!.mapping).toHaveProperty('user', 'user');
+    });
   });
 
   describe('send_message tool', () => {
