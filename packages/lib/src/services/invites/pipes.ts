@@ -114,13 +114,15 @@ export const revokePendingInvite =
       inviteId: validated.data.id,
       driveId: validated.data.driveId,
     });
-    ports.auditPermissionRevoked({
-      inviteId: validated.data.id,
-      driveId: validated.data.driveId,
-      actorId: input.actorId,
-      targetEmail: validated.data.email,
-      role: validated.data.role,
-    });
+    await swallow(() =>
+      ports.auditPermissionRevoked({
+        inviteId: validated.data.id,
+        driveId: validated.data.driveId,
+        actorId: input.actorId,
+        targetEmail: validated.data.email,
+        role: validated.data.role,
+      }),
+    );
 
     return {
       ok: true,

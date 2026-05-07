@@ -364,6 +364,17 @@ describe('revokePendingInvite', () => {
     expect(result.ok).toBe(true);
     expect(ports.deletePendingInviteForDrive).toHaveBeenCalledOnce();
   });
+
+  it('given an audit port that throws AFTER the delete commits, should still return ok (audit failure must not reverse the revoke)', async () => {
+    const ports = buildRevokePorts({
+      auditPermissionRevoked: vi.fn(() => {
+        throw new Error('audit DB down');
+      }),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result.ok).toBe(true);
+    expect(ports.deletePendingInviteForDrive).toHaveBeenCalledOnce();
+  });
 });
 
 const baseMagicLinkInput = (
