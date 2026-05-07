@@ -127,7 +127,12 @@ vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+
 import { POST } from '../route';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -208,6 +213,7 @@ describe('POST /api/auth/google/one-tap', () => {
     // Default mocks
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
+    vi.mocked(consumeInviteIfPresent).mockResolvedValue({ invitedDriveId: null });
 
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_session_token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -748,6 +754,46 @@ describe('POST /api/auth/google/one-tap', () => {
       const meta = call?.[1] as Record<string, unknown>;
       expect(meta).not.toHaveProperty('name');
       expect(meta).toHaveProperty('userId');
+    });
+  });
+
+  describe('invite acceptance', () => {
+    it('forwards inviteToken and overrides redirectTo when invite consumed', async () => {
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive-from-invite' });
+
+      const request = createOneTapRequest({ ...validOneTapPayload, inviteToken: 'ps_invite_xyz' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_xyz' }),
+      );
+      expect(body.invitedDriveId).toBe('drive-from-invite');
+      expect(body.redirectTo).toBe('/dashboard/drive-from-invite?invited=1');
+    });
+
+    it('keeps original redirectTo and surfaces inviteError when pipe rejects', async () => {
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const request = createOneTapRequest({ ...validOneTapPayload, inviteToken: 'ps_invite_xyz' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBe('EMAIL_MISMATCH');
+      expect(body.redirectTo).toBe('/dashboard');
+    });
+
+    it('returns invitedDriveId: null when no inviteToken provided', async () => {
+      const request = createOneTapRequest(validOneTapPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBeUndefined();
     });
   });
 

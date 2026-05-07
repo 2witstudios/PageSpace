@@ -34,7 +34,12 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+
 import { POST } from '../route';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
@@ -211,6 +216,7 @@ describe('POST /api/auth/google/native', () => {
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
+    vi.mocked(consumeInviteIfPresent).mockResolvedValue({ invitedDriveId: null });
 
     // Default session mocks
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_session_token');
@@ -762,6 +768,45 @@ describe('POST /api/auth/google/native', () => {
       expect(call).toBeDefined();
       const meta = call?.[1] as { email?: string };
       expect(meta.email).toBe('te***@example.com');
+    });
+  });
+
+  describe('invite acceptance', () => {
+    it('forwards inviteToken to consumeInviteIfPresent and includes invitedDriveId in response', async () => {
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive-from-invite' });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_xyz', isNewUser: true }),
+      );
+      expect(body.invitedDriveId).toBe('drive-from-invite');
+      expect(body.inviteError).toBeUndefined();
+    });
+
+    it('passes inviteError through when pipe rejects with EMAIL_MISMATCH', async () => {
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBe('EMAIL_MISMATCH');
+    });
+
+    it('returns invitedDriveId: null and no inviteError when no inviteToken provided', async () => {
+      const request = createNativeRequest(validNativePayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBeUndefined();
     });
   });
 

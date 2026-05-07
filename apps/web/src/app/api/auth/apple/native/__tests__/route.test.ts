@@ -118,7 +118,12 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+
 import { POST } from '../route';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
@@ -725,6 +730,41 @@ describe('POST /api/auth/apple/native', () => {
       expect(call).toBeDefined();
       const meta = call?.[1] as { email?: string };
       expect(meta.email).toBe('te***@example.com');
+    });
+  });
+
+  describe('invite acceptance', () => {
+    it('forwards inviteToken to consumeInviteIfPresent and includes invitedDriveId in response', async () => {
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive-from-invite' });
+
+      const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_xyz', isNewUser: true }),
+      );
+      expect(body.invitedDriveId).toBe('drive-from-invite');
+    });
+
+    it('passes inviteError through when pipe rejects', async () => {
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: null,
+        inviteError: 'TOKEN_CONSUMED',
+      });
+
+      const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBe('TOKEN_CONSUMED');
+    });
+
+    it('returns invitedDriveId: null and no inviteError when no inviteToken provided', async () => {
+      const response = await POST(createNativeRequest(validPayload));
+      const body = await response.json();
+
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.inviteError).toBeUndefined();
     });
   });
 

@@ -20,12 +20,15 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 const client = new OAuth2Client(process.env.GOOGLE_OAUTH_CLIENT_ID);
@@ -52,7 +55,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { credential, platform, deviceId, deviceName } = validation.data;
+    const { credential, platform, deviceId, deviceName, inviteToken } = validation.data;
 
     // Rate limiting by IP address
     const clientIP = getClientIP(req);
@@ -201,7 +204,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
+    let redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
@@ -267,6 +270,17 @@ export async function POST(req: Request) {
       }
     }
 
+    const { invitedDriveId, inviteError } = await consumeInviteIfPresent({
+      request: req,
+      inviteToken,
+      user,
+      isNewUser,
+      email,
+    });
+    if (invitedDriveId) {
+      redirectTo = `/dashboard/${invitedDriveId}?invited=1`;
+    }
+
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
 
@@ -284,6 +298,8 @@ export async function POST(req: Request) {
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         redirectTo,
         isNewUser,
+        invitedDriveId,
+        ...(inviteError && { inviteError }),
       },
       { headers }
     );
