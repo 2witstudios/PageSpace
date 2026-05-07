@@ -189,13 +189,14 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
   });
 
   it('safe next on send body, but tampered to unsafe in the email link, is rejected at verify', async () => {
-    await sendPost(
+    const sendResp = await sendPost(
       buildSendRequest({
         email: 'user@example.com',
         next: '/dashboard/drive_abc',
         tosAccepted: true,
       }),
     );
+    expect(sendResp.status).toBe(200);
     extractUrlFromEmailCall();
 
     // Simulate a tampered email link — attacker swaps next= for an open

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // Radix UI Checkbox renders an indicator that calls into @radix-ui/react-use-size,
@@ -86,6 +86,31 @@ describe('MagicLinkForm', () => {
       const body = JSON.parse((sendCall![1] as RequestInit).body as string) as Record<string, unknown>;
       expect(body.tosAccepted).toBe(true);
       expect(body.email).toBe('user@example.com');
+    });
+
+    it('refuses to POST if a programmatic submit fires while the checkbox is unchecked (defense-in-depth: payload binds to state, not literal true)', async () => {
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      // Type a valid email but DO NOT tick the ToS checkbox.
+      const input = screen.getByLabelText(/email/i) as HTMLInputElement;
+      await userEvent.type(input, 'user@example.com');
+
+      // Bypass the disabled submit button by triggering a programmatic submit
+      // on the form element itself (simulates Enter / scripted submit).
+      const form = input.closest('form')!;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      });
+
+      // The handler must short-circuit BEFORE the send-route POST is issued.
+      // waitFor lets any queued promise microtasks settle without flake.
+      await waitFor(() => {
+        const sendCalls = fetchSpy.mock.calls.filter(([url]) =>
+          typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+        );
+        expect(sendCalls).toHaveLength(0);
+      });
     });
   });
 

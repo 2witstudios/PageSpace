@@ -162,9 +162,10 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
   });
 
   it('given a unique-constraint race (concurrent magic-link request landed first), re-loads the surviving id and returns it', async () => {
-    returningMock.mockRejectedValueOnce(
-      new Error('duplicate key value violates unique constraint "users_email_unique"'),
-    );
+    // SQLSTATE 23505 (unique_violation) — the standard Postgres code carried
+    // through node-postgres and Drizzle. Detection is by code, not message.
+    const pgUniqueViolation = Object.assign(new Error('duplicate key value violates unique constraint "users_email_unique"'), { code: '23505' });
+    returningMock.mockRejectedValueOnce(pgUniqueViolation);
     selectWhereMock.mockResolvedValueOnce([{ id: 'user_existing_456' }]);
 
     const ports = buildMagicLinkPorts();
@@ -177,7 +178,7 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
     expect(dbSelectMock).toHaveBeenCalledOnce();
   });
 
-  it('given a non-constraint error, propagates it (caller sees the failure rather than a silent no-op)', async () => {
+  it('given a non-constraint error (no 23505 code), propagates it without attempting the post-race re-load', async () => {
     const dbDown = new Error('connection refused');
     returningMock.mockRejectedValueOnce(dbDown);
 
@@ -188,8 +189,22 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
     expect(dbSelectMock).not.toHaveBeenCalled();
   });
 
-  it('given a constraint error but the post-race lookup finds no row (storage anomaly), rethrows the original error', async () => {
-    const constraintErr = new Error('unique constraint violation');
+  it('given an error whose message looks like a unique violation but lacks code 23505, propagates it (no string-match false-positive)', async () => {
+    // Defensive: a stale/test error whose message contains "unique constraint"
+    // but isn't a real pg unique-violation must NOT trigger the race-recovery
+    // path — that would mask real bugs.
+    const fakey = new Error('something something unique constraint blah');
+    returningMock.mockRejectedValueOnce(fakey);
+
+    const ports = buildMagicLinkPorts();
+    await expect(
+      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date() }),
+    ).rejects.toThrow(fakey);
+    expect(dbSelectMock).not.toHaveBeenCalled();
+  });
+
+  it('given code 23505 but the post-race lookup finds no row (storage anomaly), rethrows the original error', async () => {
+    const constraintErr = Object.assign(new Error('unique violation'), { code: '23505' });
     returningMock.mockRejectedValueOnce(constraintErr);
     selectWhereMock.mockResolvedValueOnce([]);
 

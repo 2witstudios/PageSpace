@@ -148,12 +148,14 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
         transition={{ delay: 0.45, duration: 0.3 }}
       >
         {showMagicLink ? (
-          <div className="mt-2">
+          <div id="magic-link-form" className="mt-2">
             <MagicLinkForm {...(magicLinkNextPath && { nextPath: magicLinkNextPath })} />
           </div>
         ) : (
           <button
             type="button"
+            aria-expanded={showMagicLink}
+            aria-controls="magic-link-form"
             className="flex w-full items-center justify-center gap-2 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setShowMagicLink(true)}
           >

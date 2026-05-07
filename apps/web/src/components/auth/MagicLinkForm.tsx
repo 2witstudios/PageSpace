@@ -69,6 +69,14 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
 
     if (formState === 'sending') return;
     if (cooldownSeconds > 0) return;
+    // Submit-time guard: the button is disabled until acceptedTos, but a
+    // programmatic / Enter-key submit could still fire. Refuse to send a
+    // payload that would record consent without an actual checkbox tick.
+    if (!acceptedTos) {
+      setFormState('error');
+      setError('Please accept the Terms and Privacy Policy to continue.');
+      return;
+    }
 
     setFormState('sending');
     setError(null);
@@ -97,7 +105,7 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
         credentials: 'include',
         body: JSON.stringify({
           email: email.trim(),
-          tosAccepted: true,
+          tosAccepted: acceptedTos,
           ...platformFields,
           ...(nextPath && { next: nextPath }),
         }),
@@ -137,7 +145,7 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
       setFormState('error');
       setError('Network error. Please check your connection and try again.');
     }
-  }, [email, formState, cooldownSeconds, nextPath]);
+  }, [email, formState, cooldownSeconds, nextPath, acceptedTos]);
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;
