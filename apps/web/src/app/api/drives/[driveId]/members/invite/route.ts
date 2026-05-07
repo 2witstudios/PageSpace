@@ -458,7 +458,7 @@ async function handleEmailPath(args: {
       recipientEmail: email,
       inviterName: inviter?.name ?? 'A teammate',
       driveName: drive.name,
-      magicLinkUrl: inviteUrl,
+      inviteUrl,
     });
   } catch (emailError) {
     loggers.api.error(

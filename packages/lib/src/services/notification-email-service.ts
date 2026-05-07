@@ -278,15 +278,15 @@ function stripHeaderControls(input: string): string {
 
 /**
  * Send a "you've been invited to a drive" email to a recipient who does not
- * yet hold an active session. The route mints a long-lived magic-link token,
- * encodes it into magicLinkUrl, and hands it here. Errors propagate so the
- * caller (the invite route) can decide whether to surface a 5xx.
+ * yet hold an active session. The route mints a single-use invite token,
+ * encodes it into inviteUrl pointing at the consent screen, and hands it
+ * here. Errors propagate so the caller can decide whether to surface a 5xx.
  */
 export async function sendPendingDriveInvitationEmail(input: {
   recipientEmail: string;
   inviterName: string;
   driveName: string;
-  magicLinkUrl: string;
+  inviteUrl: string;
 }): Promise<void> {
   const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
   const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
@@ -298,7 +298,7 @@ export async function sendPendingDriveInvitationEmail(input: {
       userName: input.recipientEmail,
       inviterName: safeInviterName,
       driveName: safeDriveName,
-      acceptUrl: input.magicLinkUrl,
+      acceptUrl: input.inviteUrl,
     }),
   });
 }

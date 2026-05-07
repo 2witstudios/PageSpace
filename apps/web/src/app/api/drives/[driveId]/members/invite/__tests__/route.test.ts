@@ -534,7 +534,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         expect.objectContaining({
           recipientEmail: 'newbie@example.com',
           driveName: 'Test Drive',
-          magicLinkUrl: expect.stringContaining('https://app.example.com/invite/ps_invite_xyz'),
+          inviteUrl: expect.stringContaining('https://app.example.com/invite/ps_invite_xyz'),
         })
       );
     });
@@ -988,7 +988,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
         expect.objectContaining({
-          magicLinkUrl: expect.stringContaining('https://fallback.example.com/invite/'),
+          inviteUrl: expect.stringContaining('https://fallback.example.com/invite/'),
         })
       );
     });
