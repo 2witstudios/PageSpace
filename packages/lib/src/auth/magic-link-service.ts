@@ -16,8 +16,10 @@ import { verificationTokens } from '@pagespace/db/schema/auth';
 import { hashToken } from './token-utils';
 import { secureCompare } from './secure-compare';
 
-// Token expiry: 5 minutes for magic links
-export const MAGIC_LINK_EXPIRY_MINUTES = 5;
+// Re-exported from the pure-leaf constants module so the pure-core invites
+// pipe can import the default expiry without dragging the drizzle-touching
+// half of this file into its module-load graph.
+export { MAGIC_LINK_EXPIRY_MINUTES } from './magic-link-constants';
 
 const verifyMagicLinkSchema = z.object({
   token: z.string().min(1).refine(

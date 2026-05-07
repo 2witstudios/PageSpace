@@ -1,4 +1,4 @@
-import { MAGIC_LINK_EXPIRY_MINUTES } from '../../auth/magic-link-service';
+import { MAGIC_LINK_EXPIRY_MINUTES } from '../../auth/magic-link-constants';
 import type { AcceptancePorts, MagicLinkPorts, RevokePorts } from './ports';
 import type {
   AcceptedInviteData,
