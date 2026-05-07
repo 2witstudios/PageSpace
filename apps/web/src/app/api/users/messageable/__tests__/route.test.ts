@@ -125,7 +125,7 @@ describe('GET /api/users/messageable', () => {
           { userId: 'user_bob', driveId: 'drive_1' },
         ])
       ) // other accepted members
-      .mockReturnValueOnce(fromWhere([])) // connections (none)
+      .mockReturnValueOnce(fromWhere([])) // relationships (no connections, no blocks)
       .mockReturnValueOnce(
         fromLeftJoinWhere([userRow('user_alice', 'Alice'), userRow('user_bob', 'Bob')])
       );
@@ -150,8 +150,8 @@ describe('GET /api/users/messageable', () => {
       .mockReturnValueOnce(fromWhere([])) // other owners
       .mockReturnValueOnce(fromWhere([{ userId: 'user_alice', driveId: 'drive_1' }])) // co-member
       .mockReturnValueOnce(
-        fromWhere([{ user1Id: userId, user2Id: 'user_alice' }])
-      ) // connections include alice
+        fromWhere([{ user1Id: userId, user2Id: 'user_alice', status: 'ACCEPTED' }])
+      ) // accepted connection with alice
       .mockReturnValueOnce(fromLeftJoinWhere([userRow('user_alice', 'Alice')]));
 
     const response = await GET(new Request('http://localhost/api/users/messageable'));
@@ -166,6 +166,30 @@ describe('GET /api/users/messageable', () => {
     });
   });
 
+  it('excludes BLOCKED relationships even when the users share a drive', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(fromWhere([{ id: 'drive_1' }])) // owned drives
+      .mockReturnValueOnce(fromWhere([])) // member drives
+      .mockReturnValueOnce(fromWhere([])) // other owners
+      .mockReturnValueOnce(
+        fromWhere([
+          { userId: 'user_alice', driveId: 'drive_1' },
+          { userId: 'user_bob', driveId: 'drive_1' },
+        ])
+      ) // alice and bob co-members
+      .mockReturnValueOnce(
+        fromWhere([{ user1Id: userId, user2Id: 'user_alice', status: 'BLOCKED' }])
+      ) // alice is blocked
+      .mockReturnValueOnce(fromLeftJoinWhere([userRow('user_bob', 'Bob')]));
+
+    const response = await GET(new Request('http://localhost/api/users/messageable'));
+
+    const body = await response.json();
+    const ids = body.users.map((u: { id: string }) => u.id);
+    expect(ids).toEqual(['user_bob']);
+    expect(ids).not.toContain('user_alice');
+  });
+
   it('counts membership across multiple shared drives correctly', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(fromWhere([{ id: 'drive_1' }, { id: 'drive_2' }])) // owns 2 drives
@@ -177,7 +201,7 @@ describe('GET /api/users/messageable', () => {
           { userId: 'user_alice', driveId: 'drive_2' },
         ])
       ) // alice is member of both
-      .mockReturnValueOnce(fromWhere([])) // connections
+      .mockReturnValueOnce(fromWhere([])) // relationships (none)
       .mockReturnValueOnce(fromLeftJoinWhere([userRow('user_alice', 'Alice')]));
 
     const response = await GET(new Request('http://localhost/api/users/messageable'));

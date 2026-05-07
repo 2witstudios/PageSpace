@@ -107,7 +107,7 @@ describe('POST /api/messages/conversations DM eligibility', () => {
   it('allows DM when an accepted connection exists', async () => {
     vi.mocked(usersShareDrive).mockResolvedValue(false);
     vi.mocked(db.select)
-      .mockReturnValueOnce(selectChain([{ id: 'conn_1' }]))
+      .mockReturnValueOnce(selectChain([{ status: 'ACCEPTED' }]))
       .mockReturnValueOnce(selectChain([]));
     vi.mocked(db.insert).mockReturnValueOnce(
       insertChain([{ id: 'conv_1', participant1Id: userId, participant2Id: recipientId }])
@@ -145,6 +145,17 @@ describe('POST /api/messages/conversations DM eligibility', () => {
     const response = await POST(makeRequest({ recipientId }));
 
     expect(response.status).toBe(403);
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when the relationship is BLOCKED, even if users share a drive', async () => {
+    vi.mocked(usersShareDrive).mockResolvedValue(true);
+    vi.mocked(db.select).mockReturnValueOnce(selectChain([{ status: 'BLOCKED' }]));
+
+    const response = await POST(makeRequest({ recipientId }));
+
+    expect(response.status).toBe(403);
+    expect(usersShareDrive).not.toHaveBeenCalled();
     expect(db.insert).not.toHaveBeenCalled();
   });
 

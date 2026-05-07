@@ -93,10 +93,11 @@ export async function GET(request: Request) {
       for (const m of otherMembers) bump(m.userId, m.driveId);
     }
 
-    const userConnections = await db
+    const relationshipRows = await db
       .select({
         user1Id: connections.user1Id,
         user2Id: connections.user2Id,
+        status: connections.status,
       })
       .from(connections)
       .where(
@@ -105,14 +106,25 @@ export async function GET(request: Request) {
             eq(connections.user1Id, userId),
             eq(connections.user2Id, userId)
           ),
-          eq(connections.status, 'ACCEPTED')
+          or(
+            eq(connections.status, 'ACCEPTED'),
+            eq(connections.status, 'BLOCKED')
+          )
         )
       );
 
     const connectionUserIds = new Set<string>();
-    for (const c of userConnections) {
+    const blockedUserIds = new Set<string>();
+    for (const c of relationshipRows) {
       const other = c.user1Id === userId ? c.user2Id : c.user1Id;
-      if (other) connectionUserIds.add(other);
+      if (!other) continue;
+      if (c.status === 'BLOCKED') blockedUserIds.add(other);
+      else if (c.status === 'ACCEPTED') connectionUserIds.add(other);
+    }
+
+    for (const blockedId of blockedUserIds) {
+      driveCountByUserId.delete(blockedId);
+      connectionUserIds.delete(blockedId);
     }
 
     const allUserIds = Array.from(

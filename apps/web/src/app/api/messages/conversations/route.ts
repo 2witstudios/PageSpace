@@ -180,9 +180,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // DM eligibility: accepted connection OR shared drive membership
-    const [connection] = await db
-      .select()
+    // Block precedence: a BLOCKED relationship denies DMs even when the users
+    // share a drive. Otherwise, eligibility = accepted connection OR shared
+    // drive membership.
+    const [relationship] = await db
+      .select({ status: connections.status })
       .from(connections)
       .where(
         and(
@@ -196,12 +198,24 @@ export async function POST(request: Request) {
               eq(connections.user2Id, userId)
             )
           ),
-          eq(connections.status, 'ACCEPTED')
+          or(
+            eq(connections.status, 'ACCEPTED'),
+            eq(connections.status, 'BLOCKED')
+          )
         )
       )
       .limit(1);
 
-    const isEligible = !!connection || (await usersShareDrive(userId, recipientId));
+    if (relationship?.status === 'BLOCKED') {
+      return NextResponse.json(
+        { error: 'You can\'t message this user' },
+        { status: 403 }
+      );
+    }
+
+    const isEligible =
+      relationship?.status === 'ACCEPTED' ||
+      (await usersShareDrive(userId, recipientId));
 
     if (!isEligible) {
       return NextResponse.json(
