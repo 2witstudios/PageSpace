@@ -71,6 +71,10 @@ export interface RequestMagicLinkInput {
   platform?: 'web' | 'desktop' | 'ios';
   deviceId?: string;
   deviceName?: string;
+  // Same-origin redirect target embedded in the verify URL. The caller must
+  // have already validated against an allowlist; the pipe forwards verbatim
+  // to the email-send port and never inspects it.
+  next?: string;
 }
 
 export type MagicLinkErrorCode =

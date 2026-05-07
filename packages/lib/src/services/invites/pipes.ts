@@ -152,7 +152,11 @@ export const requestMagicLink =
       ...(input.deviceName !== undefined && { deviceName: input.deviceName }),
     });
 
-    await ports.sendMagicLinkEmail({ email: input.email, token });
+    await ports.sendMagicLinkEmail({
+      email: input.email,
+      token,
+      ...(input.next !== undefined && { next: input.next }),
+    });
 
     return { ok: true, data: undefined };
   };
