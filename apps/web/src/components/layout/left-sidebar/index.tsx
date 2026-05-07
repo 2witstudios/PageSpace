@@ -94,7 +94,7 @@ export default function Sidebar({ className }: SidebarProps) {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0"
-                    onClick={() => openQuickCreate()}
+                    onClick={() => openQuickCreate(null)}
                   >
                     <Plus className="h-4 w-4" />
                   </Button>

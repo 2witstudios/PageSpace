@@ -164,7 +164,7 @@ export default function QuickCreatePalette() {
       const binding = getEffectiveBinding('pages.quick-create');
       if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId && !quickCreateOpen) {
         e.preventDefault();
-        openQuickCreate();
+        openQuickCreate(null);
       }
     };
     document.addEventListener('keydown', handler);
