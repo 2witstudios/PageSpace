@@ -6,6 +6,7 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 // Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
 // the server can mint a signed state it will later reject at the callback,
@@ -15,7 +16,7 @@ const appleSigninSchema = z.object({
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),
-  inviteToken: z.string().min(1).max(128).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 export async function POST(req: Request) {

@@ -94,7 +94,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
       platform,
       deviceId,
       deviceName,
-      ...(inviteToken && { inviteToken }),
+      inviteToken,
     });
     const response = await fetch(endpoint, {
       method: 'POST',
