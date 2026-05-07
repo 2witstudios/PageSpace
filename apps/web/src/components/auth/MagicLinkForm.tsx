@@ -11,7 +11,14 @@ import { getDevicePlatformFields } from '@/lib/desktop-auth';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error' | 'no-account';
 
-export function MagicLinkForm() {
+export interface MagicLinkFormProps {
+  // Same-origin redirect target the user originally aimed at. Caller
+  // (signin/page.tsx) is the source of truth for safety; the form just
+  // forwards it. Send route + verify route both re-validate.
+  nextPath?: string;
+}
+
+export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [formState, setFormState] = useState<FormState>('input');
@@ -86,7 +93,11 @@ export function MagicLinkForm() {
           'X-Login-CSRF-Token': csrfToken,
         },
         credentials: 'include',
-        body: JSON.stringify({ email: email.trim(), ...platformFields }),
+        body: JSON.stringify({
+          email: email.trim(),
+          ...platformFields,
+          ...(nextPath && { next: nextPath }),
+        }),
       });
 
       if (response.status === 429) {
@@ -131,7 +142,7 @@ export function MagicLinkForm() {
       setFormState('error');
       setError('Network error. Please check your connection and try again.');
     }
-  }, [email, formState, cooldownSeconds]);
+  }, [email, formState, cooldownSeconds, nextPath]);
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;
