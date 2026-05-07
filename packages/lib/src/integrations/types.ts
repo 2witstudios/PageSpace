@@ -62,6 +62,7 @@ export type BodyEncoding = 'json' | 'form' | 'multipart';
 export interface ParameterRef {
   $param: string;
   transform?: 'string' | 'number' | 'boolean' | 'json';
+  default?: unknown;
 }
 
 export interface HttpExecutionConfig {
