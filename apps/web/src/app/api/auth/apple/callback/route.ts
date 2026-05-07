@@ -23,6 +23,7 @@ import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -137,6 +138,7 @@ export async function POST(req: Request) {
 
     // Find or create user
     let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
+    const wasNewUser = !user;
 
     if (user) {
       // Update existing user if needed
@@ -228,6 +230,19 @@ export async function POST(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
+    // Invite consumption runs BEFORE platform branching so desktop/iOS users
+    // who arrived with `?invite=<token>` don't have their invite silently
+    // dropped at the deep-link handoff. The invite is fully consumed (the
+    // membership row is created) regardless of platform; deep-link clients
+    // get `invitedDriveId` as a query param for forward-compatible routing.
+    const oauthInviteResult = await consumeInviteIfPresent({
+      request: req,
+      inviteToken: verifiedState.inviteToken,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      isNewUser: wasNewUser,
+      email,
+    });
+
     // DESKTOP PLATFORM: Redirect with tokens encoded via exchange code
     if (platform === 'desktop') {
       if (!deviceId) {
@@ -264,11 +279,15 @@ export async function POST(req: Request) {
       if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
+      if (oauthInviteResult.invitedDriveId) {
+        deepLinkUrl.searchParams.set('invitedDriveId', oauthInviteResult.invitedDriveId);
+      }
 
       loggers.auth.info('Desktop Apple OAuth deep link bridge', {
         userId: user.id,
         provider: 'apple',
         hasNewUserFlag: isNewlyProvisioned,
+        invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
       return buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
@@ -304,11 +323,15 @@ export async function POST(req: Request) {
       if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
+      if (oauthInviteResult.invitedDriveId) {
+        deepLinkUrl.searchParams.set('invitedDriveId', oauthInviteResult.invitedDriveId);
+      }
 
       loggers.auth.info('iOS Apple OAuth deep link redirect', {
         userId: user.id,
         provider: 'apple',
         hasNewUserFlag: isNewlyProvisioned,
+        invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());
@@ -328,6 +351,13 @@ export async function POST(req: Request) {
           userId: user.id, error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+
+    if (oauthInviteResult.invitedDriveId) {
+      returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}?invited=1`;
+    } else if (oauthInviteResult.inviteError) {
+      const sep = returnUrl.includes('?') ? '&' : '?';
+      returnUrl = `${returnUrl}${sep}inviteError=${oauthInviteResult.inviteError}`;
     }
 
     const redirectUrl = new URL(returnUrl, baseUrl);

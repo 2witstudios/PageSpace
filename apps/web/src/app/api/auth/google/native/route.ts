@@ -19,6 +19,8 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const client = new OAuth2Client();
 
@@ -27,6 +29,7 @@ const nativeAuthSchema = z.object({
   platform: z.enum(['ios', 'android']),
   deviceId: z.string().min(1, 'Device ID is required'),
   deviceName: z.string().optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 /**
@@ -67,7 +70,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken, platform, deviceId, deviceName } = validation.data;
+    const { idToken, platform, deviceId, deviceName, inviteToken } = validation.data;
 
     // Validate required environment variables
     if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_IOS_CLIENT_ID) {
@@ -241,6 +244,14 @@ export async function POST(req: Request) {
       isNewUser,
     });
 
+    const { invitedDriveId, inviteError } = await consumeInviteIfPresent({
+      request: req,
+      inviteToken,
+      user,
+      isNewUser,
+      email,
+    });
+
     // Set session cookie so middleware recognizes the authenticated session
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
@@ -250,6 +261,8 @@ export async function POST(req: Request) {
       csrfToken,
       deviceToken,
       isNewUser,
+      invitedDriveId,
+      ...(inviteError && { inviteError }),
       user: {
         id: user.id,
         name: user.name,

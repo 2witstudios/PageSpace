@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -30,8 +31,18 @@ export async function GET(
     // Get all members with their profiles and permission counts
     const members = await listDriveMembers(driveId);
 
+    // Pending invites are visible to OWNER/ADMIN only. The field is always an
+    // array (never undefined) so client-side SWR cache shape stays stable as
+    // a viewer's role changes — avoids "field present for some users, missing
+    // for others" type ambiguity in the UI.
+    const canSeePending = access.isOwner || access.isAdmin;
+    const pendingInvites = canSeePending
+      ? await driveInviteRepository.findUnconsumedInvitesByDrive(driveId)
+      : [];
+
     return NextResponse.json({
       members,
+      pendingInvites,
       currentUserRole: access.isOwner ? 'OWNER' : (access.isAdmin ? 'ADMIN' : 'MEMBER')
     });
   } catch (error) {

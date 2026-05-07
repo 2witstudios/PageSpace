@@ -68,19 +68,22 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
 }));
 
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-      auth: {
-        error: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-      security: {
-        warn: vi.fn(),
-      },
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const childLogger = {
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(() => childLogger),
+  };
+  return {
+    logger: childLogger,
+    loggers: {
+      auth: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      security: { warn: vi.fn() },
     },
-}));
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));

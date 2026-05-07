@@ -191,6 +191,24 @@ describe('POST /api/auth/apple/signin', () => {
       expect(response.status).toBe(400);
       expect(body.errors.deviceName).toBeDefined();
     });
+
+    it('returns 400 for inviteToken longer than 128 chars', async () => {
+      const request = createPostRequest({ inviteToken: 'ps_invite_' + 'x'.repeat(120) });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.errors.inviteToken).toBeDefined();
+    });
+
+    it('returns 400 for empty inviteToken', async () => {
+      const request = createPostRequest({ inviteToken: '' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.errors.inviteToken).toBeDefined();
+    });
   });
 
   describe('return URL safety', () => {
@@ -337,6 +355,47 @@ describe('POST /api/auth/apple/signin', () => {
       expect(decoded.data.deviceId).toBeUndefined();
       expect(decoded.data.deviceName).toBeUndefined();
     });
+
+    it('forwards inviteToken into state when provided', async () => {
+      const inviteToken = 'ps_invite_abc123def456ghi789';
+      const request = createPostRequest({ inviteToken });
+      const response = await POST(request);
+      const body = await response.json();
+      const url = new URL(body.url);
+
+      const stateParam = url.searchParams.get('state')!;
+      const decoded = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
+      expect(decoded.data.inviteToken).toBe(inviteToken);
+    });
+
+    it('omits inviteToken from state when not provided', async () => {
+      const request = createPostRequest({});
+      const response = await POST(request);
+      const body = await response.json();
+      const url = new URL(body.url);
+
+      const stateParam = url.searchParams.get('state')!;
+      const decoded = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
+      expect(decoded.data.inviteToken).toBeUndefined();
+    });
+
+    // Regression guard for the createSignedState migration: the helper
+    // auto-attaches a `timestamp` field that verifyOAuthState requires.
+    // Without this, callbacks would reject the state as malformed.
+    it('includes timestamp in state', async () => {
+      const before = Date.now();
+      const request = createPostRequest({});
+      const response = await POST(request);
+      const body = await response.json();
+      const url = new URL(body.url);
+      const after = Date.now();
+
+      const stateParam = url.searchParams.get('state')!;
+      const decoded = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
+      expect(typeof decoded.data.timestamp).toBe('number');
+      expect(decoded.data.timestamp).toBeGreaterThanOrEqual(before);
+      expect(decoded.data.timestamp).toBeLessThanOrEqual(after);
+    });
   });
 
   describe('error handling', () => {
@@ -474,6 +533,7 @@ describe('GET /api/auth/apple/signin', () => {
 
       expect(decoded.data.returnUrl).toBe('/dashboard');
       expect(decoded.data.platform).toBe('web');
+      expect(typeof decoded.data.timestamp).toBe('number');
       expect(typeof decoded.sig).toBe('string');
       expect(decoded.sig.length).toBeGreaterThan(0);
     });

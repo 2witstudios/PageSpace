@@ -13,6 +13,8 @@ export interface GoogleAuthResult {
   success: boolean;
   error?: string;
   isNewUser?: boolean;
+  invitedDriveId?: string | null;
+  inviteError?: string;
   user?: {
     id: string;
     name: string | null;
@@ -26,6 +28,8 @@ type GoogleNativeAuthResponse = {
   csrfToken?: string | null;
   deviceToken?: string;
   isNewUser?: boolean;
+  invitedDriveId?: string | null;
+  inviteError?: string;
   user?: GoogleAuthResult['user'];
 };
 
@@ -42,7 +46,7 @@ const IOS_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID;
  * Perform native Google Sign-In and exchange tokens with backend.
  * Only works when running in the iOS Capacitor app.
  */
-export async function signInWithGoogle(): Promise<GoogleAuthResult> {
+export async function signInWithGoogle(options: { inviteToken?: string } = {}): Promise<GoogleAuthResult> {
   // Guard: only run on iOS native app
   if (!isCapacitorApp() || getPlatform() !== 'ios') {
     return { success: false, error: 'Not in iOS app' };
@@ -100,6 +104,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
         platform: 'ios',
         deviceId,
         deviceName: 'iOS App',
+        ...(options.inviteToken && { inviteToken: options.inviteToken }),
       }),
     });
 
@@ -109,7 +114,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
       throw new Error(errorData.error || 'Authentication failed');
     }
 
-    const { sessionToken, csrfToken, deviceToken, isNewUser, user } =
+    const { sessionToken, csrfToken, deviceToken, isNewUser, invitedDriveId, inviteError, user } =
       (await response.json()) as GoogleNativeAuthResponse;
 
     if (!sessionToken) {
@@ -129,7 +134,13 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
 
     console.log('[iOS Google Auth] Sign-in successful, tokens stored');
 
-    return { success: true, isNewUser, user };
+    return {
+      success: true,
+      isNewUser,
+      user,
+      ...(invitedDriveId !== undefined && { invitedDriveId }),
+      ...(inviteError && { inviteError }),
+    };
   } catch (error) {
     console.error('[iOS Google Auth] Sign-in failed:', error);
 

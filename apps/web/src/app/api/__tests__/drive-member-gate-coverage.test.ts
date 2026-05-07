@@ -60,6 +60,10 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'repositories/drive-invite-repository.ts',
     'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; findActivePendingMemberByEmail intentionally filters IS NULL to surface pending rows; createDriveMember/findExistingMember/updateDriveMemberRole operate by composite key or memberId and do not branch on acceptedAt).',
   ],
+  [
+    'auth/revoke-adapters.ts',
+    'findActorMembership returns raw {role, acceptedAt} so the strict "accepted OWNER/ADMIN" gate lives once in validateRevokeRequest (pure-core). Filtering acceptedAt at the SQL layer would silently NOT_FOUND a request that should FORBIDDEN, masking a wrong-role attempt.',
+  ],
 ]);
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;

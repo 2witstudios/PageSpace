@@ -38,6 +38,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
   } = useOAuthSignIn({
     onStart: () => setError(null),
     onError: (msg) => setError(msg),
+    ...(inviteToken && { inviteToken }),
   });
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;

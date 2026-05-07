@@ -24,6 +24,7 @@ import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -130,6 +131,7 @@ export async function GET(req: Request) {
     const userName = name || email.split('@')[0] || 'User';
 
     let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
+    const wasNewUser = !user;
 
     if (user) {
       const resolvedImage = await resolveGoogleAvatarImage({
@@ -242,6 +244,19 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
+    // Invite consumption runs BEFORE platform branching so desktop/iOS users
+    // who arrived with `?invite=<token>` don't have their invite silently
+    // dropped at the deep-link handoff. The invite is fully consumed (the
+    // membership row is created) regardless of platform; deep-link clients
+    // get `invitedDriveId` as a query param for forward-compatible routing.
+    const oauthInviteResult = await consumeInviteIfPresent({
+      request: req,
+      inviteToken: verifiedState.inviteToken,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      isNewUser: wasNewUser,
+      email,
+    });
+
     // DESKTOP PLATFORM: Redirect with tokens encoded in URL
     // OAuth callbacks happen via browser redirect from Google, so we can't return JSON
     // The desktop app (Electron) intercepts the redirect URL and extracts the tokens
@@ -301,11 +316,15 @@ export async function GET(req: Request) {
       if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
+      if (oauthInviteResult.invitedDriveId) {
+        deepLinkUrl.searchParams.set('invitedDriveId', oauthInviteResult.invitedDriveId);
+      }
 
       loggers.auth.info('Desktop OAuth deep link bridge', {
         userId: user.id,
         provider: 'google',
         hasNewUserFlag: isNewlyProvisioned,
+        invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
       return buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
@@ -361,11 +380,15 @@ export async function GET(req: Request) {
       if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
+      if (oauthInviteResult.invitedDriveId) {
+        deepLinkUrl.searchParams.set('invitedDriveId', oauthInviteResult.invitedDriveId);
+      }
 
       loggers.auth.info('iOS OAuth deep link redirect', {
         userId: user.id,
         provider: 'google',
         hasNewUserFlag: isNewlyProvisioned,
+        invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());
@@ -385,6 +408,13 @@ export async function GET(req: Request) {
           userId: user.id, error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+
+    if (oauthInviteResult.invitedDriveId) {
+      returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}?invited=1`;
+    } else if (oauthInviteResult.inviteError) {
+      const sep = returnUrl.includes('?') ? '&' : '?';
+      returnUrl = `${returnUrl}${sep}inviteError=${oauthInviteResult.inviteError}`;
     }
 
     const redirectUrl = new URL(returnUrl, baseUrl);
