@@ -49,10 +49,23 @@ const member = (overrides: { userId?: string; acceptedAt?: string | null } = {})
   permissionCounts: { view: 0, edit: 0, share: 0 },
 });
 
-const okMembers = (members: ReturnType<typeof member>[], currentUserRole = 'OWNER') =>
+type PendingInviteFixture = {
+  id: string;
+  email: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  invitedByName: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+const okMembers = (
+  members: ReturnType<typeof member>[],
+  currentUserRole = 'OWNER',
+  pendingInvites: PendingInviteFixture[] = [],
+) =>
   Promise.resolve({
     ok: true,
-    json: () => Promise.resolve({ currentUserRole, members }),
+    json: () => Promise.resolve({ currentUserRole, members, pendingInvites }),
   });
 
 const EVENTS = ['drive:member_added', 'drive:member_removed', 'drive:member_role_changed'] as const;
@@ -70,56 +83,35 @@ describe('DriveMembers', () => {
     window.confirm = originalConfirm;
   });
 
-  it('Given a mix of pending + accepted, renders two distinct sections with correct counts', async () => {
+  const samplePending = (overrides: Partial<PendingInviteFixture> = {}): PendingInviteFixture => ({
+    id: 'inv_1',
+    email: 'invitee@example.com',
+    role: 'MEMBER',
+    invitedByName: 'Alice',
+    createdAt: '2026-05-01T00:00:00Z',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    ...overrides,
+  });
+
+  it('Given accepted members and pending invites, renders both sections with correct counts', async () => {
     mockFetchWithAuth.mockImplementation(() =>
-      okMembers([
-        member({ userId: 'a1' }),
-        member({ userId: 'a2' }),
-        member({ userId: 'p1', acceptedAt: null }),
-      ])
+      okMembers(
+        [member({ userId: 'a1' }), member({ userId: 'a2' })],
+        'OWNER',
+        [samplePending(), samplePending({ id: 'inv_2', email: 'b@example.com' })],
+      )
     );
     render(<DriveMembers driveId="drive-1" />);
 
     expect(await screen.findByText('Members (2)')).toBeInTheDocument();
-    expect(screen.getByText('Pending invitations (1)')).toBeInTheDocument();
-    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getByText('Pending invitations (2)')).toBeInTheDocument();
   });
 
-  it('Strict null check: acceptedAt undefined must NOT classify as pending', async () => {
-    mockFetchWithAuth.mockImplementation(() =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            currentUserRole: 'OWNER',
-            members: [{ ...member({ userId: 'm1' }), acceptedAt: undefined }],
-          }),
-      })
-    );
+  it('Renders no pending section when API returns an empty pendingInvites array', async () => {
+    mockFetchWithAuth.mockImplementation(() => okMembers([member({ userId: 'm1' })]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText(/members \(/i);
     expect(screen.queryByText(/pending invitations/i)).not.toBeInTheDocument();
-  });
-
-  it('Given Revoke succeeds on a pending row, removes it from local state without a refetch', async () => {
-    mockFetchWithAuth.mockImplementation(() =>
-      okMembers([
-        member({ userId: 'a1' }),
-        member({ userId: 'p1', acceptedAt: null }),
-      ])
-    );
-    mockDel.mockResolvedValue(undefined);
-
-    render(<DriveMembers driveId="drive-1" />);
-    await screen.findByText('Pending invitations (1)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
-
-    await userEvent.setup().click(screen.getByRole('button', { name: /revoke invitation/i }));
-    await waitFor(() =>
-      expect(screen.queryByText(/pending invitations/i)).not.toBeInTheDocument()
-    );
-    expect(mockDel).toHaveBeenCalledWith('/api/drives/drive-1/members/p1');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
   });
 
   it('Given the component mounts, subscribes to all three drive member events', async () => {
@@ -160,14 +152,4 @@ describe('DriveMembers', () => {
     EVENTS.forEach((e) => expect(socket.__count(e)).toBe(0));
   });
 
-  it('Given a pending row, no Resend button is rendered (resend was retired with the broad-sweep cutover)', async () => {
-    mockFetchWithAuth.mockImplementation(() =>
-      okMembers([member({ userId: 'p1', acceptedAt: null })])
-    );
-
-    render(<DriveMembers driveId="drive-1" />);
-    await screen.findByText('Pending invitations (1)');
-
-    expect(screen.queryByRole('button', { name: /resend invitation/i })).not.toBeInTheDocument();
-  });
 });

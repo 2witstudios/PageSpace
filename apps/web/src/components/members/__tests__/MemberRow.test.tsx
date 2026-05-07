@@ -35,51 +35,27 @@ const renderRow = (
 describe('MemberRow', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  describe('Given a pending member row (acceptedAt === null)', () => {
-    it('renders a Pending badge', () => {
-      renderRow(null);
-      expect(screen.getByText('Pending')).toBeInTheDocument();
-    });
-
-    it('hides the Member Settings button', () => {
-      renderRow(null);
-      expect(screen.queryByRole('button', { name: /member settings/i })).not.toBeInTheDocument();
-    });
-
-    it.each([['OWNER' as const], ['ADMIN' as const]])(
-      'exposes a Revoke button to %s and fires onRemove on click',
-      async (role) => {
-        const onRemove = vi.fn();
-        renderRow(null, { currentUserRole: role, onRemove });
-        await userEvent.setup().click(screen.getByRole('button', { name: /revoke invitation/i }));
-        expect(onRemove).toHaveBeenCalledOnce();
-      }
-    );
-
-    it('does NOT expose a Revoke button to MEMBER', () => {
-      renderRow(null, { currentUserRole: 'MEMBER' });
-      expect(screen.queryByRole('button', { name: /revoke invitation/i })).not.toBeInTheDocument();
-    });
-
-    it('does NOT render a Resend button (resend was retired with the broad-sweep cutover)', () => {
-      renderRow(null);
-      expect(screen.queryByRole('button', { name: /resend invitation/i })).not.toBeInTheDocument();
-    });
+  it('shows Member Settings + Remove for OWNER on a regular row', async () => {
+    const onRemove = vi.fn();
+    renderRow('2026-05-02T00:00:00Z', { onRemove });
+    expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /member settings/i })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: /remove member/i }));
+    expect(onRemove).toHaveBeenCalledOnce();
   });
 
-  describe('Given an accepted member row (acceptedAt !== null)', () => {
-    it('does NOT render a Pending badge and shows Member Settings + Remove for OWNER', async () => {
-      const onRemove = vi.fn();
-      renderRow('2026-05-02T00:00:00Z', { onRemove });
-      expect(screen.queryByText('Pending')).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /member settings/i })).toBeInTheDocument();
-      await userEvent.setup().click(screen.getByRole('button', { name: /remove member/i }));
-      expect(onRemove).toHaveBeenCalledOnce();
-    });
-
-    it('does NOT render a Remove button for OWNER role', () => {
-      renderRow('2026-05-02T00:00:00Z', { role: 'OWNER' });
-      expect(screen.queryByRole('button', { name: /remove member/i })).not.toBeInTheDocument();
-    });
+  it('does not render a Remove button for OWNER role member', () => {
+    renderRow('2026-05-02T00:00:00Z', { role: 'OWNER' });
+    expect(screen.queryByRole('button', { name: /remove member/i })).not.toBeInTheDocument();
   });
+
+  it('hides Member Settings + Remove for non-managers', () => {
+    renderRow('2026-05-02T00:00:00Z', { currentUserRole: 'MEMBER' });
+    expect(screen.queryByRole('button', { name: /member settings/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove member/i })).not.toBeInTheDocument();
+  });
+
+  // Pending invites no longer share this component — they live in
+  // PendingInviteRow + PendingInvitesSection, fed by a separate API field.
+  // drive_members rows always have acceptedAt set post-cutover.
 });

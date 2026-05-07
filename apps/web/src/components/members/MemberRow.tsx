@@ -40,7 +40,6 @@ interface MemberRowProps {
 }
 
 export function MemberRow({ member, driveId, currentUserRole, onRemove }: MemberRowProps) {
-  const isPending = member.acceptedAt === null;
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const displayName = member.profile?.displayName || member.user.name || member.user.email || 'Unknown User';
   const initials = displayName
@@ -117,44 +116,34 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
               <span className="text-sm text-gray-500 dark:text-gray-400">@{member.profile.username}</span>
             )}
             {getRoleBadge()}
-            {isPending && (
-              <Badge
-                variant="outline"
-                className="border-yellow-500/50 bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300"
-              >
-                Pending
-              </Badge>
-            )}
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">{member.user.email}</p>
 
-          {!isPending && (
-            <div className="flex items-center space-x-4 mt-1">
-              {member.permissionCounts.view > 0 && (
-                <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                  <Eye className="w-3 h-3" />
-                  <span>{member.permissionCounts.view} pages</span>
-                </div>
-              )}
-              {member.permissionCounts.edit > 0 && (
-                <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                  <Edit className="w-3 h-3" />
-                  <span>{member.permissionCounts.edit} pages</span>
-                </div>
-              )}
-              {member.permissionCounts.share > 0 && (
-                <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
-                  <Share className="w-3 h-3" />
-                  <span>{member.permissionCounts.share} pages</span>
-                </div>
-              )}
-            </div>
-          )}
+          <div className="flex items-center space-x-4 mt-1">
+            {member.permissionCounts.view > 0 && (
+              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                <Eye className="w-3 h-3" />
+                <span>{member.permissionCounts.view} pages</span>
+              </div>
+            )}
+            {member.permissionCounts.edit > 0 && (
+              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                <Edit className="w-3 h-3" />
+                <span>{member.permissionCounts.edit} pages</span>
+              </div>
+            )}
+            {member.permissionCounts.share > 0 && (
+              <div className="flex items-center space-x-1 text-xs text-gray-500 dark:text-gray-400">
+                <Share className="w-3 h-3" />
+                <span>{member.permissionCounts.share} pages</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="flex items-center space-x-2">
-        {canManage && !isPending && (
+        {canManage && (
           <Link href={`/dashboard/${driveId}/members/${member.userId}`}>
             <Button
               variant="ghost"
@@ -171,7 +160,7 @@ export function MemberRow({ member, driveId, currentUserRole, onRemove }: Member
             size="sm"
             onClick={onRemove}
             className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-            title={isPending ? 'Revoke Invitation' : 'Remove Member'}
+            title="Remove Member"
           >
             <Trash2 className="w-4 h-4" />
           </Button>
