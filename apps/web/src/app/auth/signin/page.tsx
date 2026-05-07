@@ -137,7 +137,12 @@ function SignInForm() {
 
   return (
     <AuthShell>
-      <GoogleOneTap autoSelect={true} cancelOnTapOutside={true} context="signin" />
+      <GoogleOneTap
+        autoSelect={true}
+        cancelOnTapOutside={true}
+        context="signin"
+        {...(inviteToken && { inviteToken })}
+      />
 
       {/* Heading */}
       <motion.div

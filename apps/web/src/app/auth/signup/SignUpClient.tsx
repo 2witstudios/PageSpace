@@ -45,7 +45,12 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
 
   return (
     <AuthShell>
-      <GoogleOneTap autoSelect={true} cancelOnTapOutside={true} context="signup" />
+      <GoogleOneTap
+        autoSelect={true}
+        cancelOnTapOutside={true}
+        context="signup"
+        {...(inviteToken && { inviteToken })}
+      />
 
       {inviteContext && (
         <motion.div

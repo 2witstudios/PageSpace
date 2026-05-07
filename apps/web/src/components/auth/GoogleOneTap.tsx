@@ -19,6 +19,8 @@ interface GoogleOneTapProps {
   disabled?: boolean;
   /** Redirect URL after successful sign-in */
   redirectTo?: string;
+  /** Pending invite token to consume on successful sign-in */
+  inviteToken?: string;
 }
 
 const GOOGLE_GSI_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
@@ -31,6 +33,7 @@ export function GoogleOneTap({
   context = 'signin',
   disabled = false,
   redirectTo,
+  inviteToken,
 }: GoogleOneTapProps) {
   const isLoadingRef = useRef(false);
   const initializedRef = useRef(false);
@@ -73,6 +76,7 @@ export function GoogleOneTap({
             platform: isDesktop ? 'desktop' : 'web',
             deviceId,
             deviceName,
+            ...(inviteToken && { inviteToken }),
           }),
         });
 
@@ -127,7 +131,7 @@ export function GoogleOneTap({
         isLoadingRef.current = false;
       }
     },
-    [onSuccess, onError, redirectTo]
+    [onSuccess, onError, redirectTo, inviteToken]
   );
 
   // Check if user already has an active session before showing One Tap
