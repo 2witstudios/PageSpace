@@ -186,6 +186,22 @@ export async function POST(req: Request) {
         );
       }
 
+      // NO_ACCOUNT_FOUND is surfaced explicitly (trade enumeration-resistance
+      // for a clearer signup path). Same-shaped audit, same logging, but the
+      // client gets a 404 with a structured code so MagicLinkForm can render
+      // the "Sign up instead" CTA pre-filled with the entered email.
+      if (result.error.code === 'NO_ACCOUNT_FOUND') {
+        auditRequest(req, {
+          eventType: 'auth.login.failure',
+          riskScore: 0.2,
+          details: { reason: 'magic_link_no_account_found' },
+        });
+        return Response.json(
+          { code: 'no_account', email: normalizedEmail },
+          { status: 404 },
+        );
+      }
+
       // For other errors, log and return generic success
       loggers.auth.error('Magic link creation failed', { error: result.error });
       auditRequest(req, {
