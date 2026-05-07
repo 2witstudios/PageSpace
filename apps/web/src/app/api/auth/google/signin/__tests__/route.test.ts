@@ -212,6 +212,24 @@ describe('/api/auth/google/signin', () => {
         expect(response.status).toBe(400);
         expect(body.errors.deviceName).toBeDefined();
       });
+
+      it('returns 400 for inviteToken longer than 128 chars', async () => {
+        const request = createPostRequest({ inviteToken: 'ps_invite_' + 'x'.repeat(120) });
+        const response = await POST(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.errors.inviteToken).toBeDefined();
+      });
+
+      it('returns 400 for empty inviteToken', async () => {
+        const request = createPostRequest({ inviteToken: '' });
+        const response = await POST(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.errors.inviteToken).toBeDefined();
+      });
     });
 
     describe('unsafe returnUrl rejection', () => {
@@ -335,6 +353,29 @@ describe('/api/auth/google/signin', () => {
         const stateParam = url.searchParams.get('state');
         const decoded = JSON.parse(Buffer.from(stateParam!, 'base64').toString('utf-8'));
         expect(decoded.data.deviceId).toBeUndefined();
+      });
+
+      it('forwards inviteToken into state when provided', async () => {
+        const inviteToken = 'ps_invite_abc123def456ghi789';
+        const request = createPostRequest({ inviteToken });
+        const response = await POST(request);
+        const body = await response.json();
+
+        const url = new URL(body.url);
+        const stateParam = url.searchParams.get('state');
+        const decoded = JSON.parse(Buffer.from(stateParam!, 'base64').toString('utf-8'));
+        expect(decoded.data.inviteToken).toBe(inviteToken);
+      });
+
+      it('omits inviteToken from state when not provided', async () => {
+        const request = createPostRequest({});
+        const response = await POST(request);
+        const body = await response.json();
+
+        const url = new URL(body.url);
+        const stateParam = url.searchParams.get('state');
+        const decoded = JSON.parse(Buffer.from(stateParam!, 'base64').toString('utf-8'));
+        expect(decoded.data.inviteToken).toBeUndefined();
       });
 
       it('defaults returnUrl to /dashboard and platform to web', async () => {

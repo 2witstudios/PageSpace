@@ -16,6 +16,7 @@ const googleSigninSchema = z.object({
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),
+  inviteToken: z.string().min(1).max(128).optional(),
 });
 
 export async function POST(req: Request) {
@@ -40,7 +41,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { returnUrl, platform, deviceId, deviceName } = validation.data;
+    const { returnUrl, platform, deviceId, deviceName, inviteToken } = validation.data;
 
     // SECURITY: Validate returnUrl to prevent open redirect attacks
     // An attacker could set returnUrl to an external domain and capture the deviceToken
@@ -86,6 +87,7 @@ export async function POST(req: Request) {
         platform: platform || 'web',
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
+        ...(inviteToken && { inviteToken }),
       },
       process.env.OAUTH_STATE_SECRET!
     );
