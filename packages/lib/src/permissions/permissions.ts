@@ -658,10 +658,14 @@ export async function getUserDrivePermissions(
 
 /**
  * Check whether two users share at least one drive, where "share" means each
- * is either the drive owner (`drives.ownerId`) or an accepted drive member
- * (`drive_members` with `acceptedAt IS NOT NULL`). Page-level collaborators
- * (page_permissions only) do NOT count — matches the drive-membership boundary
- * used by `getUserDrivePermissions`.
+ * is either the drive owner (`drives.ownerId`) or has a `drive_members` row
+ * for that drive. Unlike `getUserDriveAccess` and `isUserDriveMember`, the
+ * `acceptedAt IS NOT NULL` gate is *not* applied here — DM eligibility is a
+ * softer permission than drive access, and surfacing co-members whose
+ * acceptance state is in flux (or whose row predates the post-rebuild
+ * `migrate-pending-invites` cleanup) is preferable to silently hiding them
+ * from the picker. Page-level collaborators (page_permissions only) still
+ * do NOT count.
  *
  * Used to gate DM eligibility: drive co-members can DM each other without
  * needing a connections-level relationship.
@@ -686,12 +690,7 @@ export async function usersShareDrive(
     const aMember = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(
-        and(
-          eq(driveMembers.userId, userIdA),
-          isNotNull(driveMembers.acceptedAt)
-        )
-      );
+      .where(eq(driveMembers.userId, userIdA));
     for (const m of aMember) aDriveIds.add(m.driveId);
 
     if (aDriveIds.size === 0) return false;
@@ -710,8 +709,7 @@ export async function usersShareDrive(
       .where(
         and(
           inArray(driveMembers.driveId, aIds),
-          eq(driveMembers.userId, userIdB),
-          isNotNull(driveMembers.acceptedAt)
+          eq(driveMembers.userId, userIdB)
         )
       )
       .limit(1);

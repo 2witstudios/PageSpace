@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { eq, and, or, ne, isNotNull, inArray } from '@pagespace/db/operators';
+import { eq, and, or, ne, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 import { drives } from '@pagespace/db/schema/core';
@@ -47,15 +47,15 @@ export async function GET(request: Request) {
       .from(drives)
       .where(eq(drives.ownerId, userId));
 
+    // Note: no acceptedAt gate. DM eligibility is intentionally softer than
+    // drive-access checks elsewhere in the permissions layer; a co-member with
+    // a `driveMembers` row predating the new invite flow (or otherwise missing
+    // acceptedAt) should still appear in the picker rather than be silently
+    // hidden.
     const memberDrives = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(
-        and(
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        )
-      );
+      .where(eq(driveMembers.userId, userId));
 
     const myDriveIds = Array.from(
       new Set<string>([
@@ -77,8 +77,7 @@ export async function GET(request: Request) {
         .where(
           and(
             inArray(driveMembers.driveId, myDriveIds),
-            ne(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
+            ne(driveMembers.userId, userId)
           )
         );
 
