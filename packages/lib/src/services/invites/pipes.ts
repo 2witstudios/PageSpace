@@ -1,3 +1,4 @@
+import { MAGIC_LINK_EXPIRY_MINUTES } from '../../auth/magic-link-service';
 import type { AcceptancePorts, MagicLinkPorts, RevokePorts } from './ports';
 import type {
   AcceptedInviteData,
@@ -13,8 +14,6 @@ import {
   validateMagicLinkRequest,
   validateRevokeRequest,
 } from './validators';
-
-const DEFAULT_MAGIC_LINK_EXPIRY_MINUTES = 5;
 
 // Defense-in-depth wrapper. Adapter contract is "ports never throw"; this
 // guard ensures a buggy adapter cannot reverse a successful membership write
@@ -142,7 +141,7 @@ export const requestMagicLink =
     const validated = validateMagicLinkRequest({ user });
     if (!validated.ok) return validated;
 
-    const expiryMinutes = input.expiryMinutes ?? DEFAULT_MAGIC_LINK_EXPIRY_MINUTES;
+    const expiryMinutes = input.expiryMinutes ?? MAGIC_LINK_EXPIRY_MINUTES;
     const expiresAt = new Date(input.now.getTime() + expiryMinutes * 60_000);
 
     const { token } = await ports.createTokenAndPersist({
@@ -155,7 +154,7 @@ export const requestMagicLink =
 
     await ports.sendMagicLinkEmail({ email: input.email, token });
 
-    return { ok: true };
+    return { ok: true, data: undefined };
   };
 
 export const acceptInviteForNewUser =

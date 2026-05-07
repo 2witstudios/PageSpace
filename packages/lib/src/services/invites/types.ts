@@ -78,9 +78,7 @@ export type MagicLinkErrorCode =
   | 'ACCOUNT_SUSPENDED'
   | 'VALIDATION_FAILED';
 
-export type RequestMagicLinkResult =
-  | { ok: true }
-  | { ok: false; error: MagicLinkErrorCode };
+export type RequestMagicLinkResult = Result<void, MagicLinkErrorCode>;
 
 export interface PendingInviteSummary {
   id: string;

@@ -866,8 +866,8 @@
       "services/drive-search-service": [
         "./dist/services/drive-search-service.d.ts"
       ],
-      "services/invite-predicates": [
-        "./dist/services/invite-predicates.d.ts"
+      "services/invites": [
+        "./dist/services/invites/index.d.ts"
       ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"

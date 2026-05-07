@@ -207,8 +207,13 @@ export async function POST(req: Request) {
       }
 
       // VALIDATION_FAILED from the pipe shouldn't reach here — we zod-
-      // validated upstream — but stay defensive.
-      loggers.auth.error('Magic link pipe returned unexpected error', { error: result.error });
+      // validated upstream — but stay defensive. Wrap the string code in an
+      // Error so the entry.error structured field populates the same way the
+      // earlier error log on this handler does.
+      loggers.auth.error(
+        'Magic link pipe returned unexpected error',
+        new Error(`MagicLinkErrorCode: ${result.error}`),
+      );
       return Response.json({
         message: 'If an account exists with this email, we have sent a sign-in link.',
       });

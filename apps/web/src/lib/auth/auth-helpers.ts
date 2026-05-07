@@ -73,6 +73,10 @@ export function isSafeNextPath(input: {
 
   return allowedPrefixes.some((prefix) => {
     const p = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+    // A prefix of '/' (which strips to '') means "the root path exactly", not
+    // "any path" — without this guard `normalized.startsWith('/')` matches
+    // every same-origin path and silently degrades the allowlist to a no-op.
+    if (p === '') return normalized === '/';
     return (
       normalized === p ||
       normalized.startsWith(`${p}/`) ||

@@ -35,7 +35,7 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
     try {
       const baseUrl =
         process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-      const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${token}`;
+      const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
       await sendEmail({
         to: email,
         subject: 'Sign in to PageSpace',

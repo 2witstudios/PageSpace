@@ -388,6 +388,22 @@ describe('isSafeNextPath', () => {
       expect(isSafeNextPath({ path: '/dashboard', allowedPrefixes: [] })).toBe(false);
     });
   });
+
+  describe('"/" prefix means root only (regression: would otherwise match every path)', () => {
+    const rootOnly = ['/'] as const;
+
+    it('given path "/" with allowlist ["/"] , should return true', () => {
+      expect(isSafeNextPath({ path: '/', allowedPrefixes: rootOnly })).toBe(true);
+    });
+
+    it('given path "/dashboard" with allowlist ["/"] , should return false (prefix means root, not everything)', () => {
+      expect(isSafeNextPath({ path: '/dashboard', allowedPrefixes: rootOnly })).toBe(false);
+    });
+
+    it('given path "/api/auth/logout" with allowlist ["/"] , should return false', () => {
+      expect(isSafeNextPath({ path: '/api/auth/logout', allowedPrefixes: rootOnly })).toBe(false);
+    });
+  });
 });
 
 describe('getClientIP', () => {

@@ -425,7 +425,7 @@ describe('requestMagicLink', () => {
       baseMagicLinkInput({ now, expiryMinutes: 30 }),
     );
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, data: undefined });
     expect(ports.createTokenAndPersist).toHaveBeenCalledOnce();
     expect(ports.createTokenAndPersist).toHaveBeenCalledWith({
       userId: 'u_1',

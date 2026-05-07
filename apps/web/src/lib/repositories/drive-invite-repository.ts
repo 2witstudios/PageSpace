@@ -349,7 +349,14 @@ export const driveInviteRepository = {
     return user ? { id: user.id, suspendedAt: user.suspendedAt } : null;
   },
 
-  async findActivePendingInvitesByDrive(driveId: string): Promise<Array<{
+  // Lists every unconsumed pending invite for the drive, INCLUDING expired
+  // rows. The pending-invites UI (PR 2) needs to show stale-but-stuck invites
+  // so admins can revoke them; the validator/route layer is where expiry-based
+  // policy decisions belong, not the loader. Contrast with
+  // `findActivePendingInviteByDriveAndEmail` which is the strict-active gate
+  // for "is there a fresh in-flight invite for this address" — that one DOES
+  // filter `expiresAt > now`.
+  async findUnconsumedInvitesByDrive(driveId: string): Promise<Array<{
     id: string;
     email: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -378,7 +385,9 @@ export const driveInviteRepository = {
       );
   },
 
-  async findActivePendingInviteForDrive(input: {
+  // Loader for the revoke route (PR 2). Returns expired-unconsumed rows too
+  // so revoke can clean them up; expiry-policy lives at the validator layer.
+  async findUnconsumedInviteForDrive(input: {
     inviteId: string;
     driveId: string;
   }): Promise<{ id: string; email: string; role: 'OWNER' | 'ADMIN' | 'MEMBER'; driveId: string } | null> {
