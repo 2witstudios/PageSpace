@@ -132,7 +132,7 @@ function SignInForm() {
 
         <AuthDivider delay={0.3} />
 
-        <MagicLinkForm />
+        <MagicLinkForm {...(nextPath && { nextPath })} />
       </AuthShell>
     );
   }
@@ -200,7 +200,7 @@ function SignInForm() {
       >
         {showMagicLink ? (
           <div className="mt-2">
-            <MagicLinkForm />
+            <MagicLinkForm {...(nextPath && { nextPath })} />
           </div>
         ) : (
           <button
