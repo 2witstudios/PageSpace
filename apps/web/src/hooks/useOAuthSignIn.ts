@@ -9,12 +9,32 @@ const EXTERNAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 
 type OAuthProvider = 'google' | 'apple';
 
+export interface OAuthSigninBodyInput {
+  platform: 'web' | 'desktop';
+  deviceId: string;
+  deviceName: string;
+  inviteToken?: string;
+}
+
+export const buildOAuthSigninBody = ({
+  platform,
+  deviceId,
+  deviceName,
+  inviteToken,
+}: OAuthSigninBodyInput): Record<string, string> => ({
+  platform,
+  deviceId,
+  deviceName,
+  ...(inviteToken && { inviteToken }),
+});
+
 interface UseOAuthSignInOptions {
   onStart?: () => void;
   onError?: (message: string) => void;
+  inviteToken?: string;
 }
 
-export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {}) {
+export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignInOptions = {}) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [waitingProvider, setWaitingProvider] = useState<OAuthProvider | null>(null);
@@ -70,10 +90,16 @@ export function useOAuthSignIn({ onStart, onError }: UseOAuthSignInOptions = {})
 
   const initiateWebOAuth = async (endpoint: string, provider: OAuthProvider) => {
     const { platform, deviceId, deviceName } = await getDeviceInfo();
+    const body = buildOAuthSigninBody({
+      platform,
+      deviceId,
+      deviceName,
+      ...(inviteToken && { inviteToken }),
+    });
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, deviceId, deviceName }),
+      body: JSON.stringify(body),
     });
 
     if (response.ok) {
