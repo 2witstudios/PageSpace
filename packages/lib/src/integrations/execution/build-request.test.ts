@@ -86,6 +86,34 @@ describe('resolveValue', () => {
 
     expect(resolveValue(ref, input)).toBeUndefined();
   });
+
+  it('given missing param with default, should return the default value', () => {
+    const ref = { $param: 'types', default: 'public_channel,im' };
+    const input = {};
+
+    expect(resolveValue(ref, input)).toBe('public_channel,im');
+  });
+
+  it('given input value present, should override the default', () => {
+    const ref = { $param: 'types', default: 'public_channel,im' };
+    const input = { types: 'private_channel' };
+
+    expect(resolveValue(ref, input)).toBe('private_channel');
+  });
+
+  it('given missing param with default and transform, should apply transform to default', () => {
+    const ref = { $param: 'limit', default: 50, transform: 'string' as const };
+    const input = {};
+
+    expect(resolveValue(ref, input)).toBe('50');
+  });
+
+  it('given default of null, should still treat missing input as having no value', () => {
+    const ref = { $param: 'optional', default: null };
+    const input = {};
+
+    expect(resolveValue(ref, input)).toBeNull();
+  });
 });
 
 describe('resolveBody', () => {

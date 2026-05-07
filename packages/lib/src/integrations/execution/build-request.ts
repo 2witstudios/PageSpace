@@ -33,7 +33,9 @@ export const resolveValue = (
   }
 
   if (typeof value === 'object' && '$param' in value) {
-    const rawValue = input[value.$param];
+    const rawValue = input[value.$param] !== undefined
+      ? input[value.$param]
+      : value.default;
 
     if (rawValue === undefined) {
       return undefined;
