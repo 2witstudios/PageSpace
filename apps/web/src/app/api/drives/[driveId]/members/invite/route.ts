@@ -1,25 +1,19 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import {
-  broadcastDriveMemberEvent,
-  broadcastDriveMemberEventToRecipients,
-  createDriveMemberEventPayload,
-} from '@/lib/websocket';
-import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
+import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -266,16 +260,17 @@ async function handleUserIdPath(args: {
   }
 
   if (isFreshJoin) {
-    await emitJoinSideEffects({
-      request,
+    const ports = buildAcceptancePorts(request);
+    const data: AcceptedInviteData = {
+      memberId,
       driveId,
       driveName: drive.name,
-      inviterUserId,
-      invitedUserId,
       role,
-      permissionsGranted,
-      sourceEmail,
-    });
+      invitedUserId,
+      inviterUserId,
+      ...(sourceEmail !== undefined && { inviteEmail: sourceEmail }),
+    };
+    await emitAcceptanceSideEffects(ports, data, permissionsGranted);
   } else {
     auditRequest(request, {
       eventType: 'authz.permission.granted',
@@ -458,7 +453,7 @@ async function handleEmailPath(args: {
       recipientEmail: email,
       inviterName: inviter?.name ?? 'A teammate',
       driveName: drive.name,
-      magicLinkUrl: inviteUrl,
+      inviteUrl,
     });
   } catch (emailError) {
     loggers.api.error(
@@ -508,70 +503,3 @@ async function handleEmailPath(args: {
   });
 }
 
-async function emitJoinSideEffects(args: {
-  request: Request;
-  driveId: string;
-  driveName: string;
-  inviterUserId: string;
-  invitedUserId: string;
-  role: 'MEMBER' | 'ADMIN';
-  permissionsGranted: number;
-  sourceEmail?: string;
-}): Promise<void> {
-  const { request, driveId, driveName, inviterUserId, invitedUserId, role, permissionsGranted, sourceEmail } = args;
-
-  const payload = createDriveMemberEventPayload(driveId, invitedUserId, 'member_added', {
-    role,
-    driveName,
-  });
-  // Notify the invited user directly (joining their own drives channel) ...
-  await broadcastDriveMemberEvent(payload);
-  // ... and notify other drive recipients so the members page updates live.
-  try {
-    const allRecipients = await getDriveRecipientUserIds(driveId);
-    const others = allRecipients.filter((id) => id !== invitedUserId);
-    if (others.length > 0) {
-      await broadcastDriveMemberEventToRecipients(payload, others);
-    }
-  } catch (error) {
-    loggers.api.warn('Failed to fan-out member_added to drive recipients', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  await createDriveNotification(invitedUserId, driveId, 'invited', role, inviterUserId);
-
-  trackDriveOperation(inviterUserId, 'invite_member', driveId, {
-    invitedUserId,
-    role,
-    permissionsGranted,
-  });
-
-  const actorInfo = await getActorInfo(inviterUserId);
-  const invitedUserEmail = await driveInviteRepository.findUserEmail(invitedUserId);
-  logMemberActivity(
-    inviterUserId,
-    'member_add',
-    {
-      driveId,
-      driveName,
-      targetUserId: invitedUserId,
-      targetUserEmail: invitedUserEmail,
-      role,
-    },
-    actorInfo
-  );
-
-  auditRequest(request, {
-    eventType: 'authz.permission.granted',
-    userId: inviterUserId,
-    resourceType: 'drive',
-    resourceId: driveId,
-    details: {
-      targetUserId: invitedUserId,
-      role,
-      operation: 'invite',
-      ...(sourceEmail ? { sourceEmail } : {}),
-    },
-  });
-}

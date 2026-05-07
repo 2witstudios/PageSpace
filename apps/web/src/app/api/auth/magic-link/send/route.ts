@@ -1,13 +1,11 @@
 import { z } from 'zod/v4';
 import { parse } from 'cookie';
-import React from 'react';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { sendEmail } from '@pagespace/lib/services/email-service';
-import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
+import { requestMagicLink } from '@pagespace/lib/services/invites';
+import { buildMagicLinkPorts } from '@/lib/auth/magic-link-adapters';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
@@ -154,81 +152,85 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create magic link token (handles both existing and new users)
-    // Pass platform/deviceId so the verify route can redirect desktop apps via deep link
-    const result = await createMagicLinkToken({
-      email: normalizedEmail,
-      ...(platform && { platform }),
-      ...(deviceId && { deviceId }),
-      ...(deviceName && { deviceName }),
-    });
-
-    // SECURITY: Always return same response to prevent email enumeration
-    // Even if user is suspended, we return success but don't send email
-    if (!result.ok) {
-      if (result.error.code === 'USER_SUSPENDED') {
-        auditRequest(req, {
-          eventType: 'auth.login.failure',
-          riskScore: 0.5,
-          details: { reason: 'magic_link_user_suspended' },
-        });
-        // Return success to prevent enumeration, but don't send email
-        return Response.json({
-          message: 'If an account exists with this email, we have sent a sign-in link.',
-        });
-      }
-
-      // Validation errors are safe to return
-      if (result.error.code === 'VALIDATION_FAILED') {
-        return Response.json(
-          { error: result.error.message },
-          { status: 400 }
-        );
-      }
-
-      // For other errors, log and return generic success
-      loggers.auth.error('Magic link creation failed', { error: result.error });
-      auditRequest(req, {
-        eventType: 'auth.login.failure',
-        riskScore: 0.3,
-        details: { reason: `magic_link_${result.error.code.toLowerCase()}` },
+    // requestMagicLink pipe owns the full flow: load user → validate (no-auto-
+    // create / not-suspended) → mint token → send email. On any failure mode
+    // the pipe never minted a token nor sent an email.
+    let result;
+    try {
+      result = await requestMagicLink(buildMagicLinkPorts())({
+        email: normalizedEmail,
+        now: new Date(),
+        ...(platform && { platform }),
+        ...(deviceId && { deviceId }),
+        ...(deviceName && { deviceName }),
+      });
+    } catch (error) {
+      // Email send (or any other adapter throw) failed AFTER the pipe minted
+      // a token. Log + return generic success: a 5xx here would distinguish
+      // "this email exists" from "doesn't exist" by triggering only on
+      // existing accounts, defeating the rate-limited enumeration resistance.
+      loggers.auth.error('Magic link pipe threw', error as Error, {
+        email: maskEmail(normalizedEmail),
       });
       return Response.json({
         message: 'If an account exists with this email, we have sent a sign-in link.',
       });
     }
 
-    // Send magic link email
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${result.data.token}`;
+    if (!result.ok) {
+      if (result.error === 'ACCOUNT_SUSPENDED') {
+        auditRequest(req, {
+          eventType: 'auth.login.failure',
+          riskScore: 0.5,
+          details: { reason: 'magic_link_user_suspended' },
+        });
+        // Generic success masks suspension state from the requester.
+        return Response.json({
+          message: 'If an account exists with this email, we have sent a sign-in link.',
+        });
+      }
 
-    try {
-      await sendEmail({
-        to: normalizedEmail,
-        subject: 'Sign in to PageSpace',
-        react: React.createElement(MagicLinkEmail, { magicLinkUrl }),
-      });
+      // NO_ACCOUNT_FOUND is surfaced explicitly (trade enumeration-resistance
+      // for a clearer signup path). MagicLinkForm consumes the structured
+      // payload and renders the "Sign up instead" CTA pre-filled with the
+      // entered email.
+      if (result.error === 'NO_ACCOUNT_FOUND') {
+        auditRequest(req, {
+          eventType: 'auth.login.failure',
+          riskScore: 0.2,
+          details: { reason: 'magic_link_no_account_found' },
+        });
+        return Response.json(
+          { code: 'no_account', email: normalizedEmail },
+          { status: 404 },
+        );
+      }
 
-      loggers.auth.info('Magic link email sent', {
-        email: maskEmail(normalizedEmail),
-        isNewUser: result.data.isNewUser,
-        ip: clientIP,
-      });
-      auditRequest(req, {
-        eventType: 'auth.token.created',
-        details: {
-          tokenType: 'magic_link',
-          isNewUser: result.data.isNewUser,
-        },
-      });
-    } catch (error) {
-      // Log but don't expose email sending errors
-      loggers.auth.error('Failed to send magic link email', error as Error, {
-        email: maskEmail(normalizedEmail),
+      // VALIDATION_FAILED from the pipe shouldn't reach here — we zod-
+      // validated upstream — but stay defensive. Wrap the string code in an
+      // Error so the entry.error structured field populates the same way the
+      // earlier error log on this handler does.
+      loggers.auth.error(
+        'Magic link pipe returned unexpected error',
+        new Error(`MagicLinkErrorCode: ${result.error}`),
+      );
+      return Response.json({
+        message: 'If an account exists with this email, we have sent a sign-in link.',
       });
     }
 
-    // Always return same success message to prevent enumeration
+    // Pipe succeeded: token minted + email sent inside the adapter.
+    loggers.auth.info('Magic link email sent', {
+      email: maskEmail(normalizedEmail),
+      ip: clientIP,
+    });
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      details: {
+        tokenType: 'magic_link',
+      },
+    });
+
     return Response.json({
       message: 'If an account exists with this email, we have sent a sign-in link.',
     });

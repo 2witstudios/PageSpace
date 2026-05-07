@@ -1,0 +1,51 @@
+import { createId } from '@paralleldrive/cuid2';
+import React from 'react';
+import { db } from '@pagespace/db/db';
+import { verificationTokens } from '@pagespace/db/schema/auth';
+import { generateToken } from '@pagespace/lib/auth/token-utils';
+import { sendEmail } from '@pagespace/lib/services/email-service';
+import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { MagicLinkPorts } from '@pagespace/lib/services/invites';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+
+export const buildMagicLinkPorts = (): MagicLinkPorts => ({
+  loadUserByEmail: async ({ email }) =>
+    driveInviteRepository.loadUserAccountByEmail(email),
+
+  createTokenAndPersist: async ({ userId, expiresAt, platform, deviceId, deviceName }) => {
+    const { token, hash, tokenPrefix } = generateToken('ps_magic');
+    const metadata =
+      platform === 'desktop' && deviceId
+        ? JSON.stringify({ platform, deviceId, deviceName })
+        : undefined;
+    await db.insert(verificationTokens).values({
+      id: createId(),
+      userId,
+      tokenHash: hash,
+      tokenPrefix,
+      type: 'magic_link',
+      expiresAt,
+      ...(metadata && { metadata }),
+    });
+    return { token };
+  },
+
+  sendMagicLinkEmail: async ({ email, token }) => {
+    try {
+      const baseUrl =
+        process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
+      await sendEmail({
+        to: email,
+        subject: 'Sign in to PageSpace',
+        react: React.createElement(MagicLinkEmail, { magicLinkUrl }),
+      });
+    } catch (error) {
+      loggers.auth.warn('Failed to send magic link email', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  },
+});

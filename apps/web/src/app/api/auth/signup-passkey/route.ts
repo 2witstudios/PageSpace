@@ -16,7 +16,8 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
-import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
+import { acceptInviteForNewUser } from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -218,10 +219,11 @@ export async function POST(req: Request) {
     let inviteAcceptError: string | null = null;
     if (validation.data.inviteToken) {
       try {
-        const inviteResult = await acceptInviteForNewUser({
+        const inviteResult = await acceptInviteForNewUser(buildAcceptancePorts(req))({
           token: validation.data.inviteToken,
           userId,
           userEmail: email,
+          suspendedAt: null,
           now: new Date(),
         });
         if (inviteResult.ok) {

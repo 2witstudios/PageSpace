@@ -60,10 +60,6 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'repositories/drive-invite-repository.ts',
     'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; findActivePendingMemberByEmail intentionally filters IS NULL to surface pending rows; createDriveMember/findExistingMember/updateDriveMemberRole operate by composite key or memberId and do not branch on acceptedAt).',
   ],
-  [
-    'auth/invite-acceptance.ts',
-    'Acceptance pipes delegate every drive_members write to driveInviteRepository.consumeInviteAndCreateMembership (allow-listed seam). The only `driveMembers` reference here is documentation prose explaining where the unique-violation surfaces; no direct query is performed. The findExistingMember pre-check intentionally inspects pending rows to short-circuit on ALREADY_MEMBER without burning the invite token.',
-  ],
 ]);
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;

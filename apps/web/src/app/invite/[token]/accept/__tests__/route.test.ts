@@ -13,8 +13,16 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth/invite-acceptance', () => ({
-  acceptInviteForExistingUser: vi.fn(),
+const { pipeInner, pipeFactory } = vi.hoisted(() => {
+  const inner = vi.fn();
+  return { pipeInner: inner, pipeFactory: vi.fn(() => inner) };
+});
+vi.mock('@pagespace/lib/services/invites', () => ({
+  acceptInviteForExistingUser: pipeFactory,
+}));
+
+vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
+  buildAcceptancePorts: vi.fn(() => ({})),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -26,7 +34,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { acceptInviteForExistingUser } from '@/lib/auth/invite-acceptance';
 
 const buildGet = (token: string) =>
   new Request(`https://app.example.com/invite/${token}/accept`);
@@ -46,6 +53,7 @@ const authError: AuthError = { error: NextResponse.json({ error: 'Unauthorized' 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pipeFactory.mockReturnValue(pipeInner);
   vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
     email: 'invitee@example.com',
     emailVerified: new Date('2025-01-01'),
@@ -64,13 +72,12 @@ describe('GET /invite/[token]/accept', () => {
     const location = response.headers.get('Location') ?? '';
     expect(location).toContain('/auth/signin?invite=ps_invite_abc');
     expect(location).toContain('next=');
-    // next= is URL-encoded so the consuming flow can round-trip it.
     expect(decodeURIComponent(location.split('next=')[1] ?? '')).toContain(
       '/invite/ps_invite_abc/accept',
     );
   });
 
-  it('given a session whose user record cannot be found, redirects to dashboard with TOKEN_NOT_FOUND', async () => {
+  it('given a session whose user record cannot be found, redirects to dashboard with TOKEN_NOT_FOUND and never invokes the pipe', async () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_ghost'));
     vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue(null as never);
@@ -79,15 +86,24 @@ describe('GET /invite/[token]/accept', () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get('Location')).toContain('/dashboard?inviteError=TOKEN_NOT_FOUND');
-    expect(acceptInviteForExistingUser).not.toHaveBeenCalled();
+    expect(pipeInner).not.toHaveBeenCalled();
   });
 
-  it('given a successful acceptance, redirects to /dashboard/<driveId>?invited=1', async () => {
+  it('given a successful acceptance, redirects to /dashboard/<driveId>?invited=1 and forwards suspendedAt to the pipe', async () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_existing'));
-    vi.mocked(acceptInviteForExistingUser).mockResolvedValue({
+    pipeInner.mockResolvedValue({
       ok: true,
-      data: { driveId: 'drive_abc', driveName: 'Alpha', memberId: 'mem_new' },
+      data: {
+        memberId: 'mem_new',
+        driveId: 'drive_abc',
+        driveName: 'Alpha',
+        role: 'MEMBER',
+        invitedUserId: 'user_existing',
+        inviterUserId: 'user_inviter',
+        inviteId: 'inv_1',
+        inviteEmail: 'invitee@example.com',
+      },
     });
 
     const response = await GET(buildGet('tok'), ctx('tok'));
@@ -96,23 +112,21 @@ describe('GET /invite/[token]/accept', () => {
     expect(response.headers.get('Location')).toBe(
       'https://app.example.com/dashboard/drive_abc?invited=1',
     );
-    expect(acceptInviteForExistingUser).toHaveBeenCalledWith(
+    expect(pipeInner).toHaveBeenCalledWith(
       expect.objectContaining({
         token: 'tok',
         userId: 'user_existing',
         userEmail: 'invitee@example.com',
+        suspendedAt: null,
         now: expect.any(Date),
       }),
     );
   });
 
-  it('given EMAIL_MISMATCH, redirects to /dashboard?inviteError=EMAIL_MISMATCH', async () => {
+  it('given EMAIL_MISMATCH from the pipe, redirects to /dashboard?inviteError=EMAIL_MISMATCH', async () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_a'));
-    vi.mocked(acceptInviteForExistingUser).mockResolvedValue({
-      ok: false,
-      error: 'EMAIL_MISMATCH',
-    });
+    pipeInner.mockResolvedValue({ ok: false, error: 'EMAIL_MISMATCH' });
 
     const response = await GET(buildGet('tok'), ctx('tok'));
 
@@ -122,7 +136,7 @@ describe('GET /invite/[token]/accept', () => {
     );
   });
 
-  it('given a suspended account, redirects to /dashboard?inviteError=ACCOUNT_SUSPENDED and does not consume', async () => {
+  it('given a suspended account, the pipe receives suspendedAt and returns ACCOUNT_SUSPENDED (no consume)', async () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_suspended'));
     vi.mocked(driveInviteRepository.findUserVerificationStatusById).mockResolvedValue({
@@ -130,6 +144,7 @@ describe('GET /invite/[token]/accept', () => {
       emailVerified: new Date('2025-01-01'),
       suspendedAt: new Date('2026-01-01'),
     } as never);
+    pipeInner.mockResolvedValue({ ok: false, error: 'ACCOUNT_SUSPENDED' });
 
     const response = await GET(buildGet('tok'), ctx('tok'));
 
@@ -137,16 +152,15 @@ describe('GET /invite/[token]/accept', () => {
     expect(response.headers.get('Location')).toBe(
       'https://app.example.com/dashboard?inviteError=ACCOUNT_SUSPENDED',
     );
-    expect(acceptInviteForExistingUser).not.toHaveBeenCalled();
+    expect(pipeInner).toHaveBeenCalledWith(
+      expect.objectContaining({ suspendedAt: new Date('2026-01-01') }),
+    );
   });
 
   it('given ALREADY_MEMBER, redirects to /dashboard?inviteError=ALREADY_MEMBER', async () => {
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session('user_dup'));
-    vi.mocked(acceptInviteForExistingUser).mockResolvedValue({
-      ok: false,
-      error: 'ALREADY_MEMBER',
-    });
+    pipeInner.mockResolvedValue({ ok: false, error: 'ALREADY_MEMBER' });
 
     const response = await GET(buildGet('tok'), ctx('tok'));
 

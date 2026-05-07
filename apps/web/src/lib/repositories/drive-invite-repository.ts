@@ -339,14 +339,88 @@ export const driveInviteRepository = {
     await db.delete(pendingInvites).where(eq(pendingInvites.id, inviteId));
   },
 
-  async findUserToSStatusByEmail(
+  async loadUserAccountByEmail(
     email: string,
-  ): Promise<{ id: string; tosAcceptedAt: Date | null } | null> {
+  ): Promise<{ id: string; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.email, email.trim().toLowerCase()),
-      columns: { id: true, tosAcceptedAt: true },
+      columns: { id: true, suspendedAt: true },
     });
-    return user ? { id: user.id, tosAcceptedAt: user.tosAcceptedAt } : null;
+    return user ? { id: user.id, suspendedAt: user.suspendedAt } : null;
+  },
+
+  // Lists every unconsumed pending invite for the drive, INCLUDING expired
+  // rows. The pending-invites UI (PR 2) needs to show stale-but-stuck invites
+  // so admins can revoke them; the validator/route layer is where expiry-based
+  // policy decisions belong, not the loader. Contrast with
+  // `findActivePendingInviteByDriveAndEmail` which is the strict-active gate
+  // for "is there a fresh in-flight invite for this address" — that one DOES
+  // filter `expiresAt > now`.
+  async findUnconsumedInvitesByDrive(driveId: string): Promise<Array<{
+    id: string;
+    email: string;
+    role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    driveId: string;
+    invitedByName: string;
+    createdAt: Date;
+    expiresAt: Date;
+  }>> {
+    return db
+      .select({
+        id: pendingInvites.id,
+        email: pendingInvites.email,
+        role: pendingInvites.role,
+        driveId: pendingInvites.driveId,
+        invitedByName: users.name,
+        createdAt: pendingInvites.createdAt,
+        expiresAt: pendingInvites.expiresAt,
+      })
+      .from(pendingInvites)
+      .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
+      .where(
+        and(
+          eq(pendingInvites.driveId, driveId),
+          isNull(pendingInvites.consumedAt),
+        ),
+      );
+  },
+
+  // Loader for the revoke route (PR 2). Returns expired-unconsumed rows too
+  // so revoke can clean them up; expiry-policy lives at the validator layer.
+  async findUnconsumedInviteForDrive(input: {
+    inviteId: string;
+    driveId: string;
+  }): Promise<{ id: string; email: string; role: 'OWNER' | 'ADMIN' | 'MEMBER'; driveId: string } | null> {
+    const rows = await db
+      .select({
+        id: pendingInvites.id,
+        email: pendingInvites.email,
+        role: pendingInvites.role,
+        driveId: pendingInvites.driveId,
+      })
+      .from(pendingInvites)
+      .where(
+        and(
+          eq(pendingInvites.id, input.inviteId),
+          eq(pendingInvites.driveId, input.driveId),
+          isNull(pendingInvites.consumedAt),
+        ),
+      )
+      .limit(1);
+    return rows.at(0) ?? null;
+  },
+
+  async deletePendingInviteForDrive(input: {
+    inviteId: string;
+    driveId: string;
+  }): Promise<{ rowsDeleted: number }> {
+    const deleted = await db
+      .delete(pendingInvites)
+      .where(
+        and(eq(pendingInvites.id, input.inviteId), eq(pendingInvites.driveId, input.driveId)),
+      )
+      .returning({ id: pendingInvites.id });
+    return { rowsDeleted: deleted.length };
   },
 
   async consumeInviteAndCreateMembership(input: {

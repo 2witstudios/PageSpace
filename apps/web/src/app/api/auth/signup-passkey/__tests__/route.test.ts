@@ -76,8 +76,15 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
 }));
 
-vi.mock('@/lib/auth/invite-acceptance', () => ({
-  acceptInviteForNewUser: vi.fn(),
+const { pipeInner: invitePipeInner, pipeFactory: invitePipeFactory } = vi.hoisted(() => {
+  const inner = vi.fn();
+  return { pipeInner: inner, pipeFactory: vi.fn(() => inner) };
+});
+vi.mock('@pagespace/lib/services/invites', () => ({
+  acceptInviteForNewUser: invitePipeFactory,
+}));
+vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
+  buildAcceptancePorts: vi.fn(() => ({})),
 }));
 
 import { POST } from '../route';
@@ -91,7 +98,6 @@ import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
 
 const validPayload = {
   email: 'user@example.com',
@@ -560,12 +566,12 @@ describe('POST /api/auth/signup-passkey', () => {
       const response = await POST(createRequest());
       const body = await response.json();
 
-      expect(acceptInviteForNewUser).not.toHaveBeenCalled();
+      expect(invitePipeInner).not.toHaveBeenCalled();
       expect(body.redirectUrl).toBe('/dashboard/drive-1?welcome=true');
     });
 
     it('given inviteToken present and acceptance succeeds, redirects to /dashboard/<driveId>?welcome=true (overrides provisioning)', async () => {
-      vi.mocked(acceptInviteForNewUser).mockResolvedValue({
+      invitePipeInner.mockResolvedValue({
         ok: true,
         data: { driveId: 'drive_invited', driveName: 'Invited Workspace', memberId: 'mem_new' },
       });
@@ -574,7 +580,7 @@ describe('POST /api/auth/signup-passkey', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(acceptInviteForNewUser).toHaveBeenCalledWith(
+      expect(invitePipeInner).toHaveBeenCalledWith(
         expect.objectContaining({
           token: 'ps_invite_xyz',
           userId: 'new-user-1',
@@ -585,7 +591,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('given inviteToken present and acceptance fails (EMAIL_MISMATCH), signup still succeeds with inviteError query param (NON-FATAL)', async () => {
-      vi.mocked(acceptInviteForNewUser).mockResolvedValue({
+      invitePipeInner.mockResolvedValue({
         ok: false,
         error: 'EMAIL_MISMATCH',
       });
@@ -601,7 +607,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('given inviteToken present and acceptance throws, signup still succeeds with TOKEN_NOT_FOUND inviteError', async () => {
-      vi.mocked(acceptInviteForNewUser).mockRejectedValue(new Error('connection lost'));
+      invitePipeInner.mockRejectedValue(new Error('connection lost'));
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
       const body = await response.json();

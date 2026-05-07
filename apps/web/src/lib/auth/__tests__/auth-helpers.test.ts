@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSafeReturnUrl, getClientIP } from '../auth-helpers';
+import { isSafeReturnUrl, isSafeNextPath, getClientIP } from '../auth-helpers';
 
 /**
  * Security-Critical: isSafeReturnUrl Open Redirect Prevention Tests
@@ -276,6 +276,132 @@ describe('isSafeReturnUrl', () => {
       isSafeReturnUrl(malicious);
       const elapsed = performance.now() - start;
       expect(elapsed).toBeLessThan(50);
+    });
+  });
+});
+
+describe('isSafeNextPath', () => {
+  const allowed = ['/dashboard', '/invite/', '/account'] as const;
+
+  describe('safe inputs (allowlist match)', () => {
+    it('given /dashboard exactly, should return true', () => {
+      expect(isSafeNextPath({ path: '/dashboard', allowedPrefixes: allowed })).toBe(true);
+    });
+
+    it('given /dashboard/<driveId>?invited=1, should return true', () => {
+      expect(
+        isSafeNextPath({ path: '/dashboard/abc?invited=1', allowedPrefixes: allowed }),
+      ).toBe(true);
+    });
+
+    it('given /dashboard with hash, should return true', () => {
+      expect(isSafeNextPath({ path: '/dashboard#tab', allowedPrefixes: allowed })).toBe(true);
+    });
+
+    it('given /invite/abc/accept, should return true', () => {
+      expect(isSafeNextPath({ path: '/invite/abc/accept', allowedPrefixes: allowed })).toBe(true);
+    });
+
+    it('given /account/settings, should return true', () => {
+      expect(isSafeNextPath({ path: '/account/settings', allowedPrefixes: allowed })).toBe(true);
+    });
+  });
+
+  describe('rejected: missing or empty input', () => {
+    it('given undefined, should return false (no implicit fallback)', () => {
+      expect(isSafeNextPath({ path: undefined, allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given null, should return false', () => {
+      expect(isSafeNextPath({ path: null, allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given empty string, should return false', () => {
+      expect(isSafeNextPath({ path: '', allowedPrefixes: allowed })).toBe(false);
+    });
+  });
+
+  describe('rejected: not in allowlist', () => {
+    it('given /, should return false', () => {
+      expect(isSafeNextPath({ path: '/', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given /api/auth/logout, should return false', () => {
+      expect(isSafeNextPath({ path: '/api/auth/logout', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given /auth/signin, should return false (not in allowlist)', () => {
+      expect(isSafeNextPath({ path: '/auth/signin', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given /dashboardcake (segment-prefix bypass attempt), should return false', () => {
+      expect(isSafeNextPath({ path: '/dashboardcake', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given /accountant (segment-prefix bypass), should return false', () => {
+      expect(isSafeNextPath({ path: '/accountant', allowedPrefixes: allowed })).toBe(false);
+    });
+  });
+
+  describe('rejected: open-redirect attack vectors (composed with isSafeReturnUrl)', () => {
+    it('given //evil.com, should return false', () => {
+      expect(isSafeNextPath({ path: '//evil.com', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given /\\evil.com (backslash trick), should return false', () => {
+      expect(isSafeNextPath({ path: '/\\evil.com', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given https://evil.com, should return false', () => {
+      expect(isSafeNextPath({ path: 'https://evil.com', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given javascript:alert(1), should return false', () => {
+      expect(isSafeNextPath({ path: 'javascript:alert(1)', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given data:text/html,<script>, should return false', () => {
+      expect(
+        isSafeNextPath({ path: 'data:text/html,<script>', allowedPrefixes: allowed }),
+      ).toBe(false);
+    });
+
+    it('given /%2fevil.com, should return false', () => {
+      expect(isSafeNextPath({ path: '/%2fevil.com', allowedPrefixes: allowed })).toBe(false);
+    });
+  });
+
+  describe('rejected: path traversal that escapes the allowlist after URL normalization', () => {
+    it('given /dashboard/../etc, should return false (normalizes to /etc)', () => {
+      expect(isSafeNextPath({ path: '/dashboard/../etc', allowedPrefixes: allowed })).toBe(false);
+    });
+
+    it('given /dashboard/../auth/login, should return false', () => {
+      expect(
+        isSafeNextPath({ path: '/dashboard/../auth/login', allowedPrefixes: allowed }),
+      ).toBe(false);
+    });
+  });
+
+  describe('rejected: empty allowlist', () => {
+    it('given a valid path but empty allowlist, should return false', () => {
+      expect(isSafeNextPath({ path: '/dashboard', allowedPrefixes: [] })).toBe(false);
+    });
+  });
+
+  describe('"/" prefix means root only (regression: would otherwise match every path)', () => {
+    const rootOnly = ['/'] as const;
+
+    it('given path "/" with allowlist ["/"] , should return true', () => {
+      expect(isSafeNextPath({ path: '/', allowedPrefixes: rootOnly })).toBe(true);
+    });
+
+    it('given path "/dashboard" with allowlist ["/"] , should return false (prefix means root, not everything)', () => {
+      expect(isSafeNextPath({ path: '/dashboard', allowedPrefixes: rootOnly })).toBe(false);
+    });
+
+    it('given path "/api/auth/logout" with allowlist ["/"] , should return false', () => {
+      expect(isSafeNextPath({ path: '/api/auth/logout', allowedPrefixes: rootOnly })).toBe(false);
     });
   });
 });

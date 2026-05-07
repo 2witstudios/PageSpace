@@ -1,5 +1,5 @@
 import { hashToken } from '@pagespace/lib/auth/token-utils';
-import { isInviteExpired, isInviteConsumed } from '@pagespace/lib/services/invite-predicates';
+import { isInviteExpired, isInviteConsumed } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 export type InviteResolutionError = 'NOT_FOUND' | 'EXPIRED' | 'CONSUMED';
@@ -43,14 +43,11 @@ export const resolveInviteContext = async ({
     return { ok: false, error: 'EXPIRED' };
   }
 
-  // Classify by ACCOUNT PRESENCE, not ToS acceptance state. OAuth/magic-link
-  // users (and rows from before the ToS column existed) have null
-  // tosAcceptedAt yet are real existing accounts — gating on
-  // tosAcceptedAt would route them to /auth/signup where signup-passkey
-  // returns EMAIL_EXISTS and the invite becomes unclaimable. The accept
-  // gateway handles ToS re-prompting separately if/when needed.
-  const tosStatus = await driveInviteRepository.findUserToSStatusByEmail(invite.email);
-  const isExistingUser = tosStatus !== null;
+  // Classify by ACCOUNT PRESENCE. OAuth/magic-link users are real existing
+  // accounts even if their ToS state predates the consent column; the accept
+  // gateway re-prompts for ToS separately when needed.
+  const account = await driveInviteRepository.loadUserAccountByEmail(invite.email);
+  const isExistingUser = account !== null;
 
   return {
     ok: true,

@@ -1,13 +1,3 @@
-/**
- * Pure predicates for pending-invite state checks.
- *
- * These functions are side-effect-free and accept `now` as an injected
- * argument so they can be tested deterministically without freezing the
- * system clock.
- *
- * @module @pagespace/lib/services/invite-predicates
- */
-
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
 export const isInviteExpired = ({
@@ -24,10 +14,16 @@ export const isInviteConsumed = ({
   consumedAt: Date | null;
 }): boolean => consumedAt !== null;
 
-export const isEmailMatchingInvite = ({
+export const isEmailMatch = ({
   inviteEmail,
   userEmail,
 }: {
   inviteEmail: string;
   userEmail: string;
 }): boolean => normalizeEmail(inviteEmail) === normalizeEmail(userEmail);
+
+export const isAccountSuspended = ({
+  suspendedAt,
+}: {
+  suspendedAt: Date | null;
+}): boolean => suspendedAt !== null;

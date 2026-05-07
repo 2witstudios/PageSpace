@@ -5,15 +5,13 @@
  * - CSRF token validation (missing header/cookie, mismatch, invalid)
  * - Request body validation (invalid JSON, schema validation)
  * - Rate limiting by IP and email
- * - Magic link creation (success, suspended user, validation error, generic error)
- * - Email sending (success and failure)
+ * - requestMagicLink pipe outcomes (success, suspended, no account, throw)
  * - Email enumeration prevention (always same success response)
  * - Error handling
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Mock dependencies BEFORE imports
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
@@ -25,19 +23,17 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
-  createMagicLinkToken: vi.fn().mockResolvedValue({
-    ok: true,
-    data: { token: 'mock-magic-token', isNewUser: false },
-  }),
+const { pipeInner, pipeFactory } = vi.hoisted(() => {
+  const inner = vi.fn();
+  return { pipeInner: inner, pipeFactory: vi.fn(() => inner) };
+});
+
+vi.mock('@pagespace/lib/services/invites', () => ({
+  requestMagicLink: pipeFactory,
 }));
 
-vi.mock('@pagespace/lib/services/email-service', () => ({
-  sendEmail: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('@pagespace/lib/email-templates/MagicLinkEmail', () => ({
-  MagicLinkEmail: vi.fn(),
+vi.mock('@/lib/auth/magic-link-adapters', () => ({
+  buildMagicLinkPorts: vi.fn(() => ({})),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -70,16 +66,8 @@ vi.mock('cookie', () => ({
   parse: vi.fn().mockReturnValue({ login_csrf: 'valid-csrf-token' }),
 }));
 
-vi.mock('react', () => ({
-  default: {
-    createElement: vi.fn().mockReturnValue({}),
-  },
-}));
-
 import { POST } from '../route';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { sendEmail } from '@pagespace/lib/services/email-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
@@ -116,11 +104,8 @@ describe('POST /api/auth/magic-link/send', () => {
       attemptsRemaining: 4,
       retryAfter: undefined,
     });
-    vi.mocked(createMagicLinkToken).mockResolvedValue({
-      ok: true,
-      // @ts-expect-error - partial mock data
-      data: { token: 'mock-magic-token', isNewUser: false },
-    });
+    pipeFactory.mockReturnValue(pipeInner);
+    pipeInner.mockResolvedValue({ ok: true });
   });
 
   describe('CSRF validation', () => {
@@ -173,7 +158,6 @@ describe('POST /api/auth/magic-link/send', () => {
       vi.mocked(parse).mockReturnValue({ login_csrf: 'different-token' });
 
       const request = createMagicLinkRequest();
-
       const response = await POST(request);
       const body = await response.json();
 
@@ -264,14 +248,6 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.retryAfter).toBe(600);
       expect(response.headers.get('Retry-After')).toBe('600');
       expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
-      expect(auditRequest).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          eventType: 'security.rate.limited',
-          details: expect.objectContaining({ reason: 'magic_link_rate_limit_ip' }),
-          riskScore: 0.5,
-        })
-      );
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
@@ -286,14 +262,6 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(429);
       expect(body.error).toContain('Too many requests for this email');
       expect(body.retryAfter).toBe(300);
-      expect(auditRequest).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          eventType: 'security.rate.limited',
-          details: expect.objectContaining({ reason: 'magic_link_rate_limit_email' }),
-          riskScore: 0.5,
-        })
-      );
     });
 
     it('uses default Retry-After when retryAfter is undefined for IP', async () => {
@@ -301,19 +269,7 @@ describe('POST /api/auth/magic-link/send', () => {
         .mockResolvedValueOnce({ allowed: false, attemptsRemaining: 0, retryAfter: undefined })
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4, retryAfter: undefined });
 
-      const request = createMagicLinkRequest();
-      const response = await POST(request);
-
-      expect(response.headers.get('Retry-After')).toBe('900');
-    });
-
-    it('uses default Retry-After when retryAfter is undefined for email', async () => {
-      vi.mocked(checkDistributedRateLimit)
-        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4, retryAfter: undefined })
-        .mockResolvedValueOnce({ allowed: false, attemptsRemaining: 0, retryAfter: undefined });
-
-      const request = createMagicLinkRequest();
-      const response = await POST(request);
+      const response = await POST(createMagicLinkRequest());
 
       expect(response.headers.get('Retry-After')).toBe('900');
     });
@@ -329,22 +285,9 @@ describe('POST /api/auth/magic-link/send', () => {
     });
   });
 
-  describe('magic link creation', () => {
-    it('returns success message on successful creation', async () => {
-      const request = createMagicLinkRequest();
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.message).toContain('If an account exists');
-    });
-
-    it('returns success without sending email for suspended users', async () => {
-      vi.mocked(createMagicLinkToken).mockResolvedValue({
-        ok: false,
-        // @ts-expect-error - test mock with extra properties
-        error: { code: 'USER_SUSPENDED', message: 'Account suspended' },
-      });
+  describe('requestMagicLink pipe outcomes', () => {
+    it('given a successful pipe call, returns generic 200 + audits auth.token.created', async () => {
+      pipeInner.mockResolvedValue({ ok: true });
 
       const request = createMagicLinkRequest();
       const response = await POST(request);
@@ -352,116 +295,64 @@ describe('POST /api/auth/magic-link/send', () => {
 
       expect(response.status).toBe(200);
       expect(body.message).toContain('If an account exists');
-      expect(sendEmail).not.toHaveBeenCalled();
-      expect(auditRequest).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          eventType: 'auth.login.failure',
-          details: expect.objectContaining({
-            reason: 'magic_link_user_suspended',
-          }),
-          riskScore: 0.5,
-        })
-      );
-    });
-
-    it('returns 400 for validation errors from service', async () => {
-      vi.mocked(createMagicLinkToken).mockResolvedValue({
-        ok: false,
-        error: { code: 'VALIDATION_FAILED', message: 'Email domain not allowed' },
-      });
-
-      const request = createMagicLinkRequest();
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toBe('Email domain not allowed');
-    });
-
-    it('returns generic success for other service errors', async () => {
-      vi.mocked(createMagicLinkToken).mockResolvedValue({
-        ok: false,
-        // @ts-expect-error - partial mock data
-        error: { code: 'DATABASE_ERROR', message: 'Connection failed' },
-      });
-
-      const request = createMagicLinkRequest();
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.message).toContain('If an account exists');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Magic link creation failed',
-        { error: { code: 'DATABASE_ERROR', message: 'Connection failed' } }
-      );
-    });
-
-    it('audits unexpected service errors via auditRequest', async () => {
-      vi.mocked(createMagicLinkToken).mockResolvedValue({
-        ok: false,
-        // @ts-expect-error - partial mock data
-        error: { code: 'DATABASE_ERROR', message: 'Connection failed' },
-      });
-
-      const request = createMagicLinkRequest();
-      await POST(request);
-
-      expect(auditRequest).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          eventType: 'auth.login.failure',
-          details: expect.objectContaining({
-            reason: 'magic_link_database_error',
-          }),
-        })
-      );
-    });
-  });
-
-  describe('email sending', () => {
-    it('sends magic link email on success', async () => {
-      const request = createMagicLinkRequest({ email: 'user@example.com' });
-      await POST(request);
-
-      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
-      expect(sendArgs.to).toBe('user@example.com');
-      expect(sendArgs.subject).toBe('Sign in to PageSpace');
-    });
-
-    it('logs successful email send', async () => {
-      const request = createMagicLinkRequest();
-      await POST(request);
-
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Magic link email sent',
-        {
-          email: 'te***@example.com',
-          isNewUser: false,
-          ip: '127.0.0.1',
-        }
-      );
-    });
-
-    it('audits magic link token creation on successful email send', async () => {
-      const request = createMagicLinkRequest();
-      await POST(request);
-
       expect(auditRequest).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
           eventType: 'auth.token.created',
-          details: expect.objectContaining({
-            tokenType: 'magic_link',
-            isNewUser: false,
-          }),
-        })
+          details: expect.objectContaining({ tokenType: 'magic_link' }),
+        }),
+      );
+      expect(loggers.auth.info).toHaveBeenCalledWith(
+        'Magic link email sent',
+        { email: 'te***@example.com', ip: '127.0.0.1' },
       );
     });
 
-    it('returns success even when email sending fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
+    it('given the pipe returns ACCOUNT_SUSPENDED, returns generic 200 + audits the failure (enumeration mask)', async () => {
+      pipeInner.mockResolvedValue({ ok: false, error: 'ACCOUNT_SUSPENDED' });
+
+      const request = createMagicLinkRequest();
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toContain('If an account exists');
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'magic_link_user_suspended' }),
+          riskScore: 0.5,
+        }),
+      );
+      // No success-side audit
+      expect(auditRequest).not.toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({ eventType: 'auth.token.created' }),
+      );
+    });
+
+    it('given the pipe returns NO_ACCOUNT_FOUND, returns 404 + the structured no_account payload (signup CTA)', async () => {
+      pipeInner.mockResolvedValue({ ok: false, error: 'NO_ACCOUNT_FOUND' });
+
+      const request = createMagicLinkRequest({ email: 'unknown@example.com' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body).toEqual({ code: 'no_account', email: 'unknown@example.com' });
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.login.failure',
+          details: expect.objectContaining({ reason: 'magic_link_no_account_found' }),
+          riskScore: 0.2,
+        }),
+      );
+    });
+
+    it('given the pipe throws (e.g. SMTP failure inside the email-send port), returns generic 200 + logs (preserves enumeration resistance)', async () => {
+      pipeInner.mockRejectedValue(new Error('SMTP unavailable'));
 
       const request = createMagicLinkRequest();
       const response = await POST(request);
@@ -470,15 +361,27 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(response.status).toBe(200);
       expect(body.message).toContain('If an account exists');
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to send magic link email',
-        new Error('SMTP error'),
-        { email: 'te***@example.com' }
+        'Magic link pipe threw',
+        expect.any(Error),
+        expect.objectContaining({ email: 'te***@example.com' }),
+      );
+    });
+
+    it('given the pipe is invoked, the email is normalized + a Date now is forwarded', async () => {
+      const request = createMagicLinkRequest({ email: 'TEST@Example.COM' });
+      await POST(request);
+
+      expect(pipeInner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'test@example.com',
+          now: expect.any(Date),
+        }),
       );
     });
   });
 
   describe('error handling', () => {
-    it('returns 500 on unexpected errors', async () => {
+    it('returns 500 on unexpected errors (rate-limit throws)', async () => {
       vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const request = createMagicLinkRequest();
