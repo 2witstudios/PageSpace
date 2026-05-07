@@ -657,6 +657,77 @@ export async function getUserDrivePermissions(
 }
 
 /**
+ * Check whether two users share at least one drive, where "share" means each
+ * is either the drive owner (`drives.ownerId`) or an accepted drive member
+ * (`drive_members` with `acceptedAt IS NOT NULL`). Page-level collaborators
+ * (page_permissions only) do NOT count — matches the drive-membership boundary
+ * used by `getUserDrivePermissions`.
+ *
+ * Used to gate DM eligibility: drive co-members can DM each other without
+ * needing a connections-level relationship.
+ *
+ * Fail-closed on error.
+ */
+export async function usersShareDrive(
+  userIdA: string,
+  userIdB: string
+): Promise<boolean> {
+  if (userIdA === userIdB) return false;
+
+  try {
+    const aDriveIds = new Set<string>();
+
+    const aOwned = await db
+      .select({ id: drives.id })
+      .from(drives)
+      .where(eq(drives.ownerId, userIdA));
+    for (const d of aOwned) aDriveIds.add(d.id);
+
+    const aMember = await db
+      .select({ driveId: driveMembers.driveId })
+      .from(driveMembers)
+      .where(
+        and(
+          eq(driveMembers.userId, userIdA),
+          isNotNull(driveMembers.acceptedAt)
+        )
+      );
+    for (const m of aMember) aDriveIds.add(m.driveId);
+
+    if (aDriveIds.size === 0) return false;
+    const aIds = Array.from(aDriveIds);
+
+    const bOwned = await db
+      .select({ id: drives.id })
+      .from(drives)
+      .where(and(inArray(drives.id, aIds), eq(drives.ownerId, userIdB)))
+      .limit(1);
+    if (bOwned.length > 0) return true;
+
+    const bMember = await db
+      .select({ id: driveMembers.id })
+      .from(driveMembers)
+      .where(
+        and(
+          inArray(driveMembers.driveId, aIds),
+          eq(driveMembers.userId, userIdB),
+          isNotNull(driveMembers.acceptedAt)
+        )
+      )
+      .limit(1);
+
+    return bMember.length > 0;
+  } catch (error) {
+    loggers.api.error('[USERS_SHARE_DRIVE] Error checking shared drive membership', {
+      userIdA,
+      userIdB,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
  * Batch permission lookup for multiple pages in a single DB round-trip.
  *
  * One SQL statement joins `pages`, `drives`, `drive_members` (for ADMIN role,

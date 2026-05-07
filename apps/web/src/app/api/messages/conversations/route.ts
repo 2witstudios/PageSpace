@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ConversationRow } from '@/types/messaging';
@@ -179,7 +180,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if users are connected
+    // DM eligibility: accepted connection OR shared drive membership
     const [connection] = await db
       .select()
       .from(connections)
@@ -200,9 +201,11 @@ export async function POST(request: Request) {
       )
       .limit(1);
 
-    if (!connection) {
+    const isEligible = !!connection || (await usersShareDrive(userId, recipientId));
+
+    if (!isEligible) {
       return NextResponse.json(
-        { error: 'You must be connected to start a conversation' },
+        { error: 'You can\'t message this user' },
         { status: 403 }
       );
     }
