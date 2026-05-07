@@ -512,4 +512,61 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
   });
 
+  describe('next= honoring', () => {
+    const requestWithNext = (token: string, next: string) =>
+      new Request(
+        `http://localhost/api/auth/magic-link/verify?token=${token}&next=${encodeURIComponent(next)}`,
+        { method: 'GET', headers: { 'User-Agent': 'TestBrowser/1.0' } },
+      );
+
+    it('redirects to a safe next path inside the /dashboard allowlist', async () => {
+      const response = await GET(requestWithNext('valid-token', '/dashboard/drive_abc'));
+
+      expect(response.status).toBe(302);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_abc');
+      expect(location).toContain('auth=success');
+    });
+
+    it('redirects to a safe next path inside /invite/<token>', async () => {
+      const response = await GET(requestWithNext('valid-token', '/invite/abc123'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/invite/abc123');
+    });
+
+    it('falls back to /dashboard when next is a protocol-relative URL (//evil.com)', async () => {
+      const response = await GET(requestWithNext('valid-token', '//evil.com/phish'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('evil.com');
+    });
+
+    it('falls back to /dashboard when next is outside the allowlist (/admin)', async () => {
+      const response = await GET(requestWithNext('valid-token', '/admin/settings'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('/admin');
+    });
+
+    it('honors next over the default new-user provisioned drive when next is safe', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: { userId: 'test-user-id', isNewUser: true },
+      });
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+        driveId: 'provisioned-drive-id',
+        created: true,
+      });
+
+      const response = await GET(requestWithNext('valid-token', '/dashboard/drive_abc'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_abc');
+      expect(location).not.toContain('provisioned-drive-id');
+    });
+  });
+
 });
