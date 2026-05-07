@@ -104,7 +104,6 @@ describe('magic-link-service', () => {
       if (result.ok) {
         expect(result.data.token).toBe('ps_magic_testtoken123');
         expect(result.data.userId).toBe('user-1');
-        expect(result.data.isNewUser).toBe(false);
       }
     });
 
@@ -117,7 +116,7 @@ describe('magic-link-service', () => {
     //   - the original email's link when admin clicked Resend on the same drive
     // Issuing a new token MUST NOT delete prior unused tokens for the user.
     // Tokens age out via expiresAt instead.
-    it('does NOT delete prior unused magic_link tokens — adversarial concurrent-invitations-from-two-drives path', async () => {
+    it('does not blind-delete prior unused magic_link tokens for the user when issuing a new one', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         suspendedAt: null,
@@ -135,43 +134,18 @@ describe('magic-link-service', () => {
       expect(mockDeleteWhere).not.toHaveBeenCalled();
     });
 
-    it('should create new user when email not found', async () => {
+    it('should return NO_ACCOUNT_FOUND when email maps to no user (no auto-create)', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const mockReturning = vi.fn().mockResolvedValue([{ id: 'new-user-1' }]);
-      const mockValues = vi.fn(() => ({ returning: mockReturning }));
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-      vi.mocked(db.delete).mockReturnValue({ where: vi.fn() } as never);
+      const insertSpy = vi.mocked(db.insert);
 
       const result = await createMagicLinkToken({ email: 'new@test.com' });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.data.isNewUser).toBe(true);
-      }
-    });
 
-    it('should handle unique constraint violation (race condition)', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const mockReturning = vi.fn().mockRejectedValue(new Error('unique constraint'));
-      const mockValues = vi.fn(() => ({ returning: mockReturning }));
-      // First call: insert fails, second call: select finds user, third call: delete, fourth: insert token
-      let insertCallCount = 0;
-      vi.mocked(db.insert).mockImplementation(() => {
-        insertCallCount++;
-        if (insertCallCount === 1) {
-          return { values: mockValues } as never;
-        }
-        return { values: vi.fn() } as never;
-      });
-      const mockWhere = vi.fn().mockResolvedValue([{ id: 'existing-user' }]);
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
-      vi.mocked(db.delete).mockReturnValue({ where: vi.fn() } as never);
-
-      const result = await createMagicLinkToken({ email: 'race@test.com' });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.data.isNewUser).toBe(false);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('NO_ACCOUNT_FOUND');
       }
+      // No users row inserted, no verificationTokens row inserted.
+      expect(insertSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -211,14 +211,12 @@ export async function POST(req: Request) {
 
       loggers.auth.info('Magic link email sent', {
         email: maskEmail(normalizedEmail),
-        isNewUser: result.data.isNewUser,
         ip: clientIP,
       });
       auditRequest(req, {
         eventType: 'auth.token.created',
         details: {
           tokenType: 'magic_link',
-          isNewUser: result.data.isNewUser,
         },
       });
     } catch (error) {

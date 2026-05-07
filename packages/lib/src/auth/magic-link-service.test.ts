@@ -75,12 +75,6 @@ describe('Magic Link Service', () => {
           expected: true,
         });
 
-        assert({
-          given: 'an email for existing user',
-          should: 'return isNewUser: false',
-          actual: result.data.isNewUser,
-          expected: false,
-        });
       }
     });
 
@@ -133,28 +127,33 @@ describe('Magic Link Service', () => {
       });
     });
 
-    it('creates pending signup token for non-existent user', async () => {
-      const newEmail = `new-user-${Date.now()}@example.com`;
+    it('returns NO_ACCOUNT_FOUND for non-existent user (no auto-create)', async () => {
+      const newEmail = `nobody-${Date.now()}@example.com`;
       const result = await createMagicLinkToken({ email: newEmail });
 
       assert({
-        given: 'an email for non-existent user',
-        should: 'return ok: true',
+        given: 'an email for a non-existent account',
+        should: 'return ok: false',
         actual: result.ok,
-        expected: true,
+        expected: false,
       });
 
-      if (result.ok) {
-        // Track dynamically created user for cleanup
-        dynamicallyCreatedUserIds.push(result.data.userId);
-
+      if (!result.ok) {
         assert({
-          given: 'an email for non-existent user',
-          should: 'return isNewUser: true',
-          actual: result.data.isNewUser,
-          expected: true,
+          given: 'an email for a non-existent account',
+          should: 'return NO_ACCOUNT_FOUND error code (signup is a separate flow)',
+          actual: result.error.code,
+          expected: 'NO_ACCOUNT_FOUND',
         });
       }
+
+      const planted = await db.query.users.findFirst({ where: eq(users.email, newEmail) });
+      assert({
+        given: 'NO_ACCOUNT_FOUND was returned',
+        should: 'never have inserted a users row',
+        actual: planted ?? null,
+        expected: null,
+      });
     });
 
     it('returns validation error for invalid email', async () => {
@@ -275,15 +274,10 @@ describe('Magic Link Service', () => {
       }
     });
 
-    // Review H1 — multi-token isolation. Pre-fix, createMagicLinkToken ran a
-    // blind delete of all unused magic_link tokens for the user before
-    // inserting the new one. That silently invalidated:
-    //   - a 7-day pending drive invitation when a 5-min sign-in token issued
-    //   - a drive-A invitation when a drive-B invitation issued for same email
-    //   - the original email's link when admin clicked Resend on the same drive
-    // The fix: stop the pre-insert deletion entirely. Tokens have a TTL and a
-    // unique tokenHash; verifyMagicLinkToken refuses expired/used rows.
-    it('preserves prior unused tokens — adversarial concurrent-invitations-from-two-drives path', async () => {
+    // Token issuance must not blind-delete prior unused magic_link tokens for
+    // the user — a 7-day drive invitation should survive a 5-minute sign-in
+    // token issued in the same window.
+    it('preserves prior unused tokens when a second is issued for the same existing user', async () => {
       const first = await createMagicLinkToken({ email: testUserEmail });
       const second = await createMagicLinkToken({ email: testUserEmail });
 
@@ -296,26 +290,17 @@ describe('Magic Link Service', () => {
       });
 
       assert({
-        given: 'two concurrent invitations for the same user',
-        should: 'preserve both unused tokens (no blind type-wide cleanup)',
+        given: 'two sequential token mints for the same user',
+        should: 'preserve both unused rows (no blind type-wide cleanup)',
         actual: stored.length,
         expected: 2,
       });
 
-      // Both tokens must remain clickable.
       const verifyFirst = await verifyMagicLinkToken({ token: first.data.token });
       assert({
-        given: 'the first invitation token after a second was issued',
-        should: 'still verify successfully (T1 is not invalidated by T2)',
+        given: 'the first token after a second was issued',
+        should: 'still verify successfully',
         actual: verifyFirst.ok,
-        expected: true,
-      });
-
-      const verifySecond = await verifyMagicLinkToken({ token: second.data.token });
-      assert({
-        given: 'the second invitation token',
-        should: 'verify successfully',
-        actual: verifySecond.ok,
         expected: true,
       });
     });

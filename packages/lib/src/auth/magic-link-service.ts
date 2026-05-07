@@ -56,10 +56,11 @@ export type MagicLinkError =
   | { code: 'TOKEN_EXPIRED' }
   | { code: 'TOKEN_ALREADY_USED' }
   | { code: 'TOKEN_NOT_FOUND' }
+  | { code: 'NO_ACCOUNT_FOUND' }
   | { code: 'USER_SUSPENDED'; userId: string };
 
 export type CreateMagicLinkResult =
-  | { ok: true; data: { token: string; userId: string; isNewUser: boolean } }
+  | { ok: true; data: { token: string; userId: string } }
   | { ok: false; error: MagicLinkError };
 
 export type VerifyMagicLinkResult =
@@ -67,17 +68,14 @@ export type VerifyMagicLinkResult =
   | { ok: false; error: MagicLinkError };
 
 /**
- * Create a magic link token for passwordless authentication.
- *
- * Given an email for existing user, generates ps_magic_* token with 5-minute expiry.
- * Given an email for non-existent user, creates pending signup token.
- * Given a suspended user, returns USER_SUSPENDED error.
- *
- * @param input - Unknown input, validated with Zod
- * @returns Result with token or error
+ * Create a magic link token for passwordless authentication of an EXISTING
+ * account. Unknown emails return NO_ACCOUNT_FOUND — the auto-create dance
+ * is gone. Signup is the consent-gated passkey path / OAuth flow. Suspended
+ * accounts return USER_SUSPENDED. Pre-existing unused tokens for the user
+ * are preserved (no blind type-wide cleanup) so a long-lived invite token
+ * cannot be silently invalidated by a short-lived sign-in.
  */
 export async function createMagicLinkToken(input: unknown): Promise<CreateMagicLinkResult> {
-  // Validate input
   const parsed = createMagicLinkSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -93,83 +91,33 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
   const normalizedEmail = email.toLowerCase().trim();
   const effectiveExpiryMinutes = expiryMinutes ?? MAGIC_LINK_EXPIRY_MINUTES;
 
-  // Check if user exists
   const existingUser = await db.query.users.findFirst({
     where: eq(users.email, normalizedEmail),
     columns: { id: true, suspendedAt: true },
   });
 
-  // If user is suspended, reject
-  if (existingUser?.suspendedAt) {
+  if (!existingUser) {
+    return { ok: false, error: { code: 'NO_ACCOUNT_FOUND' } };
+  }
+
+  if (existingUser.suspendedAt) {
     return {
       ok: false,
       error: { code: 'USER_SUSPENDED', userId: existingUser.id },
     };
   }
 
-  let userId: string;
-  let isNewUser = false;
-
-  if (existingUser) {
-    userId = existingUser.id;
-  } else {
-    // Create a temporary user for magic link signup
-    // The user will be marked as pending until they complete verification
-    // Handle race condition where concurrent requests try to create the same user
-    try {
-      const [newUser] = await db.insert(users).values({
-        id: createId(),
-        name: normalizedEmail.split('@')[0] ?? 'New User',
-        email: normalizedEmail,
-        provider: 'email',
-        role: 'user',
-        tokenVersion: 1,
-      }).returning();
-      userId = newUser.id;
-      isNewUser = true;
-    } catch (error: unknown) {
-      // Handle unique constraint violation - another request created the user
-      const isConstraintViolation =
-        error instanceof Error &&
-        (error.message.includes('unique constraint') ||
-          error.message.includes('duplicate key') ||
-          error.message.includes('UNIQUE constraint'));
-
-      if (isConstraintViolation) {
-        const [existingUserAfterRace] = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, normalizedEmail));
-
-        if (!existingUserAfterRace) {
-          throw error; // Unexpected state, rethrow
-        }
-        userId = existingUserAfterRace.id;
-        isNewUser = false;
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  // Review H1: do NOT delete prior unused magic_link tokens here. The blind
-  // type-wide cleanup invalidated multi-token scenarios — a 7-day drive
-  // invitation could be silently nuked by a 5-min sign-in (or by an invitation
-  // from a second drive, or by Resend on the same drive). Tokens carry their
-  // own TTL via expiresAt and a unique tokenHash; verifyMagicLinkToken refuses
-  // expired/used rows. Stale entries age out naturally.
   const { token, hash, tokenPrefix } = generateToken('ps_magic');
   const expiresAt = new Date(Date.now() + effectiveExpiryMinutes * 60 * 1000);
 
-  // Build metadata for desktop platform support
-  const metadata = platform === 'desktop' && deviceId
-    ? JSON.stringify({ platform, deviceId, deviceName })
-    : undefined;
+  const metadata =
+    platform === 'desktop' && deviceId
+      ? JSON.stringify({ platform, deviceId, deviceName })
+      : undefined;
 
-  // Store token hash (never plaintext)
   await db.insert(verificationTokens).values({
     id: createId(),
-    userId,
+    userId: existingUser.id,
     tokenHash: hash,
     tokenPrefix,
     type: 'magic_link',
@@ -179,7 +127,7 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
 
   return {
     ok: true,
-    data: { token, userId, isNewUser },
+    data: { token, userId: existingUser.id },
   };
 }
 
