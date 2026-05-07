@@ -455,4 +455,37 @@ describe('requestMagicLink', () => {
       }),
     );
   });
+
+  it('given a next on the input, should forward it to sendMagicLinkEmail (and not to createTokenAndPersist)', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(
+      baseMagicLinkInput({ next: '/dashboard/drive_abc' }),
+    );
+
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      token: 'ps_magic_xyz',
+      next: '/dashboard/drive_abc',
+    });
+
+    expect(ports.createTokenAndPersist).toHaveBeenCalledOnce();
+    const persistCall = (ports.createTokenAndPersist as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect(persistCall).not.toHaveProperty('next');
+  });
+
+  it('given no next on the input, should NOT include next on the sendMagicLinkEmail call', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(baseMagicLinkInput());
+
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
+    const sendCall = (ports.sendMagicLinkEmail as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect(sendCall).toEqual({
+      email: 'user@example.com',
+      token: 'ps_magic_xyz',
+    });
+    expect(sendCall).not.toHaveProperty('next');
+  });
 });

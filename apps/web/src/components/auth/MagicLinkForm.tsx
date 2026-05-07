@@ -11,7 +11,14 @@ import { getDevicePlatformFields } from '@/lib/desktop-auth';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error' | 'no-account';
 
-export function MagicLinkForm() {
+export interface MagicLinkFormProps {
+  // Same-origin redirect target the user originally aimed at. Caller
+  // (signin/page.tsx) is the source of truth for safety; the form just
+  // forwards it. Send route + verify route both re-validate.
+  nextPath?: string;
+}
+
+export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [formState, setFormState] = useState<FormState>('input');
@@ -86,7 +93,11 @@ export function MagicLinkForm() {
           'X-Login-CSRF-Token': csrfToken,
         },
         credentials: 'include',
-        body: JSON.stringify({ email: email.trim(), ...platformFields }),
+        body: JSON.stringify({
+          email: email.trim(),
+          ...platformFields,
+          ...(nextPath && { next: nextPath }),
+        }),
       });
 
       if (response.status === 429) {
@@ -131,7 +142,7 @@ export function MagicLinkForm() {
       setFormState('error');
       setError('Network error. Please check your connection and try again.');
     }
-  }, [email, formState, cooldownSeconds]);
+  }, [email, formState, cooldownSeconds, nextPath]);
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;
@@ -156,7 +167,9 @@ export function MagicLinkForm() {
   // deliberately disclose that no account exists for the entered email
   // (trade enumeration-resistance for a clearer onboarding path).
   if (formState === 'no-account') {
-    const signupHref = `/auth/signup?email=${encodeURIComponent(email)}`;
+    const signupParams = new URLSearchParams({ email });
+    if (nextPath) signupParams.set('next', nextPath);
+    const signupHref = `/auth/signup?${signupParams.toString()}`;
     return (
       <div className="space-y-4">
         <div className="flex flex-col items-center gap-3 py-4">

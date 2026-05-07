@@ -380,6 +380,79 @@ describe('POST /api/auth/magic-link/send', () => {
     });
   });
 
+  describe('next= forwarding', () => {
+    it('given a safe next path on the body, forwards next to the pipe input', async () => {
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        next: '/dashboard/drive_abc',
+      });
+      await POST(request);
+
+      expect(pipeInner).toHaveBeenCalledWith(
+        expect.objectContaining({ next: '/dashboard/drive_abc' }),
+      );
+    });
+
+    it('given a safe /invite/<token> next path on the body, forwards next to the pipe input', async () => {
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        next: '/invite/abc123',
+      });
+      await POST(request);
+
+      expect(pipeInner).toHaveBeenCalledWith(
+        expect.objectContaining({ next: '/invite/abc123' }),
+      );
+    });
+
+    it('given a protocol-relative next (//evil.com), strips it before forwarding (defense in depth)', async () => {
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        next: '//evil.com/phish',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const callArgs = pipeInner.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(callArgs).toBeDefined();
+      expect(callArgs).not.toHaveProperty('next');
+    });
+
+    it('given a next outside the allowlist (/admin), strips it before forwarding', async () => {
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        next: '/admin/settings',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const callArgs = pipeInner.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(callArgs).toBeDefined();
+      expect(callArgs).not.toHaveProperty('next');
+    });
+
+    it('given no next on the body, does not forward next to the pipe', async () => {
+      const request = createMagicLinkRequest({ email: 'test@example.com' });
+      await POST(request);
+
+      const callArgs = pipeInner.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(callArgs).toBeDefined();
+      expect(callArgs).not.toHaveProperty('next');
+    });
+
+    it('given a next longer than 2048 chars, returns 400 (zod schema rejects)', async () => {
+      const tooLong = '/dashboard/' + 'a'.repeat(2050);
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        next: tooLong,
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+      expect(pipeInner).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('returns 500 on unexpected errors (rate-limit throws)', async () => {
       vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));

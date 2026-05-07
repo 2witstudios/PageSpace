@@ -56,7 +56,11 @@ export interface MagicLinkPorts {
     deviceId?: string;
     deviceName?: string;
   }) => Promise<{ token: string }>;
-  sendMagicLinkEmail: (input: { email: string; token: string }) => Promise<void>;
+  sendMagicLinkEmail: (input: {
+    email: string;
+    token: string;
+    next?: string;
+  }) => Promise<void>;
 }
 
 export interface RevokePorts {

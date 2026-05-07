@@ -194,4 +194,24 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     const location = response.headers.get('Location') || '';
     expect(location).toContain('welcome=true');
   });
+
+  it('honors a safe next= on the desktop redirect URL', async () => {
+    const url = `http://localhost/api/auth/magic-link/verify?token=ps_magic_validtoken&next=${encodeURIComponent('/dashboard/drive_abc')}`;
+    const response = await GET(new Request(url, { method: 'GET' }));
+
+    const location = response.headers.get('Location') || '';
+    expect(location).toContain('/dashboard/drive_abc');
+    expect(location).toContain('desktopExchange=exchange-code-abc');
+    expect(location).toContain('auth=success');
+  });
+
+  it('falls back to /dashboard when desktop next= is unsafe', async () => {
+    const url = `http://localhost/api/auth/magic-link/verify?token=ps_magic_validtoken&next=${encodeURIComponent('//evil.com/phish')}`;
+    const response = await GET(new Request(url, { method: 'GET' }));
+
+    const location = response.headers.get('Location') || '';
+    expect(location).toContain('/dashboard');
+    expect(location).not.toContain('evil.com');
+    expect(location).toContain('desktopExchange=exchange-code-abc');
+  });
 });

@@ -11,6 +11,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -24,6 +25,13 @@ export async function GET(req: Request) {
     const clientIP = getClientIP(req);
     const { searchParams } = new URL(req.url);
     const token = searchParams.get('token');
+    // Re-validate next at the verify boundary — never trust the param across
+    // the email round-trip even though the send route already validated.
+    const rawNext = searchParams.get('next');
+    const safeNext =
+      rawNext && isSafeNextPath({ path: rawNext, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })
+        ? rawNext
+        : undefined;
 
     // Validate token format
     const validation = verifyTokenSchema.safeParse({ token });
@@ -146,6 +154,7 @@ export async function GET(req: Request) {
           const desktopRedirectPath = await resolvePostLoginRedirectPath({
             isNewUser,
             userId,
+            next: safeNext,
           });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
@@ -202,6 +211,7 @@ export async function GET(req: Request) {
     const redirectPath = await resolvePostLoginRedirectPath({
       isNewUser,
       userId,
+      next: safeNext,
     });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -248,16 +258,24 @@ function redirectWithError(error: string): NextResponse {
 /**
  * Resolve the post-login dashboard redirect path. Single source of truth for
  * both the desktop exchange and web cookie flows so the two paths cannot drift
- * out of sync on the next redirect-rule change. Provisioning errors are logged
- * and swallowed — the user still lands on /dashboard.
+ * out of sync on the next redirect-rule change. A pre-validated `next` always
+ * wins so the user lands on whatever drive/invite they were trying to reach.
+ * Provisioning errors are logged and swallowed — the user still lands on
+ * /dashboard.
  */
 async function resolvePostLoginRedirectPath({
   isNewUser,
   userId,
+  next,
 }: {
   isNewUser: boolean;
   userId: string;
+  next?: string;
 }): Promise<string> {
+  if (next) {
+    return next;
+  }
+
   if (!isNewUser) {
     return '/dashboard';
   }
