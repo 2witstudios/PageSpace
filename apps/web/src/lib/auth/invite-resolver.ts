@@ -1,5 +1,5 @@
 import { hashToken } from '@pagespace/lib/auth/token-utils';
-import { isInviteExpired, isInviteConsumed } from '@pagespace/lib/services/invite-predicates';
+import { isInviteExpired, isInviteConsumed } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 export type InviteResolutionError = 'NOT_FOUND' | 'EXPIRED' | 'CONSUMED';

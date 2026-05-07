@@ -2,8 +2,8 @@ import { hashToken } from '@pagespace/lib/auth/token-utils';
 import {
   isInviteExpired,
   isInviteConsumed,
-  isEmailMatchingInvite,
-} from '@pagespace/lib/services/invite-predicates';
+  isEmailMatch,
+} from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 export type InviteAcceptanceError =
@@ -49,7 +49,7 @@ const validateAndLoadInvite = async ({
   if (isInviteExpired({ expiresAt: invite.expiresAt, now })) {
     return { ok: false as const, error: 'TOKEN_EXPIRED' as const };
   }
-  if (!isEmailMatchingInvite({ inviteEmail: invite.email, userEmail })) {
+  if (!isEmailMatch({ inviteEmail: invite.email, userEmail })) {
     return { ok: false as const, error: 'EMAIL_MISMATCH' as const };
   }
   return { ok: true as const, invite };
