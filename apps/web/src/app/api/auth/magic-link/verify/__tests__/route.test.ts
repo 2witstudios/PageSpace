@@ -533,6 +533,7 @@ describe('GET /api/auth/magic-link/verify', () => {
 
       const location = response.headers.get('Location')!;
       expect(location).toContain('/invite/abc123');
+      expect(location).toContain('auth=success');
     });
 
     it('falls back to /dashboard when next is a protocol-relative URL (//evil.com)', async () => {
