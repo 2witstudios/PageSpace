@@ -75,10 +75,14 @@ export interface RequestMagicLinkInput {
   // have already validated against an allowlist; the pipe forwards verbatim
   // to the email-send port and never inspects it.
   next?: string;
+  // Affirmative ToS acceptance from the inline form. Required to auto-create
+  // the user when no account exists for `email`. Must be true for unknown
+  // emails or the pipe returns TOS_REQUIRED. Existing users are unaffected.
+  tosAccepted: boolean;
 }
 
 export type MagicLinkErrorCode =
-  | 'NO_ACCOUNT_FOUND'
+  | 'TOS_REQUIRED'
   | 'ACCOUNT_SUSPENDED'
   | 'VALIDATION_FAILED';
 

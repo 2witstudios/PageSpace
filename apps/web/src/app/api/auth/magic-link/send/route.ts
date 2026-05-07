@@ -19,6 +19,7 @@ const sendMagicLinkSchema = z.object({
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
   next: z.string().min(1).max(2048).optional(),
+  tosAccepted: z.boolean(),
 }).refine(
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
   { message: 'deviceId and deviceName are required for desktop platform' }
@@ -101,8 +102,24 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, platform, deviceId, deviceName, next } = validation.data;
+    const { email, platform, deviceId, deviceName, next, tosAccepted } = validation.data;
     const normalizedEmail = email.toLowerCase().trim();
+
+    // Defense in depth: the form's submit button is gated on the checkbox,
+    // but a tampered POST body must not bypass affirmative consent. Without
+    // tosAccepted we won't auto-create, and refusing here keeps the failure
+    // mode loud + auditable instead of silently sending a link.
+    if (tosAccepted !== true) {
+      auditRequest(req, {
+        eventType: 'security.suspicious.activity',
+        riskScore: 0.3,
+        details: { reason: 'magic_link_tos_not_accepted' },
+      });
+      return Response.json(
+        { code: 'tos_required', error: 'Terms of Service must be accepted' },
+        { status: 400 },
+      );
+    }
 
     // Re-validate next against the same allowlist the signin page uses. Defense
     // in depth: form already validated, but never trust the client across a
@@ -162,14 +179,16 @@ export async function POST(req: Request) {
       );
     }
 
-    // requestMagicLink pipe owns the full flow: load user → validate (no-auto-
-    // create / not-suspended) → mint token → send email. On any failure mode
-    // the pipe never minted a token nor sent an email.
+    // requestMagicLink pipe owns the full flow: load user → auto-create on
+    // unknown email (gated on tosAccepted) → mint token → send email. Magic-
+    // link is a unified signin/signup flow: the click on the link in the
+    // inbox proves email control and the ToS checkbox supplies legal consent.
     let result;
     try {
       result = await requestMagicLink(buildMagicLinkPorts())({
         email: normalizedEmail,
         now: new Date(),
+        tosAccepted,
         ...(platform && { platform }),
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
@@ -201,26 +220,10 @@ export async function POST(req: Request) {
         });
       }
 
-      // NO_ACCOUNT_FOUND is surfaced explicitly (trade enumeration-resistance
-      // for a clearer signup path). MagicLinkForm consumes the structured
-      // payload and renders the "Sign up instead" CTA pre-filled with the
-      // entered email.
-      if (result.error === 'NO_ACCOUNT_FOUND') {
-        auditRequest(req, {
-          eventType: 'auth.login.failure',
-          riskScore: 0.2,
-          details: { reason: 'magic_link_no_account_found' },
-        });
-        return Response.json(
-          { code: 'no_account', email: normalizedEmail },
-          { status: 404 },
-        );
-      }
-
-      // VALIDATION_FAILED from the pipe shouldn't reach here — we zod-
-      // validated upstream — but stay defensive. Wrap the string code in an
-      // Error so the entry.error structured field populates the same way the
-      // earlier error log on this handler does.
+      // TOS_REQUIRED from the pipe shouldn't reach here — the schema-level
+      // guard above already rejected tosAccepted=false — but stay defensive.
+      // Surface as a generic 200 to keep enumeration resistance intact.
+      // VALIDATION_FAILED is similarly upstream-impossible.
       loggers.auth.error(
         'Magic link pipe returned unexpected error',
         new Error(`MagicLinkErrorCode: ${result.error}`),

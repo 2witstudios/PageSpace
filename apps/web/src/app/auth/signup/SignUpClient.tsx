@@ -11,6 +11,7 @@ import {
   OAuthButtons,
   GoogleOneTap,
   PasskeySignupButton,
+  MagicLinkForm,
   ExternalAuthWaiting,
 } from '@/components/auth';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
@@ -24,9 +25,15 @@ interface SignUpClientProps {
 
 export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) {
   const [error, setError] = useState<string | null>(null);
+  const [showMagicLink, setShowMagicLink] = useState(false);
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
+  // Invited users coming through magic-link should land on the invite-accept
+  // route after verify so the existing acceptInviteForExistingUser pipe
+  // consumes the token. Non-invite signups go to /dashboard via the verify
+  // route's default redirect.
+  const magicLinkNextPath = inviteToken ? `/invite/${inviteToken}/accept` : undefined;
   const {
     handleGoogleSignIn,
     handleAppleSignIn,
@@ -135,18 +142,25 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
       )}
 
       <motion.div
-        className="mt-4 text-center"
+        className="mt-4"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.45, duration: 0.3 }}
       >
-        <Link
-          href="/auth/magic-link"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <Mail className="h-3.5 w-3.5" />
-          Or sign up with email link
-        </Link>
+        {showMagicLink ? (
+          <div className="mt-2">
+            <MagicLinkForm {...(magicLinkNextPath && { nextPath: magicLinkNextPath })} />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="flex w-full items-center justify-center gap-2 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setShowMagicLink(true)}
+          >
+            <Mail className="h-4 w-4" />
+            Or sign up with email link
+          </button>
+        )}
       </motion.div>
 
       <motion.div

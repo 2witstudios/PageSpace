@@ -44,11 +44,8 @@ export const validateMagicLinkRequest = ({
   user,
 }: {
   user: UserAccount | null;
-}): Result<UserAccount, MagicLinkErrorCode> => {
-  if (user === null) {
-    return { ok: false, error: 'NO_ACCOUNT_FOUND' };
-  }
-  if (isAccountSuspended({ suspendedAt: user.suspendedAt })) {
+}): Result<UserAccount | null, MagicLinkErrorCode> => {
+  if (user && isAccountSuspended({ suspendedAt: user.suspendedAt })) {
     return { ok: false, error: 'ACCOUNT_SUSPENDED' };
   }
   return { ok: true, data: user };

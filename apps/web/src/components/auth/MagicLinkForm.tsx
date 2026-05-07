@@ -6,10 +6,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Mail, ArrowLeft, ArrowRight, Loader2, CheckCircle, UserPlus } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 import { getDevicePlatformFields } from '@/lib/desktop-auth';
 
-type FormState = 'input' | 'sending' | 'sent' | 'error' | 'no-account';
+type FormState = 'input' | 'sending' | 'sent' | 'error';
 
 export interface MagicLinkFormProps {
   // Same-origin redirect target the user originally aimed at. Caller
@@ -21,6 +22,7 @@ export interface MagicLinkFormProps {
 export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
+  const [acceptedTos, setAcceptedTos] = useState(false);
   const [formState, setFormState] = useState<FormState>('input');
   const [error, setError] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
@@ -95,6 +97,7 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
         credentials: 'include',
         body: JSON.stringify({
           email: email.trim(),
+          tosAccepted: true,
           ...platformFields,
           ...(nextPath && { next: nextPath }),
         }),
@@ -116,14 +119,6 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
         setFormState('error');
         setError(data.details || 'Security verification failed. Please refresh the page.');
         return;
-      }
-
-      if (response.status === 404) {
-        const data = (await response.json()) as { code?: string };
-        if (data.code === 'no_account') {
-          setFormState('no-account');
-          return;
-        }
       }
 
       if (!response.ok) {
@@ -159,46 +154,10 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
     setFormState('input');
     setError(null);
     setEmail('');
+    setAcceptedTos(false);
     setCooldownSeconds(0);
     setRetryAfterSeconds(0);
   }, []);
-
-  // No-account state — surface NO_ACCOUNT_FOUND with a sign-up CTA. We
-  // deliberately disclose that no account exists for the entered email
-  // (trade enumeration-resistance for a clearer onboarding path).
-  if (formState === 'no-account') {
-    const signupParams = new URLSearchParams({ email });
-    if (nextPath) signupParams.set('next', nextPath);
-    const signupHref = `/auth/signup?${signupParams.toString()}`;
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-col items-center gap-3 py-4">
-          <div className="rounded-full bg-blue-100 dark:bg-blue-900/30 p-3">
-            <UserPlus className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-          </div>
-          <div className="text-center">
-            <h3 className="font-medium text-lg">No PageSpace account for that email</h3>
-            <p className="text-muted-foreground text-sm mt-1">
-              <span className="font-medium text-foreground">{email}</span> isn&apos;t signed up yet. Create an account to continue.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Button asChild className="w-full">
-            <Link href={signupHref}>
-              Sign up
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Link>
-          </Button>
-          <Button type="button" variant="ghost" className="w-full" onClick={handleReset}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Try a different email
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   // Sent state - show confirmation
   if (formState === 'sent') {
@@ -271,6 +230,30 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
         </div>
       </div>
 
+      <div className="flex items-start gap-2">
+        <Checkbox
+          id="magic-link-tos"
+          checked={acceptedTos}
+          onCheckedChange={(checked) => setAcceptedTos(checked === true)}
+          disabled={formState === 'sending'}
+          className="mt-0.5"
+        />
+        <Label
+          htmlFor="magic-link-tos"
+          className="text-xs font-normal leading-snug text-muted-foreground"
+        >
+          I agree to PageSpace&apos;s{' '}
+          <Link href="/terms" className="underline hover:text-foreground">
+            Terms
+          </Link>
+          {' '}and{' '}
+          <Link href="/privacy" className="underline hover:text-foreground">
+            Privacy Policy
+          </Link>
+          .
+        </Label>
+      </div>
+
       {error && (
         <div className="text-sm text-red-500 dark:text-red-400">
           {error}
@@ -285,7 +268,7 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
       <Button
         type="submit"
         className="w-full"
-        disabled={formState === 'sending' || retryAfterSeconds > 0}
+        disabled={formState === 'sending' || retryAfterSeconds > 0 || !acceptedTos}
       >
         {formState === 'sending' ? (
           <div className="flex items-center gap-2">
