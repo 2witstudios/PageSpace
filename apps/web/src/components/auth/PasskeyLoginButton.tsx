@@ -21,6 +21,13 @@ interface PasskeyLoginButtonProps {
   refreshToken?: () => Promise<string | null>;
   email?: string;
   onSuccess?: (redirectUrl: string) => void;
+  /**
+   * Pre-validated relative path to redirect to on success. Caller is
+   * responsible for safety-checking this (e.g. via `isSafeNextPath`) before
+   * passing it in. When present, takes precedence over the server's
+   * `verifyData.redirectUrl`.
+   */
+  nextPath?: string;
   className?: string;
   variant?: 'default' | 'outline' | 'secondary';
 }
@@ -30,6 +37,7 @@ export function PasskeyLoginButton({
   refreshToken,
   email,
   onSuccess,
+  nextPath,
   className,
   variant = 'default',
 }: PasskeyLoginButtonProps) {
@@ -154,10 +162,15 @@ export function PasskeyLoginButton({
 
       if (await handleDesktopAuthResponse(verifyData)) return;
 
+      // Pre-validated nextPath wins over the server's default redirect so the
+      // user lands where they were trying to go (e.g. an /invite/[token] page
+      // they were forced to sign in from).
+      const targetUrl = nextPath ?? verifyData.redirectUrl;
+
       if (onSuccess) {
-        onSuccess(verifyData.redirectUrl);
+        onSuccess(targetUrl);
       } else {
-        window.location.href = verifyData.redirectUrl;
+        window.location.href = targetUrl;
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -174,7 +187,7 @@ export function PasskeyLoginButton({
     } finally {
       setIsAuthenticating(false);
     }
-  }, [csrfToken, refreshToken, email, onSuccess]);
+  }, [csrfToken, refreshToken, email, onSuccess, nextPath]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {

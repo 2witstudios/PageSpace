@@ -18,12 +18,20 @@ import {
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
+import { isSafeNextPath } from "@/lib/auth/auth-helpers";
+
+const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'];
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const inviteToken = searchParams.get('invite') ?? undefined;
+  const rawNext = searchParams.get('next');
+  const nextPath = rawNext && isSafeNextPath({
+    path: rawNext,
+    allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES,
+  }) ? rawNext : undefined;
   const {
     handleGoogleSignIn,
     handleAppleSignIn,
@@ -117,6 +125,7 @@ function SignInForm() {
             <PasskeyLoginButton
               csrfToken={csrfToken}
               refreshToken={refreshToken}
+              {...(nextPath && { nextPath })}
             />
           </motion.div>
         )}
