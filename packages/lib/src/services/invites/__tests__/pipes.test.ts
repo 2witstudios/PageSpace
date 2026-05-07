@@ -142,6 +142,16 @@ describe('acceptInviteForExistingUser', () => {
     expect(ports.broadcastMemberAdded).not.toHaveBeenCalled();
   });
 
+  it('given a side-effect port that throws (e.g. websocket down), should still return ok and not surface the error (membership is already written)', async () => {
+    const ports = buildStubPorts({
+      broadcastMemberAdded: vi.fn().mockRejectedValue(new Error('ws down')),
+    });
+    const result = await acceptInviteForExistingUser(ports)(baseInput());
+    expect(result.ok).toBe(true);
+    expect(ports.notifyMemberAdded).toHaveBeenCalledOnce();
+    expect(ports.auditPermissionGranted).toHaveBeenCalledOnce();
+  });
+
   it('given a valid invite for a non-suspended new member, should consume + fire all 4 side-effect ports exactly once and return AcceptedInviteData', async () => {
     const ports = buildStubPorts();
     const result = await acceptInviteForExistingUser(ports)(baseInput());
@@ -244,7 +254,6 @@ const baseRevokeInput = (
   inviteId: 'inv_1',
   driveId: 'drive_1',
   actorId: 'user_actor',
-  now: new Date('2026-05-06T12:00:00.000Z'),
   ...overrides,
 });
 

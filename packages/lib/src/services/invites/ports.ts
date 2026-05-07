@@ -15,6 +15,11 @@ export type ConsumeMembershipResult =
   | { ok: true; memberId: string }
   | { ok: false; reason: ConsumeMembershipReason };
 
+// Side-effect ports (broadcastMemberAdded, notifyMemberAdded, trackInviteMember,
+// auditPermissionGranted, auditPermissionRevoked) MUST NOT throw. Adapters
+// own try/catch + logging at the IO boundary so a flaky websocket fan-out or
+// audit-DB blip cannot reverse a successful membership write. Pipes wrap each
+// call in defense-in-depth try/catch but never log.
 export interface AcceptancePorts {
   loadInvite: (input: { token: string }) => Promise<Invite | null>;
   findExistingMembership: (input: {

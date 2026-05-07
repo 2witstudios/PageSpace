@@ -30,8 +30,8 @@ export interface AcceptInviteInput {
   token: string;
   userId: string;
   userEmail: string;
+  suspendedAt: Date | null;
   now: Date;
-  suspendedAt?: Date | null;
 }
 
 export type InviteAcceptanceErrorCode =
@@ -48,7 +48,6 @@ export interface RevokePendingInviteInput {
   inviteId: string;
   driveId: string;
   actorId: string;
-  now: Date;
 }
 
 export interface RevokedInviteData {

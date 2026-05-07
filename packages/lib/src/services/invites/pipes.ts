@@ -16,19 +16,25 @@ import {
 
 const DEFAULT_MAGIC_LINK_EXPIRY_MINUTES = 5;
 
-/**
- * Shared side-effect step used by both acceptance pipes. Fires broadcast,
- * notify, track, and audit ports in sequence; never duplicated across
- * acceptForExisting / acceptForNew.
- */
+// Defense-in-depth wrapper. Adapter contract is "ports never throw"; this
+// guard ensures a buggy adapter cannot reverse a successful membership write
+// (consume already committed) by surfacing a side-effect failure as a 500.
+const swallow = async (op: () => unknown | Promise<unknown>): Promise<void> => {
+  try {
+    await op();
+  } catch {
+    // Adapter is responsible for logging. Pipe stays pure.
+  }
+};
+
 const emitAcceptanceSideEffects = async (
   ports: AcceptancePorts,
   data: AcceptedInviteData,
 ): Promise<void> => {
-  await ports.broadcastMemberAdded(data);
-  await ports.notifyMemberAdded(data);
-  ports.trackInviteMember({ ...data, permissionsGranted: 0 });
-  ports.auditPermissionGranted(data);
+  await swallow(() => ports.broadcastMemberAdded(data));
+  await swallow(() => ports.notifyMemberAdded(data));
+  await swallow(() => ports.trackInviteMember({ ...data, permissionsGranted: 0 }));
+  await swallow(() => ports.auditPermissionGranted(data));
 };
 
 export const acceptInviteForExistingUser =
@@ -40,7 +46,7 @@ export const acceptInviteForExistingUser =
     const validated = validateInviteForUser({
       invite,
       userEmail: input.userEmail,
-      suspendedAt: input.suspendedAt ?? null,
+      suspendedAt: input.suspendedAt,
       now: input.now,
     });
     if (!validated.ok) return validated;
@@ -153,7 +159,7 @@ export const acceptInviteForNewUser =
     const validated = validateInviteForUser({
       invite,
       userEmail: input.userEmail,
-      suspendedAt: input.suspendedAt ?? null,
+      suspendedAt: input.suspendedAt,
       now: input.now,
     });
     if (!validated.ok) return validated;
