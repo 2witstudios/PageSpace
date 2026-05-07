@@ -1,12 +1,20 @@
-import type { AcceptancePorts, RevokePorts } from './ports';
+import type { AcceptancePorts, MagicLinkPorts, RevokePorts } from './ports';
 import type {
   AcceptedInviteData,
   AcceptInviteInput,
   AcceptInviteResult,
+  RequestMagicLinkInput,
+  RequestMagicLinkResult,
   RevokePendingInviteInput,
   RevokePendingInviteResult,
 } from './types';
-import { validateInviteForUser, validateRevokeRequest } from './validators';
+import {
+  validateInviteForUser,
+  validateMagicLinkRequest,
+  validateRevokeRequest,
+} from './validators';
+
+const DEFAULT_MAGIC_LINK_EXPIRY_MINUTES = 5;
 
 /**
  * Shared side-effect step used by both acceptance pipes. Fires broadcast,
@@ -110,6 +118,30 @@ export const revokePendingInvite =
         role: validated.data.role,
       },
     };
+  };
+
+export const requestMagicLink =
+  (ports: MagicLinkPorts) =>
+  async (input: RequestMagicLinkInput): Promise<RequestMagicLinkResult> => {
+    const user = await ports.loadUserByEmail({ email: input.email });
+    const validated = validateMagicLinkRequest({ user });
+    if (!validated.ok) return validated;
+
+    const expiryMinutes = input.expiryMinutes ?? DEFAULT_MAGIC_LINK_EXPIRY_MINUTES;
+    const expiresAt = new Date(input.now.getTime() + expiryMinutes * 60_000);
+
+    const { token } = await ports.createTokenAndPersist({
+      userId: validated.data.id,
+      expiresAt,
+      now: input.now,
+      ...(input.platform !== undefined && { platform: input.platform }),
+      ...(input.deviceId !== undefined && { deviceId: input.deviceId }),
+      ...(input.deviceName !== undefined && { deviceName: input.deviceName }),
+    });
+
+    await ports.sendMagicLinkEmail({ email: input.email, token });
+
+    return { ok: true };
   };
 
 export const acceptInviteForNewUser =

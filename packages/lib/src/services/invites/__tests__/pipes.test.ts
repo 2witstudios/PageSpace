@@ -2,10 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   acceptInviteForExistingUser,
   acceptInviteForNewUser,
+  requestMagicLink,
   revokePendingInvite,
 } from '../pipes';
-import type { AcceptancePorts, RevokePorts } from '../ports';
-import type { AcceptInviteInput, Invite, RevokePendingInviteInput } from '../types';
+import type { AcceptancePorts, MagicLinkPorts, RevokePorts } from '../ports';
+import type {
+  AcceptInviteInput,
+  Invite,
+  RequestMagicLinkInput,
+  RevokePendingInviteInput,
+} from '../types';
 
 const baseInvite = (overrides: Partial<Invite> = {}): Invite => ({
   id: 'inv_1',
@@ -348,5 +354,86 @@ describe('revokePendingInvite', () => {
     const result = await revokePendingInvite(ports)(baseRevokeInput());
     expect(result.ok).toBe(true);
     expect(ports.deletePendingInviteForDrive).toHaveBeenCalledOnce();
+  });
+});
+
+const baseMagicLinkInput = (
+  overrides: Partial<RequestMagicLinkInput> = {},
+): RequestMagicLinkInput => ({
+  email: 'user@example.com',
+  now: new Date('2026-05-06T12:00:00.000Z'),
+  expiryMinutes: 5,
+  ...overrides,
+});
+
+const buildMagicLinkPorts = (
+  overrides: Partial<MagicLinkPorts> = {},
+): MagicLinkPorts => ({
+  loadUserByEmail: vi.fn().mockResolvedValue({ id: 'u_1', suspendedAt: null }),
+  createTokenAndPersist: vi.fn().mockResolvedValue({ token: 'ps_magic_xyz' }),
+  sendMagicLinkEmail: vi.fn().mockResolvedValue(undefined),
+  ...overrides,
+});
+
+describe('requestMagicLink', () => {
+  it('given the email is unknown, should return NO_ACCOUNT_FOUND and never create a token or send email', async () => {
+    const ports = buildMagicLinkPorts({
+      loadUserByEmail: vi.fn().mockResolvedValue(null),
+    });
+    const result = await requestMagicLink(ports)(baseMagicLinkInput());
+    expect(result).toEqual({ ok: false, error: 'NO_ACCOUNT_FOUND' });
+    expect(ports.createTokenAndPersist).not.toHaveBeenCalled();
+    expect(ports.sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  it('given the user is suspended, should return ACCOUNT_SUSPENDED', async () => {
+    const ports = buildMagicLinkPorts({
+      loadUserByEmail: vi
+        .fn()
+        .mockResolvedValue({ id: 'u_1', suspendedAt: new Date('2026-04-01') }),
+    });
+    const result = await requestMagicLink(ports)(baseMagicLinkInput());
+    expect(result).toEqual({ ok: false, error: 'ACCOUNT_SUSPENDED' });
+    expect(ports.createTokenAndPersist).not.toHaveBeenCalled();
+    expect(ports.sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  it('given a valid user, should create a token with an expiry derived from now + expiryMinutes and send the email', async () => {
+    const ports = buildMagicLinkPorts();
+    const now = new Date('2026-05-06T12:00:00.000Z');
+    const result = await requestMagicLink(ports)(
+      baseMagicLinkInput({ now, expiryMinutes: 30 }),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(ports.createTokenAndPersist).toHaveBeenCalledOnce();
+    expect(ports.createTokenAndPersist).toHaveBeenCalledWith({
+      userId: 'u_1',
+      expiresAt: new Date(now.getTime() + 30 * 60_000),
+      now,
+    });
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      token: 'ps_magic_xyz',
+    });
+  });
+
+  it('given platform/deviceId/deviceName, should forward them to the token-persist port', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(
+      baseMagicLinkInput({
+        platform: 'ios',
+        deviceId: 'dev_1',
+        deviceName: "Jono's iPhone",
+      }),
+    );
+    expect(ports.createTokenAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'ios',
+        deviceId: 'dev_1',
+        deviceName: "Jono's iPhone",
+      }),
+    );
   });
 });
