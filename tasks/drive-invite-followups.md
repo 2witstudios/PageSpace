@@ -1,6 +1,6 @@
 # Drive Invite Follow-ups Epic
 
-**Status**: 🔄 IN PROGRESS
+**Status**: 🔄 PARTIAL — PR 1 covers brief items #1, #2, #7 + the from-scratch architecture rebuild. PR 2 (follow-up branch) covers #3 (members UI), #4 (OAuth invite plumbing), #5 (next= plumbing), #6 (revoke endpoint).
 **Goal**: Land the items deferred from PR #1267 by rebuilding invite logic into a pure-core service module with ports.
 
 ## Overview

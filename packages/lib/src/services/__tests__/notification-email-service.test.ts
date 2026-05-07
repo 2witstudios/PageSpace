@@ -306,7 +306,7 @@ describe('sendPendingDriveInvitationEmail', () => {
       recipientEmail: 'invitee@example.com',
       inviterName: 'Alice',
       driveName: 'Test Drive',
-      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
     });
 
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
@@ -322,7 +322,7 @@ describe('sendPendingDriveInvitationEmail', () => {
       recipientEmail: 'invitee@example.com',
       inviterName: 'Eve\r\nBcc: attacker@evil.com',
       driveName: 'Drive',
-      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
     });
 
     const call = vi.mocked(sendEmail).mock.calls[0][0];
@@ -335,7 +335,7 @@ describe('sendPendingDriveInvitationEmail', () => {
       recipientEmail: 'invitee@example.com',
       inviterName: 'Alice',
       driveName: 'Drive\nX-Header: pwn',
-      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
     });
 
     const call = vi.mocked(sendEmail).mock.calls[0][0];
@@ -348,7 +348,7 @@ describe('sendPendingDriveInvitationEmail', () => {
       recipientEmail: 'invitee@example.com',
       inviterName: 'Alice\x00\x07\x1b',
       driveName: 'Drive\x7f',
-      magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+      inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
     });
 
     const call = vi.mocked(sendEmail).mock.calls[0][0];
@@ -364,18 +364,18 @@ describe('sendPendingDriveInvitationEmail', () => {
         recipientEmail: 'invitee@example.com',
         inviterName: 'Alice',
         driveName: 'Drive',
-        magicLinkUrl: 'https://app.example.com/auth/verify?token=ps_magic_xyz',
+        inviteUrl: 'https://app.example.com/invite/ps_invite_xyz',
       })
     ).rejects.toThrow('SMTP unavailable');
   });
 
-  it('uses the magic-link URL as the email accept link', async () => {
-    const magicLinkUrl = 'https://app.example.com/auth/verify?token=ps_magic_abc&redirect=/dashboard/drive_xyz';
+  it('uses the invite URL as the email accept link', async () => {
+    const inviteUrl = 'https://app.example.com/invite/ps_invite_abc';
     await sendPendingDriveInvitationEmail({
       recipientEmail: 'invitee@example.com',
       inviterName: 'Alice',
       driveName: 'Drive',
-      magicLinkUrl,
+      inviteUrl,
     });
 
     expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
