@@ -5,13 +5,21 @@ import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 // State expires after 10 minutes — prevents replay attacks
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
+// Bound matches the request-body validators in google/signin & apple/signin.
+// Real tokens are `ps_invite_<cuid2>` (~33 chars) — 128 leaves headroom while
+// keeping the signed+base64 state well under provider redirect-URL limits.
+const INVITE_TOKEN_MAX_LENGTH = 128;
+
 const oauthStateDataSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
   timestamp: z.number().finite(),
 });
+
+export { INVITE_TOKEN_MAX_LENGTH };
 
 export type OAuthStateData = z.infer<typeof oauthStateDataSchema>;
 

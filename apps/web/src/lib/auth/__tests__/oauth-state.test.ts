@@ -132,6 +132,48 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('malformed');
   });
 
+  it('round-trips inviteToken when present', () => {
+    const now = Date.now();
+    const state = createState({
+      returnUrl: '/dashboard',
+      platform: 'web',
+      inviteToken: 'ps_invite_abc123def456ghi789jklm',
+      timestamp: now,
+    });
+    const result = verifyOAuthState(state);
+    expect(result).toEqual({
+      status: 'valid',
+      data: {
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_abc123def456ghi789jklm',
+        timestamp: now,
+      },
+    });
+  });
+
+  it('returns malformed for inviteToken longer than 128 chars', () => {
+    const state = createState({
+      returnUrl: '/dashboard',
+      platform: 'web',
+      inviteToken: 'ps_invite_' + 'x'.repeat(120),
+      timestamp: Date.now(),
+    });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('malformed');
+  });
+
+  it('returns malformed for empty inviteToken string', () => {
+    const state = createState({
+      returnUrl: '/dashboard',
+      platform: 'web',
+      inviteToken: '',
+      timestamp: Date.now(),
+    });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('malformed');
+  });
+
   it('extracts data fields from valid state', () => {
     const now = Date.now();
     const state = createState({
