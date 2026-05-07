@@ -46,6 +46,10 @@ const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'channels/[pageId]/messages',
     'Followup #4: pending admins should not receive @mention broadcast — tracked in followup-4.',
   ],
+  [
+    'users/messageable',
+    'DM-eligibility surfacing intentionally drops the gate so co-members whose driveMembers.acceptedAt is NULL (legacy rows missed by migrate-pending-invites, or transient invite states) still appear in the New Conversation picker. DM eligibility is softer than drive access; the gate is preserved everywhere a NULL row could exercise authority (page reads, member listings, broadcasts).',
+  ],
 ]);
 
 /**

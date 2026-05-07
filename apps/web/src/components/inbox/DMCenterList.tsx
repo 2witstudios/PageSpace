@@ -117,7 +117,7 @@ export default function DMCenterList() {
             </div>
             <div>
               <h1 className="text-xl font-semibold">Direct Messages</h1>
-              <p className="text-sm text-muted-foreground">Conversations with your connections</p>
+              <p className="text-sm text-muted-foreground">Direct messages with your connections and drive co-members</p>
             </div>
           </div>
           <Button asChild size="sm">

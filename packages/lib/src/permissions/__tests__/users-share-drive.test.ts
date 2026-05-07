@@ -79,7 +79,7 @@ describe('usersShareDrive', () => {
     expect(db.select).not.toHaveBeenCalled();
   });
 
-  it('returns false when user A has neither owned nor accepted-member drives', async () => {
+  it('returns false when user A has neither owned nor any-member drives', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubFromWhere([])) // owned by A
       .mockReturnValueOnce(stubFromWhere([])); // member rows for A
@@ -88,17 +88,17 @@ describe('usersShareDrive', () => {
     expect(db.select).toHaveBeenCalledTimes(2);
   });
 
-  it('returns true when both users are accepted members of the same drive', async () => {
+  it('returns true when both users are members of the same drive', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubFromWhere([])) // A owns nothing
       .mockReturnValueOnce(stubFromWhere([{ driveId: 'drive_1' }])) // A is member
       .mockReturnValueOnce(stubFromWhereLimit([])) // B does not own a drive in A's set
-      .mockReturnValueOnce(stubFromWhereLimit([{ id: 'mem_b' }])); // B is accepted member
+      .mockReturnValueOnce(stubFromWhereLimit([{ id: 'mem_b' }])); // B is member
 
     expect(await usersShareDrive(A, B)).toBe(true);
   });
 
-  it('returns true when A owns a drive that B is an accepted member of', async () => {
+  it('returns true when A owns a drive that B is a member of', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubFromWhere([{ id: 'drive_1' }])) // A owns drive_1
       .mockReturnValueOnce(stubFromWhere([])) // A has no member rows
@@ -108,11 +108,24 @@ describe('usersShareDrive', () => {
     expect(await usersShareDrive(A, B)).toBe(true);
   });
 
-  it('returns true when B owns a drive that A is an accepted member of', async () => {
+  it('returns true when B owns a drive that A is a member of', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubFromWhere([])) // A owns nothing
       .mockReturnValueOnce(stubFromWhere([{ driveId: 'drive_1' }])) // A is member of drive_1
       .mockReturnValueOnce(stubFromWhereLimit([{ id: 'drive_1' }])); // B is owner of drive_1 — short-circuits
+
+    expect(await usersShareDrive(A, B)).toBe(true);
+  });
+
+  it('returns true even when membership rows lack acceptedAt (legacy data)', async () => {
+    // Defensive: a driveMembers row whose acceptedAt is NULL (e.g., a legacy
+    // pending row not yet cleaned up by migrate-pending-invites) still counts
+    // as drive co-membership for DM purposes.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubFromWhere([])) // A owns nothing
+      .mockReturnValueOnce(stubFromWhere([{ driveId: 'drive_1' }])) // A row exists, acceptedAt may be NULL
+      .mockReturnValueOnce(stubFromWhereLimit([])) // B not owner
+      .mockReturnValueOnce(stubFromWhereLimit([{ id: 'mem_b' }])); // B row exists, acceptedAt may be NULL
 
     expect(await usersShareDrive(A, B)).toBe(true);
   });
