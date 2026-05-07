@@ -11,12 +11,16 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { isSafeNextPath } from '@/lib/auth/auth-helpers';
+
+const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'] as const;
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
   platform: z.enum(['web', 'desktop']).optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  next: z.string().min(1).max(2048).optional(),
 }).refine(
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
   { message: 'deviceId and deviceName are required for desktop platform' }
@@ -99,8 +103,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, platform, deviceId, deviceName } = validation.data;
+    const { email, platform, deviceId, deviceName, next } = validation.data;
     const normalizedEmail = email.toLowerCase().trim();
+
+    // Re-validate next against the same allowlist the signin page uses. Defense
+    // in depth: form already validated, but never trust the client across a
+    // boundary. Unsafe values fall through to the default (no next forwarded).
+    const safeNext =
+      next && isSafeNextPath({ path: next, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })
+        ? next
+        : undefined;
 
     // Rate limit by IP and email
     const [ipRateLimit, emailRateLimit] = await Promise.all([
@@ -163,6 +175,7 @@ export async function POST(req: Request) {
         ...(platform && { platform }),
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
+        ...(safeNext && { next: safeNext }),
       });
     } catch (error) {
       // Email send (or any other adapter throw) failed AFTER the pipe minted
