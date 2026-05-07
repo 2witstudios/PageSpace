@@ -419,7 +419,6 @@ describe('requestMagicLink', () => {
     expect(ports.createTokenAndPersist).toHaveBeenCalledWith({
       userId: 'u_1',
       expiresAt: new Date(now.getTime() + 30 * 60_000),
-      now,
     });
     expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
     expect(ports.sendMagicLinkEmail).toHaveBeenCalledWith({

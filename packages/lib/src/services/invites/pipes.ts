@@ -146,7 +146,6 @@ export const requestMagicLink =
     const { token } = await ports.createTokenAndPersist({
       userId: validated.data.id,
       expiresAt,
-      now: input.now,
       ...(input.platform !== undefined && { platform: input.platform }),
       ...(input.deviceId !== undefined && { deviceId: input.deviceId }),
       ...(input.deviceName !== undefined && { deviceName: input.deviceName }),

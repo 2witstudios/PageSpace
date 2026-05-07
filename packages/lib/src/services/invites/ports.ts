@@ -15,11 +15,19 @@ export type ConsumeMembershipResult =
   | { ok: true; memberId: string }
   | { ok: false; reason: ConsumeMembershipReason };
 
-// Side-effect ports (broadcastMemberAdded, notifyMemberAdded, trackInviteMember,
-// auditPermissionGranted, auditPermissionRevoked) MUST NOT throw. Adapters
-// own try/catch + logging at the IO boundary so a flaky websocket fan-out or
-// audit-DB blip cannot reverse a successful membership write. Pipes wrap each
-// call in defense-in-depth try/catch but never log.
+// Acceptance-side-effect ports — broadcastMemberAdded, notifyMemberAdded,
+// trackInviteMember, auditPermissionGranted, auditPermissionRevoked — MUST
+// NOT throw. They fire AFTER the membership write commits, and an exception
+// there cannot reverse the commit. Adapters own try/catch + logging at the
+// IO boundary; pipes wrap each call in defense-in-depth swallow() but never
+// log themselves.
+//
+// Pre-commit ports (loadInvite, findExistingMembership,
+// consumeInviteAndCreateMember, loadUserByEmail, createTokenAndPersist,
+// sendMagicLinkEmail, loadPendingInviteForDrive, findActorMembership,
+// deletePendingInviteForDrive) MAY throw — the pipe needs the route to
+// surface a 5xx so the user can retry. Routes that wrap pipes are expected
+// to catch.
 export interface AcceptancePorts {
   loadInvite: (input: { token: string }) => Promise<Invite | null>;
   findExistingMembership: (input: {
@@ -44,7 +52,6 @@ export interface MagicLinkPorts {
   createTokenAndPersist: (input: {
     userId: string;
     expiresAt: Date;
-    now: Date;
     platform?: 'web' | 'desktop' | 'ios';
     deviceId?: string;
     deviceName?: string;
