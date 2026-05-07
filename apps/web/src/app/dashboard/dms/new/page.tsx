@@ -21,18 +21,17 @@ const fetcher = async (url: string) => {
   return response.json();
 };
 
-interface Connection {
+interface MessageableUser {
   id: string;
-  status: string;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    username: string | null;
-    displayName: string | null;
-    bio: string | null;
-    avatarUrl: string | null;
-  };
+  name: string | null;
+  email: string;
+  image: string | null;
+  username: string | null;
+  displayName: string | null;
+  bio: string | null;
+  avatarUrl: string | null;
+  source: 'connection' | 'drive';
+  sharedDriveCount: number;
 }
 
 export default function NewConversationPage() {
@@ -42,16 +41,14 @@ export default function NewConversationPage() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
-  // Fetch user's connections
-  const { data: connectionsData } = useSWR<{ connections: Connection[] }>(
-    '/api/connections?status=ACCEPTED',
+  const { data: messageableData } = useSWR<{ users: MessageableUser[] }>(
+    '/api/users/messageable',
     fetcher
   );
 
-  // Filter connections based on search
-  const filteredConnections = connectionsData?.connections?.filter((conn) => {
-    const displayName = conn.user.displayName || conn.user.name;
-    const username = conn.user.username || '';
+  const filteredUsers = messageableData?.users?.filter((u) => {
+    const displayName = u.displayName || u.name || '';
+    const username = u.username || '';
     return (
       displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       username.toLowerCase().includes(searchQuery.toLowerCase())
@@ -67,12 +64,10 @@ export default function NewConversationPage() {
     setIsCreating(true);
 
     try {
-      // Create or get existing conversation
       const { conversation } = await post<{ conversation: { id: string } }>('/api/messages/conversations', {
         recipientId: selectedUserId,
       });
 
-      // Navigate to the conversation
       router.push(`/dashboard/dms/${conversation.id}`);
     } catch (error) {
       toast.error((error as Error).message || 'Failed to start conversation');
@@ -86,7 +81,6 @@ export default function NewConversationPage() {
 
   return (
     <div className="flex-1 flex flex-col">
-      {/* Header */}
       <div className="border-b border-border p-4">
         <div className="flex items-center gap-4">
           <Button
@@ -100,18 +94,17 @@ export default function NewConversationPage() {
         </div>
       </div>
 
-      {/* Content */}
       <div className="flex-1 p-6">
         <div className="max-w-2xl mx-auto">
           <div className="mb-6">
             <Label htmlFor="search" className="mb-2 block">
-              Select a connection to message
+              Select someone to message
             </Label>
             <div className="relative">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 id="search"
-                placeholder="Search your connections..."
+                placeholder="Search connections and drive members..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
@@ -119,14 +112,13 @@ export default function NewConversationPage() {
             </div>
           </div>
 
-          {/* Connections List */}
           <ScrollArea className="h-[400px] border rounded-lg">
             <div className="p-4">
-              {filteredConnections.length === 0 && !searchQuery && (
+              {filteredUsers.length === 0 && !searchQuery && (
                 <div className="text-center py-8">
                   <UserPlus className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground mb-4">
-                    You need to connect with users before you can message them
+                    Connect with someone or join a shared drive to start messaging
                   </p>
                   <Button onClick={handleConnectionsClick} variant="outline">
                     Manage Connections
@@ -134,22 +126,28 @@ export default function NewConversationPage() {
                 </div>
               )}
 
-              {filteredConnections.length === 0 && searchQuery && (
+              {filteredUsers.length === 0 && searchQuery && (
                 <div className="text-center py-8">
                   <p className="text-muted-foreground">
-                    No connections found matching &quot;{searchQuery}&quot;
+                    No matches for &quot;{searchQuery}&quot;
                   </p>
                 </div>
               )}
 
-              {filteredConnections.map((connection) => {
-                const displayName = connection.user.displayName || connection.user.name;
-                const isSelected = selectedUserId === connection.user.id;
+              {filteredUsers.map((u) => {
+                const displayName = u.displayName || u.name || u.email;
+                const isSelected = selectedUserId === u.id;
+                const sourceLabel =
+                  u.source === 'connection'
+                    ? 'Connection'
+                    : u.sharedDriveCount > 1
+                      ? `Shares ${u.sharedDriveCount} drives`
+                      : 'Shared drive';
 
                 return (
                   <div
-                    key={connection.id}
-                    onClick={() => setSelectedUserId(connection.user.id)}
+                    key={u.id}
+                    onClick={() => setSelectedUserId(u.id)}
                     className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
                       isSelected
                         ? 'bg-accent border-2 border-primary'
@@ -157,22 +155,27 @@ export default function NewConversationPage() {
                     }`}
                   >
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={connection.user.avatarUrl || ''} />
+                      <AvatarImage src={u.avatarUrl || u.image || ''} />
                       <AvatarFallback>
                         {displayName.charAt(0).toUpperCase()}
                       </AvatarFallback>
                     </Avatar>
 
-                    <div className="flex-1">
-                      <p className="font-medium">{displayName}</p>
-                      {connection.user.username && (
-                        <p className="text-sm text-muted-foreground">
-                          @{connection.user.username}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium truncate">{displayName}</p>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          · {sourceLabel}
+                        </span>
+                      </div>
+                      {u.username && (
+                        <p className="text-sm text-muted-foreground truncate">
+                          @{u.username}
                         </p>
                       )}
-                      {connection.user.bio && (
+                      {u.bio && (
                         <p className="text-sm text-muted-foreground line-clamp-1">
-                          {connection.user.bio}
+                          {u.bio}
                         </p>
                       )}
                     </div>
@@ -198,7 +201,6 @@ export default function NewConversationPage() {
             </div>
           </ScrollArea>
 
-          {/* Action Buttons */}
           <div className="flex justify-end gap-3 mt-6">
             <Button
               variant="outline"

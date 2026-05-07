@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ConversationRow } from '@/types/messaging';
@@ -179,9 +180,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if users are connected
-    const [connection] = await db
-      .select()
+    // Block precedence: a BLOCKED relationship denies DMs even when the users
+    // share a drive. Otherwise, eligibility = accepted connection OR shared
+    // drive membership.
+    const [relationship] = await db
+      .select({ status: connections.status })
       .from(connections)
       .where(
         and(
@@ -195,14 +198,28 @@ export async function POST(request: Request) {
               eq(connections.user2Id, userId)
             )
           ),
-          eq(connections.status, 'ACCEPTED')
+          or(
+            eq(connections.status, 'ACCEPTED'),
+            eq(connections.status, 'BLOCKED')
+          )
         )
       )
       .limit(1);
 
-    if (!connection) {
+    if (relationship?.status === 'BLOCKED') {
       return NextResponse.json(
-        { error: 'You must be connected to start a conversation' },
+        { error: 'You can\'t message this user' },
+        { status: 403 }
+      );
+    }
+
+    const isEligible =
+      relationship?.status === 'ACCEPTED' ||
+      (await usersShareDrive(userId, recipientId));
+
+    if (!isEligible) {
+      return NextResponse.json(
+        { error: 'You can\'t message this user' },
         { status: 403 }
       );
     }
