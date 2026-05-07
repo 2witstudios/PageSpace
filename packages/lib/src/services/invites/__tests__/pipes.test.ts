@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { acceptInviteForExistingUser, acceptInviteForNewUser } from '../pipes';
-import type { AcceptancePorts } from '../ports';
-import type { AcceptInviteInput, Invite } from '../types';
+import {
+  acceptInviteForExistingUser,
+  acceptInviteForNewUser,
+  revokePendingInvite,
+} from '../pipes';
+import type { AcceptancePorts, RevokePorts } from '../ports';
+import type { AcceptInviteInput, Invite, RevokePendingInviteInput } from '../types';
 
 const baseInvite = (overrides: Partial<Invite> = {}): Invite => ({
   id: 'inv_1',
@@ -225,5 +229,124 @@ describe('acceptInviteForNewUser', () => {
     const result = await acceptInviteForNewUser(ports)(baseInput());
     expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER' });
     expect(ports.broadcastMemberAdded).not.toHaveBeenCalled();
+  });
+});
+
+const baseRevokeInput = (
+  overrides: Partial<RevokePendingInviteInput> = {},
+): RevokePendingInviteInput => ({
+  inviteId: 'inv_1',
+  driveId: 'drive_1',
+  actorId: 'user_actor',
+  now: new Date('2026-05-06T12:00:00.000Z'),
+  ...overrides,
+});
+
+const baseRevokeRow = () => ({
+  id: 'inv_1',
+  email: 'pending@example.com',
+  role: 'MEMBER' as const,
+  driveId: 'drive_1',
+});
+
+const buildRevokePorts = (overrides: Partial<RevokePorts> = {}): RevokePorts => ({
+  loadPendingInviteForDrive: vi.fn().mockResolvedValue(baseRevokeRow()),
+  findActorMembership: vi
+    .fn()
+    .mockResolvedValue({ role: 'OWNER', acceptedAt: new Date('2026-01-01') }),
+  deletePendingInviteForDrive: vi.fn().mockResolvedValue({ rowsDeleted: 1 }),
+  auditPermissionRevoked: vi.fn(),
+  ...overrides,
+});
+
+describe('revokePendingInvite', () => {
+  it('given the invite does not exist, should return NOT_FOUND and not delete or audit', async () => {
+    const ports = buildRevokePorts({
+      loadPendingInviteForDrive: vi.fn().mockResolvedValue(null),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
+    expect(ports.deletePendingInviteForDrive).not.toHaveBeenCalled();
+    expect(ports.auditPermissionRevoked).not.toHaveBeenCalled();
+  });
+
+  it('given the invite belongs to a different drive than the request, should return NOT_FOUND', async () => {
+    const ports = buildRevokePorts({
+      loadPendingInviteForDrive: vi
+        .fn()
+        .mockResolvedValue({ ...baseRevokeRow(), driveId: 'drive_other' }),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
+    expect(ports.deletePendingInviteForDrive).not.toHaveBeenCalled();
+    expect(ports.auditPermissionRevoked).not.toHaveBeenCalled();
+  });
+
+  it('given the actor has no membership on the drive, should return FORBIDDEN', async () => {
+    const ports = buildRevokePorts({
+      findActorMembership: vi.fn().mockResolvedValue(null),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result).toEqual({ ok: false, error: 'FORBIDDEN' });
+    expect(ports.deletePendingInviteForDrive).not.toHaveBeenCalled();
+  });
+
+  it('given the actor is an accepted MEMBER (not OWNER/ADMIN), should return FORBIDDEN', async () => {
+    const ports = buildRevokePorts({
+      findActorMembership: vi
+        .fn()
+        .mockResolvedValue({ role: 'MEMBER', acceptedAt: new Date() }),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result).toEqual({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  it('given the actor is an ADMIN with acceptedAt null (pending), should return FORBIDDEN', async () => {
+    const ports = buildRevokePorts({
+      findActorMembership: vi
+        .fn()
+        .mockResolvedValue({ role: 'ADMIN', acceptedAt: null }),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result).toEqual({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  it('given an accepted OWNER, should delete the row, fire audit with targetEmail, and return RevokedInviteData', async () => {
+    const ports = buildRevokePorts();
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        inviteId: 'inv_1',
+        driveId: 'drive_1',
+        email: 'pending@example.com',
+        role: 'MEMBER',
+      },
+    });
+    expect(ports.deletePendingInviteForDrive).toHaveBeenCalledOnce();
+    expect(ports.deletePendingInviteForDrive).toHaveBeenCalledWith({
+      inviteId: 'inv_1',
+      driveId: 'drive_1',
+    });
+    expect(ports.auditPermissionRevoked).toHaveBeenCalledOnce();
+    expect(ports.auditPermissionRevoked).toHaveBeenCalledWith({
+      inviteId: 'inv_1',
+      driveId: 'drive_1',
+      actorId: 'user_actor',
+      targetEmail: 'pending@example.com',
+      role: 'MEMBER',
+    });
+  });
+
+  it('given an accepted ADMIN, should authorize the revoke', async () => {
+    const ports = buildRevokePorts({
+      findActorMembership: vi
+        .fn()
+        .mockResolvedValue({ role: 'ADMIN', acceptedAt: new Date() }),
+    });
+    const result = await revokePendingInvite(ports)(baseRevokeInput());
+    expect(result.ok).toBe(true);
+    expect(ports.deletePendingInviteForDrive).toHaveBeenCalledOnce();
   });
 });

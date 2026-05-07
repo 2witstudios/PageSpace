@@ -1,10 +1,12 @@
-import type { AcceptancePorts } from './ports';
+import type { AcceptancePorts, RevokePorts } from './ports';
 import type {
   AcceptedInviteData,
   AcceptInviteInput,
   AcceptInviteResult,
+  RevokePendingInviteInput,
+  RevokePendingInviteResult,
 } from './types';
-import { validateInviteForUser } from './validators';
+import { validateInviteForUser, validateRevokeRequest } from './validators';
 
 /**
  * Shared side-effect step used by both acceptance pipes. Fires broadcast,
@@ -64,6 +66,50 @@ export const acceptInviteForExistingUser =
     await emitAcceptanceSideEffects(ports, data);
 
     return { ok: true, data };
+  };
+
+export const revokePendingInvite =
+  (ports: RevokePorts) =>
+  async (input: RevokePendingInviteInput): Promise<RevokePendingInviteResult> => {
+    const [invite, actorMembership] = await Promise.all([
+      ports.loadPendingInviteForDrive({
+        inviteId: input.inviteId,
+        driveId: input.driveId,
+      }),
+      ports.findActorMembership({
+        driveId: input.driveId,
+        actorId: input.actorId,
+      }),
+    ]);
+
+    const validated = validateRevokeRequest({
+      invite,
+      requestedDriveId: input.driveId,
+      actorMembership,
+    });
+    if (!validated.ok) return validated;
+
+    await ports.deletePendingInviteForDrive({
+      inviteId: validated.data.id,
+      driveId: validated.data.driveId,
+    });
+    ports.auditPermissionRevoked({
+      inviteId: validated.data.id,
+      driveId: validated.data.driveId,
+      actorId: input.actorId,
+      targetEmail: validated.data.email,
+      role: validated.data.role,
+    });
+
+    return {
+      ok: true,
+      data: {
+        inviteId: validated.data.id,
+        driveId: validated.data.driveId,
+        email: validated.data.email,
+        role: validated.data.role,
+      },
+    };
   };
 
 export const acceptInviteForNewUser =
