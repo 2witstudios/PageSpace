@@ -51,7 +51,7 @@ vi.mock('../secure-compare', () => ({
   secureCompare: vi.fn(() => true),
 }));
 
-import { createMagicLinkToken, verifyMagicLinkToken, MAGIC_LINK_EXPIRY_MINUTES } from '../magic-link-service';
+import { verifyMagicLinkToken, MAGIC_LINK_EXPIRY_MINUTES } from '../magic-link-service';
 import { db } from '@pagespace/db/db';
 import { secureCompare } from '../secure-compare';
 
@@ -62,91 +62,6 @@ describe('magic-link-service', () => {
 
   it('should export MAGIC_LINK_EXPIRY_MINUTES as 5', () => {
     expect(MAGIC_LINK_EXPIRY_MINUTES).toBe(5);
-  });
-
-  describe('createMagicLinkToken', () => {
-    it('should return validation error for invalid email', async () => {
-      const result = await createMagicLinkToken({ email: 'not-an-email' });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('VALIDATION_FAILED');
-      }
-    });
-
-    it('should return validation error for missing email', async () => {
-      const result = await createMagicLinkToken({});
-      expect(result.ok).toBe(false);
-    });
-
-    it('should return USER_SUSPENDED for suspended user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
-        id: 'user-1',
-        suspendedAt: new Date(),
-      } as never);
-
-      const result = await createMagicLinkToken({ email: 'user@test.com' });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('USER_SUSPENDED');
-      }
-    });
-
-    it('should create token for existing user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
-        id: 'user-1',
-        suspendedAt: null,
-      } as never);
-      const mockValues = vi.fn();
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-
-      const result = await createMagicLinkToken({ email: 'user@test.com' });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.data.token).toBe('ps_magic_testtoken123');
-        expect(result.data.userId).toBe('user-1');
-      }
-    });
-
-    // Review H1 — adversarial multi-token isolation. Pre-fix, the function
-    // ran a blind `delete from verificationTokens where userId=? and
-    // type='magic_link' and usedAt is null` before each insert, which
-    // silently invalidated:
-    //   - a 7-day pending invitation token when a 5-min sign-in token issued
-    //   - a drive-A invitation token when a drive-B invitation issued
-    //   - the original email's link when admin clicked Resend on the same drive
-    // Issuing a new token MUST NOT delete prior unused tokens for the user.
-    // Tokens age out via expiresAt instead.
-    it('does not blind-delete prior unused magic_link tokens for the user when issuing a new one', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
-        id: 'user-1',
-        suspendedAt: null,
-      } as never);
-      const mockDeleteWhere = vi.fn();
-      vi.mocked(db.delete).mockReturnValue({ where: mockDeleteWhere } as never);
-      vi.mocked(db.insert).mockReturnValue({ values: vi.fn() } as never);
-
-      const result = await createMagicLinkToken({ email: 'user@test.com' });
-
-      expect(result.ok).toBe(true);
-      // The blind pre-insert delete is gone — neither db.delete nor its
-      // chained where is called by createMagicLinkToken.
-      expect(db.delete).not.toHaveBeenCalled();
-      expect(mockDeleteWhere).not.toHaveBeenCalled();
-    });
-
-    it('should return NO_ACCOUNT_FOUND when email maps to no user (no auto-create)', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const insertSpy = vi.mocked(db.insert);
-
-      const result = await createMagicLinkToken({ email: 'new@test.com' });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('NO_ACCOUNT_FOUND');
-      }
-      // No users row inserted, no verificationTokens row inserted.
-      expect(insertSpy).not.toHaveBeenCalled();
-    });
   });
 
   describe('verifyMagicLinkToken', () => {

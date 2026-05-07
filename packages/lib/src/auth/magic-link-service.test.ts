@@ -1,16 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users, verificationTokens } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
-import {
-  createMagicLinkToken,
-  verifyMagicLinkToken,
-  MAGIC_LINK_EXPIRY_MINUTES,
-} from './magic-link-service';
-import { hashToken } from './token-utils';
+import { verifyMagicLinkToken, MAGIC_LINK_EXPIRY_MINUTES } from './magic-link-service';
+import { generateToken } from './token-utils';
 
-// Riteway-style assert helper
 interface AssertParams {
   given: string;
   should: string;
@@ -23,13 +18,30 @@ const assert = ({ given, should, actual, expected }: AssertParams): void => {
   expect(actual, message).toEqual(expected);
 };
 
+/**
+ * Mint a magic_link verificationTokens row directly so verify-side tests can
+ * exercise the lookup without depending on the issuance path. Mirrors what
+ * the magic-link adapter does in production.
+ */
+const mintMagicLinkToken = async (userId: string): Promise<string> => {
+  const { token, hash, tokenPrefix } = generateToken('ps_magic');
+  const expiresAt = new Date(Date.now() + MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000);
+  await db.insert(verificationTokens).values({
+    id: createId(),
+    userId,
+    tokenHash: hash,
+    tokenPrefix,
+    type: 'magic_link',
+    expiresAt,
+  });
+  return token;
+};
+
 describe('Magic Link Service', () => {
   let testUserId: string;
   let testUserEmail: string;
-  let dynamicallyCreatedUserIds: string[] = [];
 
   beforeEach(async () => {
-    dynamicallyCreatedUserIds = [];
     testUserEmail = `magic-link-test-${Date.now()}@example.com`;
     const [user] = await db.insert(users).values({
       id: createId(),
@@ -44,274 +56,15 @@ describe('Magic Link Service', () => {
   });
 
   afterEach(async () => {
-    // Clean up tokens for all users (test user and dynamically created ones)
-    const allUserIds = [testUserId, ...dynamicallyCreatedUserIds];
-    for (const userId of allUserIds) {
-      await db.delete(verificationTokens).where(eq(verificationTokens.userId, userId));
-    }
-    // Clean up users
+    await db.delete(verificationTokens).where(eq(verificationTokens.userId, testUserId));
     await db.delete(users).where(eq(users.id, testUserId));
-    for (const userId of dynamicallyCreatedUserIds) {
-      await db.delete(users).where(eq(users.id, userId));
-    }
-  });
-
-  describe('createMagicLinkToken', () => {
-    it('returns success with token for existing user', async () => {
-      const result = await createMagicLinkToken({ email: testUserEmail });
-
-      assert({
-        given: 'an email for existing user',
-        should: 'return ok: true',
-        actual: result.ok,
-        expected: true,
-      });
-
-      if (result.ok) {
-        assert({
-          given: 'an email for existing user',
-          should: 'return ps_magic_ prefixed token',
-          actual: result.data.token.startsWith('ps_magic_'),
-          expected: true,
-        });
-
-      }
-    });
-
-    it('stores hash, not plaintext token', async () => {
-      const result = await createMagicLinkToken({ email: testUserEmail });
-
-      if (!result.ok) {
-        throw new Error('Expected success');
-      }
-
-      const storedToken = await db.query.verificationTokens.findFirst({
-        where: eq(verificationTokens.userId, testUserId),
-      });
-
-      assert({
-        given: 'a created magic link token',
-        should: 'store hash in database',
-        actual: storedToken?.tokenHash,
-        expected: hashToken(result.data.token),
-      });
-
-      assert({
-        given: 'a created magic link token',
-        should: 'not store plaintext',
-        actual: storedToken?.tokenHash === result.data.token,
-        expected: false,
-      });
-    });
-
-    it('sets 5-minute expiry', async () => {
-      const before = Date.now();
-      const result = await createMagicLinkToken({ email: testUserEmail });
-
-      if (!result.ok) {
-        throw new Error('Expected success');
-      }
-
-      const storedToken = await db.query.verificationTokens.findFirst({
-        where: eq(verificationTokens.userId, testUserId),
-      });
-
-      const expectedExpiryMs = MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000;
-      const expiresAtMs = storedToken?.expiresAt?.getTime() ?? 0;
-
-      assert({
-        given: 'a created magic link token',
-        should: 'expire in approximately 5 minutes',
-        actual: expiresAtMs >= before + expectedExpiryMs - 1000 && expiresAtMs <= before + expectedExpiryMs + 1000,
-        expected: true,
-      });
-    });
-
-    it('returns NO_ACCOUNT_FOUND for non-existent user (no auto-create)', async () => {
-      const newEmail = `nobody-${Date.now()}@example.com`;
-      const result = await createMagicLinkToken({ email: newEmail });
-
-      assert({
-        given: 'an email for a non-existent account',
-        should: 'return ok: false',
-        actual: result.ok,
-        expected: false,
-      });
-
-      if (!result.ok) {
-        assert({
-          given: 'an email for a non-existent account',
-          should: 'return NO_ACCOUNT_FOUND error code (signup is a separate flow)',
-          actual: result.error.code,
-          expected: 'NO_ACCOUNT_FOUND',
-        });
-      }
-
-      const planted = await db.query.users.findFirst({ where: eq(users.email, newEmail) });
-      assert({
-        given: 'NO_ACCOUNT_FOUND was returned',
-        should: 'never have inserted a users row',
-        actual: planted ?? null,
-        expected: null,
-      });
-    });
-
-    it('returns validation error for invalid email', async () => {
-      const result = await createMagicLinkToken({ email: 'invalid-email' });
-
-      assert({
-        given: 'an invalid email',
-        should: 'return ok: false',
-        actual: result.ok,
-        expected: false,
-      });
-
-      if (!result.ok) {
-        assert({
-          given: 'an invalid email',
-          should: 'return VALIDATION_FAILED error code',
-          actual: result.error.code,
-          expected: 'VALIDATION_FAILED',
-        });
-      }
-    });
-
-    it('returns error for suspended user', async () => {
-      await db.update(users)
-        .set({ suspendedAt: new Date(), suspendedReason: 'test suspension' })
-        .where(eq(users.id, testUserId));
-
-      const result = await createMagicLinkToken({ email: testUserEmail });
-
-      assert({
-        given: 'a suspended user',
-        should: 'return ok: false',
-        actual: result.ok,
-        expected: false,
-      });
-
-      if (!result.ok) {
-        assert({
-          given: 'a suspended user',
-          should: 'return USER_SUSPENDED error code',
-          actual: result.error.code,
-          expected: 'USER_SUSPENDED',
-        });
-      }
-    });
-
-    it('honors expiryMinutes parameter when provided', async () => {
-      const before = Date.now();
-      const customExpiry = 60 * 24 * 7; // 7 days
-
-      const result = await createMagicLinkToken({
-        email: testUserEmail,
-        expiryMinutes: customExpiry,
-      });
-
-      if (!result.ok) {
-        throw new Error('Expected success');
-      }
-
-      const storedToken = await db.query.verificationTokens.findFirst({
-        where: eq(verificationTokens.userId, testUserId),
-      });
-
-      const expectedExpiryMs = customExpiry * 60 * 1000;
-      const expiresAtMs = storedToken?.expiresAt?.getTime() ?? 0;
-
-      assert({
-        given: 'an expiryMinutes input parameter',
-        should: 'set expiresAt to honor it',
-        actual: expiresAtMs >= before + expectedExpiryMs - 2000 && expiresAtMs <= before + expectedExpiryMs + 2000,
-        expected: true,
-      });
-    });
-
-    it('falls back to MAGIC_LINK_EXPIRY_MINUTES when expiryMinutes omitted', async () => {
-      const before = Date.now();
-      const result = await createMagicLinkToken({ email: testUserEmail });
-
-      if (!result.ok) {
-        throw new Error('Expected success');
-      }
-
-      const storedToken = await db.query.verificationTokens.findFirst({
-        where: eq(verificationTokens.userId, testUserId),
-      });
-
-      const expectedExpiryMs = MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000;
-      const expiresAtMs = storedToken?.expiresAt?.getTime() ?? 0;
-
-      assert({
-        given: 'no expiryMinutes',
-        should: 'default to MAGIC_LINK_EXPIRY_MINUTES',
-        actual: expiresAtMs >= before + expectedExpiryMs - 2000 && expiresAtMs <= before + expectedExpiryMs + 2000,
-        expected: true,
-      });
-    });
-
-    it('rejects expiryMinutes larger than 30 days with VALIDATION_FAILED', async () => {
-      const result = await createMagicLinkToken({
-        email: testUserEmail,
-        expiryMinutes: 43201, // 30 days + 1 minute
-      });
-
-      assert({
-        given: 'expiryMinutes larger than 30 days',
-        should: 'return ok: false',
-        actual: result.ok,
-        expected: false,
-      });
-
-      if (!result.ok) {
-        assert({
-          given: 'expiryMinutes larger than 30 days',
-          should: 'return VALIDATION_FAILED error code',
-          actual: result.error.code,
-          expected: 'VALIDATION_FAILED',
-        });
-      }
-    });
-
-    // Token issuance must not blind-delete prior unused magic_link tokens for
-    // the user — a 7-day drive invitation should survive a 5-minute sign-in
-    // token issued in the same window.
-    it('preserves prior unused tokens when a second is issued for the same existing user', async () => {
-      const first = await createMagicLinkToken({ email: testUserEmail });
-      const second = await createMagicLinkToken({ email: testUserEmail });
-
-      if (!first.ok || !second.ok) {
-        throw new Error('Setup failed: both creates should succeed');
-      }
-
-      const stored = await db.query.verificationTokens.findMany({
-        where: eq(verificationTokens.userId, testUserId),
-      });
-
-      assert({
-        given: 'two sequential token mints for the same user',
-        should: 'preserve both unused rows (no blind type-wide cleanup)',
-        actual: stored.length,
-        expected: 2,
-      });
-
-      const verifyFirst = await verifyMagicLinkToken({ token: first.data.token });
-      assert({
-        given: 'the first token after a second was issued',
-        should: 'still verify successfully',
-        actual: verifyFirst.ok,
-        expected: true,
-      });
-    });
   });
 
   describe('verifyMagicLinkToken', () => {
     it('returns success with userId for valid token', async () => {
-      const createResult = await createMagicLinkToken({ email: testUserEmail });
-      if (!createResult.ok) throw new Error('Setup failed');
+      const token = await mintMagicLinkToken(testUserId);
 
-      const verifyResult = await verifyMagicLinkToken({ token: createResult.data.token });
+      const verifyResult = await verifyMagicLinkToken({ token });
 
       assert({
         given: 'a valid magic link token',
@@ -338,10 +91,9 @@ describe('Magic Link Service', () => {
     });
 
     it('marks token as used after verification', async () => {
-      const createResult = await createMagicLinkToken({ email: testUserEmail });
-      if (!createResult.ok) throw new Error('Setup failed');
+      const token = await mintMagicLinkToken(testUserId);
 
-      await verifyMagicLinkToken({ token: createResult.data.token });
+      await verifyMagicLinkToken({ token });
 
       const storedToken = await db.query.verificationTokens.findFirst({
         where: eq(verificationTokens.userId, testUserId),
@@ -356,14 +108,10 @@ describe('Magic Link Service', () => {
     });
 
     it('returns TOKEN_ALREADY_USED for reused token', async () => {
-      const createResult = await createMagicLinkToken({ email: testUserEmail });
-      if (!createResult.ok) throw new Error('Setup failed');
+      const token = await mintMagicLinkToken(testUserId);
 
-      // First verification
-      await verifyMagicLinkToken({ token: createResult.data.token });
-
-      // Second verification attempt
-      const secondVerify = await verifyMagicLinkToken({ token: createResult.data.token });
+      await verifyMagicLinkToken({ token });
+      const secondVerify = await verifyMagicLinkToken({ token });
 
       assert({
         given: 'a previously used magic link token',
@@ -383,15 +131,14 @@ describe('Magic Link Service', () => {
     });
 
     it('returns TOKEN_EXPIRED for expired token', async () => {
-      const createResult = await createMagicLinkToken({ email: testUserEmail });
-      if (!createResult.ok) throw new Error('Setup failed');
+      const token = await mintMagicLinkToken(testUserId);
 
-      // Manually expire the token
-      await db.update(verificationTokens)
+      await db
+        .update(verificationTokens)
         .set({ expiresAt: new Date(Date.now() - 1000) })
         .where(eq(verificationTokens.userId, testUserId));
 
-      const verifyResult = await verifyMagicLinkToken({ token: createResult.data.token });
+      const verifyResult = await verifyMagicLinkToken({ token });
 
       assert({
         given: 'an expired magic link token',
@@ -451,15 +198,14 @@ describe('Magic Link Service', () => {
     });
 
     it('returns USER_SUSPENDED for suspended user', async () => {
-      const createResult = await createMagicLinkToken({ email: testUserEmail });
-      if (!createResult.ok) throw new Error('Setup failed');
+      const token = await mintMagicLinkToken(testUserId);
 
-      // Suspend user after token creation
-      await db.update(users)
+      await db
+        .update(users)
         .set({ suspendedAt: new Date(), suspendedReason: 'test suspension' })
         .where(eq(users.id, testUserId));
 
-      const verifyResult = await verifyMagicLinkToken({ token: createResult.data.token });
+      const verifyResult = await verifyMagicLinkToken({ token });
 
       assert({
         given: 'a magic link token for suspended user',
