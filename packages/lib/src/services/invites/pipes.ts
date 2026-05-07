@@ -65,3 +65,40 @@ export const acceptInviteForExistingUser =
 
     return { ok: true, data };
   };
+
+export const acceptInviteForNewUser =
+  (ports: AcceptancePorts) =>
+  async (input: AcceptInviteInput): Promise<AcceptInviteResult> => {
+    const invite = await ports.loadInvite({ token: input.token });
+    if (!invite) return { ok: false, error: 'TOKEN_NOT_FOUND' };
+
+    const validated = validateInviteForUser({
+      invite,
+      userEmail: input.userEmail,
+      suspendedAt: input.suspendedAt ?? null,
+      now: input.now,
+    });
+    if (!validated.ok) return validated;
+
+    const consumed = await ports.consumeInviteAndCreateMember({
+      invite,
+      userId: input.userId,
+      now: input.now,
+    });
+    if (!consumed.ok) return { ok: false, error: consumed.reason };
+
+    const data: AcceptedInviteData = {
+      inviteId: invite.id,
+      inviteEmail: invite.email,
+      memberId: consumed.memberId,
+      driveId: invite.driveId,
+      driveName: invite.driveName,
+      role: invite.role,
+      invitedUserId: input.userId,
+      inviterUserId: invite.invitedBy,
+    };
+
+    await emitAcceptanceSideEffects(ports, data);
+
+    return { ok: true, data };
+  };

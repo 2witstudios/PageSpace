@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { acceptInviteForExistingUser } from '../pipes';
+import { acceptInviteForExistingUser, acceptInviteForNewUser } from '../pipes';
 import type { AcceptancePorts } from '../ports';
 import type { AcceptInviteInput, Invite } from '../types';
 
@@ -171,5 +171,59 @@ describe('acceptInviteForExistingUser', () => {
     });
     expect(ports.auditPermissionGranted).toHaveBeenCalledOnce();
     expect(ports.auditPermissionGranted).toHaveBeenCalledWith(expectedPayload);
+  });
+});
+
+describe('acceptInviteForNewUser', () => {
+  it('given loadInvite returns null, should return TOKEN_NOT_FOUND with no side effects', async () => {
+    const ports = buildStubPorts({ loadInvite: vi.fn().mockResolvedValue(null) });
+    const result = await acceptInviteForNewUser(ports)(baseInput());
+    expect(result).toEqual({ ok: false, error: 'TOKEN_NOT_FOUND' });
+    expect(ports.broadcastMemberAdded).not.toHaveBeenCalled();
+    expect(ports.consumeInviteAndCreateMember).not.toHaveBeenCalled();
+  });
+
+  it('given an expired invite, should return TOKEN_EXPIRED without side effects', async () => {
+    const ports = buildStubPorts({
+      loadInvite: vi
+        .fn()
+        .mockResolvedValue(baseInvite({ expiresAt: new Date('2026-01-01') })),
+    });
+    const result = await acceptInviteForNewUser(ports)(baseInput());
+    expect(result).toEqual({ ok: false, error: 'TOKEN_EXPIRED' });
+    expect(ports.consumeInviteAndCreateMember).not.toHaveBeenCalled();
+  });
+
+  it('given an email mismatch, should return EMAIL_MISMATCH', async () => {
+    const ports = buildStubPorts();
+    const result = await acceptInviteForNewUser(ports)(
+      baseInput({ userEmail: 'different@example.com' }),
+    );
+    expect(result).toEqual({ ok: false, error: 'EMAIL_MISMATCH' });
+    expect(ports.consumeInviteAndCreateMember).not.toHaveBeenCalled();
+  });
+
+  it('given a successful new-user acceptance, should NOT call findExistingMembership and SHOULD fire all 4 side-effect ports', async () => {
+    const ports = buildStubPorts();
+    const result = await acceptInviteForNewUser(ports)(baseInput());
+
+    expect(result.ok).toBe(true);
+    expect(ports.findExistingMembership).not.toHaveBeenCalled();
+    expect(ports.consumeInviteAndCreateMember).toHaveBeenCalledOnce();
+    expect(ports.broadcastMemberAdded).toHaveBeenCalledOnce();
+    expect(ports.notifyMemberAdded).toHaveBeenCalledOnce();
+    expect(ports.trackInviteMember).toHaveBeenCalledOnce();
+    expect(ports.auditPermissionGranted).toHaveBeenCalledOnce();
+  });
+
+  it('given consume returns reason ALREADY_MEMBER (concurrent-create race), should propagate without firing side effects', async () => {
+    const ports = buildStubPorts({
+      consumeInviteAndCreateMember: vi
+        .fn()
+        .mockResolvedValue({ ok: false, reason: 'ALREADY_MEMBER' }),
+    });
+    const result = await acceptInviteForNewUser(ports)(baseInput());
+    expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER' });
+    expect(ports.broadcastMemberAdded).not.toHaveBeenCalled();
   });
 });
