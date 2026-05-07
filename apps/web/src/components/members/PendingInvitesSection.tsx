@@ -5,6 +5,7 @@ import { PendingInviteRow, type PendingInvite } from './PendingInviteRow';
 interface PendingInvitesSectionProps {
   invites: PendingInvite[];
   currentUserRole: 'OWNER' | 'ADMIN' | 'MEMBER';
+  onRevoke?: (inviteId: string) => void | Promise<void>;
 }
 
 /**
@@ -12,9 +13,9 @@ interface PendingInvitesSectionProps {
  * regular members or when the array is empty — keeps the members page
  * uncluttered for viewers without the management surface.
  */
-export function PendingInvitesSection({ invites, currentUserRole }: PendingInvitesSectionProps) {
-  const canSee = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
-  if (!canSee || invites.length === 0) return null;
+export function PendingInvitesSection({ invites, currentUserRole, onRevoke }: PendingInvitesSectionProps) {
+  const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+  if (!canManage || invites.length === 0) return null;
 
   return (
     <div className="mt-6 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
@@ -25,7 +26,12 @@ export function PendingInvitesSection({ invites, currentUserRole }: PendingInvit
       </div>
       <div className="divide-y divide-gray-200 dark:divide-gray-700">
         {invites.map((invite) => (
-          <PendingInviteRow key={invite.id} invite={invite} />
+          <PendingInviteRow
+            key={invite.id}
+            invite={invite}
+            canRevoke={canManage}
+            {...(onRevoke && { onRevoke })}
+          />
         ))}
       </div>
     </div>

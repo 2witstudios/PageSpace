@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { PendingInviteRow, type PendingInvite } from '../PendingInviteRow';
 
 const buildInvite = (overrides: Partial<PendingInvite> = {}): PendingInvite => ({
@@ -42,10 +43,47 @@ describe('PendingInviteRow', () => {
     expect(screen.getByText('Admin')).toBeInTheDocument();
   });
 
-  it('attaches data-invite-id for downstream interaction (e.g. revoke in T9)', () => {
+  it('attaches data-invite-id for downstream interaction', () => {
     const { container } = render(<PendingInviteRow invite={buildInvite({ id: 'inv_xyz' })} />);
     const row = container.querySelector('[data-testid="pending-invite-row"]');
     expect(row).toBeInTheDocument();
     expect(row?.getAttribute('data-invite-id')).toBe('inv_xyz');
+  });
+
+  it('does not render a revoke button when canRevoke is false', () => {
+    render(<PendingInviteRow invite={buildInvite()} onRevoke={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /revoke invitation/i })).not.toBeInTheDocument();
+  });
+
+  it('does not render a revoke button when onRevoke is missing', () => {
+    render(<PendingInviteRow invite={buildInvite()} canRevoke />);
+    expect(screen.queryByRole('button', { name: /revoke invitation/i })).not.toBeInTheDocument();
+  });
+
+  it('renders a revoke button when canRevoke + onRevoke are both provided', () => {
+    render(<PendingInviteRow invite={buildInvite()} canRevoke onRevoke={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /revoke invitation/i })).toBeInTheDocument();
+  });
+
+  it('opens confirmation dialog and calls onRevoke with the invite id on confirm', async () => {
+    const onRevoke = vi.fn().mockResolvedValue(undefined);
+    render(<PendingInviteRow invite={buildInvite({ id: 'inv_42' })} canRevoke onRevoke={onRevoke} />);
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /revoke invitation/i }));
+
+    expect(screen.getByText(/revoke this invitation/i)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: /^revoke$/i }));
+
+    expect(onRevoke).toHaveBeenCalledWith('inv_42');
+  });
+
+  it('does not call onRevoke when user cancels the dialog', async () => {
+    const onRevoke = vi.fn();
+    render(<PendingInviteRow invite={buildInvite()} canRevoke onRevoke={onRevoke} />);
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /revoke invitation/i }));
+    await userEvent.setup().click(screen.getByRole('button', { name: /cancel/i }));
+
+    expect(onRevoke).not.toHaveBeenCalled();
   });
 });

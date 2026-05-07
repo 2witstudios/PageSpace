@@ -1,7 +1,20 @@
 'use client';
 
-import { Mail } from 'lucide-react';
+import { Mail, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 export interface PendingInvite {
   id: string;
@@ -14,9 +27,23 @@ export interface PendingInvite {
 
 interface PendingInviteRowProps {
   invite: PendingInvite;
+  canRevoke?: boolean;
+  onRevoke?: (inviteId: string) => void | Promise<void>;
 }
 
-export function PendingInviteRow({ invite }: PendingInviteRowProps) {
+export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: PendingInviteRowProps) {
+  const [isRevoking, setIsRevoking] = useState(false);
+
+  const handleConfirmRevoke = async () => {
+    if (!onRevoke) return;
+    setIsRevoking(true);
+    try {
+      await onRevoke(invite.id);
+    } finally {
+      setIsRevoking(false);
+    }
+  };
+
   const roleBadge =
     invite.role === 'ADMIN'
       ? (
@@ -69,6 +96,35 @@ export function PendingInviteRow({ invite }: PendingInviteRowProps) {
           </p>
         </div>
       </div>
+
+      {canRevoke && onRevoke && (
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+              title="Revoke Invitation"
+              disabled={isRevoking}
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Revoke this invitation?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The invitation to <span className="font-medium">{invite.email}</span> will be deleted.
+                The recipient&apos;s link will stop working immediately. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleConfirmRevoke}>Revoke</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 }

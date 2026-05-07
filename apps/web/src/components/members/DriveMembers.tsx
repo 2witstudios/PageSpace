@@ -136,6 +136,24 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     }
   };
 
+  const handleRevokeInvite = async (inviteId: string) => {
+    try {
+      await del(`/api/drives/${driveId}/pending-invites/${inviteId}`);
+      setPendingInvites((prev) => prev.filter((inv) => inv.id !== inviteId));
+      toast({
+        title: 'Invitation revoked',
+        description: 'The invitation link no longer works.',
+      });
+    } catch (error) {
+      console.error('Error revoking invite:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to revoke invitation',
+        variant: 'destructive',
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center py-8">
@@ -182,6 +200,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
       <PendingInvitesSection
         invites={pendingInvites}
         currentUserRole={currentUserRole}
+        onRevoke={handleRevokeInvite}
       />
     </div>
   );
