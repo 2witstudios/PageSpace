@@ -45,6 +45,44 @@ export function isSafeReturnUrl(url: string | undefined): boolean {
 }
 
 /**
+ * Validates that a `next=` redirect target is both same-origin (composed via
+ * `isSafeReturnUrl`) AND begins with one of the caller's allowed path
+ * prefixes. URL-normalises the path first so `..` segments cannot escape the
+ * allowlist (e.g. `/dashboard/../etc` resolves to `/etc` and is rejected).
+ *
+ * Unlike `isSafeReturnUrl`, undefined/empty input returns false: callers
+ * should fall through to their own default rather than rely on an implicit
+ * one.
+ */
+export function isSafeNextPath(input: {
+  path: string | null | undefined;
+  allowedPrefixes: readonly string[];
+}): boolean {
+  const { path, allowedPrefixes } = input;
+  if (typeof path !== 'string' || path.length === 0) return false;
+  if (!isSafeReturnUrl(path)) return false;
+
+  let normalized: string;
+  try {
+    const u = new URL(path, 'https://pagespace.invalid');
+    if (u.hostname !== 'pagespace.invalid') return false;
+    normalized = `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return false;
+  }
+
+  return allowedPrefixes.some((prefix) => {
+    const p = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+    return (
+      normalized === p ||
+      normalized.startsWith(`${p}/`) ||
+      normalized.startsWith(`${p}?`) ||
+      normalized.startsWith(`${p}#`)
+    );
+  });
+}
+
+/**
  * Extract client IP address from request headers.
  * Checks x-forwarded-for (proxy), x-real-ip (nginx), falls back to 'unknown'.
  *
