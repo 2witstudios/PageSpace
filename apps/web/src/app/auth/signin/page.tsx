@@ -18,9 +18,7 @@ import {
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
-import { isSafeNextPath } from "@/lib/auth/auth-helpers";
-
-const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'];
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from "@/lib/auth/auth-helpers";
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);

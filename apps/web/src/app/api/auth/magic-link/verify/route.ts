@@ -11,12 +11,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
-import { isSafeNextPath } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
-
-const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'] as const;
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -156,7 +154,7 @@ export async function GET(req: Request) {
           const desktopRedirectPath = await resolvePostLoginRedirectPath({
             isNewUser,
             userId,
-            ...(safeNext && { next: safeNext }),
+            next: safeNext,
           });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
@@ -213,7 +211,7 @@ export async function GET(req: Request) {
     const redirectPath = await resolvePostLoginRedirectPath({
       isNewUser,
       userId,
-      ...(safeNext && { next: safeNext }),
+      next: safeNext,
     });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';

@@ -11,9 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
-import { isSafeNextPath } from '@/lib/auth/auth-helpers';
-
-const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'] as const;
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),

@@ -45,6 +45,14 @@ export function isSafeReturnUrl(url: string | undefined): boolean {
 }
 
 /**
+ * Allowlist for `next=` redirect targets accepted on the signin surface
+ * (passkey login, magic-link send/verify). Single source of truth so the
+ * three boundaries that re-validate (form, send route, verify route) cannot
+ * drift apart and accidentally widen — or narrow — the redirect surface.
+ */
+export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'] as const;
+
+/**
  * Validates that a `next=` redirect target is both same-origin (composed via
  * `isSafeReturnUrl`) AND begins with one of the caller's allowed path
  * prefixes. URL-normalises the path first so `..` segments cannot escape the
