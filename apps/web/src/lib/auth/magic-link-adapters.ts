@@ -31,11 +31,12 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
     return { token };
   },
 
-  sendMagicLinkEmail: async ({ email, token }) => {
+  sendMagicLinkEmail: async ({ email, token, next }) => {
     try {
       const baseUrl =
         process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-      const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
+      const nextSuffix = next ? `&next=${encodeURIComponent(next)}` : '';
+      const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}${nextSuffix}`;
       await sendEmail({
         to: email,
         subject: 'Sign in to PageSpace',
