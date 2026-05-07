@@ -27,13 +27,20 @@ const swallow = async (op: () => unknown | Promise<unknown>): Promise<void> => {
   }
 };
 
-const emitAcceptanceSideEffects = async (
+/**
+ * Shared post-acceptance fanout. Routes that add a user to a drive (invite
+ * acceptance via either pipe, or OWNER/ADMIN direct-add via members/invite)
+ * MUST go through this helper so a future 5th side-effect port can never be
+ * silently dropped on one path.
+ */
+export const emitAcceptanceSideEffects = async (
   ports: AcceptancePorts,
   data: AcceptedInviteData,
+  permissionsGranted = 0,
 ): Promise<void> => {
   await swallow(() => ports.broadcastMemberAdded(data));
   await swallow(() => ports.notifyMemberAdded(data));
-  await swallow(() => ports.trackInviteMember({ ...data, permissionsGranted: 0 }));
+  await swallow(() => ports.trackInviteMember({ ...data, permissionsGranted }));
   await swallow(() => ports.auditPermissionGranted(data));
 };
 

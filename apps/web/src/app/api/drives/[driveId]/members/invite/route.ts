@@ -12,7 +12,7 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import type { AcceptedInviteData } from '@pagespace/lib/services/invites';
+import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/lib/services/invites';
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -270,10 +270,7 @@ async function handleUserIdPath(args: {
       inviterUserId,
       ...(sourceEmail !== undefined && { inviteEmail: sourceEmail }),
     };
-    await ports.broadcastMemberAdded(data);
-    await ports.notifyMemberAdded(data);
-    await ports.trackInviteMember({ ...data, permissionsGranted });
-    ports.auditPermissionGranted(data);
+    await emitAcceptanceSideEffects(ports, data, permissionsGranted);
   } else {
     auditRequest(request, {
       eventType: 'authz.permission.granted',
