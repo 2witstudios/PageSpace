@@ -80,4 +80,35 @@ describe('MagicLinkForm — next= forwarding', () => {
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body).not.toHaveProperty('next');
   });
+
+  it('given a nextPath and a no-account response, preserves next on the signup CTA href', async () => {
+    const fetchSpy = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      void _init;
+      const u = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+      if (u.includes('/api/auth/login-csrf')) {
+        return new Response(JSON.stringify({ csrfToken: 'csrf-token' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (u.includes('/api/auth/magic-link/send')) {
+        return new Response(JSON.stringify({ code: 'no_account' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${u}`);
+    });
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    render(<MagicLinkForm nextPath="/dashboard/drive_abc" />);
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'unknown@example.com');
+    await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+    const signupLink = await screen.findByRole('link', { name: /sign up/i });
+    const href = signupLink.getAttribute('href');
+    expect(href).toContain('email=unknown%40example.com');
+    expect(href).toContain('next=%2Fdashboard%2Fdrive_abc');
+  });
 });

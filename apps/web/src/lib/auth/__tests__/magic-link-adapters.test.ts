@@ -65,7 +65,7 @@ describe('buildMagicLinkPorts.sendMagicLinkEmail', () => {
     await ports.sendMagicLinkEmail({ email: 'u@example.com', token: 'abc 123' });
 
     expect(sendEmailMock).toHaveBeenCalledOnce();
-    const args = sendEmailMock.mock.calls[0]?.[0] as {
+    const args = sendEmailMock.mock.calls[0][0] as {
       to: string;
       subject: string;
       react: { props: { magicLinkUrl: string } };
@@ -82,7 +82,8 @@ describe('buildMagicLinkPorts.sendMagicLinkEmail', () => {
       next: '/dashboard/drive_abc',
     });
 
-    const args = sendEmailMock.mock.calls[0]?.[0] as {
+    expect(sendEmailMock).toHaveBeenCalledOnce();
+    const args = sendEmailMock.mock.calls[0][0] as {
       react: { props: { magicLinkUrl: string } };
     };
     const url = args.react.props.magicLinkUrl;
@@ -99,7 +100,8 @@ describe('buildMagicLinkPorts.sendMagicLinkEmail', () => {
       next: '/dashboard?welcome=1#top',
     });
 
-    const args = sendEmailMock.mock.calls[0]?.[0] as {
+    expect(sendEmailMock).toHaveBeenCalledOnce();
+    const args = sendEmailMock.mock.calls[0][0] as {
       react: { props: { magicLinkUrl: string } };
     };
     const url = args.react.props.magicLinkUrl;

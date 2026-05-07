@@ -119,7 +119,7 @@ const buildSendRequest = (body: Record<string, unknown>) =>
 
 const extractUrlFromEmailCall = (): string => {
   expect(sendEmailMock).toHaveBeenCalledOnce();
-  const args = sendEmailMock.mock.calls[0]?.[0] as {
+  const args = sendEmailMock.mock.calls[0][0] as {
     react: { props: { magicLinkUrl: string } };
   };
   return args.react.props.magicLinkUrl;

@@ -167,7 +167,9 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
   // deliberately disclose that no account exists for the entered email
   // (trade enumeration-resistance for a clearer onboarding path).
   if (formState === 'no-account') {
-    const signupHref = `/auth/signup?email=${encodeURIComponent(email)}`;
+    const signupParams = new URLSearchParams({ email });
+    if (nextPath) signupParams.set('next', nextPath);
+    const signupHref = `/auth/signup?${signupParams.toString()}`;
     return (
       <div className="space-y-4">
         <div className="flex flex-col items-center gap-3 py-4">
