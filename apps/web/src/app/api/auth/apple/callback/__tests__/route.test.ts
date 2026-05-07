@@ -131,8 +131,12 @@ vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
   buildAcceptancePorts: vi.fn(() => ({})),
 }));
 
-const acceptInviteForNewUserPipe = vi.fn();
-const acceptInviteForExistingUserPipe = vi.fn();
+// vi.hoisted ensures the pipes exist before vi.mock factories run, even though
+// they're only called from inside lazily-evaluated factory closures.
+const { acceptInviteForNewUserPipe, acceptInviteForExistingUserPipe } = vi.hoisted(() => ({
+  acceptInviteForNewUserPipe: vi.fn(),
+  acceptInviteForExistingUserPipe: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/services/invites', () => ({
   acceptInviteForNewUser: vi.fn(() => acceptInviteForNewUserPipe),

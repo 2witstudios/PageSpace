@@ -166,6 +166,7 @@ function SignInForm() {
           <PasskeyLoginButton
             csrfToken={csrfToken}
             refreshToken={refreshToken}
+            {...(nextPath && { nextPath })}
           />
         </motion.div>
       )}

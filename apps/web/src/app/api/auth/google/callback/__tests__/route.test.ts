@@ -153,8 +153,12 @@ vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
   buildAcceptancePorts: vi.fn(() => ({})),
 }));
 
-const acceptInviteForNewUserPipe = vi.fn();
-const acceptInviteForExistingUserPipe = vi.fn();
+// vi.hoisted ensures the pipes exist before vi.mock factories run, even though
+// they're only called from inside lazily-evaluated factory closures.
+const { acceptInviteForNewUserPipe, acceptInviteForExistingUserPipe } = vi.hoisted(() => ({
+  acceptInviteForNewUserPipe: vi.fn(),
+  acceptInviteForExistingUserPipe: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/services/invites', () => ({
   acceptInviteForNewUser: vi.fn(() => acceptInviteForNewUserPipe),
@@ -1292,11 +1296,14 @@ describe('GET /api/auth/google/callback', () => {
   });
 
   describe('invite acceptance via OAuth', () => {
-    const stateWithInvite = createSignedState({
-      returnUrl: '/dashboard',
-      platform: 'web',
-      inviteToken: 'ps_invite_abc123def456',
-    });
+    // Per-test factory: a single module-level signed state would embed a fixed
+    // timestamp and could expire mid-suite, causing flaky failures.
+    const stateWithInvite = () =>
+      createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_abc123def456',
+      });
 
     beforeEach(() => {
       acceptInviteForNewUserPipe.mockReset();
@@ -1324,7 +1331,7 @@ describe('GET /api/auth/google/callback', () => {
         },
       });
 
-      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite });
+      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
       expect(acceptInviteForNewUser).toHaveBeenCalled();
@@ -1359,7 +1366,7 @@ describe('GET /api/auth/google/callback', () => {
         },
       });
 
-      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite });
+      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
       expect(acceptInviteForExistingUser).toHaveBeenCalled();
@@ -1384,7 +1391,7 @@ describe('GET /api/auth/google/callback', () => {
         error: 'EMAIL_MISMATCH',
       });
 
-      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite });
+      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
@@ -1399,7 +1406,7 @@ describe('GET /api/auth/google/callback', () => {
         error: 'TOKEN_CONSUMED',
       });
 
-      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite });
+      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
       const location = response.headers.get('Location')!;
@@ -1409,7 +1416,7 @@ describe('GET /api/auth/google/callback', () => {
     it('does not bounce auth when invite acceptance pipe throws', async () => {
       acceptInviteForNewUserPipe.mockRejectedValueOnce(new Error('pipe blew up'));
 
-      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite });
+      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
