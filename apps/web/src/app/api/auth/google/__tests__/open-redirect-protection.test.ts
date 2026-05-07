@@ -10,19 +10,22 @@ import { POST } from '../signin/route';
 import { GET } from '../callback/route';
 
 // Mock dependencies for signin
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-      auth: {
-        error: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-      security: {
-        warn: vi.fn(),
-      },
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const childLogger = {
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(() => childLogger),
+  };
+  return {
+    logger: childLogger,
+    loggers: {
+      auth: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+      security: { warn: vi.fn() },
     },
-}));
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
