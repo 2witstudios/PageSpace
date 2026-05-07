@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokePendingInvite } from '@pagespace/lib/services/invites';
 import { buildRevokePorts } from '@/lib/auth/revoke-adapters';
 
@@ -35,10 +36,23 @@ export async function DELETE(
       if (result.error === 'NOT_FOUND') {
         return NextResponse.json({ error: 'Invite not found' }, { status: 404 });
       }
-      // FORBIDDEN — actor is not an accepted OWNER/ADMIN of this drive
+      // FORBIDDEN — actor is not an accepted OWNER/ADMIN of this drive.
+      // Adapter's auditPermissionRevoked fires only on success; audit the
+      // denied attempt explicitly here so a malicious enumeration leaves a
+      // trail.
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        riskScore: 0.4,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: { operation: 'revoke_invite', inviteId },
+      });
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // Success-side audit (authz.permission.revoked) is emitted by the
+    // adapter's auditPermissionRevoked port inside the pipe.
     return NextResponse.json({
       inviteId: result.data.inviteId,
       driveId: result.data.driveId,
