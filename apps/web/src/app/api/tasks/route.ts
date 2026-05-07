@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
-import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
@@ -27,6 +27,10 @@ const querySchema = z.object({
   assigneeAgentId: z.string().optional(),
   showAllAssignees: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   dueDateFilter: z.enum(['overdue', 'today', 'this_week', 'upcoming']).optional(),
+  // Group-level status filter: 'active' = todo + in_progress, 'completed' = done.
+  // Custom per-task-list status configs are honoured; fall back to DEFAULT_STATUS_CONFIG
+  // when a task list has no entries.
+  statusGroup: z.enum(['all', 'active', 'completed']).optional(),
   // Pagination
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
@@ -73,6 +77,7 @@ export async function GET(request: Request) {
       assigneeAgentId: searchParams.get('assigneeAgentId') ?? undefined,
       showAllAssignees: searchParams.get('showAllAssignees') ?? undefined,
       dueDateFilter: searchParams.get('dueDateFilter') ?? undefined,
+      statusGroup: searchParams.get('statusGroup') ?? undefined,
       limit: searchParams.get('limit') ?? undefined,
       offset: searchParams.get('offset') ?? undefined,
     });
@@ -205,6 +210,19 @@ export async function GET(request: Request) {
       .where(and(eq(pages.isTrashed, true), inArray(pages.driveId, driveIds)));
     const trashedPageIds = trashedPages.map(p => p.id);
 
+    // Fetch status configs for all involved task lists. Done up-front so we can
+    // both (a) filter by status group and (b) enrich each task with metadata below.
+    const statusConfigRows = await db.query.taskStatusConfigs.findMany({
+      where: inArray(taskStatusConfigs.taskListId, taskListIds),
+    });
+
+    const taskListStatusMap = new Map<string, typeof statusConfigRows>();
+    for (const config of statusConfigRows) {
+      const existing = taskListStatusMap.get(config.taskListId) || [];
+      existing.push(config);
+      taskListStatusMap.set(config.taskListId, existing);
+    }
+
     // Build assignee filter condition
     // Default: tasks assigned to current user
     // If assigneeId or assigneeAgentId is provided, filter by that instead
@@ -307,20 +325,45 @@ export async function GET(request: Request) {
       }
     }
 
-    const whereCondition = and(...filterConditions);
+    // Group-level status filter. Convert the requested group into a per-task-list
+    // set of allowed status slugs (custom configs first, defaults if none) and
+    // build an OR over (taskListId, status IN (...)) tuples.
+    if (params.statusGroup && params.statusGroup !== 'all') {
+      const allowedGroups: TaskStatusGroup[] = params.statusGroup === 'active'
+        ? ['todo', 'in_progress']
+        : ['done'];
+      const allowedGroupSet = new Set<TaskStatusGroup>(allowedGroups);
 
-    // Fetch status configs for all involved task lists
-    const statusConfigRows = await db.query.taskStatusConfigs.findMany({
-      where: inArray(taskStatusConfigs.taskListId, taskListIds),
-    });
+      const defaultAllowedSlugs = Object.entries(DEFAULT_STATUS_CONFIG)
+        .filter(([, cfg]) => allowedGroupSet.has(cfg.group))
+        .map(([slug]) => slug);
 
-    // Build map: taskListId -> status configs
-    const taskListStatusMap = new Map<string, typeof statusConfigRows>();
-    for (const config of statusConfigRows) {
-      const existing = taskListStatusMap.get(config.taskListId) || [];
-      existing.push(config);
-      taskListStatusMap.set(config.taskListId, existing);
+      const perTaskListConditions = taskListIds.map((id) => {
+        const configs = taskListStatusMap.get(id);
+        const slugs = configs && configs.length > 0
+          ? configs.filter((c) => allowedGroupSet.has(c.group)).map((c) => c.slug)
+          : defaultAllowedSlugs;
+        if (slugs.length === 0) return undefined;
+        return and(eq(taskItems.taskListId, id), inArray(taskItems.status, slugs));
+      }).filter((c): c is NonNullable<typeof c> => c !== undefined);
+
+      if (perTaskListConditions.length === 0) {
+        return NextResponse.json({
+          tasks: [],
+          statusConfigsByTaskList: {},
+          pagination: {
+            total: 0,
+            limit: params.limit,
+            offset: params.offset,
+            hasMore: false,
+          },
+        });
+      }
+
+      filterConditions.push(or(...perTaskListConditions));
     }
+
+    const whereCondition = and(...filterConditions);
 
     // Fetch tasks with relations (including multi-assignees)
     const tasks = await db.query.taskItems.findMany({

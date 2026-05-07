@@ -14,6 +14,7 @@ import type { Drive } from './types';
 
 export type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 export type AssigneeFilter = 'mine' | 'all';
+export type StatusGroupFilter = 'all' | 'active' | 'completed';
 
 export interface FilterValues {
   status?: TaskStatus;
@@ -21,6 +22,7 @@ export interface FilterValues {
   driveId?: string;
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
+  statusGroup?: StatusGroupFilter;
 }
 
 export interface FilterSelectProps {
@@ -259,6 +261,39 @@ export function AssigneeToggle({ value, onChange, variant = 'compact', className
         <Users className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">All tasks</span>
       </button>
+    </div>
+  );
+}
+
+export interface StatusGroupToggleProps {
+  value: StatusGroupFilter;
+  onChange: (value: StatusGroupFilter) => void;
+  className?: string;
+}
+
+const STATUS_GROUP_OPTIONS: Array<{ value: StatusGroupFilter; label: string }> = [
+  { value: 'active', label: 'Active' },
+  { value: 'all', label: 'All' },
+  { value: 'completed', label: 'Completed' },
+];
+
+export function StatusGroupToggle({ value, onChange, className }: StatusGroupToggleProps) {
+  return (
+    <div className={cn('flex items-center bg-muted rounded-md p-0.5', className)}>
+      {STATUS_GROUP_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => onChange(opt.value)}
+          className={cn(
+            'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 sm:flex-none',
+            value === opt.value
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 }

@@ -7,15 +7,17 @@ import { aggregateStatuses } from './task-helpers';
 import {
   type DueDateFilter,
   type AssigneeFilter,
+  type StatusGroupFilter,
   type FilterValues,
   DriveSelect,
   StatusSelect,
   PrioritySelect,
   DueDateSelect,
   AssigneeToggle,
+  StatusGroupToggle,
 } from './FilterComponents';
 
-export type { DueDateFilter, AssigneeFilter, FilterValues };
+export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 
 export interface FilterControlsProps {
   layout: 'mobile' | 'desktop';
@@ -51,6 +53,12 @@ export function FilterControls({
   if (isMobile) {
     return (
       <>
+        <StatusGroupToggle
+          value={filters.statusGroup || 'active'}
+          onChange={(g) => onFiltersChange({ statusGroup: g })}
+          className="w-full"
+        />
+
         <div
           className="-mx-3 overflow-x-auto px-3 pb-1"
           role="region"
@@ -107,6 +115,10 @@ export function FilterControls({
 
   return (
     <>
+      <StatusGroupToggle
+        value={filters.statusGroup || 'active'}
+        onChange={(g) => onFiltersChange({ statusGroup: g })}
+      />
       <DriveSelect
         context={context}
         drives={drives}

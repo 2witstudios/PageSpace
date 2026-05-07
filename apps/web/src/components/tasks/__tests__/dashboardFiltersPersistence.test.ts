@@ -36,6 +36,13 @@ describe('pickInitialFilters', () => {
 
     expect(result.status).toBe('in_progress');
     expect(result.assigneeFilter).toBe('mine');
+    expect(result.statusGroup).toBe('active');
+  });
+
+  it('given URL has statusGroup param, should reflect that statusGroup value', () => {
+    const result = pickInitialFilters(params({ statusGroup: 'completed' }), undefined);
+
+    expect(result.statusGroup).toBe('completed');
   });
 
   it('given URL is bare and stored prefs exist, should use stored prefs', () => {
@@ -86,6 +93,13 @@ describe('fromStoredOrDefaults', () => {
 
     expect(result.status).toBe('in_progress');
     expect(result.assigneeFilter).toBe('mine');
+    expect(result.statusGroup).toBe('active');
+  });
+
+  it('given stored prefs that override statusGroup, should respect the override', () => {
+    const result = fromStoredOrDefaults({ statusGroup: 'all' });
+
+    expect(result.statusGroup).toBe('all');
   });
 
   it('given stored prefs that override the default assignee, should respect the override', () => {
@@ -104,6 +118,7 @@ describe('toStoredDashboardFilters', () => {
       search: 'budget',
       dueDateFilter: 'overdue',
       assigneeFilter: 'all',
+      statusGroup: 'completed',
     });
 
     expect(result).toEqual({
@@ -112,6 +127,7 @@ describe('toStoredDashboardFilters', () => {
       search: 'budget',
       dueDateFilter: 'overdue',
       assigneeFilter: 'all',
+      statusGroup: 'completed',
     });
   });
 

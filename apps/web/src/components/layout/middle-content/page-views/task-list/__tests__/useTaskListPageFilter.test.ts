@@ -19,10 +19,10 @@ describe('useTaskListPageFilter', () => {
     localStorage.clear();
   });
 
-  it('given no entry stored for the page, should default to "all"', () => {
+  it('given no entry stored for the page, should default to "active"', () => {
     const { result } = renderHook(() => useTaskListPageFilter('page-1'));
 
-    expect(result.current[0]).toBe('all');
+    expect(result.current[0]).toBe('active');
   });
 
   it('given the store has a filter for the page, should return that filter', () => {
@@ -55,6 +55,6 @@ describe('useTaskListPageFilter', () => {
 
     const { result } = renderHook(() => useTaskListPageFilter('page-1'));
 
-    expect(result.current[0]).toBe('all');
+    expect(result.current[0]).toBe('active');
   });
 });

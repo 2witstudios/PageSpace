@@ -3,6 +3,7 @@ import type { StoredDashboardFilters } from '@/stores/useLayoutStore';
 
 export type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 export type AssigneeFilter = 'mine' | 'all';
+export type StatusGroupFilter = 'all' | 'active' | 'completed';
 
 export interface PersistableFilters {
   status?: string;
@@ -10,6 +11,7 @@ export interface PersistableFilters {
   search?: string;
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
+  statusGroup?: StatusGroupFilter;
   driveId?: string;
 }
 
@@ -20,9 +22,10 @@ export const DEFAULT_DASHBOARD_FILTERS: PersistableFilters = {
   search: undefined,
   dueDateFilter: undefined,
   assigneeFilter: 'mine',
+  statusGroup: 'active',
 };
 
-const URL_FILTER_KEYS = ['status', 'priority', 'driveId', 'search', 'dueDateFilter', 'assigneeFilter'] as const;
+const URL_FILTER_KEYS = ['status', 'priority', 'driveId', 'search', 'dueDateFilter', 'assigneeFilter', 'statusGroup'] as const;
 
 export function scopeKeyFor(context: 'user' | 'drive', driveId: string | undefined): string {
   return context === 'user' ? 'user' : `drive:${driveId ?? ''}`;
@@ -40,6 +43,7 @@ function readFromUrl(searchParams: URLSearchParams): PersistableFilters {
     search: searchParams.get('search') || undefined,
     dueDateFilter: (searchParams.get('dueDateFilter') as DueDateFilter) || undefined,
     assigneeFilter: (searchParams.get('assigneeFilter') as AssigneeFilter) || 'mine',
+    statusGroup: (searchParams.get('statusGroup') as StatusGroupFilter) || 'active',
   };
 }
 
@@ -69,5 +73,6 @@ export function toStoredDashboardFilters(filters: PersistableFilters): StoredDas
   if (filters.search !== undefined) out.search = filters.search;
   if (filters.dueDateFilter !== undefined) out.dueDateFilter = filters.dueDateFilter;
   if (filters.assigneeFilter !== undefined) out.assigneeFilter = filters.assigneeFilter;
+  if (filters.statusGroup !== undefined) out.statusGroup = filters.statusGroup;
   return out;
 }
