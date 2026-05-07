@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   driveInviteRepository: {
     findPendingInviteByTokenHash: vi.fn(),
-    findUserToSStatusByEmail: vi.fn(),
+    loadUserAccountByEmail: vi.fn(),
   },
 }));
 
@@ -63,9 +63,9 @@ describe('resolveInviteContext', () => {
 
   it('given an active row + a user with tosAcceptedAt set, returns ok with isExistingUser=true', async () => {
     vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
-    vi.mocked(driveInviteRepository.findUserToSStatusByEmail).mockResolvedValue({
+    vi.mocked(driveInviteRepository.loadUserAccountByEmail).mockResolvedValue({
       id: 'user_1',
-      tosAcceptedAt: new Date('2025-01-01'),
+      suspendedAt: null,
     });
 
     const result = await resolveInviteContext({ token: 'tok', now });
@@ -84,9 +84,9 @@ describe('resolveInviteContext', () => {
 
   it('given an active row + a user record exists with tosAcceptedAt null (OAuth / magic-link user), returns ok with isExistingUser=true', async () => {
     vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
-    vi.mocked(driveInviteRepository.findUserToSStatusByEmail).mockResolvedValue({
+    vi.mocked(driveInviteRepository.loadUserAccountByEmail).mockResolvedValue({
       id: 'user_oauth',
-      tosAcceptedAt: null,
+      suspendedAt: null,
     });
 
     const result = await resolveInviteContext({ token: 'tok', now });
@@ -103,7 +103,7 @@ describe('resolveInviteContext', () => {
 
   it('given an active row + no user mapped to that email, returns ok with isExistingUser=false', async () => {
     vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(baseInvite);
-    vi.mocked(driveInviteRepository.findUserToSStatusByEmail).mockResolvedValue(null);
+    vi.mocked(driveInviteRepository.loadUserAccountByEmail).mockResolvedValue(null);
 
     const result = await resolveInviteContext({ token: 'tok', now });
 

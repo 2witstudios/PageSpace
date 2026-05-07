@@ -1,22 +1,17 @@
 import { createId } from '@paralleldrive/cuid2';
 import React from 'react';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { users, verificationTokens } from '@pagespace/db/schema/auth';
+import { verificationTokens } from '@pagespace/db/schema/auth';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { MagicLinkPorts } from '@pagespace/lib/services/invites';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 export const buildMagicLinkPorts = (): MagicLinkPorts => ({
-  loadUserByEmail: async ({ email }) => {
-    const u = await db.query.users.findFirst({
-      where: eq(users.email, email.trim().toLowerCase()),
-      columns: { id: true, suspendedAt: true },
-    });
-    return u ? { id: u.id, suspendedAt: u.suspendedAt } : null;
-  },
+  loadUserByEmail: async ({ email }) =>
+    driveInviteRepository.loadUserAccountByEmail(email),
 
   createTokenAndPersist: async ({ userId, expiresAt, platform, deviceId, deviceName }) => {
     const { token, hash, tokenPrefix } = generateToken('ps_magic');

@@ -397,28 +397,27 @@ describe('driveInviteRepository.deletePendingInvite', () => {
   });
 });
 
-describe('driveInviteRepository.findUserToSStatusByEmail', () => {
-  it('given an email that maps to a user with tosAcceptedAt set, returns the id + tosAcceptedAt', async () => {
-    const tosAcceptedAt = new Date('2025-01-01');
-    mockUsersFindFirst.mockResolvedValueOnce({ id: 'user_1', tosAcceptedAt });
-
-    expect(await driveInviteRepository.findUserToSStatusByEmail('A@B.com')).toEqual({
+describe('driveInviteRepository.loadUserAccountByEmail', () => {
+  it('given an email that maps to an active user, returns id + suspendedAt null', async () => {
+    mockUsersFindFirst.mockResolvedValueOnce({ id: 'user_1', suspendedAt: null });
+    expect(await driveInviteRepository.loadUserAccountByEmail('A@B.com')).toEqual({
       id: 'user_1',
-      tosAcceptedAt,
+      suspendedAt: null,
     });
   });
 
-  it('given an email that maps to a user with tosAcceptedAt null, returns the id + null', async () => {
-    mockUsersFindFirst.mockResolvedValueOnce({ id: 'user_pending', tosAcceptedAt: null });
-    expect(await driveInviteRepository.findUserToSStatusByEmail('a@b.com')).toEqual({
-      id: 'user_pending',
-      tosAcceptedAt: null,
+  it('given an email that maps to a suspended user, returns id + the suspendedAt timestamp', async () => {
+    const suspendedAt = new Date('2026-04-01');
+    mockUsersFindFirst.mockResolvedValueOnce({ id: 'user_susp', suspendedAt });
+    expect(await driveInviteRepository.loadUserAccountByEmail('a@b.com')).toEqual({
+      id: 'user_susp',
+      suspendedAt,
     });
   });
 
   it('given an unknown email, returns null', async () => {
     mockUsersFindFirst.mockResolvedValueOnce(undefined);
-    expect(await driveInviteRepository.findUserToSStatusByEmail('nobody@nowhere.com')).toBeNull();
+    expect(await driveInviteRepository.loadUserAccountByEmail('nobody@nowhere.com')).toBeNull();
   });
 });
 

@@ -1,31 +1,14 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, isNull } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { RevokePorts } from '@pagespace/lib/services/invites';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 export const buildRevokePorts = (request: Request): RevokePorts => ({
-  loadPendingInviteForDrive: async ({ inviteId, driveId }) => {
-    const rows = await db
-      .select({
-        id: pendingInvites.id,
-        email: pendingInvites.email,
-        role: pendingInvites.role,
-        driveId: pendingInvites.driveId,
-      })
-      .from(pendingInvites)
-      .where(
-        and(
-          eq(pendingInvites.id, inviteId),
-          eq(pendingInvites.driveId, driveId),
-          isNull(pendingInvites.consumedAt),
-        ),
-      )
-      .limit(1);
-    return rows.at(0) ?? null;
-  },
+  loadPendingInviteForDrive: ({ inviteId, driveId }) =>
+    driveInviteRepository.findActivePendingInviteForDrive({ inviteId, driveId }),
 
   findActorMembership: async ({ driveId, actorId }) => {
     const rows = await db
@@ -36,13 +19,8 @@ export const buildRevokePorts = (request: Request): RevokePorts => ({
     return rows.at(0) ?? null;
   },
 
-  deletePendingInviteForDrive: async ({ inviteId, driveId }) => {
-    const deleted = await db
-      .delete(pendingInvites)
-      .where(and(eq(pendingInvites.id, inviteId), eq(pendingInvites.driveId, driveId)))
-      .returning({ id: pendingInvites.id });
-    return { rowsDeleted: deleted.length };
-  },
+  deletePendingInviteForDrive: ({ inviteId, driveId }) =>
+    driveInviteRepository.deletePendingInviteForDrive({ inviteId, driveId }),
 
   auditPermissionRevoked: ({ inviteId, driveId, actorId, targetEmail, role }) => {
     try {
