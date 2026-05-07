@@ -123,7 +123,7 @@ export const buildAcceptancePorts = (request: Request): AcceptancePorts => ({
           driveId: data.driveId,
           driveName: data.driveName,
           targetUserId: data.invitedUserId,
-          targetUserEmail: data.inviteEmail,
+          ...(data.inviteEmail !== undefined && { targetUserEmail: data.inviteEmail }),
           role: data.role,
         },
         actorInfo,
@@ -145,9 +145,10 @@ export const buildAcceptancePorts = (request: Request): AcceptancePorts => ({
         resourceId: data.driveId,
         details: {
           targetUserId: data.invitedUserId,
-          targetEmail: data.inviteEmail,
           role: data.role,
           operation: 'invite',
+          ...(data.inviteEmail !== undefined && { targetEmail: data.inviteEmail }),
+          ...(data.inviteId !== undefined && { inviteId: data.inviteId }),
         },
       });
     } catch (error) {

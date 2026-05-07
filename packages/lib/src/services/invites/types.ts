@@ -16,8 +16,11 @@ export interface Invite {
 }
 
 export interface AcceptedInviteData {
-  inviteId: string;
-  inviteEmail: string;
+  // inviteId/inviteEmail are present on invite-driven acceptances (the two
+  // pipes set them) and absent on direct-grant flows where an OWNER/ADMIN
+  // adds an existing user without going through an invite token.
+  inviteId?: string;
+  inviteEmail?: string;
   memberId: string;
   driveId: string;
   driveName: string;

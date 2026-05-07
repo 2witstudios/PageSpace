@@ -118,7 +118,6 @@ describe('POST /api/auth/magic-link/send', () => {
     });
     vi.mocked(createMagicLinkToken).mockResolvedValue({
       ok: true,
-      // @ts-expect-error - partial mock data
       data: { token: 'mock-magic-token', userId: 'mock-user-1' },
     });
   });

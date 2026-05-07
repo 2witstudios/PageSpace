@@ -688,7 +688,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(driveInviteRepository.deletePendingInvite).toHaveBeenCalledWith('inv_pending_rollback');
     });
 
-    it('preserves sourceEmail in the audit record when fall-through occurs', async () => {
+    it('preserves the source email in the audit record when fall-through occurs', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue({
         id: 'user_existing_verified',
         emailVerified: new Date(),
@@ -707,7 +707,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
           eventType: 'authz.permission.granted',
           details: expect.objectContaining({
             targetUserId: 'user_existing_verified',
-            sourceEmail: 'fall-through@example.com',
+            targetEmail: 'fall-through@example.com',
           }),
         })
       );
