@@ -42,7 +42,7 @@ const buildStubPorts = (overrides: Partial<AcceptancePorts> = {}): AcceptancePor
     .mockResolvedValue({ ok: true, memberId: 'mem_1' }),
   broadcastMemberAdded: vi.fn().mockResolvedValue(undefined),
   notifyMemberAdded: vi.fn().mockResolvedValue(undefined),
-  trackInviteMember: vi.fn(),
+  trackInviteMember: vi.fn().mockResolvedValue(undefined),
   auditPermissionGranted: vi.fn(),
   ...overrides,
 });

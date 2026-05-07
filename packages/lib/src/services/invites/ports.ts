@@ -33,7 +33,9 @@ export interface AcceptancePorts {
   }) => Promise<ConsumeMembershipResult>;
   broadcastMemberAdded: (input: AcceptedInviteData) => Promise<void>;
   notifyMemberAdded: (input: AcceptedInviteData) => Promise<void>;
-  trackInviteMember: (input: AcceptedInviteData & { permissionsGranted: number }) => void;
+  trackInviteMember: (
+    input: AcceptedInviteData & { permissionsGranted: number },
+  ) => Promise<void>;
   auditPermissionGranted: (input: AcceptedInviteData) => void;
 }
 
