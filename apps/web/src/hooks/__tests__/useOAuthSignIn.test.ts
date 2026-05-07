@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildOAuthSigninBody } from '../useOAuthSignIn';
+import { buildOAuthSigninBody, buildPostNativeAuthRedirect } from '../useOAuthSignIn';
 
 describe('buildOAuthSigninBody', () => {
   it('serializes web device info without inviteToken', () => {
@@ -42,5 +42,31 @@ describe('buildOAuthSigninBody', () => {
       inviteToken: '',
     });
     expect(body).not.toHaveProperty('inviteToken');
+  });
+});
+
+describe('buildPostNativeAuthRedirect', () => {
+  it('routes to drive-specific dashboard when an invite was consumed', () => {
+    expect(buildPostNativeAuthRedirect({ invitedDriveId: 'drive-123' }))
+      .toBe('/dashboard/drive-123?invited=1');
+  });
+
+  it('invite-consumed wins over isNewUser welcome', () => {
+    expect(buildPostNativeAuthRedirect({ isNewUser: true, invitedDriveId: 'drive-123' }))
+      .toBe('/dashboard/drive-123?invited=1');
+  });
+
+  it('routes new users to welcome when no invite', () => {
+    expect(buildPostNativeAuthRedirect({ isNewUser: true }))
+      .toBe('/dashboard?welcome=true');
+  });
+
+  it('falls back to /dashboard for existing users without invites', () => {
+    expect(buildPostNativeAuthRedirect({})).toBe('/dashboard');
+    expect(buildPostNativeAuthRedirect({ isNewUser: false })).toBe('/dashboard');
+  });
+
+  it('treats null invitedDriveId as no-invite', () => {
+    expect(buildPostNativeAuthRedirect({ invitedDriveId: null })).toBe('/dashboard');
   });
 });
