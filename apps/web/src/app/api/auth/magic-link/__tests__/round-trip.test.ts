@@ -149,7 +149,11 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
 
   it('safe next on send body lands the user on that path after verify', async () => {
     const sendResp = await sendPost(
-      buildSendRequest({ email: 'user@example.com', next: '/dashboard/drive_abc' }),
+      buildSendRequest({
+        email: 'user@example.com',
+        next: '/dashboard/drive_abc',
+        tosAccepted: true,
+      }),
     );
     expect(sendResp.status).toBe(200);
 
@@ -166,7 +170,11 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
 
   it('unsafe next on send body is stripped at the boundary; verify URL has no next', async () => {
     const sendResp = await sendPost(
-      buildSendRequest({ email: 'user@example.com', next: '//evil.com/phish' }),
+      buildSendRequest({
+        email: 'user@example.com',
+        next: '//evil.com/phish',
+        tosAccepted: true,
+      }),
     );
     expect(sendResp.status).toBe(200);
 
@@ -181,9 +189,14 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
   });
 
   it('safe next on send body, but tampered to unsafe in the email link, is rejected at verify', async () => {
-    await sendPost(
-      buildSendRequest({ email: 'user@example.com', next: '/dashboard/drive_abc' }),
+    const sendResp = await sendPost(
+      buildSendRequest({
+        email: 'user@example.com',
+        next: '/dashboard/drive_abc',
+        tosAccepted: true,
+      }),
     );
+    expect(sendResp.status).toBe(200);
     extractUrlFromEmailCall();
 
     // Simulate a tampered email link — attacker swaps next= for an open

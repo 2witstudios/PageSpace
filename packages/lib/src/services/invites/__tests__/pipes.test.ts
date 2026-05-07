@@ -383,6 +383,7 @@ const baseMagicLinkInput = (
   email: 'user@example.com',
   now: new Date('2026-05-06T12:00:00.000Z'),
   expiryMinutes: 5,
+  tosAccepted: true,
   ...overrides,
 });
 
@@ -390,20 +391,54 @@ const buildMagicLinkPorts = (
   overrides: Partial<MagicLinkPorts> = {},
 ): MagicLinkPorts => ({
   loadUserByEmail: vi.fn().mockResolvedValue({ id: 'u_1', suspendedAt: null }),
+  createUserAccount: vi.fn().mockResolvedValue({ id: 'u_new' }),
   createTokenAndPersist: vi.fn().mockResolvedValue({ token: 'ps_magic_xyz' }),
   sendMagicLinkEmail: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
 describe('requestMagicLink', () => {
-  it('given the email is unknown, should return NO_ACCOUNT_FOUND and never create a token or send email', async () => {
+  it('given an unknown email + tosAccepted, should auto-create the user, mint a token against the new id, and send the email', async () => {
     const ports = buildMagicLinkPorts({
       loadUserByEmail: vi.fn().mockResolvedValue(null),
     });
-    const result = await requestMagicLink(ports)(baseMagicLinkInput());
-    expect(result).toEqual({ ok: false, error: 'NO_ACCOUNT_FOUND' });
+    const now = new Date('2026-05-06T12:00:00.000Z');
+    const result = await requestMagicLink(ports)(
+      baseMagicLinkInput({ now, tosAccepted: true }),
+    );
+
+    expect(result).toEqual({ ok: true, data: undefined });
+    expect(ports.createUserAccount).toHaveBeenCalledOnce();
+    expect(ports.createUserAccount).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      tosAcceptedAt: now,
+    });
+    expect(ports.createTokenAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u_new' }),
+    );
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
+  });
+
+  it('given an unknown email + tosAccepted=false, should return TOS_REQUIRED and never create user/token/email', async () => {
+    const ports = buildMagicLinkPorts({
+      loadUserByEmail: vi.fn().mockResolvedValue(null),
+    });
+    const result = await requestMagicLink(ports)(
+      baseMagicLinkInput({ tosAccepted: false }),
+    );
+    expect(result).toEqual({ ok: false, error: 'TOS_REQUIRED' });
+    expect(ports.createUserAccount).not.toHaveBeenCalled();
     expect(ports.createTokenAndPersist).not.toHaveBeenCalled();
     expect(ports.sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  it('given an existing user, should NOT call createUserAccount (tosAccepted is irrelevant for existing accounts)', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(baseMagicLinkInput({ tosAccepted: true }));
+    expect(ports.createUserAccount).not.toHaveBeenCalled();
+    expect(ports.createTokenAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u_1' }),
+    );
   });
 
   it('given the user is suspended, should return ACCOUNT_SUSPENDED', async () => {
@@ -414,6 +449,7 @@ describe('requestMagicLink', () => {
     });
     const result = await requestMagicLink(ports)(baseMagicLinkInput());
     expect(result).toEqual({ ok: false, error: 'ACCOUNT_SUSPENDED' });
+    expect(ports.createUserAccount).not.toHaveBeenCalled();
     expect(ports.createTokenAndPersist).not.toHaveBeenCalled();
     expect(ports.sendMagicLinkEmail).not.toHaveBeenCalled();
   });

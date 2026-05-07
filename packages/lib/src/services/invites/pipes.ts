@@ -141,11 +141,30 @@ export const requestMagicLink =
     const validated = validateMagicLinkRequest({ user });
     if (!validated.ok) return validated;
 
+    // Auto-create on unknown email is what makes magic-link a unified
+    // signin/signup flow. The click on the link in the inbox proves email
+    // control; the ToS checkbox at form-submit time is the legal consent.
+    // Together they're the full zero-trust chain — refuse to create the row
+    // without affirmative ToS acceptance.
+    let userId: string;
+    if (validated.data === null) {
+      if (!input.tosAccepted) {
+        return { ok: false, error: 'TOS_REQUIRED' };
+      }
+      const created = await ports.createUserAccount({
+        email: input.email,
+        tosAcceptedAt: input.now,
+      });
+      userId = created.id;
+    } else {
+      userId = validated.data.id;
+    }
+
     const expiryMinutes = input.expiryMinutes ?? MAGIC_LINK_EXPIRY_MINUTES;
     const expiresAt = new Date(input.now.getTime() + expiryMinutes * 60_000);
 
     const { token } = await ports.createTokenAndPersist({
-      userId: validated.data.id,
+      userId,
       expiresAt,
       ...(input.platform !== undefined && { platform: input.platform }),
       ...(input.deviceId !== undefined && { deviceId: input.deviceId }),

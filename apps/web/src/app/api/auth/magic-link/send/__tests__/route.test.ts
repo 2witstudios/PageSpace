@@ -74,7 +74,7 @@ import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { parse } from 'cookie';
 
 const createMagicLinkRequest = (
-  body: Record<string, unknown> | string = { email: 'test@example.com' },
+  body: Record<string, unknown> | string = { email: 'test@example.com', tosAccepted: true },
   headers: Record<string, string> = {}
 ) => {
   const defaultHeaders: Record<string, string> = {
@@ -84,7 +84,15 @@ const createMagicLinkRequest = (
     ...headers,
   };
 
-  const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+  // Auto-add tosAccepted:true to inline-object bodies that omit it, so the
+  // legacy tests (CSRF, rate limit, validation) keep passing the schema. Tests
+  // that specifically exercise the ToS gate set tosAccepted explicitly.
+  const bodyObj =
+    typeof body === 'object' && body !== null && !('tosAccepted' in body)
+      ? { ...body, tosAccepted: true }
+      : body;
+
+  const bodyStr = typeof bodyObj === 'string' ? bodyObj : JSON.stringify(bodyObj);
 
   return new Request('http://localhost/api/auth/magic-link/send', {
     method: 'POST',
@@ -233,6 +241,48 @@ describe('POST /api/auth/magic-link/send', () => {
     });
   });
 
+  describe('ToS acceptance gate', () => {
+    it('returns 400 tos_required when tosAccepted is false (server-side defense; never call the pipe)', async () => {
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        tosAccepted: false,
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body).toEqual({
+        code: 'tos_required',
+        error: 'Terms of Service must be accepted',
+      });
+      expect(pipeInner).not.toHaveBeenCalled();
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'security.suspicious.activity',
+          details: expect.objectContaining({ reason: 'magic_link_tos_not_accepted' }),
+        }),
+      );
+    });
+
+    it('returns 400 (zod schema) when tosAccepted is omitted entirely from the body', async () => {
+      // Bypass the helper's auto-add by passing a JSON string directly.
+      const request = new Request('http://localhost/api/auth/magic-link/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Login-CSRF-Token': 'valid-csrf-token',
+          'Cookie': 'login_csrf=valid-csrf-token',
+        },
+        body: JSON.stringify({ email: 'test@example.com' }),
+      });
+
+      const response = await POST(request);
+      expect(response.status).toBe(400);
+      expect(pipeInner).not.toHaveBeenCalled();
+    });
+  });
+
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
       vi.mocked(checkDistributedRateLimit)
@@ -332,21 +382,22 @@ describe('POST /api/auth/magic-link/send', () => {
       );
     });
 
-    it('given the pipe returns NO_ACCOUNT_FOUND, returns 404 + the structured no_account payload (signup CTA)', async () => {
-      pipeInner.mockResolvedValue({ ok: false, error: 'NO_ACCOUNT_FOUND' });
+    it('given the pipe is invoked for an unknown email + tosAccepted=true, returns 200 (auto-create path lives inside the pipe; the route just sees ok)', async () => {
+      pipeInner.mockResolvedValue({ ok: true });
 
-      const request = createMagicLinkRequest({ email: 'unknown@example.com' });
+      const request = createMagicLinkRequest({
+        email: 'unknown@example.com',
+        tosAccepted: true,
+      });
       const response = await POST(request);
       const body = await response.json();
 
-      expect(response.status).toBe(404);
-      expect(body).toEqual({ code: 'no_account', email: 'unknown@example.com' });
-      expect(auditRequest).toHaveBeenCalledWith(
-        request,
+      expect(response.status).toBe(200);
+      expect(body.message).toContain('If an account exists');
+      expect(pipeInner).toHaveBeenCalledWith(
         expect.objectContaining({
-          eventType: 'auth.login.failure',
-          details: expect.objectContaining({ reason: 'magic_link_no_account_found' }),
-          riskScore: 0.2,
+          email: 'unknown@example.com',
+          tosAccepted: true,
         }),
       );
     });

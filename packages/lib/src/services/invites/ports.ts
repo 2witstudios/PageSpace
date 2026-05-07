@@ -49,6 +49,14 @@ export interface AcceptancePorts {
 
 export interface MagicLinkPorts {
   loadUserByEmail: (input: { email: string }) => Promise<UserAccount | null>;
+  // Creates a new user row when the typed email has no account. Adapter must
+  // handle unique-constraint races (two concurrent magic-link requests for
+  // the same email) by re-loading and returning the surviving id. Stores
+  // tosAcceptedAt to record affirmative consent at form-submit time.
+  createUserAccount: (input: {
+    email: string;
+    tosAcceptedAt: Date;
+  }) => Promise<{ id: string }>;
   createTokenAndPersist: (input: {
     userId: string;
     expiresAt: Date;

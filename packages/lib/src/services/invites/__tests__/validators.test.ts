@@ -90,10 +90,10 @@ describe('validateInviteForUser', () => {
 });
 
 describe('validateMagicLinkRequest', () => {
-  it('given user is null, should return NO_ACCOUNT_FOUND', () => {
+  it('given user is null (unknown email), should return ok with null data so the pipe can branch into auto-create', () => {
     expect(validateMagicLinkRequest({ user: null })).toEqual({
-      ok: false,
-      error: 'NO_ACCOUNT_FOUND',
+      ok: true,
+      data: null,
     });
   });
 
