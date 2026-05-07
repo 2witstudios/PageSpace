@@ -24,6 +24,11 @@ import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
+import {
+  acceptInviteForExistingUser,
+  acceptInviteForNewUser,
+} from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -130,6 +135,7 @@ export async function GET(req: Request) {
     const userName = name || email.split('@')[0] || 'User';
 
     let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
+    const wasNewUser = !user;
 
     if (user) {
       const resolvedImage = await resolveGoogleAvatarImage({
@@ -384,6 +390,32 @@ export async function GET(req: Request) {
         loggers.auth.warn('Failed to create device token', {
           userId: user.id, error: error instanceof Error ? error.message : String(error),
         });
+      }
+    }
+
+    const inviteToken = verifiedState.inviteToken;
+    if (inviteToken) {
+      try {
+        const ports = buildAcceptancePorts(req);
+        const acceptInput = {
+          token: inviteToken,
+          userId: user.id,
+          userEmail: email.toLowerCase(),
+          suspendedAt: wasNewUser ? null : (user.suspendedAt ?? null),
+          now: new Date(),
+        };
+        const result = wasNewUser
+          ? await acceptInviteForNewUser(ports)(acceptInput)
+          : await acceptInviteForExistingUser(ports)(acceptInput);
+
+        if (result.ok) {
+          returnUrl = `/dashboard/${result.data.driveId}?invited=1`;
+        } else {
+          const sep = returnUrl.includes('?') ? '&' : '?';
+          returnUrl = `${returnUrl}${sep}inviteError=${result.error}`;
+        }
+      } catch (error) {
+        loggers.auth.error('Invite acceptance pipe threw', error as Error);
       }
     }
 
