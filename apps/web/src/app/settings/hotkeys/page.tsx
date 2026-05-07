@@ -7,13 +7,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useHotkeyPreferences, updateHotkeyPreference } from '@/hooks/useHotkeyPreferences';
 import { HOTKEY_REGISTRY, HOTKEY_CATEGORIES, getHotkeysByCategory, type HotkeyCategory } from '@/lib/hotkeys/registry';
-import { getEffectiveBinding } from '@/stores/useHotkeyStore';
+import { getEffectiveBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
 import { HotkeyInput } from '@/components/settings/hotkeys/HotkeyInput';
 import { toast } from 'sonner';
 
 export default function HotkeysSettingsPage() {
   const router = useRouter();
   const { isLoading, mutate } = useHotkeyPreferences();
+  const userBindings = useHotkeyStore((s) => s.userBindings);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const hotkeysByCategory = getHotkeysByCategory();
@@ -97,7 +98,7 @@ export default function HotkeysSettingsPage() {
                 <CardContent>
                   <div className="space-y-4">
                     {hotkeys.map((hotkey) => {
-                      const effectiveBinding = getEffectiveBinding(hotkey.id);
+                      const effectiveBinding = userBindings.get(hotkey.id) ?? hotkey.defaultBinding;
                       const isEditing = editingId === hotkey.id;
                       const isCustomized = effectiveBinding !== hotkey.defaultBinding;
 
