@@ -10,9 +10,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { MagicLinkPorts } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
-// Postgres SQLSTATE 23505 (unique_violation). Mirrors the inline pattern used
-// in reactions/route.ts and drive-invite-repository.ts; matches the helper in
-// google-calendar/sync-service.ts.
+// Postgres SQLSTATE 23505 (unique_violation).
 const isUniqueConstraintError = (err: unknown): boolean =>
   err instanceof Error && 'code' in err && (err as { code: string }).code === '23505';
 
@@ -42,12 +40,10 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
         .returning({ id: users.id });
       return { id: created.id };
     } catch (error: unknown) {
-      // Concurrent magic-link request for the same email won the insert race.
-      // Re-load and return the surviving id. The losing pipe path still mints
+      // Concurrent magic-link request for the same email won the insert race;
+      // re-load and return the surviving id. The losing pipe path still mints
       // a token + sends an email, which is correct — the email is what we
-      // wanted to send anyway. Detect the race via Postgres SQLSTATE 23505
-      // (unique_violation) — message-string matching is brittle across pg
-      // driver/version upgrades.
+      // wanted to send anyway.
       if (!isUniqueConstraintError(error)) throw error;
 
       const [existing] = await db

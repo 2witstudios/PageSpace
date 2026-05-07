@@ -179,10 +179,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // requestMagicLink pipe owns the full flow: load user → auto-create on
-    // unknown email (gated on tosAccepted) → mint token → send email. Magic-
-    // link is a unified signin/signup flow: the click on the link in the
-    // inbox proves email control and the ToS checkbox supplies legal consent.
     let result;
     try {
       result = await requestMagicLink(buildMagicLinkPorts())({
@@ -220,10 +216,9 @@ export async function POST(req: Request) {
         });
       }
 
-      // TOS_REQUIRED from the pipe shouldn't reach here — the schema-level
-      // guard above already rejected tosAccepted=false — but stay defensive.
-      // Surface as a generic 200 to keep enumeration resistance intact.
-      // VALIDATION_FAILED is similarly upstream-impossible.
+      // TOS_REQUIRED and VALIDATION_FAILED are upstream-impossible (the schema
+      // and the explicit tosAccepted guard above catch them first); surface as
+      // a generic 200 to preserve enumeration resistance.
       loggers.auth.error(
         'Magic link pipe returned unexpected error',
         new Error(`MagicLinkErrorCode: ${result.error}`),
