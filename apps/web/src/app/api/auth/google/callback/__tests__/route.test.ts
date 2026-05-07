@@ -1427,6 +1427,69 @@ describe('GET /api/auth/google/callback', () => {
         expect.any(Error),
       );
     });
+
+    it('attaches invitedDriveId to desktop deep link when invite is consumed', async () => {
+      acceptInviteForNewUserPipe.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          inviteId: 'invite-d1',
+          inviteEmail: 'test@example.com',
+          memberId: 'member-d1',
+          driveId: 'drive-desktop-1',
+          driveName: 'Desktop Drive',
+          role: 'MEMBER',
+          invitedUserId: 'user-d1',
+          inviterUserId: 'inviter-d1',
+        },
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'desktop',
+        deviceId: 'desktop-dev-123',
+        deviceName: 'My Mac',
+        inviteToken: 'ps_invite_abc123def456',
+      });
+
+      const request = createCallbackRequest({ code: 'valid-code', state });
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('invitedDriveId=drive-desktop-1');
+    });
+
+    it('attaches invitedDriveId to iOS deep link when invite is consumed', async () => {
+      acceptInviteForNewUserPipe.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          inviteId: 'invite-i1',
+          inviteEmail: 'test@example.com',
+          memberId: 'member-i1',
+          driveId: 'drive-ios-1',
+          driveName: 'iOS Drive',
+          role: 'MEMBER',
+          invitedUserId: 'user-i1',
+          inviterUserId: 'inviter-i1',
+        },
+      });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'ios',
+        deviceId: 'ios-dev-123',
+        deviceName: 'iPhone',
+        inviteToken: 'ps_invite_abc123def456',
+      });
+
+      const request = createCallbackRequest({ code: 'valid-code', state });
+      const response = await GET(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('pagespace://auth-exchange');
+      expect(location).toContain('invitedDriveId=drive-ios-1');
+    });
   });
 
 });
