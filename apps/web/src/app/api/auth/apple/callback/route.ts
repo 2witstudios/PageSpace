@@ -23,6 +23,11 @@ import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
+import {
+  acceptInviteForExistingUser,
+  acceptInviteForNewUser,
+} from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -137,6 +142,7 @@ export async function POST(req: Request) {
 
     // Find or create user
     let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
+    const wasNewUser = !user;
 
     if (user) {
       // Update existing user if needed
@@ -327,6 +333,32 @@ export async function POST(req: Request) {
         loggers.auth.warn('Failed to create device token', {
           userId: user.id, error: error instanceof Error ? error.message : String(error),
         });
+      }
+    }
+
+    const inviteToken = verifiedState.inviteToken;
+    if (inviteToken) {
+      try {
+        const ports = buildAcceptancePorts(req);
+        const acceptInput = {
+          token: inviteToken,
+          userId: user.id,
+          userEmail: email.toLowerCase(),
+          suspendedAt: wasNewUser ? null : (user.suspendedAt ?? null),
+          now: new Date(),
+        };
+        const result = wasNewUser
+          ? await acceptInviteForNewUser(ports)(acceptInput)
+          : await acceptInviteForExistingUser(ports)(acceptInput);
+
+        if (result.ok) {
+          returnUrl = `/dashboard/${result.data.driveId}?invited=1`;
+        } else {
+          const sep = returnUrl.includes('?') ? '&' : '?';
+          returnUrl = `${returnUrl}${sep}inviteError=${result.error}`;
+        }
+      } catch (error) {
+        loggers.auth.error('Invite acceptance pipe threw', error as Error);
       }
     }
 

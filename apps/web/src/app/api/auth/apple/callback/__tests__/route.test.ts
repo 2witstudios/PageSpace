@@ -127,6 +127,18 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
+vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
+  buildAcceptancePorts: vi.fn(() => ({})),
+}));
+
+const acceptInviteForNewUserPipe = vi.fn();
+const acceptInviteForExistingUserPipe = vi.fn();
+
+vi.mock('@pagespace/lib/services/invites', () => ({
+  acceptInviteForNewUser: vi.fn(() => acceptInviteForNewUserPipe),
+  acceptInviteForExistingUser: vi.fn(() => acceptInviteForExistingUserPipe),
+}));
+
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -139,6 +151,8 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { acceptInviteForNewUser, acceptInviteForExistingUser } from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 
 // Helper to create signed state
 function createSignedState(
@@ -1140,6 +1154,169 @@ describe('POST /api/auth/apple/callback', () => {
       expect(errCall).toBeDefined();
       const meta = errCall?.[1] as { email?: string };
       expect(meta.email).toBe('te***@example.com');
+    });
+  });
+
+  describe('invite acceptance via OAuth', () => {
+    const mockExistingUser = {
+      id: 'existing-user-id',
+      name: 'Existing User',
+      email: 'test@example.com',
+      appleId: 'apple-sub-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'apple',
+      image: null,
+      emailVerified: new Date(),
+    };
+
+    beforeEach(() => {
+      acceptInviteForNewUserPipe.mockReset();
+      acceptInviteForExistingUserPipe.mockReset();
+      vi.mocked(acceptInviteForNewUser).mockImplementation(() => acceptInviteForNewUserPipe);
+      vi.mocked(acceptInviteForExistingUser).mockImplementation(() => acceptInviteForExistingUserPipe);
+      vi.mocked(buildAcceptancePorts).mockReturnValue({} as never);
+    });
+
+    it('calls acceptInviteForNewUser for new users when inviteToken is in state', async () => {
+      acceptInviteForNewUserPipe.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          inviteId: 'invite-1',
+          inviteEmail: 'test@example.com',
+          memberId: 'member-1',
+          driveId: 'drive-apple-789',
+          driveName: 'Shared Drive',
+          role: 'MEMBER',
+          invitedUserId: 'new-user-id',
+          inviterUserId: 'inviter-1',
+        },
+      });
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_apple_abc',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(acceptInviteForNewUser).toHaveBeenCalled();
+      expect(acceptInviteForNewUserPipe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          token: 'ps_invite_apple_abc',
+          userEmail: 'test@example.com',
+          suspendedAt: null,
+        }),
+      );
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive-apple-789');
+      expect(location).toContain('invited=1');
+    });
+
+    it('calls acceptInviteForExistingUser for existing users when inviteToken is in state', async () => {
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
+
+      acceptInviteForExistingUserPipe.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          inviteId: 'invite-2',
+          inviteEmail: 'test@example.com',
+          memberId: 'member-2',
+          driveId: 'drive-existing-apple',
+          driveName: 'Other Drive',
+          role: 'ADMIN',
+          invitedUserId: 'existing-user-id',
+          inviterUserId: 'inviter-2',
+        },
+      });
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_existing',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(acceptInviteForExistingUser).toHaveBeenCalled();
+      expect(acceptInviteForNewUser).not.toHaveBeenCalled();
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive-existing-apple');
+      expect(location).toContain('invited=1');
+    });
+
+    it('does not call any acceptance pipe when inviteToken is absent from state', async () => {
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      await POST(request);
+
+      expect(acceptInviteForNewUser).not.toHaveBeenCalled();
+      expect(acceptInviteForExistingUser).not.toHaveBeenCalled();
+    });
+
+    // Apple private-relay regression guard: if the user signed up at the
+    // invite consent screen with their personal email but Apple returns a
+    // private-relay address, the pipe MUST surface EMAIL_MISMATCH and not
+    // silently join them to the drive.
+    it('appends inviteError=EMAIL_MISMATCH when Apple returns private-relay email mismatch', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValueOnce({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: {
+          providerId: 'apple-sub-123',
+          email: 'abc123@privaterelay.appleid.com',
+          emailVerified: true,
+        },
+      });
+      acceptInviteForNewUserPipe.mockResolvedValueOnce({ ok: false, error: 'EMAIL_MISMATCH' });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_relay',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('inviteError=EMAIL_MISMATCH');
+      expect(location).toContain('auth=success');
+    });
+
+    it('appends inviteError to returnUrl on TOKEN_CONSUMED', async () => {
+      acceptInviteForNewUserPipe.mockResolvedValueOnce({ ok: false, error: 'TOKEN_CONSUMED' });
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_consumed',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('inviteError=TOKEN_CONSUMED');
+    });
+
+    it('does not bounce auth when invite acceptance pipe throws', async () => {
+      acceptInviteForNewUserPipe.mockRejectedValueOnce(new Error('apple pipe blew up'));
+
+      const state = createSignedState({
+        returnUrl: '/dashboard',
+        platform: 'web',
+        inviteToken: 'ps_invite_throw',
+      });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('auth=success');
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Invite acceptance pipe threw',
+        expect.any(Error),
+      );
     });
   });
 
