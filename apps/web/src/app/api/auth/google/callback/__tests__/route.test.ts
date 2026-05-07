@@ -149,10 +149,6 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   createDeviceTokenHandoffCookie: vi.fn().mockReturnValue('ps_device_token=mock; Path=/; Max-Age=60'),
 }));
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
@@ -172,7 +168,6 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 // Helper to create signed state
 function createSignedState(
@@ -1282,50 +1277,4 @@ describe('GET /api/auth/google/callback', () => {
     });
   });
 
-  describe('post-login pending invite acceptance', () => {
-    beforeEach(() => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValue([]);
-    });
-
-    it('given a successful login, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
-      const request = createCallbackRequest({ code: 'valid-code' });
-      await GET(request);
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('user-123');
-      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
-      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
-      expect(acceptOrder).toBeGreaterThan(sessionOrder);
-    });
-
-    it('given the helper throws, revokes the just-created session and redirects to signin?error=server_error', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
-
-      const request = createCallbackRequest({ code: 'valid-code' });
-      const response = await GET(request);
-      const location = response.headers.get('Location')!;
-
-      expect(response.status).toBe(307);
-      expect(location).toContain('/auth/signin?error=server_error');
-      expect(sessionService.revokeSession).toHaveBeenCalledWith(
-        'ps_sess_mock_session_token',
-        'pending_invite_acceptance_failed'
-      );
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'pending_invite_acceptance_failed'
-      );
-    });
-
-    it('given the helper resolves, redirect/response is unchanged', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_a', driveName: 'Alpha', role: 'MEMBER' },
-      ]);
-
-      const request = createCallbackRequest({ code: 'valid-code' });
-      const response = await GET(request);
-
-      expect(response.status).toBe(307);
-      expect(response.headers.get('Location')).not.toContain('error=');
-    });
-  });
 });

@@ -346,6 +346,11 @@
       "import": "./dist/services/drive-search-service.js",
       "require": "./dist/services/drive-search-service.js"
     },
+    "./services/invite-predicates": {
+      "types": "./dist/services/invite-predicates.d.ts",
+      "import": "./dist/services/invite-predicates.js",
+      "require": "./dist/services/invite-predicates.js"
+    },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
       "import": "./dist/validators/id-validators.js",
@@ -590,6 +595,11 @@
       "types": "./dist/auth/exchange-codes.d.ts",
       "import": "./dist/auth/exchange-codes.js",
       "require": "./dist/auth/exchange-codes.js"
+    },
+    "./auth/invite-token": {
+      "types": "./dist/auth/invite-token.d.ts",
+      "import": "./dist/auth/invite-token.js",
+      "require": "./dist/auth/invite-token.js"
     },
     "./auth/passkey-register-handoff": {
       "types": "./dist/auth/passkey-register-handoff.d.ts",
@@ -856,6 +866,9 @@
       "services/drive-search-service": [
         "./dist/services/drive-search-service.d.ts"
       ],
+      "services/invite-predicates": [
+        "./dist/services/invite-predicates.d.ts"
+      ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"
       ],
@@ -1002,6 +1015,9 @@
       ],
       "auth/exchange-codes": [
         "./dist/auth/exchange-codes.d.ts"
+      ],
+      "auth/invite-token": [
+        "./dist/auth/invite-token.d.ts"
       ],
       "auth/passkey-register-handoff": [
         "./dist/auth/passkey-register-handoff.d.ts"

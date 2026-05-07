@@ -855,6 +855,13 @@
       "when": 1778018613162,
       "tag": "0121_complete_lila_cheney",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1778110684596,
+      "tag": "0122_easy_carlie_cooper",
+      "breakpoints": true
     }
   ]
 }

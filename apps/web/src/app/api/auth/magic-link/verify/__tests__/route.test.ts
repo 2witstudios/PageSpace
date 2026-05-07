@@ -86,10 +86,6 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
-vi.mock('@/lib/auth/post-login-pending-acceptance', () => ({
-  acceptUserPendingInvitations: vi.fn().mockResolvedValue([]),
-}));
-
 import { GET } from '../route';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
@@ -100,7 +96,6 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
 
 const createVerifyRequest = (token?: string) => {
   const url = token
@@ -517,97 +512,4 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
   });
 
-  describe('post-login pending invite acceptance', () => {
-    const createVerifyRequestWithInvite = (token: string, inviteDriveId?: string) => {
-      const params = new URLSearchParams({ token });
-      if (inviteDriveId) params.set('inviteDriveId', inviteDriveId);
-      return new Request(`http://localhost/api/auth/magic-link/verify?${params.toString()}`, {
-        method: 'GET',
-        headers: { 'User-Agent': 'TestBrowser/1.0' },
-      });
-    };
-
-    it('given a successful verify, calls acceptUserPendingInvitations after createSession with the resolved userId', async () => {
-      await GET(createVerifyRequest('valid-token'));
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('test-user-id');
-      const acceptOrder = vi.mocked(acceptUserPendingInvitations).mock.invocationCallOrder[0];
-      const sessionOrder = vi.mocked(sessionService.createSession).mock.invocationCallOrder[0];
-      expect(acceptOrder).toBeGreaterThan(sessionOrder);
-    });
-
-    it('given inviteDriveId AND a matching pending row, redirects to /dashboard/<driveId> after accepting', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_invited', driveName: 'Invited', role: 'MEMBER' },
-      ]);
-
-      const response = await GET(createVerifyRequestWithInvite('valid-token', 'drive_invited'));
-      const location = response.headers.get('Location')!;
-
-      expect(response.status).toBe(302);
-      expect(location).toContain('/dashboard/drive_invited');
-    });
-
-    it('given no inviteDriveId but other pending rows exist, all are still accepted and the default redirect is used', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_other', driveName: 'Other', role: 'MEMBER' },
-      ]);
-
-      const response = await GET(createVerifyRequest('valid-token'));
-      const location = response.headers.get('Location')!;
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('test-user-id');
-      expect(location).toContain('/dashboard');
-      expect(location).not.toContain('/dashboard/drive_other');
-    });
-
-    it('given inviteDriveId with no matching pending row, falls through to the default redirect (no error)', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockResolvedValueOnce([
-        { driveId: 'drive_other', driveName: 'Other', role: 'MEMBER' },
-      ]);
-
-      const response = await GET(createVerifyRequestWithInvite('valid-token', 'drive_unknown'));
-      const location = response.headers.get('Location')!;
-
-      expect(response.status).toBe(302);
-      expect(location).toContain('/dashboard');
-      expect(location).not.toContain('/dashboard/drive_unknown');
-      expect(location).not.toContain('error=');
-    });
-
-    it('given acceptUserPendingInvitations throws (genuine DB failure), revokes the just-created session and redirects to signin?error=server_error', async () => {
-      vi.mocked(acceptUserPendingInvitations).mockRejectedValueOnce(new Error('db down'));
-
-      const response = await GET(createVerifyRequest('valid-token'));
-      const location = response.headers.get('Location')!;
-
-      expect(response.status).toBe(302);
-      expect(location).toContain('/auth/signin?error=server_error');
-      expect(sessionService.revokeSession).toHaveBeenCalledWith(
-        'ps_sess_mock_token',
-        'pending_invite_acceptance_failed'
-      );
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'pending_invite_acceptance_failed'
-      );
-    });
-
-    it('given a desktop magic-link flow, runs the pending acceptance hook before redirect', async () => {
-      vi.mocked(verifyMagicLinkToken).mockResolvedValueOnce({
-        ok: true,
-        data: {
-          userId: 'test-user-id',
-          isNewUser: false,
-          metadata: JSON.stringify({ platform: 'desktop', deviceId: 'dev-1' }),
-        },
-      });
-
-      // Make the desktop branch fall through to the web redirect (authRepository
-      // findUserById returns null), but acceptance should still have run.
-      await GET(createVerifyRequest('valid-token'));
-
-      expect(acceptUserPendingInvitations).toHaveBeenCalledWith('test-user-id');
-    });
-  });
 });

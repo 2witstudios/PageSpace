@@ -16,7 +16,7 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
-import { acceptUserPendingInvitations } from '@/lib/auth/post-login-pending-acceptance';
+import { acceptInviteForNewUser } from '@/lib/auth/invite-acceptance';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -28,6 +28,7 @@ const verifySchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: 'You must accept the Terms of Service',
   }),
+  inviteToken: z.string().min(1).optional(),
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
@@ -210,16 +211,33 @@ export async function POST(req: Request) {
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Accept any pending drive invitations now that the session is live.
-    try {
-      await acceptUserPendingInvitations(userId);
-    } catch (error) {
-      loggers.auth.error('Failed to accept pending invitations on passkey signup', error as Error, { userId });
-      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
-      return NextResponse.json(
-        { error: 'Server error' },
-        { status: 500 }
-      );
+    // Targeted invite acceptance via the new pendingInvites pipe. Failure is
+    // NON-FATAL — the signup still completes; the dashboard surfaces
+    // ?inviteError=<code> so the user can act on it.
+    let inviteAcceptedDriveId: string | null = null;
+    let inviteAcceptError: string | null = null;
+    if (validation.data.inviteToken) {
+      try {
+        const inviteResult = await acceptInviteForNewUser({
+          token: validation.data.inviteToken,
+          userId,
+          userEmail: email,
+          now: new Date(),
+        });
+        if (inviteResult.ok) {
+          inviteAcceptedDriveId = inviteResult.data.driveId;
+        } else {
+          inviteAcceptError = inviteResult.error;
+        }
+      } catch (error) {
+        // Don't tear down the session if the invite acceptance pipe throws —
+        // the user is signed up, log the error and let them land on the
+        // dashboard with an inviteError query param.
+        loggers.auth.error('Invite acceptance threw on passkey signup', error as Error, {
+          userId,
+        });
+        inviteAcceptError = 'TOKEN_NOT_FOUND';
+      }
     }
 
     let deviceTokenValue: string | undefined;
@@ -269,16 +287,28 @@ export async function POST(req: Request) {
       `csrf_token=${newCsrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`
     );
 
-    // Determine redirect URL
-    const dashboardPath = provisionedDrive
-      ? `/dashboard/${provisionedDrive.driveId}`
-      : '/dashboard';
+    // Determine redirect URL. A successful invite acceptance overrides the
+    // getting-started provisioning path so the user lands directly inside the
+    // drive they were invited to. A failed invite acceptance still lets the
+    // user land on the dashboard but with an inviteError query param so the
+    // UI can surface what went wrong.
+    let redirectUrl: string;
+    if (inviteAcceptedDriveId) {
+      redirectUrl = `/dashboard/${inviteAcceptedDriveId}?welcome=true`;
+    } else if (inviteAcceptError) {
+      redirectUrl = `/dashboard?welcome=true&inviteError=${inviteAcceptError}`;
+    } else {
+      const dashboardPath = provisionedDrive
+        ? `/dashboard/${provisionedDrive.driveId}`
+        : '/dashboard';
+      redirectUrl = `${dashboardPath}?welcome=true`;
+    }
 
     return NextResponse.json(
       {
         success: true,
         userId,
-        redirectUrl: `${dashboardPath}?welcome=true`,
+        redirectUrl,
         csrfToken: newCsrfToken,
         ...(platform === 'desktop' && { sessionToken }),
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),

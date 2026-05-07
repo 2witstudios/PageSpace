@@ -19,7 +19,6 @@ const renderRow = (
   acceptedAt: string | null,
   opts: {
     currentUserRole?: 'OWNER' | 'ADMIN' | 'MEMBER';
-    onResend?: () => void;
     onRemove?: () => void;
     role?: string;
   } = {}
@@ -30,7 +29,6 @@ const renderRow = (
       driveId="drive-1"
       currentUserRole={opts.currentUserRole ?? 'OWNER'}
       onRemove={opts.onRemove ?? vi.fn()}
-      onResend={opts.onResend}
     />
   );
 
@@ -63,29 +61,9 @@ describe('MemberRow', () => {
       expect(screen.queryByRole('button', { name: /revoke invitation/i })).not.toBeInTheDocument();
     });
 
-    it('renders a Resend button only when onResend is provided', async () => {
-      const onResend = vi.fn();
-      const { rerender } = render(
-        <MemberRow
-          member={buildMember(null)}
-          driveId="drive-1"
-          currentUserRole="OWNER"
-          onRemove={vi.fn()}
-        />
-      );
+    it('does NOT render a Resend button (resend was retired with the broad-sweep cutover)', () => {
+      renderRow(null);
       expect(screen.queryByRole('button', { name: /resend invitation/i })).not.toBeInTheDocument();
-
-      rerender(
-        <MemberRow
-          member={buildMember(null)}
-          driveId="drive-1"
-          currentUserRole="OWNER"
-          onRemove={vi.fn()}
-          onResend={onResend}
-        />
-      );
-      await userEvent.setup().click(screen.getByRole('button', { name: /resend invitation/i }));
-      expect(onResend).toHaveBeenCalledOnce();
     });
   });
 

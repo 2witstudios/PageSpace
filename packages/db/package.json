@@ -91,6 +91,10 @@
       "types": "./dist/schema/page-views.d.ts",
       "default": "./dist/schema/page-views.js"
     },
+    "./schema/pending-invites": {
+      "types": "./dist/schema/pending-invites.d.ts",
+      "default": "./dist/schema/pending-invites.js"
+    },
     "./schema/permissions": {
       "types": "./dist/schema/permissions.d.ts",
       "default": "./dist/schema/permissions.js"
@@ -170,7 +174,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
     "lint": "eslint src",
-    "promote-admin": "tsx src/promote-admin.ts"
+    "promote-admin": "tsx src/promote-admin.ts",
+    "migrate-pending-invites": "tsx src/migrate-pending-invites.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",

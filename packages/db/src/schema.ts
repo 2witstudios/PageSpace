@@ -31,6 +31,7 @@ export * from './schema/task-triggers';
 export * from './schema/rate-limit-buckets';
 export * from './schema/revoked-service-tokens';
 export * from './schema/auth-handoff-tokens';
+export * from './schema/pending-invites';
 export * from './schema/ai-streams';
 
 import * as auth from './schema/auth';
@@ -66,6 +67,7 @@ import * as taskTriggers from './schema/task-triggers';
 import * as rateLimitBuckets from './schema/rate-limit-buckets';
 import * as revokedServiceTokens from './schema/revoked-service-tokens';
 import * as authHandoffTokens from './schema/auth-handoff-tokens';
+import * as pendingInvites from './schema/pending-invites';
 import * as aiStreams from './schema/ai-streams';
 
 export const schema = {
@@ -102,5 +104,6 @@ export const schema = {
   ...rateLimitBuckets,
   ...revokedServiceTokens,
   ...authHandoffTokens,
+  ...pendingInvites,
   ...aiStreams,
 };

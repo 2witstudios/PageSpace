@@ -7,7 +7,7 @@ import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { useToast } from '@/hooks/useToast';
 import { useSocket } from '@/hooks/useSocket';
-import { del, fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface DriveMember {
   id: string;
@@ -110,26 +110,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
     };
   }, [socket, driveId, fetchMembers]);
 
-  const handleResendInvitation = async (userId: string) => {
-    try {
-      await post(`/api/drives/${driveId}/members/${userId}/resend`);
-      toast({
-        title: 'Success',
-        description: 'Invitation resent. A new invitation email has been sent.',
-      });
-      // Refetch so invitedAt-derived UI ("last sent N minutes ago") updates.
-      fetchMembers();
-    } catch (error) {
-      const description =
-        error instanceof Error ? error.message : 'Failed to resend invitation';
-      toast({
-        title: 'Error',
-        description,
-        variant: 'destructive',
-      });
-    }
-  };
-
   const handleRemoveMember = async (userId: string, isPending: boolean) => {
     const message = isPending
       ? 'Are you sure you want to revoke this invitation?'
@@ -164,6 +144,14 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   }
 
   // Strict null check: undefined from a malformed payload must not classify as pending.
+  // Post the GDPR + zero-trust invite migration, drive_members rows are only
+  // created at acceptance time (acceptedAt is always set on insert), so
+  // pendingMembers will normally be empty here. Pending invitations now live
+  // in the pending_invites table and are not surfaced through the members API
+  // — that's an intentional follow-up (see tasks/drive-invite-gdpr-zero-trust.md
+  // "Out of scope: Members-UI pending-invites list"). The block below remains
+  // so that any legacy acceptedAt=null row that survives the migration cutover
+  // is still surfaced rather than silently hidden.
   const acceptedMembers = members.filter((m) => m.acceptedAt != null);
   const pendingMembers = members.filter((m) => m.acceptedAt === null);
 
@@ -218,7 +206,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
                 driveId={driveId}
                 currentUserRole={currentUserRole}
                 onRemove={() => handleRemoveMember(member.userId, true)}
-                onResend={() => handleResendInvitation(member.userId)}
               />
             ))}
           </div>

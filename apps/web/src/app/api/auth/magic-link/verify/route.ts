@@ -14,7 +14,6 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { acceptUserPendingInvitations, type AcceptedInvitation } from '@/lib/auth/post-login-pending-acceptance';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -112,23 +111,6 @@ export async function GET(req: Request) {
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Accept any pending drive invitations now that the session is live. Genuine
-    // failures (acceptance write) revoke the session — the user shouldn't reach
-    // a half-state where they're authenticated but invisible to authz queries.
-    let acceptedInvitations: AcceptedInvitation[];
-    try {
-      acceptedInvitations = await acceptUserPendingInvitations(userId);
-    } catch (error) {
-      loggers.auth.error('Failed to accept pending invitations on magic-link login', error as Error, { userId });
-      await sessionService.revokeSession(sessionToken, 'pending_invite_acceptance_failed');
-      return redirectWithError('server_error');
-    }
-
-    const inviteDriveIdHint = searchParams.get('inviteDriveId');
-    const matchedInviteDrive = inviteDriveIdHint
-      ? acceptedInvitations.find((row) => row.driveId === inviteDriveIdHint)
-      : null;
-
     // DESKTOP: additionally create device token + exchange code for desktop token handoff
     // The web session (cookies) is always created above — this is a supplementary step.
     // If the magic link opens outside the desktop device, the cookie session still works.
@@ -162,7 +144,6 @@ export async function GET(req: Request) {
           // ignored and the user still has a valid cookie session.
           const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
           const desktopRedirectPath = await resolvePostLoginRedirectPath({
-            matchedInviteDriveId: matchedInviteDrive?.driveId ?? null,
             isNewUser,
             userId,
           });
@@ -219,7 +200,6 @@ export async function GET(req: Request) {
     // Determine redirect URL via the shared helper so the desktop and web
     // post-login flows cannot drift on the next redirect-rule change.
     const redirectPath = await resolvePostLoginRedirectPath({
-      matchedInviteDriveId: matchedInviteDrive?.driveId ?? null,
       isNewUser,
       userId,
     });
@@ -272,18 +252,12 @@ function redirectWithError(error: string): NextResponse {
  * and swallowed — the user still lands on /dashboard.
  */
 async function resolvePostLoginRedirectPath({
-  matchedInviteDriveId,
   isNewUser,
   userId,
 }: {
-  matchedInviteDriveId: string | null;
   isNewUser: boolean;
   userId: string;
 }): Promise<string> {
-  if (matchedInviteDriveId) {
-    return `/dashboard/${matchedInviteDriveId}`;
-  }
-
   if (!isNewUser) {
     return '/dashboard';
   }

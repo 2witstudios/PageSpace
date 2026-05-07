@@ -17,11 +17,12 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
     findExistingMember: vi.fn(),
     findUserIdByEmail: vi.fn(),
     findUserVerificationStatusById: vi.fn(),
-    findActivePendingMemberByEmail: vi.fn(),
+    findActivePendingInviteByDriveAndEmail: vi.fn(),
     findInviterDisplay: vi.fn(),
     createDriveMember: vi.fn(),
     createAcceptedMemberWithPermissions: vi.fn(),
-    deleteDriveMemberById: vi.fn(),
+    createPendingInvite: vi.fn(),
+    deletePendingInvite: vi.fn(),
     updateDriveMemberRole: vi.fn(),
     getValidPageIds: vi.fn(),
     findPagePermission: vi.fn(),
@@ -82,9 +83,8 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackDriveOperation: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
-  createMagicLinkToken: vi.fn(),
-  INVITATION_LINK_EXPIRY_MINUTES: 60 * 24 * 7,
+vi.mock('@pagespace/lib/auth/invite-token', () => ({
+  createInviteToken: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/notification-email-service', () => ({
@@ -110,7 +110,7 @@ import {
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { createMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
+import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
@@ -176,7 +176,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
-    vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue(null as never);
+    vi.mocked(driveInviteRepository.findActivePendingInviteByDriveAndEmail).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findInviterDisplay).mockResolvedValue({
       name: 'Inviter Name',
       email: 'inviter@example.com',
@@ -186,7 +186,8 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       memberId: 'mem_new',
       permissionsGranted: 1,
     } as never);
-    vi.mocked(driveInviteRepository.deleteDriveMemberById).mockResolvedValue(undefined);
+    vi.mocked(driveInviteRepository.createPendingInvite).mockResolvedValue({ id: 'inv_pending' } as never);
+    vi.mocked(driveInviteRepository.deletePendingInvite).mockResolvedValue(undefined);
     vi.mocked(driveInviteRepository.updateDriveMemberRole).mockResolvedValue(undefined);
     vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
     vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
@@ -201,10 +202,11 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
     vi.mocked(getDriveRecipientUserIds).mockResolvedValue([]);
-    vi.mocked(createMagicLinkToken).mockResolvedValue({
-      ok: true,
-      data: { token: 'ps_magic_xyz', userId: 'user_pending', isNewUser: true },
-    } as never);
+    vi.mocked(createInviteToken).mockReturnValue({
+      token: 'ps_invite_xyz',
+      tokenHash: 'hash_xyz',
+      expiresAt: new Date('2026-05-08T12:00:00.000Z'),
+    });
   });
 
   // ==========================================================================
@@ -368,7 +370,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     it('does not call findUserIdByEmail on the userId path (paths are disjoint)', async () => {
       await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(driveInviteRepository.findUserIdByEmail).not.toHaveBeenCalled();
-      expect(driveInviteRepository.findActivePendingMemberByEmail).not.toHaveBeenCalled();
+      expect(driveInviteRepository.findActivePendingInviteByDriveAndEmail).not.toHaveBeenCalled();
     });
 
     // Review C1 — closes the path "create temp user via email invite to drive A
@@ -396,13 +398,15 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         expect(response.status).toBe(200);
         expect(json.kind).toBe('invited');
         expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
-        expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
-          expect.objectContaining({ acceptedAt: null, role: 'MEMBER', driveId: mockDriveId })
+        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+        expect(driveInviteRepository.createPendingInvite).toHaveBeenCalledWith(
+          expect.objectContaining({
+            email: 'unverified@example.com',
+            driveId: mockDriveId,
+            role: 'MEMBER',
+          })
         );
-        expect(createMagicLinkToken).toHaveBeenCalledWith({
-          email: 'unverified@example.com',
-          expiryMinutes: 60 * 24 * 7,
-        });
+        expect(createInviteToken).toHaveBeenCalledWith(expect.objectContaining({ now: expect.any(Date) }));
         expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
           expect.objectContaining({ recipientEmail: 'unverified@example.com' })
         );
@@ -458,9 +462,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         );
 
         expect(response.status).toBe(422);
-        // Critically: nothing should have been written — no token, no member.
-        expect(createMagicLinkToken).not.toHaveBeenCalled();
-        expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+        // Critically: nothing should have been written — no token, no invite.
+        expect(createInviteToken).not.toHaveBeenCalled();
+        expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
         expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
       });
 
@@ -497,11 +501,11 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(json.kind).toBe('added');
-      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(createInviteToken).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
-    it('creates pending member + magic link + email when email maps to no user', async () => {
+    it('creates pending invite + token + email when email maps to no user — never auto-creates a users row', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
       const response = await POST(
@@ -514,22 +518,23 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(json.kind).toBe('invited');
       expect(json.email).toBe('newbie@example.com');
 
-      expect(createMagicLinkToken).toHaveBeenCalledWith({
-        email: 'newbie@example.com',
-        expiryMinutes: 60 * 24 * 7,
-      });
-      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+      expect(createInviteToken).toHaveBeenCalledWith(expect.objectContaining({ now: expect.any(Date) }));
+      expect(driveInviteRepository.createPendingInvite).toHaveBeenCalledWith(
         expect.objectContaining({
+          email: 'newbie@example.com',
           driveId: mockDriveId,
           role: 'MEMBER',
-          acceptedAt: null,
+          tokenHash: 'hash_xyz',
+          invitedBy: mockUserId,
         })
       );
+      // Critical: the legacy createDriveMember(acceptedAt:null) path is gone.
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           recipientEmail: 'newbie@example.com',
           driveName: 'Test Drive',
-          magicLinkUrl: expect.stringContaining('https://app.example.com/api/auth/magic-link/verify?token='),
+          magicLinkUrl: expect.stringContaining('https://app.example.com/invite/ps_invite_xyz'),
         })
       );
     });
@@ -549,10 +554,10 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(json.kind).toBe('invited');
-      expect(createMagicLinkToken).toHaveBeenCalledWith({
-        email: 'orphan@example.com',
-        expiryMinutes: 60 * 24 * 7,
-      });
+      expect(createInviteToken).toHaveBeenCalledWith(expect.objectContaining({ now: expect.any(Date) }));
+      expect(driveInviteRepository.createPendingInvite).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'orphan@example.com' })
+      );
       expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
         expect.objectContaining({ recipientEmail: 'orphan@example.com' })
       );
@@ -582,9 +587,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(driveInviteRepository.updateDriveMemberRole).not.toHaveBeenCalled();
     });
 
-    it('returns 409 with existingMemberId when active pending row exists', async () => {
-      vi.mocked(driveInviteRepository.findActivePendingMemberByEmail).mockResolvedValue({
-        id: 'mem_pending_existing',
+    it('returns 409 with existingMemberId when active pending invite exists', async () => {
+      vi.mocked(driveInviteRepository.findActivePendingInviteByDriveAndEmail).mockResolvedValue({
+        id: 'inv_pending_existing',
       } as never);
 
       const response = await POST(
@@ -594,8 +599,23 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       const json = await response.json();
 
       expect(response.status).toBe(409);
-      expect(json.existingMemberId).toBe('mem_pending_existing');
-      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(json.existingMemberId).toBe('inv_pending_existing');
+      expect(createInviteToken).not.toHaveBeenCalled();
+      expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when createPendingInvite races and hits the partial unique constraint', async () => {
+      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
+      vi.mocked(driveInviteRepository.createPendingInvite).mockRejectedValueOnce(
+        new Error('duplicate key value violates unique constraint "pending_invites_active_drive_email_idx"')
+      );
+
+      const response = await POST(
+        buildPost(mockDriveId, { email: 'race@example.com', role: 'MEMBER', permissions: [] }),
+        createContext(mockDriveId)
+      );
+
+      expect(response.status).toBe(409);
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
@@ -630,7 +650,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
 
       expect(response.status).toBe(403);
-      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(createInviteToken).not.toHaveBeenCalled();
     });
 
     it('rejects 422 when permissions array is non-empty on the email-pending path', async () => {
@@ -646,16 +666,16 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
 
       expect(response.status).toBe(422);
-      // Must not have created a token or member when we reject the request.
-      expect(createMagicLinkToken).not.toHaveBeenCalled();
-      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      // Must not have created a token or invite when we reject the request.
+      expect(createInviteToken).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
     });
 
-    it('rolls back the pending member row when sendPendingDriveInvitationEmail throws', async () => {
+    it('rolls back the pending invite row when sendPendingDriveInvitationEmail throws', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
-      vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
-        id: 'mem_pending_rollback',
+      vi.mocked(driveInviteRepository.createPendingInvite).mockResolvedValue({
+        id: 'inv_pending_rollback',
       } as never);
       vi.mocked(sendPendingDriveInvitationEmail).mockRejectedValueOnce(new Error('SMTP unreachable'));
 
@@ -665,7 +685,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
 
       expect(response.status).toBe(502);
-      expect(driveInviteRepository.deleteDriveMemberById).toHaveBeenCalledWith('mem_pending_rollback');
+      expect(driveInviteRepository.deletePendingInvite).toHaveBeenCalledWith('inv_pending_rollback');
     });
 
     it('preserves sourceEmail in the audit record when fall-through occurs', async () => {
@@ -701,15 +721,15 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         createContext(mockDriveId)
       );
 
-      expect(driveInviteRepository.findActivePendingMemberByEmail).toHaveBeenCalledWith(
+      expect(driveInviteRepository.findActivePendingInviteByDriveAndEmail).toHaveBeenCalledWith(
         mockDriveId,
-        'foo@example.com'
+        'foo@example.com',
+        expect.any(Date)
       );
       expect(driveInviteRepository.findUserIdByEmail).toHaveBeenCalledWith('foo@example.com');
-      expect(createMagicLinkToken).toHaveBeenCalledWith({
-        email: 'foo@example.com',
-        expiryMinutes: 60 * 24 * 7,
-      });
+      expect(driveInviteRepository.createPendingInvite).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'foo@example.com' })
+      );
       expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
         expect.objectContaining({ recipientEmail: 'foo@example.com' })
       );
@@ -773,19 +793,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
     });
 
-    it('returns 403 (not 500) when createMagicLinkToken returns USER_SUSPENDED', async () => {
-      vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
-      vi.mocked(createMagicLinkToken).mockResolvedValue({
-        ok: false,
-        error: { code: 'USER_SUSPENDED', userId: 'suspended_user' },
-      } as never);
-
-      const response = await POST(
-        buildPost(mockDriveId, { email: 'suspended@example.com', role: 'MEMBER', permissions: [] }),
-        createContext(mockDriveId)
-      );
-      expect(response.status).toBe(403);
-    });
   });
 
   // ==========================================================================
@@ -900,7 +907,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
     });
 
-    it('logs member activity with target email + magic-link-userId on email path', async () => {
+    it('does NOT call logMemberActivity on the pending email path (no targetUserId exists yet)', async () => {
       vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
 
       await POST(
@@ -908,18 +915,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         createContext(mockDriveId)
       );
 
-      expect(logMemberActivity).toHaveBeenCalledWith(
-        mockUserId,
-        'member_add',
-        expect.objectContaining({
-          driveId: mockDriveId,
-          driveName: 'Test Drive',
-          targetUserId: 'user_pending',
-          targetUserEmail: 'newbie@example.com',
-          role: 'MEMBER',
-        }),
-        expect.any(Object)
-      );
+      // The audit event captures the email-keyed invite. logMemberActivity
+      // is reserved for paths with a real targetUserId.
+      expect(logMemberActivity).not.toHaveBeenCalled();
     });
 
     it('tracks invite_member operation', async () => {
@@ -975,7 +973,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(500);
       expect(sendPendingDriveInvitationEmail).not.toHaveBeenCalled();
-      expect(createMagicLinkToken).not.toHaveBeenCalled();
+      expect(createInviteToken).not.toHaveBeenCalled();
     });
 
     it('falls back to NEXT_PUBLIC_APP_URL when only that is set', async () => {
@@ -990,7 +988,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(sendPendingDriveInvitationEmail).toHaveBeenCalledWith(
         expect.objectContaining({
-          magicLinkUrl: expect.stringContaining('https://fallback.example.com/'),
+          magicLinkUrl: expect.stringContaining('https://fallback.example.com/invite/'),
         })
       );
     });

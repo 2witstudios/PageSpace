@@ -3,9 +3,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { AnimatePresence, motion } from 'motion/react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -22,6 +24,10 @@ interface PasskeySignupButtonProps {
   onLoadingChange?: (isLoading: boolean) => void;
   className?: string;
   disabled?: boolean;
+  /** Pre-fills + disables the email input — used when arriving from /invite/[token]. */
+  lockedEmail?: string;
+  /** Forwarded to /api/auth/signup-passkey so the server can attach the new user to the invite. */
+  inviteToken?: string;
 }
 
 export function PasskeySignupButton({
@@ -32,12 +38,15 @@ export function PasskeySignupButton({
   onLoadingChange,
   className,
   disabled = false,
+  lockedEmail,
+  inviteToken,
 }: PasskeySignupButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(lockedEmail ?? '');
+  const [acceptedTos, setAcceptedTos] = useState(false);
 
   useEffect(() => {
     onLoadingChange?.(isRegistering);
@@ -56,6 +65,11 @@ export function PasskeySignupButton({
 
     if (!email.includes('@') || !email.split('@')[1]?.includes('.')) {
       toast.error('Please enter a valid email address');
+      return;
+    }
+
+    if (!acceptedTos) {
+      toast.error('Please agree to the Terms of Service and Privacy Policy');
       return;
     }
 
@@ -108,7 +122,8 @@ export function PasskeySignupButton({
           response: regResponse,
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
-          acceptedTos: true,
+          acceptedTos,
+          ...(inviteToken ? { inviteToken } : {}),
           ...platformFields,
         }),
       });
@@ -162,14 +177,20 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, refreshToken, email, name, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, acceptedTos, inviteToken, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
     return null;
   }
 
-  const isButtonDisabled = disabled || isRegistering || isSupported === null;
+  // The collapsed CTA must NOT block on `acceptedTos` — the ToS checkbox only
+  // renders inside the expanded form, so blocking the trigger would make
+  // signup unreachable. The submit button (inside the expanded form) gates on
+  // `acceptedTos` separately below.
+  const isExpandTriggerDisabled =
+    disabled || isRegistering || isSupported === null;
+  const isSubmitDisabled = isExpandTriggerDisabled || !acceptedTos;
 
   return (
     <div className={cn('w-full', className)}>
@@ -183,7 +204,7 @@ export function PasskeySignupButton({
           >
             <Button
               onClick={() => setIsExpanded(true)}
-              disabled={isButtonDisabled}
+              disabled={isExpandTriggerDisabled}
               className="w-full"
             >
               <Fingerprint className="mr-2 h-4 w-4" />
@@ -221,8 +242,31 @@ export function PasskeySignupButton({
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={isRegistering}
+                disabled={isRegistering || !!lockedEmail}
               />
+            </div>
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="passkey-tos"
+                checked={acceptedTos}
+                onCheckedChange={(checked) => setAcceptedTos(checked === true)}
+                disabled={isRegistering}
+                className="mt-0.5"
+              />
+              <Label
+                htmlFor="passkey-tos"
+                className="text-xs font-normal leading-snug text-muted-foreground"
+              >
+                I agree to PageSpace&apos;s{' '}
+                <Link href="/terms" className="underline hover:text-foreground">
+                  Terms
+                </Link>
+                {' '}and{' '}
+                <Link href="/privacy" className="underline hover:text-foreground">
+                  Privacy Policy
+                </Link>
+                .
+              </Label>
             </div>
             <div className="flex gap-2">
               <Button
@@ -235,7 +279,7 @@ export function PasskeySignupButton({
               </Button>
               <Button
                 onClick={handleSignup}
-                disabled={isButtonDisabled || !name.trim() || !email.trim()}
+                disabled={isSubmitDisabled || !name.trim() || !email.trim()}
                 className="flex-1"
               >
                 {isRegistering ? (
