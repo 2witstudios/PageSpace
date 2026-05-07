@@ -23,6 +23,7 @@ function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useAuthCSRF();
+  const inviteToken = searchParams.get('invite') ?? undefined;
   const {
     handleGoogleSignIn,
     handleAppleSignIn,
@@ -31,7 +32,7 @@ function SignInForm() {
     isWaitingForExternalAuth,
     waitingProvider,
     cancelExternalAuth,
-  } = useOAuthSignIn();
+  } = useOAuthSignIn(inviteToken ? { inviteToken } : {});
   const onPrem = isOnPrem();
 
   useEffect(() => {
