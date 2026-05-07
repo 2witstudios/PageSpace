@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { acceptInviteForExistingUser } from '@/lib/auth/invite-acceptance';
+import { acceptInviteForExistingUser } from '@pagespace/lib/services/invites';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export async function GET(
@@ -15,10 +16,6 @@ export async function GET(
 
   const auth = await authenticateRequestWithOptions(request, { allow: ['session'] });
   if (isAuthError(auth)) {
-    // Send the unauthenticated user through the standard signin flow. After
-    // signin, the user can re-click the link (two-click fallback) — full `next=`
-    // plumbing is documented as a follow-up; the redirect parameters are
-    // included here so the consuming flow has them available.
     return NextResponse.redirect(
       `${origin}/auth/signin?invite=${encodedToken}&next=${encodeURIComponent(`/invite/${encodedToken}/accept`)}`,
       { status: 303 },
@@ -33,21 +30,11 @@ export async function GET(
     return NextResponse.redirect(`${origin}/dashboard?inviteError=TOKEN_NOT_FOUND`, { status: 303 });
   }
 
-  // Defense-in-depth: authenticateSessionRequest already rejects suspended
-  // users at the session layer, but reading suspendedAt here makes the gate
-  // explicit and survives any future refactor of the auth helpers. A
-  // suspended user must not consume a pending invite.
-  if (status.suspendedAt) {
-    return NextResponse.redirect(
-      `${origin}/dashboard?inviteError=ACCOUNT_SUSPENDED`,
-      { status: 303 },
-    );
-  }
-
-  const result = await acceptInviteForExistingUser({
+  const result = await acceptInviteForExistingUser(buildAcceptancePorts(request))({
     token,
     userId: auth.userId,
     userEmail: status.email,
+    suspendedAt: status.suspendedAt,
     now: new Date(),
   });
 
