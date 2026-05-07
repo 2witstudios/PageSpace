@@ -60,10 +60,6 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'repositories/drive-invite-repository.ts',
     'Repository seam — each query carries its own gate (findAdminMembership filters IS NOT NULL; findActivePendingMemberByEmail intentionally filters IS NULL to surface pending rows; createDriveMember/findExistingMember/updateDriveMemberRole operate by composite key or memberId and do not branch on acceptedAt).',
   ],
-  [
-    'auth/revoke-adapters.ts',
-    'Revoke port adapter — findActorMembership intentionally returns the raw row including acceptedAt so the pure-core validator (validateRevokeRequest) can enforce the strict gate (FORBIDDEN if acceptedAt IS NULL) at the discriminated-union boundary. The SQL is by composite key (driveId, userId) and does not need an isNotNull filter; the gate is composed one layer up in services/invites/validators.ts.',
-  ],
 ]);
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;
