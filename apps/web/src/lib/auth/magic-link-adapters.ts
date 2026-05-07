@@ -17,11 +17,16 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
   createUserAccount: async ({ email, tosAcceptedAt }) => {
     const id = createId();
     try {
+      // `name` is NOT NULL in the schema. Email zod-validates upstream so the
+      // local part is normally non-empty, but an empty local part would split
+      // to '' and `??` only catches null/undefined — fall back with `||` so a
+      // pathological email never produces a NOT NULL violation.
+      const localPart = email.split('@')[0];
       const [created] = await db
         .insert(users)
         .values({
           id,
-          name: email.split('@')[0] ?? 'New User',
+          name: localPart || 'New User',
           email,
           provider: 'email',
           role: 'user',
