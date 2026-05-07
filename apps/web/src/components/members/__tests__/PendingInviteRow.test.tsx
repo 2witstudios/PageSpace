@@ -43,6 +43,11 @@ describe('PendingInviteRow', () => {
     expect(screen.getByText('Admin')).toBeInTheDocument();
   });
 
+  it('renders role-specific badge: Owner', () => {
+    render(<PendingInviteRow invite={buildInvite({ role: 'OWNER' })} />);
+    expect(screen.getByText('Owner')).toBeInTheDocument();
+  });
+
   it('attaches data-invite-id for downstream interaction', () => {
     const { container } = render(<PendingInviteRow invite={buildInvite({ id: 'inv_xyz' })} />);
     const row = container.querySelector('[data-testid="pending-invite-row"]');

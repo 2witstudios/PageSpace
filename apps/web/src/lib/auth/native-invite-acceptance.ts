@@ -19,7 +19,7 @@ import { buildAcceptancePorts } from './invite-acceptance-adapters';
 export interface NativeInviteAcceptanceInput {
   request: Request;
   inviteToken: string | undefined;
-  user: { id: string; suspendedAt?: Date | null };
+  user: { id: string; suspendedAt: Date | null };
   isNewUser: boolean;
   email: string;
 }
@@ -44,7 +44,7 @@ export const consumeInviteIfPresent = async ({
       token: inviteToken,
       userId: user.id,
       userEmail: email.toLowerCase(),
-      suspendedAt: isNewUser ? null : (user.suspendedAt ?? null),
+      suspendedAt: isNewUser ? null : user.suspendedAt,
       now: new Date(),
     };
     const result = isNewUser

@@ -105,6 +105,7 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
               size="sm"
               className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
               title="Revoke Invitation"
+              aria-label={`Revoke invitation for ${invite.email}`}
               disabled={isRevoking}
             >
               <Trash2 className="w-4 h-4" />
