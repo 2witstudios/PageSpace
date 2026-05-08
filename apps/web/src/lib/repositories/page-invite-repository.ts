@@ -315,13 +315,29 @@ export const pageInviteRepository = {
     canShare: boolean;
     grantedBy: string;
   }): Promise<{ id: string }> {
-    const id = createId();
     const [row] = await db
       .insert(pagePermissions)
-      .values({ id, ...data, canDelete: false })
+      .values({ id: createId(), ...data, canDelete: false })
       .onConflictDoNothing({ target: [pagePermissions.pageId, pagePermissions.userId] })
       .returning({ id: pagePermissions.id });
-    return row ?? { id };
+    if (row) return row;
+
+    // Conflict: permission already exists — return the real row id
+    const [existing] = await db
+      .select({ id: pagePermissions.id })
+      .from(pagePermissions)
+      .where(
+        and(
+          eq(pagePermissions.pageId, data.pageId),
+          eq(pagePermissions.userId, data.userId),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) {
+      throw new Error('Failed to create or read existing page permission');
+    }
+    return existing;
   },
 };
 

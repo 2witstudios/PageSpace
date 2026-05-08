@@ -149,12 +149,16 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
         return;
       }
 
+      const json = await response.json().catch(() => ({})) as { kind?: string; error?: string };
       if (!response.ok) {
-        const json = await response.json().catch(() => ({}));
-        throw new Error((json as { error?: string }).error || 'Failed to send invite.');
+        throw new Error(json.error || 'Failed to send invite.');
       }
 
-      toast.success(`Invite sent to ${offPlatformEmail}`);
+      if (json.kind === 'granted') {
+        toast.success(`Access granted to ${offPlatformEmail}`);
+      } else {
+        toast.success(`Invite sent to ${offPlatformEmail}`);
+      }
       resetForm();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';

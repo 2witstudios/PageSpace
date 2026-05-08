@@ -16,12 +16,25 @@ import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
-const shareInviteBodySchema = z.object({
-  email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
-  permissions: z
-    .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
-    .min(1, 'At least VIEW permission is required'),
-});
+const shareInviteBodySchema = z
+  .object({
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    permissions: z
+      .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
+      .min(1, 'At least VIEW permission is required'),
+  })
+  .superRefine(({ permissions }, ctx) => {
+    if (
+      (permissions.includes('EDIT') || permissions.includes('SHARE')) &&
+      !permissions.includes('VIEW')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['permissions'],
+        message: 'VIEW is required when EDIT or SHARE is granted',
+      });
+    }
+  });
 
 function resolveAppUrl(): string | null {
   const url = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;

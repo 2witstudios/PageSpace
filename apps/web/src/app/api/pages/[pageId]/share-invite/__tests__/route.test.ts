@@ -231,6 +231,22 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
       );
       expect(response.status).toBe(400);
     });
+
+    it('returns 400 when EDIT is requested without VIEW', async () => {
+      const response = await POST(
+        buildPost(mockPageId, { email: 'new@example.com', permissions: ['EDIT'] }),
+        createContext(mockPageId),
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 when SHARE is requested without VIEW', async () => {
+      const response = await POST(
+        buildPost(mockPageId, { email: 'new@example.com', permissions: ['SHARE'] }),
+        createContext(mockPageId),
+      );
+      expect(response.status).toBe(400);
+    });
   });
 
   // ==========================================================================
