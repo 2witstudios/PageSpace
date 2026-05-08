@@ -13,6 +13,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -479,6 +480,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   });
 
   const createdTitle = result.page.title;
+
+  // Notify newly assigned users (self-assign guard is inside createTaskAssignedNotification)
+  const assignedUserIds = (taskWithRelations?.assignees ?? [])
+    .map(a => a.userId)
+    .filter((id): id is string => !!id);
+  for (const assignedUserId of assignedUserIds) {
+    void createTaskAssignedNotification(
+      assignedUserId,
+      result.task.id,
+      createdTitle,
+      pageId,
+      userId
+    );
+  }
 
   // Broadcast events
   await Promise.all([
