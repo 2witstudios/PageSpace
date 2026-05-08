@@ -15,15 +15,17 @@ import { aggregateStatuses } from './task-helpers';
 import {
   type DueDateFilter,
   type AssigneeFilter,
+  type StatusGroupFilter,
   type FilterValues,
   DriveSelect,
   StatusSelect,
   PrioritySelect,
   DueDateSelect,
   AssigneeToggle,
+  StatusGroupToggle,
 } from './FilterComponents';
 
-export type { DueDateFilter, AssigneeFilter, FilterValues };
+export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 
 export interface TaskFilterSheetProps {
   open: boolean;
@@ -85,6 +87,15 @@ export function TaskFilterSheet({
         </SheetHeader>
 
         <div className="overflow-y-auto px-5 pb-4 space-y-5 mt-2">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Completion</label>
+            <StatusGroupToggle
+              value={filters.statusGroup || 'active'}
+              onChange={(g) => onFiltersChange({ statusGroup: g })}
+              className="w-full"
+            />
+          </div>
+
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Show tasks</label>
             <AssigneeToggle

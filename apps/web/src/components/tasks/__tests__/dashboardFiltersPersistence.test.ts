@@ -38,6 +38,31 @@ describe('pickInitialFilters', () => {
     expect(result.assigneeFilter).toBe('mine');
   });
 
+  it('given URL has explicit status slug but no statusGroup, should default statusGroup to "all" so the API does not AND both filters', () => {
+    const result = pickInitialFilters(params({ status: 'completed' }), undefined);
+
+    expect(result.status).toBe('completed');
+    expect(result.statusGroup).toBe('all');
+  });
+
+  it('given URL has any persistable param but no status, should still default statusGroup to "active"', () => {
+    const result = pickInitialFilters(params({ priority: 'high' }), undefined);
+
+    expect(result.statusGroup).toBe('active');
+  });
+
+  it('given URL has statusGroup param, should reflect that statusGroup value', () => {
+    const result = pickInitialFilters(params({ statusGroup: 'completed' }), undefined);
+
+    expect(result.statusGroup).toBe('completed');
+  });
+
+  it('given URL has invalid statusGroup value, should ignore it and fall back to default', () => {
+    const result = pickInitialFilters(params({ statusGroup: 'bogus', priority: 'high' }), undefined);
+
+    expect(result.statusGroup).toBe('active');
+  });
+
   it('given URL is bare and stored prefs exist, should use stored prefs', () => {
     const stored: StoredDashboardFilters = {
       assigneeFilter: 'all',
@@ -86,6 +111,13 @@ describe('fromStoredOrDefaults', () => {
 
     expect(result.status).toBe('in_progress');
     expect(result.assigneeFilter).toBe('mine');
+    expect(result.statusGroup).toBe('active');
+  });
+
+  it('given stored prefs that override statusGroup, should respect the override', () => {
+    const result = fromStoredOrDefaults({ statusGroup: 'all' });
+
+    expect(result.statusGroup).toBe('all');
   });
 
   it('given stored prefs that override the default assignee, should respect the override', () => {
@@ -104,6 +136,7 @@ describe('toStoredDashboardFilters', () => {
       search: 'budget',
       dueDateFilter: 'overdue',
       assigneeFilter: 'all',
+      statusGroup: 'completed',
     });
 
     expect(result).toEqual({
@@ -112,6 +145,7 @@ describe('toStoredDashboardFilters', () => {
       search: 'budget',
       dueDateFilter: 'overdue',
       assigneeFilter: 'all',
+      statusGroup: 'completed',
     });
   });
 

@@ -44,6 +44,7 @@ import {
   fromStoredOrDefaults,
   type DueDateFilter,
   type AssigneeFilter,
+  type StatusGroupFilter,
 } from './dashboardFiltersPersistence';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
@@ -76,6 +77,7 @@ interface ExtendedFilters extends TaskFilters {
   search?: string;
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
+  statusGroup?: StatusGroupFilter;
 }
 
 export function TasksDashboard({ context, driveId: initialDriveId, driveName }: TasksDashboardProps) {
@@ -158,6 +160,9 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     }
     if (newFilters.assigneeFilter && newFilters.assigneeFilter !== 'mine') {
       params.set('assigneeFilter', newFilters.assigneeFilter);
+    }
+    if (newFilters.statusGroup && newFilters.statusGroup !== 'active') {
+      params.set('statusGroup', newFilters.statusGroup);
     }
     // For user context, driveId is a filter (not in the URL path)
     if (newFilters.driveId && !newDriveId) {
@@ -244,6 +249,9 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
         // Handle assignee filter - 'all' shows all tasks, 'mine' (default) shows only user's tasks
         if (filters.assigneeFilter === 'all') {
           params.set('showAllAssignees', 'true');
+        }
+        if (filters.statusGroup && filters.statusGroup !== 'all') {
+          params.set('statusGroup', filters.statusGroup);
         }
 
         const response = await fetchWithAuth(`/api/tasks?${params.toString()}`);
@@ -571,20 +579,22 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       ? `Your tasks in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
       : 'Your tasks across all drives';
 
-  // Note: assigneeFilter === 'all' is included because the default is 'mine',
-  // so viewing all tasks is a deviation from the default state that users may want to clear
+  // Note: assigneeFilter === 'all' and statusGroup !== 'active' are included because their
+  // defaults are 'mine' and 'active' respectively — deviations users may want to clear.
   const hasActiveFilters = Boolean(
     filters.search ||
     filters.status ||
     filters.priority ||
     (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
     (context === 'user' && filters.driveId) ||
-    filters.assigneeFilter === 'all'
+    filters.assigneeFilter === 'all' ||
+    (filters.statusGroup && filters.statusGroup !== 'active')
   );
 
   const clearFilters = () => {
     const nextFilters: ExtendedFilters = {
       assigneeFilter: 'mine',
+      statusGroup: 'active',
     };
 
     if (searchTimeoutRef.current) {
@@ -605,6 +615,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     filters.dueDateFilter && filters.dueDateFilter !== 'all',
     context === 'user' && filters.driveId,
     filters.assigneeFilter === 'all',
+    filters.statusGroup && filters.statusGroup !== 'active',
   ].filter(Boolean).length;
 
   const handleOpenDetailSheet = (task: Task) => {

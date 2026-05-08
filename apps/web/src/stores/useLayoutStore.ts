@@ -10,6 +10,7 @@ export interface StoredDashboardFilters {
   search?: string;
   dueDateFilter?: 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
   assigneeFilter?: 'mine' | 'all';
+  statusGroup?: 'all' | 'active' | 'completed';
 }
 
 interface LayoutState {
