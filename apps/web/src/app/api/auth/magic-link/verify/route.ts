@@ -137,30 +137,42 @@ export async function GET(req: Request) {
     // pending-invite state then. We re-load the user's verification status
     // here because the pipe needs the authoritative email + suspendedAt for
     // the second validation gate inside acceptInviteForExistingUser.
+    //
+    // Wrapped in try/catch: the session is already committed; a DB blip on
+    // the verification-status lookup must not redirect the user to signin
+    // when they already hold a valid session. Worst case the invite stays
+    // pending and the user reclaims it from the consent page.
     let invitedDriveId: string | null = null;
     let inviteError: string | null = null;
     if (boundInviteToken) {
-      const status = await driveInviteRepository.findUserVerificationStatusById(userId);
-      if (status) {
-        const inviteResult = await consumeInviteIfPresent({
-          request: req,
-          inviteToken: boundInviteToken,
-          user: { id: userId, suspendedAt: status.suspendedAt },
-          isNewUser,
-          email: status.email,
-        });
-        invitedDriveId = inviteResult.invitedDriveId;
-        if (inviteResult.inviteError) {
-          inviteError = inviteResult.inviteError;
-          loggers.auth.info('Bound invite acceptance failed during magic link verify', {
+      try {
+        const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+        if (status) {
+          const inviteResult = await consumeInviteIfPresent({
+            request: req,
+            inviteToken: boundInviteToken,
+            user: { id: userId, suspendedAt: status.suspendedAt },
+            isNewUser,
+            email: status.email,
+          });
+          invitedDriveId = inviteResult.invitedDriveId;
+          if (inviteResult.inviteError) {
+            inviteError = inviteResult.inviteError;
+            loggers.auth.info('Bound invite acceptance failed during magic link verify', {
+              userId,
+              reason: inviteResult.inviteError,
+            });
+          }
+        } else {
+          loggers.auth.warn('Authenticated session has no user record on invite consume', {
             userId,
-            reason: inviteResult.inviteError,
           });
         }
-      } else {
-        loggers.auth.warn('Authenticated session has no user record on invite consume', {
+      } catch (error) {
+        loggers.auth.error('Invite consume threw during magic link verify', error as Error, {
           userId,
         });
+        // Continue with login — the session is valid; user can re-attempt invite.
       }
     }
 

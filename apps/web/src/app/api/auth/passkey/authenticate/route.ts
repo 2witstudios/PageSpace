@@ -191,27 +191,35 @@ export async function POST(req: Request) {
     // Consume invite atomically with authentication. The acceptance pipe
     // re-validates the invite (existence, expiry, consumption, email match)
     // — passing inviteToken here is unauthenticated input, the pipe is the
-    // gate. A failed invite never blocks login.
+    // gate. A failed invite never blocks login. Wrapped in try/catch so a
+    // DB blip on findUserVerificationStatusById doesn't 500 the response
+    // after the session has already committed.
     let invitedDriveId: string | null = null;
     let inviteError: string | null = null;
     if (inviteToken) {
-      const status = await driveInviteRepository.findUserVerificationStatusById(userId);
-      if (status) {
-        const inviteResult = await consumeInviteIfPresent({
-          request: req,
-          inviteToken,
-          user: { id: userId, suspendedAt: status.suspendedAt },
-          isNewUser: false,
-          email: status.email,
-        });
-        invitedDriveId = inviteResult.invitedDriveId;
-        if (inviteResult.inviteError) {
-          inviteError = inviteResult.inviteError;
-          loggers.auth.info('Bound invite acceptance failed during passkey auth', {
-            userId,
-            reason: inviteResult.inviteError,
+      try {
+        const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+        if (status) {
+          const inviteResult = await consumeInviteIfPresent({
+            request: req,
+            inviteToken,
+            user: { id: userId, suspendedAt: status.suspendedAt },
+            isNewUser: false,
+            email: status.email,
           });
+          invitedDriveId = inviteResult.invitedDriveId;
+          if (inviteResult.inviteError) {
+            inviteError = inviteResult.inviteError;
+            loggers.auth.info('Bound invite acceptance failed during passkey auth', {
+              userId,
+              reason: inviteResult.inviteError,
+            });
+          }
         }
+      } catch (error) {
+        loggers.auth.error('Invite consume threw during passkey auth', error as Error, {
+          userId,
+        });
       }
     }
 
