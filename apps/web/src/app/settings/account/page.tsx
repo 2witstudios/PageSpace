@@ -153,9 +153,7 @@ export default function AccountPage() {
       console.error("Profile update error:", error);
       toast.error(error instanceof Error ? error.message : "Failed to update profile");
     } finally {
-      if (mutate) {
-        await mutate().catch(() => {});
-      }
+      mutate?.();
       setIsUploadingAvatar(false);
       setIsSavingProfile(false);
     }
