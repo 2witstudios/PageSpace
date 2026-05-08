@@ -13,6 +13,7 @@ import { channelMessageRepository } from '@pagespace/lib/services/channel-messag
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 interface ChannelInboxFanoutInput {
@@ -447,18 +448,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       const isThreadOnlyReply = !mirrorWithRelations;
       if (isThreadOnlyReply && replyContent.trim().length > 0 && channel?.driveId) {
         const mentionedUserIds = extractMentionedUserIds(replyContent);
-        const candidateTargets = mentionedUserIds.filter(
+        // Non-followers need channel_updated so the thread surfaces in their unread.
+        // Followers already receive thread_updated above — sending channel_updated
+        // too would double-count their unread.
+        const nonFollowerMentioned = mentionedUserIds.filter(
           (id: string) => id !== userId && !followerSet.has(id)
+        );
+        // Followers who are @mentioned have view access by definition (they're already
+        // subscribed), but they still need a durable MENTION notification.
+        const followerMentioned = mentionedUserIds.filter(
+          (id: string) => id !== userId && followerSet.has(id)
         );
 
         // Mention IDs come from message text, which is sender-controlled — so
         // before we broadcast a channel_updated payload (which leaks the channel
-        // id, drive id, preview, and sender name), every candidate must pass
-        // the channel's view-permission check. Without this gate a sender could
-        // craft mentions for arbitrary user IDs and surface this channel to
-        // users who have no access.
+        // id, drive id, preview, and sender name), every non-follower candidate
+        // must pass the channel's view-permission check.
         const viewabilityChecks = await Promise.all(
-          candidateTargets.map(async (id: string) => ({
+          nonFollowerMentioned.map(async (id: string) => ({
             id,
             canView: await canUserViewPage(id, pageId),
           }))
@@ -478,6 +485,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
               lastMessagePreview: replyPreview,
               lastMessageSender: replySender.name,
             })
+          )
+        );
+
+        // Fire MENTION notifications for all @mentioned users — both non-followers
+        // who passed the view check and followers (who already have access).
+        await Promise.all(
+          [...mentionTargets, ...followerMentioned].map((id) =>
+            createMentionNotification(id, pageId, userId).catch((err) =>
+              loggers.realtime.error('Failed to send mention notification for thread reply', err as Error)
+            )
           )
         );
       }
@@ -626,6 +643,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         lastMessagePreview: messagePreview,
         lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
       });
+
+      try {
+        const mentionedIds = extractMentionedUserIds(messageContent);
+        const candidates = mentionedIds.filter((id) => id !== userId);
+        if (candidates.length > 0) {
+          const viewChecks = await Promise.all(
+            candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
+          );
+          await Promise.all(
+            viewChecks
+              .filter((e) => e.canView)
+              .map((e) =>
+                createMentionNotification(e.id, pageId, userId).catch((err) =>
+                  loggers.realtime.error('Failed to send mention notification', err as Error)
+                )
+              )
+          );
+        }
+      } catch (mentionErr) {
+        loggers.realtime.error('Failed to resolve mention targets', mentionErr as Error);
+      }
 
       // Broadcast read status change to sender to update their unread count
       await broadcastInboxEvent(userId, {
