@@ -248,6 +248,7 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
     vi.mocked(resolveInviteContext).mockResolvedValueOnce({
       ok: true,
       data: {
+        kind: 'drive',
         driveName: 'Acme',
         inviterName: 'Jane',
         role: 'MEMBER',

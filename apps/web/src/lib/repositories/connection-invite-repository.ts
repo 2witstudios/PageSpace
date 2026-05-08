@@ -210,6 +210,37 @@ export const connectionInviteRepository = {
     }
   },
 
+  async findUserIdByEmail(
+    email: string,
+  ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email),
+      columns: { id: true, emailVerified: true, suspendedAt: true },
+    });
+    return user
+      ? { id: user.id, emailVerified: user.emailVerified ?? null, suspendedAt: user.suspendedAt ?? null }
+      : null;
+  },
+
+  async createDirectConnection(input: {
+    inviterUserId: string;
+    targetUserId: string;
+    requestMessage?: string;
+  }): Promise<{ id: string }> {
+    const [user1Id, user2Id] = sortedPair(input.inviterUserId, input.targetUserId);
+    const [row] = await db
+      .insert(connections)
+      .values({
+        user1Id,
+        user2Id,
+        status: 'PENDING',
+        requestedBy: input.inviterUserId,
+        requestMessage: input.requestMessage ?? null,
+      })
+      .returning({ id: connections.id });
+    return { id: row.id };
+  },
+
   async findInviterDisplay(userId: string): Promise<{ name: string; email: string } | null> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
