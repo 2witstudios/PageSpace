@@ -132,33 +132,9 @@ export async function POST(req: Request) {
         ? next
         : undefined;
 
-    // Validate inviteToken before minting the magic-link. Two gates protect
-    // against stolen-token replay: the invite must exist + not be consumed +
-    // not be expired AND its email must match the address we're emailing. A
-    // mismatch (or any failure) drops the inviteToken silently — we still
-    // send the magic link so an attacker who guesses someone else's invite
-    // token can't enumerate which addresses it belongs to. The user just
-    // signs in normally; the invite stays pending.
-    let safeInviteToken: string | undefined;
-    if (inviteToken) {
-      try {
-        const resolution = await resolveInviteContext({ token: inviteToken, now: new Date() });
-        if (resolution.ok && resolution.data.email === normalizedEmail) {
-          safeInviteToken = inviteToken;
-        } else {
-          loggers.auth.info('Magic link invite binding rejected', {
-            email: maskEmail(normalizedEmail),
-            reason: resolution.ok ? 'EMAIL_MISMATCH' : resolution.error,
-          });
-        }
-      } catch (error) {
-        loggers.auth.warn('Invite resolution threw during magic link send', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // Rate limit by IP and email
+    // Rate limit by IP and email BEFORE doing any DB work — invite resolution
+    // hits pending_invites + users, so allowing it pre-rate-limit lets an
+    // attacker amplify load by spamming /send with invite-token guesses.
     const [ipRateLimit, emailRateLimit] = await Promise.all([
       checkDistributedRateLimit(`magic_link:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
       checkDistributedRateLimit(`magic_link:email:${normalizedEmail}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
@@ -206,6 +182,33 @@ export async function POST(req: Request) {
           },
         }
       );
+    }
+
+    // Validate inviteToken AFTER rate-limit checks so over-limit requests
+    // never reach pending_invites / users. Two gates protect against stolen-
+    // token replay: the invite must exist + not be consumed + not be expired
+    // AND its email must match the address we're emailing. A mismatch (or any
+    // failure) drops the inviteToken silently — we still send the magic link
+    // so an attacker who guesses someone else's invite token can't enumerate
+    // which addresses it belongs to. The user just signs in normally; the
+    // invite stays pending.
+    let safeInviteToken: string | undefined;
+    if (inviteToken) {
+      try {
+        const resolution = await resolveInviteContext({ token: inviteToken, now: new Date() });
+        if (resolution.ok && resolution.data.email === normalizedEmail) {
+          safeInviteToken = inviteToken;
+        } else {
+          loggers.auth.info('Magic link invite binding rejected', {
+            email: maskEmail(normalizedEmail),
+            reason: resolution.ok ? 'EMAIL_MISMATCH' : resolution.error,
+          });
+        }
+      } catch (error) {
+        loggers.auth.warn('Invite resolution threw during magic link send', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     let result;
