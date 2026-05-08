@@ -725,7 +725,7 @@ describe('Task API Routes', () => {
 
     it('fires createMentionNotification for @mentioned users in task description', async () => {
       const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
       const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
 
       transactionPageResult = [mockNewPage];
@@ -754,7 +754,7 @@ describe('Task API Routes', () => {
 
     it('does not notify the task creator even when self-mentioned in description', async () => {
       const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
       const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
 
       transactionPageResult = [mockNewPage];
@@ -787,7 +787,7 @@ describe('Task API Routes', () => {
 
     it('does not notify a @mentioned user who cannot view the task list page', async () => {
       const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
       const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
 
       transactionPageResult = [mockNewPage];
@@ -816,7 +816,7 @@ describe('Task API Routes', () => {
 
     it('returns 201 even when createMentionNotification throws during task creation', async () => {
       const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
       const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
 
       transactionPageResult = [mockNewPage];
