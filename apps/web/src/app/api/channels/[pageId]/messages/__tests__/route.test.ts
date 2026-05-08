@@ -819,6 +819,32 @@ describe('POST /api/channels/[pageId]/messages (thread reply — mention notific
     expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-bob', PAGE_ID, USER_ID);
   });
 
+  it('fires createMentionNotification for a @mentioned user who is already a thread follower', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'hey @[Alice](user-alice:user)',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    // user-alice is already a thread follower — they should still get a MENTION notification
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID, 'user-alice']);
+
+    await callPost({ content: 'hey @[Alice](user-alice:user)', parentId: PARENT_ID });
+
+    expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', PAGE_ID, USER_ID);
+  });
+
   it('returns 201 even when mention notification throws in a thread reply', async () => {
     makeThreadReplyScenario('hey @[Bob](user-bob:user)');
     mockCreateMentionNotification.mockRejectedValue(new Error('notification failed'));

@@ -448,18 +448,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       const isThreadOnlyReply = !mirrorWithRelations;
       if (isThreadOnlyReply && replyContent.trim().length > 0 && channel?.driveId) {
         const mentionedUserIds = extractMentionedUserIds(replyContent);
-        const candidateTargets = mentionedUserIds.filter(
+        // Non-followers need channel_updated so the thread surfaces in their unread.
+        // Followers already receive thread_updated above — sending channel_updated
+        // too would double-count their unread.
+        const nonFollowerMentioned = mentionedUserIds.filter(
           (id: string) => id !== userId && !followerSet.has(id)
+        );
+        // Followers who are @mentioned have view access by definition (they're already
+        // subscribed), but they still need a durable MENTION notification.
+        const followerMentioned = mentionedUserIds.filter(
+          (id: string) => id !== userId && followerSet.has(id)
         );
 
         // Mention IDs come from message text, which is sender-controlled — so
         // before we broadcast a channel_updated payload (which leaks the channel
-        // id, drive id, preview, and sender name), every candidate must pass
-        // the channel's view-permission check. Without this gate a sender could
-        // craft mentions for arbitrary user IDs and surface this channel to
-        // users who have no access.
+        // id, drive id, preview, and sender name), every non-follower candidate
+        // must pass the channel's view-permission check.
         const viewabilityChecks = await Promise.all(
-          candidateTargets.map(async (id: string) => ({
+          nonFollowerMentioned.map(async (id: string) => ({
             id,
             canView: await canUserViewPage(id, pageId),
           }))
@@ -482,8 +488,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           )
         );
 
+        // Fire MENTION notifications for all @mentioned users — both non-followers
+        // who passed the view check and followers (who already have access).
         await Promise.all(
-          mentionTargets.map((id) =>
+          [...mentionTargets, ...followerMentioned].map((id) =>
             createMentionNotification(id, pageId, userId).catch((err) =>
               loggers.realtime.error('Failed to send mention notification for thread reply', err as Error)
             )
