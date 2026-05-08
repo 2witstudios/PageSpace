@@ -225,7 +225,7 @@ export async function POST(request: Request) {
     } catch (insertError) {
       const msg = insertError instanceof Error ? insertError.message : String(insertError);
       const isUniqueViolation =
-        msg.includes('pending_connection_invites_active_owner_email_idx') ||
+        msg.includes('pending_connection_invites_active_inviter_email_idx') ||
         msg.includes('pending_connection_invites_token_hash_unique') ||
         msg.includes('duplicate key');
       if (isUniqueViolation) {
