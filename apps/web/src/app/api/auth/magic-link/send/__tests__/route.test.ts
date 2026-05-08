@@ -30,6 +30,16 @@ const { pipeInner, pipeFactory } = vi.hoisted(() => {
 
 vi.mock('@pagespace/lib/services/invites', () => ({
   requestMagicLink: pipeFactory,
+  isEmailMatch: ({ inviteEmail, userEmail }: { inviteEmail: string; userEmail: string }) =>
+    inviteEmail.trim().toLowerCase() === userEmail.trim().toLowerCase(),
+}));
+
+const { resolveInviteContextMock } = vi.hoisted(() => ({
+  resolveInviteContextMock: vi.fn(),
+}));
+
+vi.mock('@/lib/auth/invite-resolver', () => ({
+  resolveInviteContext: resolveInviteContextMock,
 }));
 
 vi.mock('@/lib/auth/magic-link-adapters', () => ({
@@ -501,6 +511,105 @@ describe('POST /api/auth/magic-link/send', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(400);
+      expect(pipeInner).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('inviteToken binding', () => {
+    it('given a valid inviteToken whose email matches, forwards inviteToken to the pipe', async () => {
+      resolveInviteContextMock.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          driveName: 'Acme',
+          inviterName: 'Jane',
+          role: 'MEMBER',
+          email: 'invitee@example.com',
+          isExistingUser: false,
+        },
+      });
+      const request = createMagicLinkRequest({
+        email: 'invitee@example.com',
+        inviteToken: 'ps_invite_abc',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(pipeInner).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
+      );
+    });
+
+    it('given inviteToken email differs only by case (Joe@ vs joe@), still binds (case-insensitive match)', async () => {
+      resolveInviteContextMock.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          driveName: 'Acme',
+          inviterName: 'Jane',
+          role: 'MEMBER',
+          email: 'Joe@Example.com',
+          isExistingUser: false,
+        },
+      });
+      const request = createMagicLinkRequest({
+        email: 'JOE@example.com',
+        inviteToken: 'ps_invite_abc',
+      });
+      await POST(request);
+
+      expect(pipeInner).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
+      );
+    });
+
+    it('given inviteToken with mismatched email, drops inviteToken silently (still calls pipe, no enumeration leak)', async () => {
+      resolveInviteContextMock.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          driveName: 'Acme',
+          inviterName: 'Jane',
+          role: 'MEMBER',
+          email: 'someone-else@example.com',
+          isExistingUser: false,
+        },
+      });
+      const request = createMagicLinkRequest({
+        email: 'attacker@example.com',
+        inviteToken: 'ps_invite_abc',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const callArgs = pipeInner.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(callArgs).not.toHaveProperty('inviteToken');
+    });
+
+    it('given an invalid inviteToken (NOT_FOUND), drops it silently and the pipe still runs', async () => {
+      resolveInviteContextMock.mockResolvedValueOnce({ ok: false, error: 'NOT_FOUND' });
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        inviteToken: 'ps_invite_unknown',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const callArgs = pipeInner.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(callArgs).not.toHaveProperty('inviteToken');
+    });
+
+    it('does not resolve invite when over rate limit (DB lookup must be gated by rate limit)', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 60,
+      });
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        inviteToken: 'ps_invite_abc',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(429);
+      expect(resolveInviteContextMock).not.toHaveBeenCalled();
       expect(pipeInner).not.toHaveBeenCalled();
     });
   });

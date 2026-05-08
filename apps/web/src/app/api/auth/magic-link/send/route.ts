@@ -4,7 +4,7 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { requestMagicLink } from '@pagespace/lib/services/invites';
+import { isEmailMatch, requestMagicLink } from '@pagespace/lib/services/invites';
 import { buildMagicLinkPorts } from '@/lib/auth/magic-link-adapters';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -196,7 +196,10 @@ export async function POST(req: Request) {
     if (inviteToken) {
       try {
         const resolution = await resolveInviteContext({ token: inviteToken, now: new Date() });
-        if (resolution.ok && resolution.data.email === normalizedEmail) {
+        if (
+          resolution.ok &&
+          isEmailMatch({ inviteEmail: resolution.data.email, userEmail: normalizedEmail })
+        ) {
           safeInviteToken = inviteToken;
         } else {
           loggers.auth.info('Magic link invite binding rejected', {
