@@ -191,11 +191,15 @@ export const pageInviteRepository = {
           throw 'TOKEN_CONSUMED';
         }
 
-        // Ensure drive_members row exists. Page access without drive
-        // membership is incoherent — see the design plan in
-        // every-invite-flow-should-ancient-zebra.md.
+        // Ensure an ACCEPTED drive_members row exists. Page access without
+        // accepted drive membership fails the acceptedAt-IS-NOT-NULL gate
+        // used across drive/page authz reads — so a user with an outstanding
+        // pending drive invite who accepts a page invite for the same drive
+        // would otherwise get a page_permissions row but still fail every
+        // drive/page authz check. Promote pending rows by stamping
+        // acceptedAt; create the row when missing.
         const existingMember = await tx
-          .select({ id: driveMembers.id })
+          .select({ id: driveMembers.id, acceptedAt: driveMembers.acceptedAt })
           .from(driveMembers)
           .where(
             and(
@@ -218,6 +222,12 @@ export const pageInviteRepository = {
             })
             .returning({ id: driveMembers.id });
           createdMemberId = member.id;
+        } else if (existingMember[0].acceptedAt === null) {
+          await tx
+            .update(driveMembers)
+            .set({ acceptedAt: input.grantedAt })
+            .where(eq(driveMembers.id, existingMember[0].id));
+          createdMemberId = existingMember[0].id;
         }
 
         const flags = PAGE_PERMISSION_FLAGS(input.permissions);

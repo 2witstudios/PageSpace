@@ -839,6 +839,42 @@ describe('POST /api/auth/google/native', () => {
       expect(body.invitedDriveId).toBeNull();
       expect(body.inviteError).toBeUndefined();
     });
+
+    it('surfaces invitedKind=page + invitedPageId for page-kind acceptances so native clients can route to /pages/<pageId>', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'page',
+        invitedDriveId: 'drv_1',
+        invitedPageId: 'page_1',
+        connectionId: null,
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_p' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('page');
+      expect(body.invitedDriveId).toBe('drv_1');
+      expect(body.invitedPageId).toBe('page_1');
+      expect(body.invitedConnectionId).toBeNull();
+    });
+
+    it('surfaces invitedKind=connection + invitedConnectionId for connection-kind acceptances so native clients have a non-null success signal', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1',
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_c' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('connection');
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.invitedPageId).toBeNull();
+      expect(body.invitedConnectionId).toBe('conn_1');
+    });
   });
 
 });

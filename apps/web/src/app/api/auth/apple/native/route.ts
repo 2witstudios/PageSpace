@@ -224,7 +224,7 @@ export async function POST(req: Request) {
       isNewUser,
     });
 
-    const { invitedDriveId, inviteError } = await consumeAnyInviteIfPresent({
+    const inviteResult = await consumeAnyInviteIfPresent({
       request: req,
       inviteToken,
       user,
@@ -248,8 +248,13 @@ export async function POST(req: Request) {
       csrfToken,
       deviceToken,
       isNewUser,
-      invitedDriveId,
-      ...(inviteError && { inviteError }),
+      // Surface every kind-specific id the dispatcher returned so native
+      // clients can route to the accepted surface (drive | page | connection).
+      invitedKind: inviteResult.kind,
+      invitedDriveId: inviteResult.invitedDriveId,
+      invitedPageId: inviteResult.invitedPageId,
+      invitedConnectionId: inviteResult.connectionId,
+      ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
       user: {
         id: user.id,
         name: user.name,

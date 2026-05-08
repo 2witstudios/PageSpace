@@ -314,7 +314,13 @@ export async function POST(req: Request) {
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         redirectTo,
         isNewUser,
+        // Surface every kind-specific id the dispatcher returned so native
+        // (One Tap on iOS/Desktop) clients have the same routing inputs as
+        // the response-driven redirectTo.
+        invitedKind: inviteKind,
         invitedDriveId,
+        invitedPageId,
+        invitedConnectionId: inviteResult.connectionId,
         ...(inviteError && { inviteError }),
       },
       { headers }

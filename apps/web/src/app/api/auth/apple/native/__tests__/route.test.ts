@@ -784,6 +784,37 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.invitedDriveId).toBeNull();
       expect(body.inviteError).toBeUndefined();
     });
+
+    it('surfaces invitedKind=page + invitedPageId for page-kind acceptances so native clients can route', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'page',
+        invitedDriveId: 'drv_1',
+        invitedPageId: 'page_1',
+        connectionId: null,
+      });
+
+      const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_p' }));
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('page');
+      expect(body.invitedDriveId).toBe('drv_1');
+      expect(body.invitedPageId).toBe('page_1');
+    });
+
+    it('surfaces invitedKind=connection + invitedConnectionId for connection-kind acceptances', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1',
+      });
+
+      const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_c' }));
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('connection');
+      expect(body.invitedConnectionId).toBe('conn_1');
+    });
   });
 
 });
