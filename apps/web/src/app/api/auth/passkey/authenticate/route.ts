@@ -318,7 +318,7 @@ export async function POST(req: Request) {
       {
         success: true,
         userId,
-        redirectUrl: invitedDriveId ? `/dashboard/${invitedDriveId}?invited=1` : '/dashboard',
+        redirectUrl: successRedirect,
         csrfToken: newCsrfToken,
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
         ...(invitedDriveId && { invitedDriveId }),

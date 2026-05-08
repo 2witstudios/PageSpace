@@ -625,6 +625,56 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
   });
 
+  describe('inviteToken handling (web JSON response)', () => {
+    it('given an inviteToken consumed successfully, returns redirectUrl pointing to the invited drive with invited=1', async () => {
+      const { consumeInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive_xyz' });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.redirectUrl).toBe('/dashboard/drive_xyz?invited=1');
+      expect(body.invitedDriveId).toBe('drive_xyz');
+    });
+
+    it('given an inviteToken whose consumption failed (e.g. TOKEN_CONSUMED race), returns redirectUrl carrying ?inviteError=<code> so the UI can surface the failure', async () => {
+      const { consumeInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: null,
+        inviteError: 'TOKEN_CONSUMED',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.redirectUrl).toBe('/dashboard?inviteError=TOKEN_CONSUMED');
+      expect(body.invitedDriveId).toBeUndefined();
+    });
+
+    it('given EMAIL_MISMATCH on invite consumption, surfaces ?inviteError=EMAIL_MISMATCH on the redirect', async () => {
+      const { consumeInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
+      const body = await response.json();
+
+      expect(body.redirectUrl).toBe('/dashboard?inviteError=EMAIL_MISMATCH');
+    });
+
+    it('given no inviteToken, returns the plain /dashboard redirect (no inviteError leakage)', async () => {
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(body.redirectUrl).toBe('/dashboard');
+      expect(body.redirectUrl).not.toContain('inviteError');
+    });
+  });
+
   describe('deviceName input bounds', () => {
     it('returns 400 when deviceName exceeds 256 characters', async () => {
       const response = await POST(
