@@ -537,6 +537,20 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
+  socket.on('leave_channel', (payload: unknown) => {
+    if (!user?.id) return;
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_channel payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_channel', validation.error);
+      return;
+    }
+    const pageId = validation.value;
+    socket.leave(pageId);
+    socketRegistry.trackRoomLeave(socket.id, pageId);
+    loggers.realtime.debug('User left channel', { userId: user.id, channelId: pageId });
+  });
+
   socket.on('join_drive', async (payload: unknown) => {
     if (!user?.id) return;
 
