@@ -87,7 +87,6 @@ vi.mock(
 );
 
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
-import { toast } from 'sonner';
 import { ShareDialog } from '../ShareDialog';
 
 const make404Response = () =>
