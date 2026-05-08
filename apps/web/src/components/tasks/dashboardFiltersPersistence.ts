@@ -35,15 +35,33 @@ function urlHasAnyPersistableParam(searchParams: URLSearchParams): boolean {
   return URL_FILTER_KEYS.some((key) => searchParams.has(key));
 }
 
+const VALID_STATUS_GROUPS: ReadonlyArray<StatusGroupFilter> = ['all', 'active', 'completed'];
+
+function isValidStatusGroup(value: string | null): value is StatusGroupFilter {
+  return value !== null && (VALID_STATUS_GROUPS as readonly string[]).includes(value);
+}
+
 function readFromUrl(searchParams: URLSearchParams): PersistableFilters {
+  const status = searchParams.get('status') || undefined;
+  const rawStatusGroup = searchParams.get('statusGroup');
+
+  // Validate URL value; if absent and an explicit `status` slug is set,
+  // fall back to 'all' so the API doesn't conjunctively filter both
+  // (e.g. ?status=completed should not be silently ANDed with 'active').
+  const statusGroup: StatusGroupFilter = isValidStatusGroup(rawStatusGroup)
+    ? rawStatusGroup
+    : status
+      ? 'all'
+      : 'active';
+
   return {
-    status: searchParams.get('status') || undefined,
+    status,
     priority: (searchParams.get('priority') as TaskPriority) || undefined,
     driveId: searchParams.get('driveId') || undefined,
     search: searchParams.get('search') || undefined,
     dueDateFilter: (searchParams.get('dueDateFilter') as DueDateFilter) || undefined,
     assigneeFilter: (searchParams.get('assigneeFilter') as AssigneeFilter) || 'mine',
-    statusGroup: (searchParams.get('statusGroup') as StatusGroupFilter) || 'active',
+    statusGroup,
   };
 }
 

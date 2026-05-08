@@ -325,6 +325,21 @@ export async function GET(request: Request) {
       }
     }
 
+    // Serialize status configs once so we can return the same shape from both
+    // the empty fast-path and the regular response. The dashboard builds its
+    // status menus from this payload, so an empty {} would hide custom statuses
+    // even when the underlying task lists still have them.
+    const serializedStatusConfigsByTaskList: Record<string, Array<{
+      id: string; taskListId: string; name: string;
+      slug: string; color: string; group: TaskStatusGroup; position: number;
+    }>> = {};
+    for (const [taskListId, configs] of taskListStatusMap) {
+      serializedStatusConfigsByTaskList[taskListId] = configs.map(c => ({
+        id: c.id, taskListId: c.taskListId, name: c.name,
+        slug: c.slug, color: c.color, group: c.group, position: c.position,
+      }));
+    }
+
     // Group-level status filter. Convert the requested group into a per-task-list
     // set of allowed status slugs (custom configs first, defaults if none) and
     // build an OR over (taskListId, status IN (...)) tuples.
@@ -350,7 +365,7 @@ export async function GET(request: Request) {
       if (perTaskListConditions.length === 0) {
         return NextResponse.json({
           tasks: [],
-          statusConfigsByTaskList: {},
+          statusConfigsByTaskList: serializedStatusConfigsByTaskList,
           pagination: {
             total: 0,
             limit: params.limit,
@@ -440,24 +455,11 @@ export async function GET(request: Request) {
 
     const total = countResult?.total ?? 0;
 
-    // Serialize status configs so the frontend can build per-task dropdowns
-    type StatusGroup = 'todo' | 'in_progress' | 'done';
-    const statusConfigsByTaskList: Record<string, Array<{
-      id: string; taskListId: string; name: string;
-      slug: string; color: string; group: StatusGroup; position: number;
-    }>> = {};
-    for (const [taskListId, configs] of taskListStatusMap) {
-      statusConfigsByTaskList[taskListId] = configs.map(c => ({
-        id: c.id, taskListId: c.taskListId, name: c.name,
-        slug: c.slug, color: c.color, group: c.group, position: c.position,
-      }));
-    }
-
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'tasks', resourceId: userId, details: { context: params.context } });
 
     return NextResponse.json({
       tasks: enrichedTasks,
-      statusConfigsByTaskList,
+      statusConfigsByTaskList: serializedStatusConfigsByTaskList,
       pagination: {
         total,
         limit: params.limit,

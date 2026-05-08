@@ -279,11 +279,17 @@ const STATUS_GROUP_OPTIONS: Array<{ value: StatusGroupFilter; label: string }> =
 
 export function StatusGroupToggle({ value, onChange, className }: StatusGroupToggleProps) {
   return (
-    <div className={cn('flex items-center bg-muted rounded-md p-0.5', className)}>
+    <div
+      role="group"
+      aria-label="Task completion filter"
+      className={cn('flex items-center bg-muted rounded-md p-0.5', className)}
+    >
       {STATUS_GROUP_OPTIONS.map((opt) => (
         <button
           key={opt.value}
+          type="button"
           onClick={() => onChange(opt.value)}
+          aria-pressed={value === opt.value}
           className={cn(
             'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 sm:flex-none',
             value === opt.value
