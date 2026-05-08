@@ -40,6 +40,50 @@ export default async function InvitePage({ params }: InvitePageProps) {
   const { data } = resolution;
   const encodedToken = encodeURIComponent(token);
 
+  if (data.kind === 'page') {
+    const ctaHref = data.isExistingUser
+      ? `/auth/signin?invite=${encodedToken}`
+      : `/auth/signup?invite=${encodedToken}`;
+    const ctaLabel = data.isExistingUser ? 'Sign in to access' : 'Create account & access';
+
+    return (
+      <AuthShell>
+        <div className="space-y-6">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+              <span className="text-blue-600 dark:text-blue-400">{data.inviterName}</span>
+              {' '}has shared a page with you
+            </h1>
+            <p className="mt-3 text-sm text-muted-foreground">
+              <span className="font-medium text-gray-900 dark:text-gray-100">&ldquo;{data.pageTitle}&rdquo;</span>
+              {' '}in{' '}
+              <span className="font-medium text-gray-900 dark:text-gray-100">{data.driveName}</span>
+              {' '}was shared with{' '}
+              <span className="font-medium text-gray-900 dark:text-gray-100">{data.email}</span>.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white/60 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
+            <p>
+              By continuing, you agree to PageSpace&apos;s{' '}
+              <Link href="/terms" className="underline hover:text-foreground">Terms</Link>
+              {' '}and{' '}
+              <Link href="/privacy" className="underline hover:text-foreground">Privacy Policy</Link>.
+            </p>
+          </div>
+
+          <Link href={ctaHref}>
+            <Button className="w-full">{ctaLabel}</Button>
+          </Link>
+
+          <p className="text-center text-xs text-muted-foreground/70">
+            Not {data.email}? Sign out of any other account first, then return to this link.
+          </p>
+        </div>
+      </AuthShell>
+    );
+  }
+
   if (data.kind === 'connection') {
     const ctaHref = data.isExistingUser
       ? `/auth/signin?invite=${encodedToken}`

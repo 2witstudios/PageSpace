@@ -38,6 +38,7 @@ export const pageInviteRepository = {
     driveName: string;
     permissions: PendingPagePermission[];
     invitedBy: string;
+    inviterName: string;
     expiresAt: Date;
     consumedAt: Date | null;
   } | null> {
@@ -51,12 +52,14 @@ export const pageInviteRepository = {
         driveName: drives.name,
         permissions: pendingPageInvites.permissions,
         invitedBy: pendingPageInvites.invitedBy,
+        inviterName: users.name,
         expiresAt: pendingPageInvites.expiresAt,
         consumedAt: pendingPageInvites.consumedAt,
       })
       .from(pendingPageInvites)
       .innerJoin(pages, eq(pages.id, pendingPageInvites.pageId))
       .innerJoin(drives, eq(drives.id, pages.driveId))
+      .innerJoin(users, eq(users.id, pendingPageInvites.invitedBy))
       .where(eq(pendingPageInvites.tokenHash, tokenHash))
       .limit(1);
     return results.at(0) ?? null;
