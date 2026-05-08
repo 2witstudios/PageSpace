@@ -17,9 +17,13 @@ export interface MagicLinkFormProps {
   // (signin/page.tsx) is the source of truth for safety; the form just
   // forwards it. Send route + verify route both re-validate.
   nextPath?: string;
+  // Invite token to bind to the magic link. When set, the verify route
+  // consumes the invite atomically with authentication and redirects to
+  // /dashboard/<driveId>?invited=1 — no `next=` needed for invite flows.
+  inviteToken?: string;
 }
 
-export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
+export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);
@@ -108,6 +112,7 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
           tosAccepted: acceptedTos,
           ...platformFields,
           ...(nextPath && { next: nextPath }),
+          ...(inviteToken && { inviteToken }),
         }),
       });
 
@@ -145,7 +150,7 @@ export function MagicLinkForm({ nextPath }: MagicLinkFormProps = {}) {
       setFormState('error');
       setError('Network error. Please check your connection and try again.');
     }
-  }, [email, formState, cooldownSeconds, nextPath, acceptedTos]);
+  }, [email, formState, cooldownSeconds, nextPath, inviteToken, acceptedTos]);
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;

@@ -86,6 +86,32 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findUserVerificationStatusById: vi
+      .fn()
+      .mockResolvedValue({ email: 'test@example.com', emailVerified: null, suspendedAt: null }),
+  },
+}));
+
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn().mockResolvedValue({ id: 'test-user-id', tokenVersion: 0 }),
+  },
+}));
+
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  validateOrCreateDeviceToken: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/auth/exchange-codes', () => ({
+  createExchangeCode: vi.fn(),
+}));
+
 import { GET } from '../route';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
@@ -528,11 +554,12 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('auth=success');
     });
 
-    it('redirects to a safe next path inside /invite/<token>', async () => {
+    it('falls back to /dashboard when next is /invite/<token> (invite acceptance no longer travels via next; the inviteToken metadata path consumes invites server-side)', async () => {
       const response = await GET(requestWithNext('valid-token', '/invite/abc123'));
 
       const location = response.headers.get('Location')!;
-      expect(location).toContain('/invite/abc123');
+      expect(location).not.toContain('/invite/abc123');
+      expect(location).toContain('/dashboard');
       expect(location).toContain('auth=success');
     });
 

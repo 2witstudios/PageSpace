@@ -169,12 +169,17 @@ export const requestMagicLink =
       ...(input.platform !== undefined && { platform: input.platform }),
       ...(input.deviceId !== undefined && { deviceId: input.deviceId }),
       ...(input.deviceName !== undefined && { deviceName: input.deviceName }),
+      ...(input.inviteToken !== undefined && { inviteToken: input.inviteToken }),
     });
 
+    // When an invite is bound, the verify route computes the post-auth
+    // redirect from invite data and consumes the invite atomically. Forwarding
+    // `next` in that case would let a stale URL param override the invite
+    // landing target, so drop it.
     await ports.sendMagicLinkEmail({
       email: input.email,
       token,
-      ...(input.next !== undefined && { next: input.next }),
+      ...(input.next !== undefined && input.inviteToken === undefined && { next: input.next }),
     });
 
     return { ok: true, data: undefined };

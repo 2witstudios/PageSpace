@@ -444,16 +444,17 @@ describe('POST /api/auth/magic-link/send', () => {
       );
     });
 
-    it('given a safe /invite/<token> next path on the body, forwards next to the pipe input', async () => {
+    it('given a /invite/<token> next path on the body, strips it (invite acceptance does not travel via next; it uses inviteToken bound to the verification-token metadata)', async () => {
       const request = createMagicLinkRequest({
         email: 'test@example.com',
         next: '/invite/abc123',
       });
-      await POST(request);
+      const response = await POST(request);
 
-      expect(pipeInner).toHaveBeenCalledWith(
-        expect.objectContaining({ next: '/invite/abc123' }),
-      );
+      expect(response.status).toBe(200);
+      const callArgs = pipeInner.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(callArgs).toBeDefined();
+      expect(callArgs).not.toHaveProperty('next');
     });
 
     it('given a protocol-relative next (//evil.com), strips it before forwarding (defense in depth)', async () => {

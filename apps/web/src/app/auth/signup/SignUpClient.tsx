@@ -29,11 +29,6 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
-  // Invited users coming through magic-link should land on the invite-accept
-  // route after verify so the existing acceptInviteForExistingUser pipe
-  // consumes the token. Non-invite signups go to /dashboard via the verify
-  // route's default redirect.
-  const magicLinkNextPath = inviteToken ? `/invite/${inviteToken}/accept` : undefined;
   const {
     handleGoogleSignIn,
     handleAppleSignIn,
@@ -149,7 +144,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
       >
         {showMagicLink ? (
           <div id="magic-link-form" className="mt-2">
-            <MagicLinkForm {...(magicLinkNextPath && { nextPath: magicLinkNextPath })} />
+            <MagicLinkForm {...(inviteToken && { inviteToken })} />
           </div>
         ) : (
           <button

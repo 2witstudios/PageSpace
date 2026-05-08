@@ -16,6 +16,8 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
@@ -25,6 +27,7 @@ const verifySchema = z.object({
   deviceId: z.string().max(128).optional(),
   deviceName: z.string().max(256).optional(),
   desktopExchange: z.boolean().optional().default(false),
+  inviteToken: z.string().min(1).max(512).optional(),
 });
 
 /**
@@ -67,7 +70,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const { response, expectedChallenge, csrfToken, platform, deviceId, deviceName, desktopExchange } = validation.data;
+    const {
+      response,
+      expectedChallenge,
+      csrfToken,
+      platform,
+      deviceId,
+      deviceName,
+      desktopExchange,
+      inviteToken,
+    } = validation.data;
 
     if (desktopExchange && !deviceId) {
       return NextResponse.json(
@@ -176,6 +188,31 @@ export async function POST(req: Request) {
     // Reset rate limit on successful login
     await resetDistributedRateLimit(rateLimitKey);
 
+    // Consume invite atomically with authentication. The acceptance pipe
+    // re-validates the invite (existence, expiry, consumption, email match)
+    // — passing inviteToken here is unauthenticated input, the pipe is the
+    // gate. A failed invite never blocks login.
+    let invitedDriveId: string | null = null;
+    if (inviteToken) {
+      const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+      if (status) {
+        const inviteResult = await consumeInviteIfPresent({
+          request: req,
+          inviteToken,
+          user: { id: userId, suspendedAt: status.suspendedAt },
+          isNewUser: false,
+          email: status.email,
+        });
+        invitedDriveId = inviteResult.invitedDriveId;
+        if (inviteResult.inviteError) {
+          loggers.auth.info('Bound invite acceptance failed during passkey auth', {
+            userId,
+            reason: inviteResult.inviteError,
+          });
+        }
+      }
+    }
+
     // Track successful passkey login
     trackAuthEvent(userId, 'passkey_login', {
       ip: clientIP,
@@ -237,8 +274,9 @@ export async function POST(req: Request) {
         {
           success: true,
           userId,
-          redirectUrl: '/dashboard',
+          redirectUrl: invitedDriveId ? `/dashboard/${invitedDriveId}?invited=1` : '/dashboard',
           desktopExchangeCode: code,
+          ...(invitedDriveId && { invitedDriveId }),
         },
         {
           headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
@@ -263,9 +301,10 @@ export async function POST(req: Request) {
       {
         success: true,
         userId,
-        redirectUrl: '/dashboard',
+        redirectUrl: invitedDriveId ? `/dashboard/${invitedDriveId}?invited=1` : '/dashboard',
         csrfToken: newCsrfToken,
         ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
+        ...(invitedDriveId && { invitedDriveId }),
       },
       { headers }
     );

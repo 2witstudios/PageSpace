@@ -6,6 +6,7 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { requestMagicLink } from '@pagespace/lib/services/invites';
 import { buildMagicLinkPorts } from '@/lib/auth/magic-link-adapters';
+import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
@@ -19,6 +20,7 @@ const sendMagicLinkSchema = z.object({
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
   next: z.string().min(1).max(2048).optional(),
+  inviteToken: z.string().min(1).max(512).optional(),
   tosAccepted: z.boolean(),
 }).refine(
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
@@ -102,7 +104,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, platform, deviceId, deviceName, next, tosAccepted } = validation.data;
+    const { email, platform, deviceId, deviceName, next, inviteToken, tosAccepted } =
+      validation.data;
     const normalizedEmail = email.toLowerCase().trim();
 
     // Defense in depth: the form's submit button is gated on the checkbox,
@@ -128,6 +131,32 @@ export async function POST(req: Request) {
       next && isSafeNextPath({ path: next, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })
         ? next
         : undefined;
+
+    // Validate inviteToken before minting the magic-link. Two gates protect
+    // against stolen-token replay: the invite must exist + not be consumed +
+    // not be expired AND its email must match the address we're emailing. A
+    // mismatch (or any failure) drops the inviteToken silently — we still
+    // send the magic link so an attacker who guesses someone else's invite
+    // token can't enumerate which addresses it belongs to. The user just
+    // signs in normally; the invite stays pending.
+    let safeInviteToken: string | undefined;
+    if (inviteToken) {
+      try {
+        const resolution = await resolveInviteContext({ token: inviteToken, now: new Date() });
+        if (resolution.ok && resolution.data.email === normalizedEmail) {
+          safeInviteToken = inviteToken;
+        } else {
+          loggers.auth.info('Magic link invite binding rejected', {
+            email: maskEmail(normalizedEmail),
+            reason: resolution.ok ? 'EMAIL_MISMATCH' : resolution.error,
+          });
+        }
+      } catch (error) {
+        loggers.auth.warn('Invite resolution threw during magic link send', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     // Rate limit by IP and email
     const [ipRateLimit, emailRateLimit] = await Promise.all([
@@ -189,6 +218,7 @@ export async function POST(req: Request) {
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
         ...(safeNext && { next: safeNext }),
+        ...(safeInviteToken && { inviteToken: safeInviteToken }),
       });
     } catch (error) {
       // Email send (or any other adapter throw) failed AFTER the pipe minted

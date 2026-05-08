@@ -49,8 +49,14 @@ export function isSafeReturnUrl(url: string | undefined): boolean {
  * (passkey login, magic-link send/verify). Single source of truth so the
  * three boundaries that re-validate (form, send route, verify route) cannot
  * drift apart and accidentally widen — or narrow — the redirect surface.
+ *
+ * Invite acceptance does NOT use `next=` — it travels server-side as
+ * `inviteToken` bound to the verification token / passed in the auth-route
+ * body, mirroring the OAuth `state.inviteToken` pattern. Adding `/invite/`
+ * here would re-introduce the URL-fragility this allowlist was designed to
+ * mitigate.
  */
-export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/invite/', '/account'] as const;
+export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/account'] as const;
 
 /**
  * Validates that a `next=` redirect target is both same-origin (composed via

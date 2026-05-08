@@ -524,4 +524,40 @@ describe('requestMagicLink', () => {
     });
     expect(sendCall).not.toHaveProperty('next');
   });
+
+  it('given inviteToken on the input, should forward it to createTokenAndPersist (so the verify route can consume the invite from metadata)', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(
+      baseMagicLinkInput({ inviteToken: 'ps_invite_abc' }),
+    );
+
+    expect(ports.createTokenAndPersist).toHaveBeenCalledOnce();
+    expect(ports.createTokenAndPersist).toHaveBeenCalledWith(
+      expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
+    );
+  });
+
+  it('given inviteToken AND next, should drop next from sendMagicLinkEmail (invite-bound flow computes redirect server-side)', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(
+      baseMagicLinkInput({
+        inviteToken: 'ps_invite_abc',
+        next: '/dashboard/drive_xyz',
+      }),
+    );
+
+    expect(ports.sendMagicLinkEmail).toHaveBeenCalledOnce();
+    const sendCall = (ports.sendMagicLinkEmail as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect(sendCall).not.toHaveProperty('next');
+  });
+
+  it('given no inviteToken, should NOT forward inviteToken to createTokenAndPersist', async () => {
+    const ports = buildMagicLinkPorts();
+    await requestMagicLink(ports)(baseMagicLinkInput());
+
+    const persistCall = (ports.createTokenAndPersist as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect(persistCall).not.toHaveProperty('inviteToken');
+  });
 });

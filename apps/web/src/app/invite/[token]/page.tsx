@@ -40,7 +40,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
   const { driveName, inviterName, role, email, isExistingUser } = resolution.data;
   const encodedToken = encodeURIComponent(token);
   const ctaHref = isExistingUser
-    ? `/invite/${encodedToken}/accept`
+    ? `/auth/signin?invite=${encodedToken}`
     : `/auth/signup?invite=${encodedToken}`;
   const ctaLabel = isExistingUser ? 'Sign in to join' : 'Create account & join';
 

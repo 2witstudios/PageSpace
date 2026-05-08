@@ -99,6 +99,12 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+vi.mock('@/lib/auth/invite-resolver', () => ({
+  resolveInviteContext: vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' }),
+}));
 vi.mock('cookie', () => ({
   parse: vi.fn().mockReturnValue({ login_csrf: 'valid-csrf-token' }),
 }));

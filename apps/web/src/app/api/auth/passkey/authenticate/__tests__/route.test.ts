@@ -91,6 +91,18 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findUserVerificationStatusById: vi
+      .fn()
+      .mockResolvedValue({ email: 'user@example.com', emailVerified: null, suspendedAt: null }),
+  },
+}));
+
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+
 import { POST } from '../route';
 import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
