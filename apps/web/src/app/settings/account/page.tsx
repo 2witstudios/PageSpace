@@ -149,14 +149,13 @@ export default function AccountPage() {
         await uploadAvatarFile(pendingAvatarFile);
         setAvatarFile(null);
       }
-
-      if (mutate) {
-        await mutate(); // Refresh user data
-      }
     } catch (error) {
       console.error("Profile update error:", error);
       toast.error(error instanceof Error ? error.message : "Failed to update profile");
     } finally {
+      if (mutate) {
+        await mutate().catch(() => {});
+      }
       setIsUploadingAvatar(false);
       setIsSavingProfile(false);
     }
