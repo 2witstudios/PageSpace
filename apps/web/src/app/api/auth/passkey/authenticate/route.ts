@@ -18,6 +18,7 @@ import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
@@ -27,7 +28,7 @@ const verifySchema = z.object({
   deviceId: z.string().max(128).optional(),
   deviceName: z.string().max(256).optional(),
   desktopExchange: z.boolean().optional().default(false),
-  inviteToken: z.string().min(1).max(512).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
 });
 
 /**

@@ -13,6 +13,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
@@ -20,7 +21,7 @@ const sendMagicLinkSchema = z.object({
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
   next: z.string().min(1).max(2048).optional(),
-  inviteToken: z.string().min(1).max(512).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
   tosAccepted: z.boolean(),
 }).refine(
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
