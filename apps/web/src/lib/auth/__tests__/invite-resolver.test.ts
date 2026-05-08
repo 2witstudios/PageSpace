@@ -13,6 +13,12 @@ vi.mock('@/lib/repositories/connection-invite-repository', () => ({
   },
 }));
 
+vi.mock('@/lib/repositories/page-invite-repository', () => ({
+  pageInviteRepository: {
+    findPendingInviteByTokenHash: vi.fn(),
+  },
+}));
+
 vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn((t: string) => `hash(${t})`),
 }));
@@ -20,6 +26,7 @@ vi.mock('@pagespace/lib/auth/token-utils', () => ({
 import { resolveInviteContext } from '../invite-resolver';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { connectionInviteRepository } from '@/lib/repositories/connection-invite-repository';
+import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
 
 const now = new Date('2026-05-06T12:00:00.000Z');
 
@@ -45,10 +52,25 @@ const baseConnectionInvite = {
   consumedAt: null as Date | null,
 };
 
+const basePageInvite = {
+  id: 'pg_inv_1',
+  email: 'invitee@example.com',
+  pageId: 'page_1',
+  pageTitle: 'Q3 Plan',
+  driveId: 'drive_1',
+  driveName: 'Acme',
+  permissions: ['VIEW' as const],
+  invitedBy: 'inviter_1',
+  inviterName: 'Jane',
+  expiresAt: new Date('2026-05-08T12:00:00.000Z'),
+  consumedAt: null as Date | null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: both repos return null (no invite found)
+  // Default: all repos return null (no invite found)
   vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(null);
+  vi.mocked(pageInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(null);
   vi.mocked(connectionInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(null);
 });
 
@@ -134,15 +156,77 @@ describe('resolveInviteContext', () => {
     });
   });
 
-  it('given a token, looks up by SHA3 hash (never plaintext)', async () => {
+  it('given a token, looks up by SHA3 hash across all three repos (never plaintext)', async () => {
     await resolveInviteContext({ token: 'ps_invite_abc', now });
 
     expect(driveInviteRepository.findPendingInviteByTokenHash).toHaveBeenCalledWith(
       'hash(ps_invite_abc)'
     );
+    expect(pageInviteRepository.findPendingInviteByTokenHash).toHaveBeenCalledWith(
+      'hash(ps_invite_abc)'
+    );
     expect(connectionInviteRepository.findPendingInviteByTokenHash).toHaveBeenCalledWith(
       'hash(ps_invite_abc)'
     );
+  });
+
+  describe('page invite tokens', () => {
+    it('given an active page row + no existing user, returns ok page context with isExistingUser=false', async () => {
+      vi.mocked(pageInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(basePageInvite);
+      vi.mocked(driveInviteRepository.loadUserAccountByEmail).mockResolvedValue(null);
+
+      const result = await resolveInviteContext({ token: 'tok', now });
+
+      expect(result).toEqual({
+        ok: true,
+        data: {
+          kind: 'page',
+          pageTitle: 'Q3 Plan',
+          driveName: 'Acme',
+          inviterName: 'Jane',
+          permissions: ['VIEW'],
+          email: 'invitee@example.com',
+          isExistingUser: false,
+        },
+      });
+    });
+
+    it('given an active page row + existing user, returns ok page context with isExistingUser=true', async () => {
+      vi.mocked(pageInviteRepository.findPendingInviteByTokenHash).mockResolvedValue(basePageInvite);
+      vi.mocked(driveInviteRepository.loadUserAccountByEmail).mockResolvedValue({
+        id: 'user_1',
+        suspendedAt: null,
+      });
+
+      const result = await resolveInviteContext({ token: 'tok', now });
+
+      expect(result).toEqual({
+        ok: true,
+        data: expect.objectContaining({ kind: 'page', isExistingUser: true }),
+      });
+    });
+
+    it('given a page row whose consumedAt is set, returns CONSUMED', async () => {
+      vi.mocked(pageInviteRepository.findPendingInviteByTokenHash).mockResolvedValue({
+        ...basePageInvite,
+        consumedAt: new Date('2026-05-06T11:00:00.000Z'),
+      });
+
+      const result = await resolveInviteContext({ token: 'tok', now });
+
+      expect(result).toEqual({ ok: false, error: 'CONSUMED' });
+    });
+
+    it('given a page row whose expiresAt is in the past, returns EXPIRED', async () => {
+      vi.mocked(pageInviteRepository.findPendingInviteByTokenHash).mockResolvedValue({
+        ...basePageInvite,
+        expiresAt: new Date('2026-05-06T11:00:00.000Z'),
+      });
+
+      const result = await resolveInviteContext({ token: 'tok', now });
+
+      expect(result).toEqual({ ok: false, error: 'EXPIRED' });
+    });
   });
 
   describe('connection invite tokens', () => {

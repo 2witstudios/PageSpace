@@ -95,6 +95,7 @@ const pageRow = (overrides = {}) => ({
   driveName: 'Acme',
   permissions: ['VIEW' as const],
   invitedBy: 'user_inviter',
+  inviterName: 'Jane',
   expiresAt: new Date('2099-01-01'),
   consumedAt: null,
   ...overrides,
