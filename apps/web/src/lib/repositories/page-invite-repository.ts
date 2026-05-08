@@ -14,6 +14,7 @@ import { eq, and, gt, lte, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { createId } from '@paralleldrive/cuid2';
 import {
   pendingPageInvites,
   type PendingPagePermission,
@@ -272,6 +273,71 @@ export const pageInviteRepository = {
       columns: { name: true, email: true },
     });
     return user ? { name: user.name, email: user.email } : null;
+  },
+
+  async findUserIdByEmail(
+    email: string,
+  ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email),
+      columns: { id: true, emailVerified: true, suspendedAt: true },
+    });
+    return user
+      ? { id: user.id, emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
+      : null;
+  },
+
+  async findPageById(pageId: string): Promise<{
+    id: string;
+    title: string;
+    driveId: string;
+    driveName: string;
+  } | null> {
+    const results = await db
+      .select({
+        id: pages.id,
+        title: pages.title,
+        driveId: pages.driveId,
+        driveName: drives.name,
+      })
+      .from(pages)
+      .innerJoin(drives, eq(drives.id, pages.driveId))
+      .where(eq(pages.id, pageId))
+      .limit(1);
+    return results.at(0) ?? null;
+  },
+
+  async createDirectPagePermission(data: {
+    pageId: string;
+    userId: string;
+    canView: boolean;
+    canEdit: boolean;
+    canShare: boolean;
+    grantedBy: string;
+  }): Promise<{ id: string }> {
+    const [row] = await db
+      .insert(pagePermissions)
+      .values({ id: createId(), ...data, canDelete: false })
+      .onConflictDoNothing({ target: [pagePermissions.pageId, pagePermissions.userId] })
+      .returning({ id: pagePermissions.id });
+    if (row) return row;
+
+    // Conflict: permission already exists — return the real row id
+    const [existing] = await db
+      .select({ id: pagePermissions.id })
+      .from(pagePermissions)
+      .where(
+        and(
+          eq(pagePermissions.pageId, data.pageId),
+          eq(pagePermissions.userId, data.userId),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) {
+      throw new Error('Failed to create or read existing page permission');
+    }
+    return existing;
   },
 };
 
