@@ -62,12 +62,21 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
           transition={{ duration: 0.3 }}
         >
           <p className="text-gray-900 dark:text-gray-100">
-            You&apos;re joining{' '}
-            <span className="font-semibold text-blue-700 dark:text-blue-300">
-              {inviteContext.driveName}
-            </span>
-            , invited by{' '}
-            <span className="font-semibold">{inviteContext.inviterName}</span>.
+            {inviteContext.kind === 'connection' ? (
+              <>
+                <span className="font-semibold">{inviteContext.inviterName}</span>
+                {' '}wants to connect with you on PageSpace.
+              </>
+            ) : (
+              <>
+                You&apos;re joining{' '}
+                <span className="font-semibold text-blue-700 dark:text-blue-300">
+                  {inviteContext.driveName}
+                </span>
+                , invited by{' '}
+                <span className="font-semibold">{inviteContext.inviterName}</span>.
+              </>
+            )}
           </p>
         </motion.div>
       )}
