@@ -157,6 +157,9 @@ describe('Task API Routes', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    // vi.resetAllMocks() clears mockCreateMentionNotification's implementation,
+    // making .catch() throw TypeError and silently hide the success path.
+    mockCreateMentionNotification.mockResolvedValue(undefined);
     // Reset default mock for taskStatusConfigs.findMany
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
     vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
