@@ -12,6 +12,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -385,7 +386,6 @@ export async function PATCH(
     }
   }
 
-  // Fire MENTION notifications for newly added @mentions in the description
   if (description !== undefined) {
     try {
       const oldMentionIds = new Set(extractMentionedUserIds(existingTask.description ?? ''));
@@ -398,11 +398,15 @@ export async function PATCH(
         await Promise.all(
           viewChecks
             .filter((e) => e.canView)
-            .map((e) => createMentionNotification(e.id, pageId, userId))
+            .map((e) =>
+              createMentionNotification(e.id, pageId, userId).catch((err) =>
+                loggers.api.error('Failed to send mention notification', err as Error)
+              )
+            )
         );
       }
-    } catch {
-      // intentional: notification failures must never fail a committed task update
+    } catch (err) {
+      loggers.api.error('Failed to resolve mention targets', err as Error);
     }
   }
 

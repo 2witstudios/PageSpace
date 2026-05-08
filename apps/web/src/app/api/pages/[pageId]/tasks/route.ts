@@ -12,6 +12,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -505,10 +506,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     ),
   ]);
 
-  // Fire MENTION notifications for @mentioned users in task description
-  try {
-    if (description && typeof description === 'string' && description.trim().length > 0) {
-      const mentionedIds = extractMentionedUserIds(description.trim());
+  if (description) {
+    try {
+      const mentionedIds = extractMentionedUserIds(description);
       const candidates = mentionedIds.filter((id) => id !== userId);
       if (candidates.length > 0) {
         const viewChecks = await Promise.all(
@@ -517,12 +517,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         await Promise.all(
           viewChecks
             .filter((e) => e.canView)
-            .map((e) => createMentionNotification(e.id, pageId, userId))
+            .map((e) =>
+              createMentionNotification(e.id, pageId, userId).catch((err) =>
+                loggers.api.error('Failed to send mention notification', err as Error)
+              )
+            )
         );
       }
+    } catch (err) {
+      loggers.api.error('Failed to resolve mention targets', err as Error);
     }
-  } catch {
-    // intentional: notification failures must never fail a committed task insert
   }
 
   // Log task creation for compliance (fire-and-forget)

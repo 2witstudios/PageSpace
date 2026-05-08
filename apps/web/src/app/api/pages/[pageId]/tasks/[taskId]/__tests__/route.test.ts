@@ -13,15 +13,13 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserEditPage: vi.fn(),
   canUserViewPage: vi.fn().mockResolvedValue(false),
 }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    api: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-    ai: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-  },
-  logger: {
-    child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
-  },
-}));
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const mkLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() });
+  return {
+    loggers: { api: mkLogger(), ai: mkLogger(), realtime: mkLogger() },
+    logger: mkLogger(),
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
@@ -1067,12 +1065,14 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   it('does not notify the updater even if they self-@mention in the new description', async () => {
     setupAuth();
     setupCanEdit(true);
-    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, description: null });
+    const selfMention = `ping @[Me](${mockUserId}:user)`;
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, description: null } as never)
+      .mockResolvedValueOnce({ ...baseTask, description: selfMention, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never);
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    const selfMention = `ping @[Me](${mockUserId}:user)`;
     setupTransaction({ ...baseTask, description: selfMention });
-    setupRelationsLookup({ ...baseTask, description: selfMention, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ description: selfMention }), context);
 
@@ -1087,12 +1087,14 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   it('does not notify a @mentioned user who cannot view the task list page', async () => {
     setupAuth();
     setupCanEdit(true);
-    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, description: null });
+    const newDesc = 'cc @[Outsider](user-outsider:user)';
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, description: null } as never)
+      .mockResolvedValueOnce({ ...baseTask, description: newDesc, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never);
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
     vi.mocked(canUserViewPage).mockResolvedValue(false);
-    const newDesc = 'cc @[Outsider](user-outsider:user)';
     setupTransaction({ ...baseTask, description: newDesc });
-    setupRelationsLookup({ ...baseTask, description: newDesc, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ description: newDesc }), context);
 
@@ -1103,13 +1105,15 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   it('returns 200 even when createMentionNotification throws during task update', async () => {
     setupAuth();
     setupCanEdit(true);
-    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, description: null });
+    const newDesc = 'cc @[Alice](user-alice:user)';
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, description: null } as never)
+      .mockResolvedValueOnce({ ...baseTask, description: newDesc, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never);
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
     vi.mocked(createMentionNotification).mockRejectedValue(new Error('notification service down'));
-    const newDesc = 'cc @[Alice](user-alice:user)';
     setupTransaction({ ...baseTask, description: newDesc });
-    setupRelationsLookup({ ...baseTask, description: newDesc, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ description: newDesc }), context);
 

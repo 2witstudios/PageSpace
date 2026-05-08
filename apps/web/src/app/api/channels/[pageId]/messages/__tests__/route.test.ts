@@ -580,6 +580,8 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       {}
     );
     expect(recipientCounts['user-bob'] ?? 0).toBeLessThanOrEqual(1);
+    // Mention notification also suppressed — broad fan-out already covers everyone
+    expect(mockCreateMentionNotification).not.toHaveBeenCalled();
   });
 
   it('does NOT emit channel_updated to a mentioned user who cannot view the channel', async () => {

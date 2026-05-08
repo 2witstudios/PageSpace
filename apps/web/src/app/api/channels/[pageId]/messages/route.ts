@@ -482,14 +482,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           )
         );
 
-        // Fire MENTION notifications for the view-checked targets
-        try {
-          await Promise.all(
-            mentionTargets.map((id: string) => createMentionNotification(id, pageId, userId))
-          );
-        } catch (mentionErr) {
-          loggers.realtime.error('Failed to send mention notifications for thread reply:', mentionErr as Error);
-        }
+        await Promise.all(
+          mentionTargets.map((id) =>
+            createMentionNotification(id, pageId, userId).catch((err) =>
+              loggers.realtime.error('Failed to send mention notification for thread reply', err as Error)
+            )
+          )
+        );
       }
 
       if (mirrorWithRelations && channel?.driveId) {
@@ -637,7 +636,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
       });
 
-      // Fire MENTION notifications for @mentioned viewable non-sender users
       try {
         const mentionedIds = extractMentionedUserIds(messageContent);
         const candidates = mentionedIds.filter((id) => id !== userId);
@@ -648,11 +646,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           await Promise.all(
             viewChecks
               .filter((e) => e.canView)
-              .map((e) => createMentionNotification(e.id, pageId, userId))
+              .map((e) =>
+                createMentionNotification(e.id, pageId, userId).catch((err) =>
+                  loggers.realtime.error('Failed to send mention notification', err as Error)
+                )
+              )
           );
         }
       } catch (mentionErr) {
-        loggers.realtime.error('Failed to send mention notifications:', mentionErr as Error);
+        loggers.realtime.error('Failed to resolve mention targets', mentionErr as Error);
       }
 
       // Broadcast read status change to sender to update their unread count
