@@ -7,6 +7,7 @@ import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare } from "lucide
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useSidebarBadges } from "@/hooks/useSidebarBadges";
 
 interface PrimaryNavigationProps {
     driveId?: string;
@@ -16,6 +17,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     const pathname = usePathname();
     const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
     const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
+    const badges = useSidebarBadges();
 
     const navigation = [
         {
@@ -23,6 +25,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             href: driveId ? `/dashboard/${driveId}` : "/dashboard",
             icon: Home,
             exact: true,
+            badge: 0,
         },
         // DMs are user-scoped — same href in drive nav so they're always one click away.
         {
@@ -30,30 +33,35 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             href: "/dashboard/dms",
             icon: MessageSquare,
             exact: false,
+            badge: badges.dms,
         },
         {
             name: "Channels",
             href: driveId ? `/dashboard/${driveId}/channels` : "/dashboard/channels",
             icon: Hash,
             exact: false,
+            badge: badges.channels,
         },
         {
             name: "Files",
             href: driveId ? `/dashboard/${driveId}/files` : "/dashboard/drives",
             icon: Folder,
             exact: false,
+            badge: badges.files,
         },
         {
             name: "Tasks",
             href: driveId ? `/dashboard/${driveId}/tasks` : "/dashboard/tasks",
             icon: CheckSquare,
             exact: false,
+            badge: badges.tasks,
         },
         {
             name: "Calendar",
             href: driveId ? `/dashboard/${driveId}/calendar` : "/dashboard/calendar",
             icon: Calendar,
             exact: false,
+            badge: badges.calendar,
         },
     ];
 
@@ -82,8 +90,13 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
                                 : "text-sidebar-foreground hover:bg-accent hover:text-accent-foreground"
                         )}
                     >
-                        <item.icon className="h-4 w-4" />
+                        <item.icon className="h-4 w-4 shrink-0" />
                         {item.name}
+                        {item.badge > 0 && (
+                            <span className="ml-auto inline-flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-medium tabular-nums">
+                                {item.badge > 99 ? "99+" : item.badge}
+                            </span>
+                        )}
                     </Link>
                 );
             })}
