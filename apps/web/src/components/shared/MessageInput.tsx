@@ -113,6 +113,7 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
           placeholder ?? 'Type a message... (use @ to mention, supports **markdown**)'
         }
         driveId={source === 'channel' ? driveId : undefined}
+        crossDrive={source === 'dm'}
         channelId={source === 'channel' ? contextId : undefined}
         conversationId={source === 'dm' ? contextId : undefined}
         attachmentsEnabled={attachmentsEnabled}
