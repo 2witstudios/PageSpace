@@ -36,7 +36,7 @@ const upload = multer({
   },
 });
 
-const STORAGE_ROOT = path.resolve(process.env.FILE_STORAGE_PATH || '/data/files');
+const STORAGE_ROOT = path.resolve(process.env.FILE_STORAGE_PATH || path.join(process.cwd(), '../../storage'));
 const AVATAR_ROOT = resolvePathWithin(STORAGE_ROOT, 'avatars');
 
 /* c8 ignore next 3 -- startup guard, module throws before any handler runs */

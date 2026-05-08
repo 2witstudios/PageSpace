@@ -122,8 +122,11 @@ export async function POST(request: NextRequest) {
     const processorResult = await processorResponse.json();
     const { filename } = processorResult;
 
-    // Update user record with API URL for the avatar
-    const avatarUrl = `/api/avatar/${userId}/${filename}?t=${Date.now()}`; // Add timestamp for cache busting
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('Processor returned invalid avatar response');
+    }
+
+    const avatarUrl = `/api/avatar/${userId}/${filename}?t=${Date.now()}`;
     await db.update(users)
       .set({ image: avatarUrl })
       .where(eq(users.id, userId));

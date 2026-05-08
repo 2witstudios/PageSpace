@@ -22,7 +22,7 @@ export async function GET(
     const { userId, filename } = await context.params;
 
     // Use the configured storage path that matches processor's storage
-    const storageBasePath = process.env.FILE_STORAGE_PATH || join(process.cwd(), 'storage');
+    const storageBasePath = process.env.FILE_STORAGE_PATH || resolve(process.cwd(), '../../storage');
 
     // Safely resolve the avatar path with traversal protection
     const pathResult = resolveAvatarPath(storageBasePath, userId, filename);

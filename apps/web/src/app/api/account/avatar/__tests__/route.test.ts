@@ -365,6 +365,53 @@ describe('POST /api/account/avatar', () => {
     });
   });
 
+  describe('processor filename validation', () => {
+    it('given processor returns no filename, should return 500 without storing a bad URL', async () => {
+      mockSelectChain([{ image: null }]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true }), // no filename field
+      });
+
+      const file = createMockFile('image/png', 1024);
+      const response = await POST(createUploadRequest(file));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to upload avatar');
+    });
+
+    it('given processor returns empty-string filename, should return 500', async () => {
+      mockSelectChain([{ image: null }]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ filename: '' }),
+      });
+
+      const file = createMockFile('image/png', 1024);
+      const response = await POST(createUploadRequest(file));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to upload avatar');
+    });
+
+    it('given processor returns non-string filename, should return 500', async () => {
+      mockSelectChain([{ image: null }]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ filename: 42 }),
+      });
+
+      const file = createMockFile('image/png', 1024);
+      const response = await POST(createUploadRequest(file));
+      const body = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to upload avatar');
+    });
+  });
+
   describe('successful upload', () => {
     it('updates user record and returns avatar URL', async () => {
       mockSelectChain([{ image: null }]);

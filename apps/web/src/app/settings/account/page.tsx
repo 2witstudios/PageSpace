@@ -179,9 +179,13 @@ export default function AccountPage() {
         throw new Error(data.error || 'Failed to upload avatar');
       }
 
+      const data = await response.json().catch(() => ({}));
       setAvatarFile(null);
+      if (data.avatarUrl) {
+        setAvatarPreview(data.avatarUrl);
+      }
+      toast.success('Avatar updated');
 
-      // Refresh user data to get new avatar URL
       if (mutate) {
         await mutate();
       }
