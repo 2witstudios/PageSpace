@@ -83,7 +83,7 @@ export async function POST(
     const parsed = shareInviteBodySchema.safeParse(rawBody);
     if (!parsed.success) {
       return NextResponse.json(
-        { error: 'Invalid request body', issues: parsed.error.issues },
+        { error: 'Invalid request body', details: parsed.error.flatten().fieldErrors },
         { status: 400 },
       );
     }
