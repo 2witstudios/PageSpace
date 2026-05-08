@@ -110,7 +110,8 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 
 import { GET } from '../route';

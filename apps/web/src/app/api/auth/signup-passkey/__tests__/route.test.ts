@@ -76,18 +76,22 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
 }));
 
-const { pipeInner: invitePipeInner, pipeFactory: invitePipeFactory } = vi.hoisted(() => {
-  const inner = vi.fn();
-  return { pipeInner: inner, pipeFactory: vi.fn(() => inner) };
-});
-vi.mock('@pagespace/lib/services/invites', () => ({
-  acceptInviteForNewUser: invitePipeFactory,
-}));
-vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
-  buildAcceptancePorts: vi.fn(() => ({})),
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
 }));
 
 import { POST } from '../route';
+import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -562,38 +566,43 @@ describe('POST /api/auth/signup-passkey', () => {
       });
     });
 
-    it('given inviteToken absent, does not call acceptInviteForNewUser and uses provisioned drive redirect', async () => {
+    it('given inviteToken absent, does not call consumeAnyInviteIfPresent and uses provisioned drive redirect', async () => {
       const response = await POST(createRequest());
       const body = await response.json();
 
-      expect(invitePipeInner).not.toHaveBeenCalled();
+      expect(consumeAnyInviteIfPresent).not.toHaveBeenCalled();
       expect(body.redirectUrl).toBe('/dashboard/drive-1?welcome=true');
     });
 
     it('given inviteToken present and acceptance succeeds, redirects to /dashboard/<driveId>?welcome=true (overrides provisioning)', async () => {
-      invitePipeInner.mockResolvedValue({
-        ok: true,
-        data: { driveId: 'drive_invited', driveName: 'Invited Workspace', memberId: 'mem_new' },
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive_invited',
+        invitedPageId: null,
+        connectionId: null,
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(invitePipeInner).toHaveBeenCalledWith(
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
         expect.objectContaining({
-          token: 'ps_invite_xyz',
-          userId: 'new-user-1',
-          userEmail: 'user@example.com',
+          inviteToken: 'ps_invite_xyz',
+          isNewUser: true,
+          email: 'user@example.com',
         }),
       );
       expect(body.redirectUrl).toBe('/dashboard/drive_invited?welcome=true');
     });
 
     it('given inviteToken present and acceptance fails (EMAIL_MISMATCH), signup still succeeds with inviteError query param (NON-FATAL)', async () => {
-      invitePipeInner.mockResolvedValue({
-        ok: false,
-        error: 'EMAIL_MISMATCH',
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
+        inviteError: 'EMAIL_MISMATCH',
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -602,12 +611,17 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toContain('inviteError=EMAIL_MISMATCH');
-      // Critical: session is NOT revoked when invite acceptance fails.
       expect(sessionService.revokeSession).not.toHaveBeenCalled();
     });
 
-    it('given inviteToken present and acceptance throws, signup still succeeds with TOKEN_NOT_FOUND inviteError', async () => {
-      invitePipeInner.mockRejectedValue(new Error('connection lost'));
+    it('given inviteToken present and dispatcher returns TOKEN_NOT_FOUND, signup still succeeds with TOKEN_NOT_FOUND inviteError', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
+        inviteError: 'TOKEN_NOT_FOUND',
+      });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
       const body = await response.json();

@@ -128,11 +128,24 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
 }));
 
 import { POST } from '../route';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+} from '@/lib/auth/native-invite-acceptance';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -213,7 +226,17 @@ describe('POST /api/auth/google/one-tap', () => {
     // Default mocks
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
-    vi.mocked(consumeInviteIfPresent).mockResolvedValue({ invitedDriveId: null });
+    vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+      kind: null,
+      invitedDriveId: null,
+      invitedPageId: null,
+      connectionId: null,
+    });
+    vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+      drivesAccepted: 0,
+      pagesAccepted: 0,
+      connectionsCreated: 0,
+    });
 
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_session_token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -759,13 +782,18 @@ describe('POST /api/auth/google/one-tap', () => {
 
   describe('invite acceptance', () => {
     it('forwards inviteToken and overrides redirectTo when invite consumed', async () => {
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive-from-invite' });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-from-invite',
+        invitedPageId: null,
+        connectionId: null,
+      });
 
       const request = createOneTapRequest({ ...validOneTapPayload, inviteToken: 'ps_invite_xyz' });
       const response = await POST(request);
       const body = await response.json();
 
-      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
         expect.objectContaining({ inviteToken: 'ps_invite_xyz' }),
       );
       expect(body.invitedDriveId).toBe('drive-from-invite');
@@ -773,8 +801,11 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('keeps original redirectTo and surfaces inviteError when pipe rejects', async () => {
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
         invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 

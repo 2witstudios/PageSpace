@@ -19,6 +19,7 @@ export const pendingInvites = pgTable('pending_invites', {
   // Note: token_hash already has an implicit unique B-tree index from
   // its UNIQUE constraint, so no explicit index is needed for lookup.
   driveIdx: index('pending_invites_drive_id_idx').on(table.driveId),
+  emailIdx: index('pending_invites_email_idx').on(table.email),
   expiresAtIdx: index('pending_invites_expires_at_idx').on(table.expiresAt),
   activeDriveEmailIdx: uniqueIndex('pending_invites_active_drive_email_idx')
     .on(table.driveId, table.email)

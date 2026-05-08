@@ -95,6 +95,14 @@
       "types": "./dist/schema/pending-invites.d.ts",
       "default": "./dist/schema/pending-invites.js"
     },
+    "./schema/pending-page-invites": {
+      "types": "./dist/schema/pending-page-invites.d.ts",
+      "default": "./dist/schema/pending-page-invites.js"
+    },
+    "./schema/pending-connection-invites": {
+      "types": "./dist/schema/pending-connection-invites.d.ts",
+      "default": "./dist/schema/pending-connection-invites.js"
+    },
     "./schema/permissions": {
       "types": "./dist/schema/permissions.d.ts",
       "default": "./dist/schema/permissions.js"

@@ -153,16 +153,18 @@ vi.mock('@/lib/auth/invite-acceptance-adapters', () => ({
   buildAcceptancePorts: vi.fn(() => ({})),
 }));
 
-// vi.hoisted ensures the pipes exist before vi.mock factories run, even though
-// they're only called from inside lazily-evaluated factory closures.
-const { acceptInviteForNewUserPipe, acceptInviteForExistingUserPipe } = vi.hoisted(() => ({
-  acceptInviteForNewUserPipe: vi.fn(),
-  acceptInviteForExistingUserPipe: vi.fn(),
-}));
-
-vi.mock('@pagespace/lib/services/invites', () => ({
-  acceptInviteForNewUser: vi.fn(() => acceptInviteForNewUserPipe),
-  acceptInviteForExistingUser: vi.fn(() => acceptInviteForExistingUserPipe),
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
 }));
 
 vi.mock('@/lib/auth/google-avatar', () => ({
@@ -184,8 +186,10 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
-import { acceptInviteForNewUser, acceptInviteForExistingUser } from '@pagespace/lib/services/invites';
-import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+} from '@/lib/auth/native-invite-acceptance';
 
 // Helper to create signed state
 function createSignedState(
@@ -310,6 +314,21 @@ describe('GET /api/auth/google/callback', () => {
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(isSafeReturnUrl).mockReturnValue(true);
+
+    // vi.resetAllMocks() above wipes the vi.mock factory implementations of
+    // the dispatcher; re-prime them so the route's await-and-destructure
+    // doesn't trip into the catch block.
+    vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+      kind: null,
+      invitedDriveId: null,
+      invitedPageId: null,
+      connectionId: null,
+    });
+    vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+      drivesAccepted: 0,
+      pagesAccepted: 0,
+      connectionsCreated: 0,
+    });
 
     // Default avatar resolution
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
@@ -1306,40 +1325,35 @@ describe('GET /api/auth/google/callback', () => {
       });
 
     beforeEach(() => {
-      acceptInviteForNewUserPipe.mockReset();
-      acceptInviteForExistingUserPipe.mockReset();
-      // Outer beforeEach calls vi.resetAllMocks() which wipes the curried
-      // factory implementations. Re-establish them so the route can keep
-      // calling `acceptInviteForXxx(ports)(input)` and reach the inner mock.
-      vi.mocked(acceptInviteForNewUser).mockImplementation(() => acceptInviteForNewUserPipe);
-      vi.mocked(acceptInviteForExistingUser).mockImplementation(() => acceptInviteForExistingUserPipe);
-      vi.mocked(buildAcceptancePorts).mockReturnValue({} as never);
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
+      });
+      vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+        drivesAccepted: 0,
+        pagesAccepted: 0,
+        connectionsCreated: 0,
+      });
     });
 
-    it('calls acceptInviteForNewUser for new users when inviteToken is in state', async () => {
-      acceptInviteForNewUserPipe.mockResolvedValueOnce({
-        ok: true,
-        data: {
-          inviteId: 'invite-1',
-          inviteEmail: 'test@example.com',
-          memberId: 'member-1',
-          driveId: 'drive-789',
-          driveName: 'Shared Drive',
-          role: 'MEMBER',
-          invitedUserId: 'user-123',
-          inviterUserId: 'inviter-1',
-        },
+    it('calls consumeAnyInviteIfPresent for new users when inviteToken is in state and redirects to /dashboard/<driveId>?invited=1', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-789',
+        invitedPageId: null,
+        connectionId: null,
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
-      expect(acceptInviteForNewUser).toHaveBeenCalled();
-      expect(acceptInviteForNewUserPipe).toHaveBeenCalledWith(
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
         expect.objectContaining({
-          token: 'ps_invite_abc123def456',
-          userEmail: 'test@example.com',
-          suspendedAt: null,
+          inviteToken: 'ps_invite_abc123def456',
+          isNewUser: true,
+          email: 'test@example.com',
         }),
       );
 
@@ -1348,47 +1362,45 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('invited=1');
     });
 
-    it('calls acceptInviteForExistingUser for existing users when inviteToken is in state', async () => {
+    it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
       vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
 
-      acceptInviteForExistingUserPipe.mockResolvedValueOnce({
-        ok: true,
-        data: {
-          inviteId: 'invite-2',
-          inviteEmail: 'test@example.com',
-          memberId: 'member-2',
-          driveId: 'drive-existing',
-          driveName: 'Other Drive',
-          role: 'ADMIN',
-          invitedUserId: 'existing-user-456',
-          inviterUserId: 'inviter-2',
-        },
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-existing',
+        invitedPageId: null,
+        connectionId: null,
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
       const response = await GET(request);
 
-      expect(acceptInviteForExistingUser).toHaveBeenCalled();
-      expect(acceptInviteForNewUser).not.toHaveBeenCalled();
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ isNewUser: false }),
+      );
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive-existing');
       expect(location).toContain('invited=1');
     });
 
-    it('does not call any acceptance pipe when inviteToken is absent from state', async () => {
+    it('does not redirect to a drive when inviteToken is absent from state', async () => {
       const stateNoInvite = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({ code: 'valid-code', state: stateNoInvite });
       await GET(request);
 
-      expect(acceptInviteForNewUser).not.toHaveBeenCalled();
-      expect(acceptInviteForExistingUser).not.toHaveBeenCalled();
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: undefined }),
+      );
     });
 
     it('appends inviteError to returnUrl on EMAIL_MISMATCH (auth still succeeds)', async () => {
-      acceptInviteForNewUserPipe.mockResolvedValueOnce({
-        ok: false,
-        error: 'EMAIL_MISMATCH',
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
+        inviteError: 'EMAIL_MISMATCH',
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
@@ -1401,9 +1413,12 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('appends inviteError to returnUrl on TOKEN_CONSUMED', async () => {
-      acceptInviteForNewUserPipe.mockResolvedValueOnce({
-        ok: false,
-        error: 'TOKEN_CONSUMED',
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
+        inviteError: 'TOKEN_CONSUMED',
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
@@ -1413,34 +1428,12 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('inviteError=TOKEN_CONSUMED');
     });
 
-    it('does not bounce auth when invite acceptance pipe throws', async () => {
-      acceptInviteForNewUserPipe.mockRejectedValueOnce(new Error('pipe blew up'));
-
-      const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
-      const response = await GET(request);
-
-      expect(response.status).toBe(307);
-      const location = response.headers.get('Location')!;
-      expect(location).toContain('auth=success');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Invite acceptance pipe threw',
-        expect.any(Error),
-      );
-    });
-
     it('attaches invitedDriveId to desktop deep link when invite is consumed', async () => {
-      acceptInviteForNewUserPipe.mockResolvedValueOnce({
-        ok: true,
-        data: {
-          inviteId: 'invite-d1',
-          inviteEmail: 'test@example.com',
-          memberId: 'member-d1',
-          driveId: 'drive-desktop-1',
-          driveName: 'Desktop Drive',
-          role: 'MEMBER',
-          invitedUserId: 'user-d1',
-          inviterUserId: 'inviter-d1',
-        },
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-desktop-1',
+        invitedPageId: null,
+        connectionId: null,
       });
 
       const state = createSignedState({
@@ -1460,18 +1453,11 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('attaches invitedDriveId to iOS deep link when invite is consumed', async () => {
-      acceptInviteForNewUserPipe.mockResolvedValueOnce({
-        ok: true,
-        data: {
-          inviteId: 'invite-i1',
-          inviteEmail: 'test@example.com',
-          memberId: 'member-i1',
-          driveId: 'drive-ios-1',
-          driveName: 'iOS Drive',
-          role: 'MEMBER',
-          invitedUserId: 'user-i1',
-          inviterUserId: 'inviter-i1',
-        },
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-ios-1',
+        invitedPageId: null,
+        connectionId: null,
       });
 
       const state = createSignedState({

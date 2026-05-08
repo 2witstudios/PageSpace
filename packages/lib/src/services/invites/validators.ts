@@ -14,17 +14,29 @@ import type {
   UserAccount,
 } from './types';
 
-export const validateInviteForUser = ({
+// Minimal shape every pending-invite kind shares. Each surface stores
+// email/expiresAt/consumedAt with the same semantics, so the time/email/
+// suspension gate is the same for drive, page, and connection. Carrying a
+// generic `T extends MinimalInvite` through the validator lets each pipe pass
+// its full record (Invite/PageInvite/ConnectionInvite) and get it back
+// narrowed without losing the surface-specific fields.
+export interface MinimalInvite {
+  email: string;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
+
+export const validatePendingInviteForUser = <T extends MinimalInvite>({
   invite,
   userEmail,
   suspendedAt,
   now,
 }: {
-  invite: Invite;
+  invite: T;
   userEmail: string;
   suspendedAt: Date | null;
   now: Date;
-}): Result<Invite, InviteAcceptanceErrorCode> => {
+}): Result<T, InviteAcceptanceErrorCode> => {
   if (isAccountSuspended({ suspendedAt })) {
     return { ok: false, error: 'ACCOUNT_SUSPENDED' };
   }
@@ -39,6 +51,16 @@ export const validateInviteForUser = ({
   }
   return { ok: true, data: invite };
 };
+
+// Drive-specific alias preserved so existing call sites compile unchanged.
+// Internally just defers to the generic validator.
+export const validateInviteForUser = (input: {
+  invite: Invite;
+  userEmail: string;
+  suspendedAt: Date | null;
+  now: Date;
+}): Result<Invite, InviteAcceptanceErrorCode> =>
+  validatePendingInviteForUser(input);
 
 export const validateMagicLinkRequest = ({
   user,

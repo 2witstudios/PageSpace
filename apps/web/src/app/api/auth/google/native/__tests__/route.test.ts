@@ -35,11 +35,24 @@ vi.mock('google-auth-library', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
 }));
 
 import { POST } from '../route';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+} from '@/lib/auth/native-invite-acceptance';
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
@@ -216,7 +229,17 @@ describe('POST /api/auth/google/native', () => {
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
-    vi.mocked(consumeInviteIfPresent).mockResolvedValue({ invitedDriveId: null });
+    vi.mocked(consumeAnyInviteIfPresent).mockResolvedValue({
+      kind: null,
+      invitedDriveId: null,
+      invitedPageId: null,
+      connectionId: null,
+    });
+    vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
+      drivesAccepted: 0,
+      pagesAccepted: 0,
+      connectionsCreated: 0,
+    });
 
     // Default session mocks
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_session_token');
@@ -772,14 +795,19 @@ describe('POST /api/auth/google/native', () => {
   });
 
   describe('invite acceptance', () => {
-    it('forwards inviteToken to consumeInviteIfPresent and includes invitedDriveId in response', async () => {
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive-from-invite' });
+    it('forwards inviteToken to consumeAnyInviteIfPresent and includes invitedDriveId in response', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-from-invite',
+        invitedPageId: null,
+        connectionId: null,
+      });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
       const response = await POST(request);
       const body = await response.json();
 
-      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
         expect.objectContaining({ inviteToken: 'ps_invite_xyz', isNewUser: true }),
       );
       expect(body.invitedDriveId).toBe('drive-from-invite');
@@ -787,8 +815,11 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('passes inviteError through when pipe rejects with EMAIL_MISMATCH', async () => {
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
         invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -807,6 +838,42 @@ describe('POST /api/auth/google/native', () => {
 
       expect(body.invitedDriveId).toBeNull();
       expect(body.inviteError).toBeUndefined();
+    });
+
+    it('surfaces invitedKind=page + invitedPageId for page-kind acceptances so native clients can route to /pages/<pageId>', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'page',
+        invitedDriveId: 'drv_1',
+        invitedPageId: 'page_1',
+        connectionId: null,
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_p' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('page');
+      expect(body.invitedDriveId).toBe('drv_1');
+      expect(body.invitedPageId).toBe('page_1');
+      expect(body.invitedConnectionId).toBeNull();
+    });
+
+    it('surfaces invitedKind=connection + invitedConnectionId for connection-kind acceptances so native clients have a non-null success signal', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1',
+      });
+
+      const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_c' });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(body.invitedKind).toBe('connection');
+      expect(body.invitedDriveId).toBeNull();
+      expect(body.invitedPageId).toBeNull();
+      expect(body.invitedConnectionId).toBe('conn_1');
     });
   });
 
