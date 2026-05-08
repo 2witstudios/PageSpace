@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User } from 'lucide-react';
+import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +57,8 @@ export default function ConnectionsPage() {
   const socket = useSocket();
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isInviting, setIsInviting] = useState(false);
+  const [invitableEmail, setInvitableEmail] = useState<string | null>(null);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
 
   // Fetch accepted connections
@@ -91,18 +93,20 @@ export default function ConnectionsPage() {
   }, [socket]);
 
   const handleSendConnectionRequest = async () => {
-    const trimmedEmail = email.trim();
+    const trimmedEmail = email.trim().toLowerCase();
     if (!trimmedEmail) return;
 
+    setInvitableEmail(null);
     setIsSubmitting(true);
     try {
       const response = await fetchWithAuth(`/api/connections/search?email=${encodeURIComponent(trimmedEmail)}`);
-      if (!response.ok) throw new Error('Failed to send connection request');
+      if (!response.ok) throw new Error('Failed to search for user');
 
       const data = await response.json();
 
       if (!data.user) {
-        toast.error(data.error || 'No user found with this email address');
+        // Surface the invite-to-PageSpace CTA for unknown emails.
+        setInvitableEmail(trimmedEmail);
         return;
       }
 
@@ -123,6 +127,29 @@ export default function ConnectionsPage() {
       toast.error(errorMessage || 'Failed to send connection request');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleInviteToPageSpace = async () => {
+    if (!invitableEmail) return;
+
+    setIsInviting(true);
+    try {
+      await post('/api/connections/invite', { email: invitableEmail });
+      toast.success(`Connection invite sent to ${invitableEmail}`);
+      setEmail('');
+      setInvitableEmail(null);
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+      if (errorMessage.includes('already pending')) {
+        toast.error(`You already have a pending connection invite for ${invitableEmail}`);
+      } else if (errorMessage.includes('requiresEmailVerification') || errorMessage.includes('verification')) {
+        setShowVerificationAlert(true);
+      } else {
+        toast.error(errorMessage || 'Failed to send invite');
+      }
+    } finally {
+      setIsInviting(false);
     }
   };
 
@@ -375,18 +402,40 @@ export default function ConnectionsPage() {
                     type="email"
                     placeholder="Enter email address"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (invitableEmail) setInvitableEmail(null);
+                    }}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendConnectionRequest()}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || isInviting}
                   />
                   <Button
                     onClick={handleSendConnectionRequest}
-                    disabled={isSubmitting || !email.trim()}
+                    disabled={isSubmitting || isInviting || !email.trim()}
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
-                    {isSubmitting ? 'Sending...' : 'Send Request'}
+                    {isSubmitting ? 'Searching...' : 'Find User'}
                   </Button>
                 </div>
+                {invitableEmail && (
+                  <div className="flex items-start gap-3 rounded-lg border border-dashed p-4">
+                    <Mail className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">User not found</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        {invitableEmail} is not on PageSpace yet.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={handleInviteToPageSpace}
+                      disabled={isInviting}
+                    >
+                      <Mail className="h-4 w-4 mr-2" />
+                      {isInviting ? 'Sending...' : 'Invite to PageSpace'}
+                    </Button>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

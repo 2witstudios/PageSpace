@@ -4,6 +4,7 @@ import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { sendEmail } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
+import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
 import { ConnectionRequestEmail } from '../email-templates/ConnectionRequestEmail';
 import { PageSharedEmail } from '../email-templates/PageSharedEmail';
@@ -298,6 +299,31 @@ export async function sendPendingDriveInvitationEmail(input: {
       userName: input.recipientEmail,
       inviterName: safeInviterName,
       driveName: safeDriveName,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * Send a "someone wants to connect with you" invite email to a recipient who
+ * does not yet hold a PageSpace account. Errors propagate so the caller can
+ * compensating-delete the pending row on SMTP failure.
+ */
+export async function sendPendingConnectionInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  message?: string;
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} wants to connect on PageSpace`,
+    react: ConnectionInvitationEmail({
+      recipientEmail: input.recipientEmail,
+      inviterName: safeInviterName,
+      message: input.message,
       acceptUrl: input.inviteUrl,
     }),
   });
