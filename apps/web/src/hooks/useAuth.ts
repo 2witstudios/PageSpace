@@ -113,6 +113,13 @@ export function useAuth(): {
         // Non-critical — tabs will just show dashboard on next login
       }
 
+      try {
+        const { useDriveStore } = await import('@/hooks/useDrive');
+        useDriveStore.getState().reset();
+      } catch {
+        // Non-critical
+      }
+
       endSession();
       router.push('/auth/signin');
     }
