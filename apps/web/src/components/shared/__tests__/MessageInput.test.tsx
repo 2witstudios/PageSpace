@@ -50,6 +50,8 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
     placeholder?: string;
     canSendEmpty?: boolean;
     disabled?: boolean;
+    driveId?: string;
+    crossDrive?: boolean;
   }
   const MockChatTextarea = React.forwardRef<
     { focus: () => void; clear: () => void },
@@ -59,6 +61,8 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
     return (
       <textarea
         data-testid="chat-textarea"
+        data-drive-id={props.driveId ?? ''}
+        data-cross-drive={props.crossDrive ? 'true' : 'false'}
         value={props.value}
         placeholder={props.placeholder}
         disabled={props.disabled}
@@ -99,6 +103,7 @@ const Harness = ({
   contextId,
   parentId,
   showAlsoSendToParent,
+  driveId,
   onSubmit,
 }: {
   initialValue?: string;
@@ -106,6 +111,7 @@ const Harness = ({
   contextId: string;
   parentId?: string;
   showAlsoSendToParent?: boolean;
+  driveId?: string;
   onSubmit: (info: MessageInputSubmit) => void;
 }) => {
   const [value, setValue] = React.useState(initialValue);
@@ -118,6 +124,7 @@ const Harness = ({
       onSubmit={onSubmit}
       parentId={parentId}
       showAlsoSendToParent={showAlsoSendToParent}
+      driveId={driveId}
     />
   );
 };
@@ -217,6 +224,48 @@ describe('MessageInput', () => {
       should: 'submit with alsoSendToParent=false',
       actual: false,
       expected: false,
+    });
+  });
+
+  it('given a DM source, should forward crossDrive=true and no driveId so mention search runs cross-drive', () => {
+    const onSubmit = vi.fn();
+    render(<Harness source="dm" contextId="conv-1" driveId="drive-x" onSubmit={onSubmit} />);
+
+    const textarea = screen.getByTestId('chat-textarea');
+    expect({
+      given: 'a DM compose (DMs are not scoped to a single drive)',
+      should: 'forward crossDrive=true and no driveId to the mention-aware textarea',
+      actual: {
+        crossDrive: textarea.getAttribute('data-cross-drive'),
+        driveId: textarea.getAttribute('data-drive-id'),
+      },
+      expected: { crossDrive: 'true', driveId: '' },
+    }).toEqual({
+      given: 'a DM compose (DMs are not scoped to a single drive)',
+      should: 'forward crossDrive=true and no driveId to the mention-aware textarea',
+      actual: { crossDrive: 'true', driveId: '' },
+      expected: { crossDrive: 'true', driveId: '' },
+    });
+  });
+
+  it('given a channel source, should forward driveId and crossDrive=false so mention search stays within-drive', () => {
+    const onSubmit = vi.fn();
+    render(<Harness source="channel" contextId="page-1" driveId="drive-x" onSubmit={onSubmit} />);
+
+    const textarea = screen.getByTestId('chat-textarea');
+    expect({
+      given: 'a channel compose with a known drive',
+      should: 'forward driveId and crossDrive=false to the mention-aware textarea',
+      actual: {
+        crossDrive: textarea.getAttribute('data-cross-drive'),
+        driveId: textarea.getAttribute('data-drive-id'),
+      },
+      expected: { crossDrive: 'false', driveId: 'drive-x' },
+    }).toEqual({
+      given: 'a channel compose with a known drive',
+      should: 'forward driveId and crossDrive=false to the mention-aware textarea',
+      actual: { crossDrive: 'false', driveId: 'drive-x' },
+      expected: { crossDrive: 'false', driveId: 'drive-x' },
     });
   });
 
