@@ -9,17 +9,23 @@ import { Hash, ExternalLink, Lock, Check, X } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '@/components/ai/ui/conversation';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 import { type ChannelInputRef, type FileAttachment } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
-import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
+import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import {
@@ -67,6 +73,8 @@ interface MessageWithUser {
   parentId?: string | null;
   replyCount?: number;
   lastReplyAt?: string | null;
+  quotedMessageId?: string | null;
+  quotedMessage?: QuotedMessageSnapshot | null;
 }
 
 interface Page {
@@ -86,11 +94,17 @@ export default function InboxChannelPage() {
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const channelInputRef = useRef<ChannelInputRef>(null);
-  const skipAutoScrollRef = useRef(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  // Active inline quote-reply target. The snapshot is captured at quote-start
+  // time so the optimistic insert can render the embed immediately, before
+  // the server's enriched payload arrives.
+  const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
+  const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
+  const quotedPreview = activeQuotedSnapshot
+    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    : null;
 
   const socket = useSocketStore((state) => state.socket);
   const connectionStatus = useSocketStore((state) => state.connectionStatus);
@@ -112,6 +126,10 @@ export default function InboxChannelPage() {
   // a panel against an unrelated message list otherwise.
   useEffect(() => {
     closeThread();
+    // Also drop any active quote so a chip composed against a previous
+    // channel cannot leak its messageId into the next channel's POST.
+    setQuotedMessageId(null);
+    setActiveQuotedSnapshot(null);
     // Only fire on context switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageId]);
@@ -204,16 +222,25 @@ export default function InboxChannelPage() {
     };
   }, [socket, connectionStatus, pageId]);
 
-  // Auto-scroll (skip when loading older messages)
-  useEffect(() => {
-    if (skipAutoScrollRef.current) {
-      skipAutoScrollRef.current = false;
-      return;
-    }
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-    }
-  }, [messages]);
+  const handleStartQuote = useCallback((m: MessageWithUser) => {
+    if (m.id.startsWith('temp-')) return;
+    setQuotedMessageId(m.id);
+    setActiveQuotedSnapshot({
+      id: m.id,
+      authorId: m.user?.id ?? m.userId ?? null,
+      authorName: m.aiMeta?.senderName || m.user?.name || 'Member',
+      authorImage: m.user?.image ?? null,
+      contentSnippet: buildThreadPreview(m.content),
+      createdAt: m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt),
+      isActive: true,
+    });
+    channelInputRef.current?.focus();
+  }, []);
+
+  const clearQuote = useCallback(() => {
+    setQuotedMessageId(null);
+    setActiveQuotedSnapshot(null);
+  }, []);
 
   const handleTopLevelSubmit = async ({
     content,
@@ -227,6 +254,21 @@ export default function InboxChannelPage() {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
+
+    const activeQuoteId = quotedMessageId;
+    const activeQuoteSnapshot = activeQuotedSnapshot;
+    setInputValue('');
+    channelInputRef.current?.clear();
+    clearQuote();
+
+    const attachmentMeta: AttachmentMeta | null = attachment
+      ? {
+          originalName: attachment.originalName,
+          size: attachment.size,
+          mimeType: attachment.mimeType,
+          contentHash: attachment.contentHash,
+        }
+      : null;
 
     const tempId = `temp-${Date.now()}`;
     const optimisticMessage: MessageWithUser = {
@@ -244,53 +286,38 @@ export default function InboxChannelPage() {
         image: null,
       },
       fileId: attachment?.id || null,
-      attachmentMeta: attachment
-        ? {
-            originalName: attachment.originalName,
-            size: attachment.size,
-            mimeType: attachment.mimeType,
-            contentHash: attachment.contentHash,
-          }
-        : null,
+      attachmentMeta,
+      quotedMessageId: activeQuoteId,
+      quotedMessage: activeQuoteSnapshot ?? null,
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
-    setInputValue('');
-    channelInputRef.current?.clear();
 
     try {
-      await post(`/api/channels/${pageId}/messages`, {
+      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta; quotedMessageId?: string } = {
         content,
-        fileId: attachment?.id,
-        attachmentMeta: attachment
-          ? {
-              originalName: attachment.originalName,
-              size: attachment.size,
-              mimeType: attachment.mimeType,
-              contentHash: attachment.contentHash,
-            }
-          : undefined,
-      });
+      };
+      if (attachment) {
+        body.fileId = attachment.id;
+        body.attachmentMeta = attachmentMeta!;
+      }
+      if (activeQuoteId) {
+        body.quotedMessageId = activeQuoteId;
+      }
+      await post(`/api/channels/${pageId}/messages`, body);
     } catch (error) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
+      toast.error('Failed to send message');
+      setInputValue(content);
+      // Restore the quote chip so the user's retry still carries the quote
+      // they originally selected.
+      if (activeQuoteId) {
+        setQuotedMessageId(activeQuoteId);
+        setActiveQuotedSnapshot(activeQuoteSnapshot);
+      }
     }
   };
-
-  const handleRefresh = useCallback(async () => {
-    try {
-      const res = await fetchWithAuth(`/api/channels/${pageId}/messages`);
-      if (!res.ok) {
-        throw new Error(`Failed to fetch messages: ${res.status}`);
-      }
-      const data = await res.json();
-      setMessages(data.messages ?? data);
-      setHasMore(data.hasMore ?? false);
-      setNextCursor(data.nextCursor ?? null);
-    } catch (error) {
-      console.error('Failed to refresh messages:', error);
-    }
-  }, [pageId]);
 
   const handleLoadOlder = useCallback(async () => {
     if (!nextCursor || loadingOlder) return;
@@ -300,7 +327,6 @@ export default function InboxChannelPage() {
       if (!res.ok) throw new Error(`Failed to fetch older messages: ${res.status}`);
       const data = await res.json();
       const olderMessages: MessageWithUser[] = data.messages ?? data;
-      skipAutoScrollRef.current = true;
       setMessages((prev) => [...olderMessages, ...prev]);
       setHasMore(data.hasMore ?? false);
       setNextCursor(data.nextCursor ?? null);
@@ -535,7 +561,7 @@ export default function InboxChannelPage() {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <StreamingMarkdown content={m.content} isStreaming={false} />
+              {renderMessageParts(convertToMessageParts(m.content))}
             </div>
           )}
           <MessageAttachment message={m} />
@@ -593,10 +619,10 @@ export default function InboxChannelPage() {
       </div>
 
       {/* Messages */}
-      <div className="flex-grow overflow-hidden">
-        <PullToRefresh direction="top" onRefresh={handleRefresh}>
-          <ScrollArea className="h-full" ref={scrollAreaRef}>
-            <div className="p-4 space-y-4 max-w-4xl mx-auto">
+      <div className="flex-grow overflow-hidden relative">
+        <Conversation className="h-full">
+          <ConversationContent className="max-w-4xl mx-auto p-4">
+            <div className="space-y-4">
               {hasMore && (
                 <div className="flex justify-center py-2">
                   <Button
@@ -680,14 +706,18 @@ export default function InboxChannelPage() {
                           <span className="opacity-60">Enter to save · Esc to cancel</span>
                         </div>
                       </div>
-                    ) : m.content ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none">
-                        <StreamingMarkdown
-                          content={m.content}
-                          isStreaming={false}
-                        />
-                      </div>
-                    ) : null}
+                    ) : (
+                      <>
+                        {(m.quotedMessage || m.quotedMessageId) && (
+                          <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
+                        )}
+                        {m.content ? (
+                          <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
+                            {renderMessageParts(convertToMessageParts(m.content))}
+                          </div>
+                        ) : null}
+                      </>
+                    )}
                     <MessageAttachment message={m} />
                     {replyCount > 0 && (
                       <button
@@ -718,12 +748,13 @@ export default function InboxChannelPage() {
                         canReact={permissions?.canView || false}
                         canEdit={isOwnMessage}
                         canDelete={isOwnMessage}
-                        canReplyInThread={!isAi}
-                        canQuoteReply={false}
+                        canReplyInThread={!m.id.startsWith('temp-')}
+                        canQuoteReply={true}
                         reactions={m.reactions}
                         currentUserId={user?.id}
                         onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
                         onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                        onQuoteReply={() => handleStartQuote(m)}
                         onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
                         onDelete={() => handleDeleteMessage(m.id)}
                         onReplyInThread={() =>
@@ -736,8 +767,9 @@ export default function InboxChannelPage() {
                 );
               })}
             </div>
-          </ScrollArea>
-        </PullToRefresh>
+          </ConversationContent>
+          <ConversationScrollButton className="z-20 bottom-6" />
+        </Conversation>
       </div>
 
       {/* Input */}
@@ -753,6 +785,8 @@ export default function InboxChannelPage() {
               onSubmit={handleTopLevelSubmit}
               driveId={page.driveId}
               attachmentsEnabled
+              quotedPreview={quotedPreview}
+              onClearQuote={clearQuote}
             />
           ) : (
             <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
