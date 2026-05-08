@@ -61,7 +61,10 @@ export async function POST(req: Request) {
 
     // Get user info for personalization
     const [user] = await db.select().from(users).where(eq(users.id, userId));
-    const userName = user?.name || user?.email?.split('@')[0] || 'there';
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+    const userName = user.name || user.email?.split('@')[0] || 'there';
 
     // Determine timezone: use client-provided, then stored preference, then UTC
     const userTimezone = clientTimezone || normalizeTimezone(user?.timezone);
