@@ -426,7 +426,7 @@ export async function GET(req: Request) {
     if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
     } else if (oauthInviteResult.kind === 'connection') {
-      returnUrl = `/dashboard/connections?connected=1`;
+      returnUrl = `/dashboard/connections?connection_requested=1`;
     } else if (oauthInviteResult.invitedDriveId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}?invited=1`;
     } else if (oauthInviteResult.inviteError) {

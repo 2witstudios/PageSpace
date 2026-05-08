@@ -442,4 +442,60 @@ describe('consumeAllInvitesForEmail', () => {
       expect.any(Date),
     );
   });
+
+  it('accepts drive and page invites in the same call and returns correct per-kind counts', async () => {
+    vi.mocked(driveInviteRepository.findUnconsumedActiveInvitesByEmail).mockResolvedValueOnce([
+      { id: 'drv_inv_1', driveId: 'drive_1', driveName: 'Acme', role: 'MEMBER' as const, invitedBy: 'user_inviter' },
+    ]);
+    vi.mocked(driveInviteRepository.consumeInviteAndCreateMembership).mockResolvedValueOnce({
+      ok: true,
+      memberId: 'mem_1',
+    });
+    vi.mocked(pageInviteRepository.findUnconsumedActiveInvitesByEmail).mockResolvedValueOnce([
+      {
+        id: 'pg_inv_1',
+        pageId: 'page_1',
+        pageTitle: 'Q3 Plan',
+        driveId: 'drive_1',
+        driveName: 'Acme',
+        invitedBy: 'user_inviter',
+        permissions: ['VIEW' as const],
+      },
+    ]);
+    vi.mocked(pageInviteRepository.consumeInviteAndGrantPage).mockResolvedValueOnce({
+      ok: true,
+      memberId: null,
+    });
+
+    const summary = await consumeAllInvitesForEmail({
+      request: dummyRequest,
+      email: 'invitee@example.com',
+      user: dummyUser,
+      now: new Date('2026-05-06'),
+    });
+
+    expect(summary.drivesAccepted).toBe(1);
+    expect(summary.pagesAccepted).toBe(1);
+    expect(summary.connectionsCreated).toBe(0);
+  });
+
+  it('continues processing remaining invites when one drive invite consumption fails', async () => {
+    vi.mocked(driveInviteRepository.findUnconsumedActiveInvitesByEmail).mockResolvedValueOnce([
+      { id: 'drv_inv_fail', driveId: 'drive_1', driveName: 'Acme', role: 'MEMBER' as const, invitedBy: 'user_a' },
+      { id: 'drv_inv_ok', driveId: 'drive_2', driveName: 'Beta', role: 'MEMBER' as const, invitedBy: 'user_b' },
+    ]);
+    vi.mocked(driveInviteRepository.consumeInviteAndCreateMembership)
+      .mockResolvedValueOnce({ ok: false, reason: 'TOKEN_CONSUMED' })
+      .mockResolvedValueOnce({ ok: true, memberId: 'mem_2' });
+
+    const summary = await consumeAllInvitesForEmail({
+      request: dummyRequest,
+      email: 'invitee@example.com',
+      user: dummyUser,
+      now: new Date('2026-05-06'),
+    });
+
+    expect(summary.drivesAccepted).toBe(1);
+    expect(driveInviteRepository.consumeInviteAndCreateMembership).toHaveBeenCalledTimes(2);
+  });
 });

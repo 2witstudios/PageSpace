@@ -22,6 +22,7 @@ export const pendingPageInvites = pgTable('pending_page_invites', {
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   pageIdx: index('pending_page_invites_page_id_idx').on(table.pageId),
+  emailIdx: index('pending_page_invites_email_idx').on(table.email),
   expiresAtIdx: index('pending_page_invites_expires_at_idx').on(table.expiresAt),
   activePageEmailIdx: uniqueIndex('pending_page_invites_active_page_email_idx')
     .on(table.pageId, table.email)

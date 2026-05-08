@@ -14,6 +14,7 @@ export const pendingConnectionInvites = pgTable('pending_connection_invites', {
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   invitedByIdx: index('pending_connection_invites_invited_by_idx').on(table.invitedBy),
+  emailIdx: index('pending_connection_invites_email_idx').on(table.email),
   expiresAtIdx: index('pending_connection_invites_expires_at_idx').on(table.expiresAt),
   activeInviterEmailIdx: uniqueIndex('pending_connection_invites_active_inviter_email_idx')
     .on(table.invitedBy, table.email)

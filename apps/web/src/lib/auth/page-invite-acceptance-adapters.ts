@@ -47,12 +47,11 @@ export const buildPageAcceptancePorts = (request: Request): PageAcceptancePorts 
     return result;
   },
 
-  broadcastPagePermissionGranted: async (data) => {
+  broadcastPagePermissionGranted: async (_data) => {
     // Page permission grants don't currently use a dedicated websocket
     // channel — clients re-fetch on focus. This port stays a no-op so the
     // pipe contract is honored and a future broadcast can land here without
     // touching call sites.
-    void data;
   },
 
   notifyPagePermissionGranted: async (data) => {

@@ -194,7 +194,10 @@ export const connectionInviteRepository = {
       return {
         ok: true,
         connectionId: result.connectionId,
-        status: result.status === 'BLOCKED' ? 'PENDING' : result.status,
+        // The insert always sets status: 'PENDING'; the column type is wider
+        // ('PENDING' | 'ACCEPTED' | 'BLOCKED') because existing rows can hold
+        // any value, but a fresh insert cannot produce BLOCKED here.
+        status: result.status as 'PENDING' | 'ACCEPTED',
       };
     } catch (error) {
       if (error === 'TOKEN_CONSUMED') {

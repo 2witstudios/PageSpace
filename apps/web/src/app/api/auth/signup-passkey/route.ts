@@ -302,7 +302,7 @@ export async function POST(req: Request) {
     if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
       redirectUrl = `/dashboard/${inviteAcceptedDriveId}/pages/${inviteAcceptedPageId}?welcome=true&invited=1`;
     } else if (inviteAcceptedKind === 'connection') {
-      redirectUrl = `/dashboard/connections?welcome=true&connected=1`;
+      redirectUrl = `/dashboard/connections?welcome=true&connection_requested=1`;
     } else if (inviteAcceptedDriveId) {
       redirectUrl = `/dashboard/${inviteAcceptedDriveId}?welcome=true`;
     } else if (inviteAcceptError) {

@@ -183,9 +183,3 @@ export type AcceptConnectionInviteResult = Result<
   InviteAcceptanceErrorCode | 'ALREADY_CONNECTED'
 >;
 
-// --- Unified dispatch envelope --------------------------------------------
-
-export type AcceptedAnyInviteData =
-  | { kind: 'drive'; data: AcceptedInviteData }
-  | { kind: 'page'; data: AcceptedPageInviteData }
-  | { kind: 'connection'; data: AcceptedConnectionData };

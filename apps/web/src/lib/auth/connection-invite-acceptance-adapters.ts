@@ -39,11 +39,10 @@ export const buildConnectionAcceptancePorts = (request: Request): ConnectionAcce
       now,
     }),
 
-  broadcastConnectionRequested: async (data) => {
+  broadcastConnectionRequested: async (_data) => {
     // Connection requests fan out via the notifications channel; no
     // dedicated socket event today. Kept as a port so a future
     // connection_state_changed broadcast can land here.
-    void data;
   },
 
   notifyConnectionRequested: async (data) => {

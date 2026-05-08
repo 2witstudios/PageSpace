@@ -3,11 +3,6 @@
  * surfaces (drive, page, connection). Hashes the token once, runs the three
  * repository lookups in parallel, and dispatches to the matching pipe.
  *
- * Replaces the legacy `consumeInviteIfPresent` (drive-only) — hard cutover,
- * no compatibility shim. All 5 auth methods (passkey signup, magic-link
- * verify allowlist, Google OAuth redirect, Google One Tap, Apple OAuth)
- * call this from the post-session-creation handoff path.
- *
  * `consumeAllInvitesForEmail` is the post-signup multi-invite resolver that
  * auto-accepts every drive + page invite waiting for the email. Connection
  * invites are also consumed but the resulting `connections` row is created
@@ -116,7 +111,19 @@ export const consumeAnyInviteIfPresent = async ({
     };
 
     if (driveRow) {
-      const ports = buildAcceptancePorts(request);
+      const ports = {
+        ...buildAcceptancePorts(request),
+        loadInvite: async () => ({
+          id: driveRow.id,
+          email: driveRow.email,
+          driveId: driveRow.driveId,
+          driveName: driveRow.driveName,
+          role: driveRow.role,
+          invitedBy: driveRow.invitedBy,
+          expiresAt: driveRow.expiresAt,
+          consumedAt: driveRow.consumedAt,
+        }),
+      };
       const result = isNewUser
         ? await acceptInviteForNewUser(ports)(acceptInput)
         : await acceptInviteForExistingUser(ports)(acceptInput);
@@ -132,7 +139,10 @@ export const consumeAnyInviteIfPresent = async ({
     }
 
     if (pageRow) {
-      const ports = buildPageAcceptancePorts(request);
+      const ports = {
+        ...buildPageAcceptancePorts(request),
+        loadInvite: async () => pageRow,
+      };
       const result = isNewUser
         ? await acceptPageInviteForNewUser(ports)(acceptInput)
         : await acceptPageInviteForExistingUser(ports)(acceptInput);
@@ -148,7 +158,10 @@ export const consumeAnyInviteIfPresent = async ({
     }
 
     if (connectionRow) {
-      const ports = buildConnectionAcceptancePorts(request);
+      const ports = {
+        ...buildConnectionAcceptancePorts(request),
+        loadInvite: async () => connectionRow,
+      };
       const result = isNewUser
         ? await acceptConnectionInviteForNewUser(ports)(acceptInput)
         : await acceptConnectionInviteForExistingUser(ports)(acceptInput);

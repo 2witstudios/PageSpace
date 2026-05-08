@@ -292,7 +292,7 @@ export async function POST(req: Request) {
     if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
       redirectTo = `/dashboard/${invitedDriveId}/pages/${invitedPageId}?invited=1`;
     } else if (inviteKind === 'connection') {
-      redirectTo = `/dashboard/connections?connected=1`;
+      redirectTo = `/dashboard/connections?connection_requested=1`;
     } else if (invitedDriveId) {
       redirectTo = `/dashboard/${invitedDriveId}?invited=1`;
     }
