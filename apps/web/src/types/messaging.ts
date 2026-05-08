@@ -57,6 +57,7 @@ export interface DMRow extends Record<string, unknown> {
   last_message: string | null;
   other_user_name: string;
   other_user_display_name: string | null;
+  other_user_image: string | null;
   other_user_avatar_url: string | null;
   unread_count: string;
 }

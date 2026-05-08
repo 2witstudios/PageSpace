@@ -61,6 +61,7 @@ const dmRow = {
   other_user_name: 'Alice',
   other_user_display_name: 'Alice',
   other_user_avatar_url: null,
+  other_user_image: '/api/avatar/alice/avatar.png?t=1',
   unread_count: '0',
 };
 
@@ -121,6 +122,14 @@ describe('GET /api/inbox ?type filter', () => {
     expect(vi.mocked(db.execute)).toHaveBeenCalledTimes(1);
     const sqlArg = vi.mocked(db.execute).mock.calls[0][0];
     expect(isDmQuery(sqlArg)).toBe(true);
+  });
+
+  it('uses users.image as the DM avatar when the profile avatar is blank', async () => {
+    const res = await GET(new Request('http://localhost/api/inbox?type=dm&limit=20'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.items[0].avatarUrl).toBe('/api/avatar/alice/avatar.png?t=1');
   });
 
   it('returns only channels when type=channel', async () => {

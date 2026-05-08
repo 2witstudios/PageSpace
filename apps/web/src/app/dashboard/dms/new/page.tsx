@@ -155,7 +155,7 @@ export default function NewConversationPage() {
                     }`}
                   >
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={u.avatarUrl || u.image || ''} />
+                      <AvatarImage src={u.image || u.avatarUrl || ''} />
                       <AvatarFallback>
                         {displayName.charAt(0).toUpperCase()}
                       </AvatarFallback>

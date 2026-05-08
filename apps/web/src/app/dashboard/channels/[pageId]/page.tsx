@@ -284,7 +284,7 @@ export default function InboxChannelPage() {
       user: {
         id: user.id,
         name: user.name || 'You',
-        image: null,
+        image: user.image ?? null,
       },
       fileId: attachment?.id || null,
       attachmentMeta,
@@ -577,7 +577,7 @@ export default function InboxChannelPage() {
       return { name: fromList.user.name, image: fromList.user.image };
     }
     if (authorId === user?.id) {
-      return { name: user?.name ?? 'You', image: null };
+      return { name: user?.name ?? 'You', image: user?.image ?? null };
     }
     return { name: fallbackName ?? 'Member', image: null };
   };
