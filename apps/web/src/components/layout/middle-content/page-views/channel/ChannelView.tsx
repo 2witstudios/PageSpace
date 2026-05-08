@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
+import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
 import {
   Conversation,
   ConversationContent,
@@ -102,6 +102,16 @@ function ChannelView({ page }: ChannelViewProps) {
   const quotedPreview = activeQuotedSnapshot
     ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
     : null;
+
+  // Close any open thread when navigating between channels — `useThreadPanelStore`
+  // is global, so a stale parentId from a previous page would otherwise reappear
+  // when CenterPanel reuses ChannelView without a per-page key.
+  useEffect(() => {
+    closeThread();
+    setQuotedMessageId(null);
+    setActiveQuotedSnapshot(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page.id]);
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -518,7 +528,7 @@ function ChannelView({ page }: ChannelViewProps) {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              {renderMessageParts(convertToMessageParts(m.content))}
+              <StreamingMarkdown content={m.content} isStreaming={false} />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -669,7 +679,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        {renderMessageParts(convertToMessageParts(m.content))}
+                                        <StreamingMarkdown content={m.content} isStreaming={false} />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (

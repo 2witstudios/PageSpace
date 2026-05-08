@@ -17,7 +17,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
+import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
 import { type ChannelInputRef, type FileAttachment } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
@@ -561,7 +561,7 @@ export default function InboxChannelPage() {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              {renderMessageParts(convertToMessageParts(m.content))}
+              <StreamingMarkdown content={m.content} isStreaming={false} />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -713,7 +713,7 @@ export default function InboxChannelPage() {
                         )}
                         {m.content ? (
                           <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                            {renderMessageParts(convertToMessageParts(m.content))}
+                            <StreamingMarkdown content={m.content} isStreaming={false} />
                           </div>
                         ) : null}
                       </>
