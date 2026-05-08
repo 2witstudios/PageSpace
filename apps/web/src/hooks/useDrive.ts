@@ -62,7 +62,7 @@ export const useDriveStore = create<DriveState>()(
         lastFetched: Date.now()
       })),
       setCurrentDrive: (driveId: string | null) => set({ currentDriveId: driveId }),
-      reset: () => set({ drives: [], lastFetched: 0, currentDriveId: null }),
+      reset: () => set({ drives: [], lastFetched: 0, currentDriveId: null, isLoading: false }),
     }),
     {
       name: 'drive-storage',

@@ -71,8 +71,10 @@ export function useGlobalDriveSocket() {
       hasJoinedRef.current = true;
       joinedUserIdRef.current = user.id;
       console.log(`🌍 Joined user:${user.id}:drives channel`);
-      // Catch any member_added events that fired while the socket was disconnected
-      fetchDrives(false, true);
+      // Catch any member_added events that fired while the socket was disconnected.
+      // Use includeTrash=true to match the debounced handler and avoid overwriting
+      // a trash-inclusive list with a narrower response.
+      fetchDrives(true, true);
     }
 
     // Listen for drive events on user-specific channel
