@@ -95,7 +95,8 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
@@ -122,7 +123,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const createVerifyRequest = (token?: string) => {
   const url = token
@@ -614,13 +615,13 @@ describe('GET /api/auth/magic-link/verify', () => {
           metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
         },
       });
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
-        invitedDriveId: 'drive_invited_42',
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
       });
 
       const response = await GET(inviteRequest('valid-token'));
 
-      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
         expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
       );
       const location = response.headers.get('Location')!;
@@ -638,9 +639,8 @@ describe('GET /api/auth/magic-link/verify', () => {
           metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
         },
       });
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
-        invitedDriveId: null,
-        inviteError: 'TOKEN_CONSUMED',
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, inviteError: 'TOKEN_CONSUMED',
       });
 
       const response = await GET(inviteRequest('valid-token'));
@@ -651,7 +651,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('inviteError=TOKEN_CONSUMED');
     });
 
-    it('given no inviteToken in metadata, does not call consumeInviteIfPresent', async () => {
+    it('given no inviteToken in metadata, does not call consumeAnyInviteIfPresent', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: true,
         data: { userId: 'test-user-id', isNewUser: false, metadata: null },
@@ -659,7 +659,7 @@ describe('GET /api/auth/magic-link/verify', () => {
 
       await GET(inviteRequest('valid-token'));
 
-      expect(consumeInviteIfPresent).not.toHaveBeenCalled();
+      expect(consumeAnyInviteIfPresent).not.toHaveBeenCalled();
     });
 
     it('given inviteToken AND a safe next, the invite drive wins (server-controlled binding overrides URL next)', async () => {
@@ -671,8 +671,8 @@ describe('GET /api/auth/magic-link/verify', () => {
           metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
         },
       });
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
-        invitedDriveId: 'drive_invited_42',
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
       });
 
       const url = `http://localhost/api/auth/magic-link/verify?token=valid&next=${encodeURIComponent('/dashboard/some_other_drive')}`;
@@ -683,7 +683,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).not.toContain('some_other_drive');
     });
 
-    it('given consumeInviteIfPresent throws (DB blip), still completes login and lands on /dashboard (session is already committed)', async () => {
+    it('given consumeAnyInviteIfPresent throws (DB blip), still completes login and lands on /dashboard (session is already committed)', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: true,
         data: {
@@ -692,7 +692,7 @@ describe('GET /api/auth/magic-link/verify', () => {
           metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
         },
       });
-      vi.mocked(consumeInviteIfPresent).mockRejectedValueOnce(new Error('postgres down'));
+      vi.mocked(consumeAnyInviteIfPresent).mockRejectedValueOnce(new Error('postgres down'));
 
       const response = await GET(inviteRequest('valid-token'));
 

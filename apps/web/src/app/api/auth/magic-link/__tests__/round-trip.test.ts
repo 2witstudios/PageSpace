@@ -100,7 +100,8 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 vi.mock('@/lib/auth/invite-resolver', () => ({
   resolveInviteContext: vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' }),
@@ -238,7 +239,7 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
 
   it('inviteToken survives send → adapter → metadata → verify and lands on the invited drive', async () => {
     const { resolveInviteContext } = await import('@/lib/auth/invite-resolver');
-    const { consumeInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+    const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
     const { driveInviteRepository } = await import('@/lib/repositories/drive-invite-repository');
     vi.mocked(driveInviteRepository).findUserVerificationStatusById = vi
       .fn()
@@ -283,20 +284,20 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
     expect(url).not.toContain('inviteToken');
 
     // Feed the captured metadata back via verifyMagicLinkToken — the verify
-    // route must read it, consume the invite via consumeInviteIfPresent, and
+    // route must read it, consume the invite via consumeAnyInviteIfPresent, and
     // land the user on the invited drive.
     verifyMagicLinkTokenMock.mockResolvedValueOnce({
       ok: true,
       data: { userId: 'user_test', isNewUser: false, metadata: persistedMetadata },
     });
-    vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
-      invitedDriveId: 'drive_invited_abc',
+    vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+      kind: 'drive', invitedDriveId: 'drive_invited_abc', invitedPageId: null, connectionId: null,
     });
 
     const verifyResp = await verifyGet(new Request(url, { method: 'GET' }));
     expect(verifyResp.status).toBe(302);
 
-    expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+    expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
       expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
     );
 
