@@ -217,6 +217,7 @@ export default function InboxChannelPage() {
     socket.on('thread_reply_count_updated', handleThreadCountUpdated);
 
     return () => {
+      socket.emit('leave_channel', pageId);
       socket.off('new_message', handleNewMessage);
       socket.off('thread_reply_count_updated', handleThreadCountUpdated);
     };

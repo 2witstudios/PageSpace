@@ -12,6 +12,9 @@ export function usePageSocketRoom(pageId: string | undefined): void {
     };
     join();
     socket.on('connect', join);
-    return () => { socket.off('connect', join); };
+    return () => {
+      socket.off('connect', join);
+      if (socket.connected) socket.emit('leave_channel', pageId);
+    };
   }, [socket, pageId]);
 }
