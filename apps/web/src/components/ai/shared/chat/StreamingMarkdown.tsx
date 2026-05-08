@@ -202,7 +202,7 @@ function CustomTable({ children, ...props }: TableHTMLAttributes<HTMLTableElemen
 // Custom list item component with smart word breaking and hyphenation
 function CustomListItem({ children, className, ...props }: HTMLAttributes<HTMLLIElement> & { children?: ReactNode }) {
   return (
-    <li className={cn("min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty] [&>p]:inline", className)} {...props}>
+    <li className={cn("min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]", className)} {...props}>
       {children}
     </li>
   );
