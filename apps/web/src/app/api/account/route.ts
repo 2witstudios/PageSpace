@@ -14,7 +14,8 @@ import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-p
 import { isValidEmail } from '@pagespace/lib/validators/email';
 import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
-import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import { stripe } from '@/lib/stripe/client';
 
 const patchBodySchema = z
@@ -243,12 +244,19 @@ export async function DELETE(req: Request) {
     }
 
     // CRITICAL: Log account deletion BEFORE anonymization (required for GDPR compliance)
-    // This ensures we have an audit record of who deleted their account and when
+    // This ensures we have an audit record of who deleted their account and when.
+    // Must be awaited — fire-and-forget would race with deleteUser() and cause FK violations.
     const actorInfo = await getActorInfo(userId);
-    logUserActivity(userId, 'account_delete', {
-      targetUserId: userId,
-      targetUserEmail: user.email,
-    }, actorInfo);
+    await logActivity({
+      userId,
+      actorEmail: actorInfo?.actorEmail ?? 'unknown@system',
+      actorDisplayName: actorInfo?.actorDisplayName,
+      operation: 'account_delete',
+      resourceType: 'user',
+      resourceId: userId,
+      resourceTitle: user.email ?? undefined,
+      driveId: null,
+    });
 
     // Anonymize activity logs before user deletion (GDPR compliance + SOX audit trail)
     // This preserves the audit trail while removing PII
@@ -289,8 +297,18 @@ export async function DELETE(req: Request) {
     }
 
     // Log security audit BEFORE user deletion so the userId FK is still valid.
-    // Timeout prevents stalling account deletion if the advisory lock hangs.
-    auditRequest(req, { eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId });
+    // Must be awaited — auditRequest() is fire-and-forget and would race with deleteUser().
+    await securityAudit.logEvent({
+      eventType: 'admin.user.deleted',
+      userId,
+      resourceType: 'account',
+      resourceId: userId,
+      ipAddress:
+        req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+        req.headers.get('x-real-ip')?.trim() ??
+        'unknown',
+      userAgent: req.headers.get('user-agent')?.trim() ?? 'unknown',
+    });
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
     await accountRepository.deleteUser(userId);
