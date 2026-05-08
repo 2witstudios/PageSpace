@@ -130,11 +130,29 @@ export async function POST(request: Request) {
         }
       }
 
-      const newConn = await connectionInviteRepository.createDirectConnection({
-        inviterUserId,
-        targetUserId: targetUser.id,
-        requestMessage: message,
-      });
+      let newConn: { id: string };
+      try {
+        newConn = await connectionInviteRepository.createDirectConnection({
+          inviterUserId,
+          targetUserId: targetUser.id,
+          requestMessage: message,
+        });
+      } catch (insertError) {
+        // Two concurrent requests can both pass the existence check and race
+        // on the connections_user_pair_key unique constraint. Map this to a
+        // deterministic conflict response rather than a 500.
+        const msg = insertError instanceof Error ? insertError.message : String(insertError);
+        const isUniqueViolation =
+          msg.includes('connections_user_pair_key') ||
+          (msg.includes('duplicate key') && msg.includes('connections'));
+        if (isUniqueViolation) {
+          return NextResponse.json(
+            { error: 'Connection request already pending' },
+            { status: 400 }
+          );
+        }
+        throw insertError;
+      }
 
       const senderName = inviterDisplay?.name ?? 'Someone';
       await createNotification({

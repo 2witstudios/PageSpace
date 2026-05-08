@@ -305,7 +305,6 @@ describe('POST /api/connections/invite', () => {
       );
 
       const res = await POST(makeRequest({ email: TARGET_EMAIL }));
-      const body = await res.json();
 
       expect(res.status).toBe(502);
       expect(connectionInviteRepository.deletePendingInvite).toHaveBeenCalledWith('invite_123');

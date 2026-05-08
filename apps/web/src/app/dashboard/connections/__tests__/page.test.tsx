@@ -56,7 +56,7 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     return discoverTab;
   }
 
-  it('given user search returns no match, surfaces the invite-to-PageSpace CTA', async () => {
+  it('given user search returns "no user found", surfaces the invite-to-PageSpace CTA', async () => {
     const user = userEvent.setup();
 
     vi.mocked(fetchWithAuth).mockResolvedValueOnce(
@@ -84,7 +84,7 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     const user = userEvent.setup();
 
     vi.mocked(fetchWithAuth).mockResolvedValueOnce(
-      new Response(JSON.stringify({ user: null }), {
+      new Response(JSON.stringify({ user: null, error: 'No user found with this email address' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -119,11 +119,34 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     });
   });
 
+  it('given user search returns "already connected", shows error toast (not invite CTA)', async () => {
+    const user = userEvent.setup();
+
+    vi.mocked(fetchWithAuth).mockResolvedValueOnce(
+      new Response(JSON.stringify({ user: null, error: 'Already connected with this user' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    const discoverTab = renderAndGetTab();
+    await user.click(discoverTab);
+
+    const input = screen.getByPlaceholderText('Enter email address');
+    await user.type(input, 'existing@example.com');
+    await user.click(screen.getByRole('button', { name: /Find User/i }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Already connected with this user');
+      expect(screen.queryByRole('button', { name: /Invite to PageSpace/i })).not.toBeInTheDocument();
+    });
+  });
+
   it('given invite returns 409 (already pending), shows appropriate error toast', async () => {
     const user = userEvent.setup();
 
     vi.mocked(fetchWithAuth).mockResolvedValueOnce(
-      new Response(JSON.stringify({ user: null }), {
+      new Response(JSON.stringify({ user: null, error: 'No user found with this email address' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })

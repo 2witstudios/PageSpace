@@ -105,8 +105,15 @@ export default function ConnectionsPage() {
       const data = await response.json();
 
       if (!data.user) {
-        // Surface the invite-to-PageSpace CTA for unknown emails.
-        setInvitableEmail(trimmedEmail);
+        const errorMsg: string = data.error || '';
+        // Only surface the invite CTA for true "user not found" — not for
+        // self-search or existing PENDING/ACCEPTED/BLOCKED relationships,
+        // which also return user: null but with a specific reason.
+        if (errorMsg.toLowerCase().includes('no user found')) {
+          setInvitableEmail(trimmedEmail);
+        } else {
+          toast.error(errorMsg || 'No user found with this email address');
+        }
         return;
       }
 
