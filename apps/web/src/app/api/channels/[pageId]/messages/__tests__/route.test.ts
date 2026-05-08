@@ -112,6 +112,11 @@ vi.mock('@/lib/channels/agent-mention-responder', () => ({
   triggerMentionedAgentResponses: vi.fn(),
 }));
 
+const mockCreateMentionNotification = vi.fn();
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+  createMentionNotification: (...args: unknown[]) => mockCreateMentionNotification(...args),
+}));
+
 // --- Imports under test --------------------------------------------------------
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -262,6 +267,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
     mockListChannelThreadFollowers.mockResolvedValue([]);
     mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    mockCreateMentionNotification.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -638,6 +644,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
       createdAt: new Date('2026-05-04T12:00:00Z'),
       user: { id: USER_ID, name: 'Test', image: null },
     });
+    mockCreateMentionNotification.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -662,5 +669,160 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
 
     expect(res.status).toBe(401);
     expect(mockInsertChannelMessage).not.toHaveBeenCalled();
+  });
+});
+
+// --- Top-level POST: mention notifications ------------------------------------
+describe('POST /api/channels/[pageId]/messages (top-level — mention notifications)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const originalRealtimeUrl = process.env.INTERNAL_REALTIME_URL;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockInsertChannelMessage.mockResolvedValue({ id: 'msg-1' });
+    mockUpsertChannelReadStatus.mockResolvedValue(undefined);
+    mockLoadChannelMessageWithRelations.mockResolvedValue({
+      id: 'msg-1',
+      content: '',
+      createdAt: new Date('2026-05-04T12:00:00Z'),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockCreateMentionNotification.mockResolvedValue(undefined);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValue({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalRealtimeUrl === undefined) {
+      delete process.env.INTERNAL_REALTIME_URL;
+    } else {
+      process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
+    }
+  });
+
+  it('fires createMentionNotification for a @mentioned user who can view the channel', async () => {
+    const res = await callPost({ content: 'hello @[Alice](user-alice:user)' });
+
+    expect(res.status).toBe(201);
+    expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', PAGE_ID, USER_ID);
+  });
+
+  it('does not notify the sender even if they @mention themselves', async () => {
+    const res = await callPost({ content: `hello @[Me](${USER_ID}:user)` });
+
+    expect(res.status).toBe(201);
+    expect(mockCreateMentionNotification).not.toHaveBeenCalledWith(
+      USER_ID,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('does not notify a @mentioned user who cannot view the channel', async () => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(false);
+
+    const res = await callPost({ content: 'hello @[Outsider](user-outsider:user)' });
+
+    expect(res.status).toBe(201);
+    expect(mockCreateMentionNotification).not.toHaveBeenCalled();
+  });
+
+  it('returns 201 even when createMentionNotification throws', async () => {
+    mockCreateMentionNotification.mockRejectedValue(new Error('notification service down'));
+
+    const res = await callPost({ content: 'hello @[Alice](user-alice:user)' });
+
+    expect(res.status).toBe(201);
+  });
+});
+
+// --- Thread reply POST: mention notifications ---------------------------------
+describe('POST /api/channels/[pageId]/messages (thread reply — mention notifications)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const originalRealtimeUrl = process.env.INTERNAL_REALTIME_URL;
+
+  function makeThreadReplyScenario(content: string) {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content,
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    // USER_ID is a follower; other mentioned users are not
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+    return replyCreatedAt;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    mockCreateMentionNotification.mockResolvedValue(undefined);
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValue({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalRealtimeUrl === undefined) {
+      delete process.env.INTERNAL_REALTIME_URL;
+    } else {
+      process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
+    }
+  });
+
+  it('fires createMentionNotification for a @mentioned non-follower who can view the channel', async () => {
+    makeThreadReplyScenario('hey @[Bob](user-bob:user)');
+
+    await callPost({ content: 'hey @[Bob](user-bob:user)', parentId: PARENT_ID });
+
+    expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-bob', PAGE_ID, USER_ID);
+  });
+
+  it('returns 201 even when mention notification throws in a thread reply', async () => {
+    makeThreadReplyScenario('hey @[Bob](user-bob:user)');
+    mockCreateMentionNotification.mockRejectedValue(new Error('notification failed'));
+
+    const res = await callPost({ content: 'hey @[Bob](user-bob:user)', parentId: PARENT_ID });
+
+    expect(res.status).toBe(201);
   });
 });

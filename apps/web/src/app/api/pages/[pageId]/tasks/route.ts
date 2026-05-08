@@ -10,6 +10,8 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -502,6 +504,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       }),
     ),
   ]);
+
+  // Fire MENTION notifications for @mentioned users in task description
+  try {
+    if (description && typeof description === 'string' && description.trim().length > 0) {
+      const mentionedIds = extractMentionedUserIds(description.trim());
+      const candidates = mentionedIds.filter((id) => id !== userId);
+      if (candidates.length > 0) {
+        const viewChecks = await Promise.all(
+          candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
+        );
+        await Promise.all(
+          viewChecks
+            .filter((e) => e.canView)
+            .map((e) => createMentionNotification(e.id, pageId, userId))
+        );
+      }
+    }
+  } catch {
+    // intentional: notification failures must never fail a committed task insert
+  }
 
   // Log task creation for compliance (fire-and-forget)
   const actorInfo = await getActorInfo(userId);

@@ -13,6 +13,7 @@ import { channelMessageRepository } from '@pagespace/lib/services/channel-messag
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 interface ChannelInboxFanoutInput {
@@ -480,6 +481,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             })
           )
         );
+
+        // Fire MENTION notifications for the view-checked targets
+        try {
+          await Promise.all(
+            mentionTargets.map((id: string) => createMentionNotification(id, pageId, userId))
+          );
+        } catch (mentionErr) {
+          loggers.realtime.error('Failed to send mention notifications for thread reply:', mentionErr as Error);
+        }
       }
 
       if (mirrorWithRelations && channel?.driveId) {
@@ -626,6 +636,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         lastMessagePreview: messagePreview,
         lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
       });
+
+      // Fire MENTION notifications for @mentioned viewable non-sender users
+      try {
+        const mentionedIds = extractMentionedUserIds(messageContent);
+        const candidates = mentionedIds.filter((id) => id !== userId);
+        if (candidates.length > 0) {
+          const viewChecks = await Promise.all(
+            candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
+          );
+          await Promise.all(
+            viewChecks
+              .filter((e) => e.canView)
+              .map((e) => createMentionNotification(e.id, pageId, userId))
+          );
+        }
+      } catch (mentionErr) {
+        loggers.realtime.error('Failed to send mention notifications:', mentionErr as Error);
+      }
 
       // Broadcast read status change to sender to update their unread count
       await broadcastInboxEvent(userId, {

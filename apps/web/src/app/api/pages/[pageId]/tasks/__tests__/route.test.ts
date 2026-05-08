@@ -139,6 +139,11 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(() => ({})),
 }));
 
+const mockCreateMentionNotification = vi.fn().mockResolvedValue(undefined);
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+  createMentionNotification: (...args: unknown[]) => mockCreateMentionNotification(...args),
+}));
+
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -714,6 +719,126 @@ describe('Task API Routes', () => {
         dueDate: '2024-12-31',
         assigneeId: 'user-456',
       }), { params: mockParams });
+
+      expect(response.status).toBe(201);
+    });
+
+    it('fires createMentionNotification for @mentioned users in task description', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(
+        createRequest({ title: 'Task', description: 'Needs review @[Alice](user-alice:user)' }),
+        { params: mockParams },
+      );
+
+      expect(response.status).toBe(201);
+      expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', mockPageId, mockUserId);
+    });
+
+    it('does not notify the task creator even when self-mentioned in description', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(
+        createRequest({ title: 'Task', description: `CC @[Me](${mockUserId}:user)` }),
+        { params: mockParams },
+      );
+
+      expect(response.status).toBe(201);
+      expect(mockCreateMentionNotification).not.toHaveBeenCalledWith(
+        mockUserId,
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('does not notify a @mentioned user who cannot view the task list page', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(
+        createRequest({ title: 'Task', description: 'Hey @[Outsider](user-outsider:user)' }),
+        { params: mockParams },
+      );
+
+      expect(response.status).toBe(201);
+      expect(mockCreateMentionNotification).not.toHaveBeenCalled();
+    });
+
+    it('returns 201 even when createMentionNotification throws during task creation', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+      mockCreateMentionNotification.mockRejectedValue(new Error('notification service down'));
+
+      const response = await POST(
+        createRequest({ title: 'Task', description: 'Hey @[Alice](user-alice:user)' }),
+        { params: mockParams },
+      );
 
       expect(response.status).toBe(201);
     });
