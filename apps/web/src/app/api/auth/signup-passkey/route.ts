@@ -16,8 +16,10 @@ import {
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
-import { acceptInviteForNewUser } from '@pagespace/lib/services/invites';
-import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -212,35 +214,37 @@ export async function POST(req: Request) {
     // Generate CSRF token bound to session ID
     const newCsrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Targeted invite acceptance via the new pendingInvites pipe. Failure is
+    // Targeted invite acceptance via the unified dispatcher. Failure is
     // NON-FATAL — the signup still completes; the dashboard surfaces
     // ?inviteError=<code> so the user can act on it.
     let inviteAcceptedDriveId: string | null = null;
+    let inviteAcceptedPageId: string | null = null;
+    let inviteAcceptedKind: 'drive' | 'page' | 'connection' | null = null;
     let inviteAcceptError: string | null = null;
     if (validation.data.inviteToken) {
-      try {
-        const inviteResult = await acceptInviteForNewUser(buildAcceptancePorts(req))({
-          token: validation.data.inviteToken,
-          userId,
-          userEmail: email,
-          suspendedAt: null,
-          now: new Date(),
-        });
-        if (inviteResult.ok) {
-          inviteAcceptedDriveId = inviteResult.data.driveId;
-        } else {
-          inviteAcceptError = inviteResult.error;
-        }
-      } catch (error) {
-        // Don't tear down the session if the invite acceptance pipe throws —
-        // the user is signed up, log the error and let them land on the
-        // dashboard with an inviteError query param.
-        loggers.auth.error('Invite acceptance threw on passkey signup', error as Error, {
-          userId,
-        });
-        inviteAcceptError = 'TOKEN_NOT_FOUND';
+      const inviteResult = await consumeAnyInviteIfPresent({
+        request: req,
+        inviteToken: validation.data.inviteToken,
+        user: { id: userId, suspendedAt: null },
+        isNewUser: true,
+        email,
+      });
+      inviteAcceptedDriveId = inviteResult.invitedDriveId;
+      inviteAcceptedPageId = inviteResult.invitedPageId;
+      inviteAcceptedKind = inviteResult.kind;
+      if (inviteResult.inviteError) {
+        inviteAcceptError = inviteResult.inviteError;
       }
     }
+
+    // Drain any other pending drive/page invites for this email; connection
+    // invites are also consumed but their `connections` row stays PENDING.
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: userId, suspendedAt: null },
+      now: new Date(),
+    });
 
     let deviceTokenValue: string | undefined;
     if (deviceId) {
@@ -295,7 +299,11 @@ export async function POST(req: Request) {
     // user land on the dashboard but with an inviteError query param so the
     // UI can surface what went wrong.
     let redirectUrl: string;
-    if (inviteAcceptedDriveId) {
+    if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
+      redirectUrl = `/dashboard/${inviteAcceptedDriveId}/pages/${inviteAcceptedPageId}?welcome=true&invited=1`;
+    } else if (inviteAcceptedKind === 'connection') {
+      redirectUrl = `/dashboard/connections?welcome=true&connected=1`;
+    } else if (inviteAcceptedDriveId) {
       redirectUrl = `/dashboard/${inviteAcceptedDriveId}?welcome=true`;
     } else if (inviteAcceptError) {
       redirectUrl = `/dashboard?welcome=true&inviteError=${inviteAcceptError}`;

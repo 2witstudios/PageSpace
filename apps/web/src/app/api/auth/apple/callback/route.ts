@@ -23,7 +23,10 @@ import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -235,12 +238,19 @@ export async function POST(req: Request) {
     // dropped at the deep-link handoff. The invite is fully consumed (the
     // membership row is created) regardless of platform; deep-link clients
     // get `invitedDriveId` as a query param for forward-compatible routing.
-    const oauthInviteResult = await consumeInviteIfPresent({
+    const oauthInviteResult = await consumeAnyInviteIfPresent({
       request: req,
       inviteToken: verifiedState.inviteToken,
       user: { id: user.id, suspendedAt: user.suspendedAt },
       isNewUser: wasNewUser,
       email,
+    });
+
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
     });
 
     // DESKTOP PLATFORM: Redirect with tokens encoded via exchange code
@@ -353,7 +363,11 @@ export async function POST(req: Request) {
       }
     }
 
-    if (oauthInviteResult.invitedDriveId) {
+    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+      returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
+    } else if (oauthInviteResult.kind === 'connection') {
+      returnUrl = `/dashboard/connections?connected=1`;
+    } else if (oauthInviteResult.invitedDriveId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}?invited=1`;
     } else if (oauthInviteResult.inviteError) {
       const sep = returnUrl.includes('?') ? '&' : '?';

@@ -119,11 +119,21 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({
+    kind: null,
+    invitedDriveId: null,
+    invitedPageId: null,
+    connectionId: null,
+  }),
+  consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
+    drivesAccepted: 0,
+    pagesAccepted: 0,
+    connectionsCreated: 0,
+  }),
 }));
 
 import { POST } from '../route';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
@@ -734,21 +744,29 @@ describe('POST /api/auth/apple/native', () => {
   });
 
   describe('invite acceptance', () => {
-    it('forwards inviteToken to consumeInviteIfPresent and includes invitedDriveId in response', async () => {
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({ invitedDriveId: 'drive-from-invite' });
+    it('forwards inviteToken to consumeAnyInviteIfPresent and includes invitedDriveId in response', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive-from-invite',
+        invitedPageId: null,
+        connectionId: null,
+      });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
       const body = await response.json();
 
-      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+      expect(consumeAnyInviteIfPresent).toHaveBeenCalledWith(
         expect.objectContaining({ inviteToken: 'ps_invite_xyz', isNewUser: true }),
       );
       expect(body.invitedDriveId).toBe('drive-from-invite');
     });
 
     it('passes inviteError through when pipe rejects', async () => {
-      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
         invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 

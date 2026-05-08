@@ -24,7 +24,10 @@ import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -249,12 +252,22 @@ export async function GET(req: Request) {
     // dropped at the deep-link handoff. The invite is fully consumed (the
     // membership row is created) regardless of platform; deep-link clients
     // get `invitedDriveId` as a query param for forward-compatible routing.
-    const oauthInviteResult = await consumeInviteIfPresent({
+    const oauthInviteResult = await consumeAnyInviteIfPresent({
       request: req,
       inviteToken: verifiedState.inviteToken,
       user: { id: user.id, suspendedAt: user.suspendedAt },
       isNewUser: wasNewUser,
       email,
+    });
+
+    // After session creation, drain any other pending drive/page invites that
+    // were waiting for this email. Connection invites are also consumed but
+    // their `connections` row stays in PENDING — see consumeAllInvitesForEmail.
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
     });
 
     // DESKTOP PLATFORM: Redirect with tokens encoded in URL
@@ -410,7 +423,11 @@ export async function GET(req: Request) {
       }
     }
 
-    if (oauthInviteResult.invitedDriveId) {
+    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+      returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
+    } else if (oauthInviteResult.kind === 'connection') {
+      returnUrl = `/dashboard/connections?connected=1`;
+    } else if (oauthInviteResult.invitedDriveId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}?invited=1`;
     } else if (oauthInviteResult.inviteError) {
       const sep = returnUrl.includes('?') ? '&' : '?';

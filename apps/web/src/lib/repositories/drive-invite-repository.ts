@@ -356,6 +356,28 @@ export const driveInviteRepository = {
   // `findActivePendingInviteByDriveAndEmail` which is the strict-active gate
   // for "is there a fresh in-flight invite for this address" — that one DOES
   // filter `expiresAt > now`.
+  // Returns every active (unconsumed, unexpired) drive-invite row for the
+  // given email — used by the post-signup multi-invite auto-accept helper to
+  // find any drive invitations that landed before the user signed up.
+  async findUnconsumedActiveInvitesByEmail(
+    email: string,
+    now: Date,
+  ): Promise<Array<{ id: string; driveId: string }>> {
+    return db
+      .select({
+        id: pendingInvites.id,
+        driveId: pendingInvites.driveId,
+      })
+      .from(pendingInvites)
+      .where(
+        and(
+          eq(pendingInvites.email, email),
+          isNull(pendingInvites.consumedAt),
+          gt(pendingInvites.expiresAt, now),
+        ),
+      );
+  },
+
   async findUnconsumedInvitesByDrive(driveId: string): Promise<Array<{
     id: string;
     email: string;

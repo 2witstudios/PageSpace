@@ -68,6 +68,10 @@ const LIB_ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'auth/revoke-adapters.ts',
     'findActorMembership returns raw {role, acceptedAt} so the strict "accepted OWNER/ADMIN" gate lives once in validateRevokeRequest (pure-core). Filtering acceptedAt at the SQL layer would silently NOT_FOUND a request that should FORBIDDEN, masking a wrong-role attempt.',
   ],
+  [
+    'repositories/page-invite-repository.ts',
+    'Page-invite acceptance writes a driveMembers row (does not read for authz). Existing-member lookup gates on (driveId, userId) composite to keep the page-grant idempotent — a pending-invite row would be a different (driveId, userId) and is irrelevant here.',
+  ],
 ]);
 
 const DRIVE_MEMBERS_REFERENCE = /\bdriveMembers\b/;

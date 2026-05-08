@@ -20,7 +20,10 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
 
 const client = new OAuth2Client();
 
@@ -244,12 +247,19 @@ export async function POST(req: Request) {
       isNewUser,
     });
 
-    const { invitedDriveId, inviteError } = await consumeInviteIfPresent({
+    const { invitedDriveId, inviteError } = await consumeAnyInviteIfPresent({
       request: req,
       inviteToken,
       user,
       isNewUser,
       email,
+    });
+
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
     });
 
     // Set session cookie so middleware recognizes the authenticated session

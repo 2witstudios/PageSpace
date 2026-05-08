@@ -21,7 +21,10 @@ import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAllInvitesForEmail,
+  consumeAnyInviteIfPresent,
+} from '@/lib/auth/native-invite-acceptance';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -270,14 +273,27 @@ export async function POST(req: Request) {
       }
     }
 
-    const { invitedDriveId, inviteError } = await consumeInviteIfPresent({
+    const inviteResult = await consumeAnyInviteIfPresent({
       request: req,
       inviteToken,
       user,
       isNewUser,
       email,
     });
-    if (invitedDriveId) {
+
+    await consumeAllInvitesForEmail({
+      request: req,
+      email,
+      user: { id: user.id, suspendedAt: user.suspendedAt },
+      now: new Date(),
+    });
+
+    const { invitedDriveId, invitedPageId, inviteError, kind: inviteKind } = inviteResult;
+    if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
+      redirectTo = `/dashboard/${invitedDriveId}/pages/${invitedPageId}?invited=1`;
+    } else if (inviteKind === 'connection') {
+      redirectTo = `/dashboard/connections?connected=1`;
+    } else if (invitedDriveId) {
       redirectTo = `/dashboard/${invitedDriveId}?invited=1`;
     }
 

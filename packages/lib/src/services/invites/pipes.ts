@@ -1,9 +1,19 @@
 import { MAGIC_LINK_EXPIRY_MINUTES } from '../../auth/magic-link-constants';
-import type { AcceptancePorts, MagicLinkPorts, RevokePorts } from './ports';
 import type {
+  AcceptancePorts,
+  ConnectionAcceptancePorts,
+  MagicLinkPorts,
+  PageAcceptancePorts,
+  RevokePorts,
+} from './ports';
+import type {
+  AcceptConnectionInviteResult,
+  AcceptedConnectionData,
   AcceptedInviteData,
+  AcceptedPageInviteData,
   AcceptInviteInput,
   AcceptInviteResult,
+  AcceptPageInviteResult,
   RequestMagicLinkInput,
   RequestMagicLinkResult,
   RevokePendingInviteInput,
@@ -12,6 +22,7 @@ import type {
 import {
   validateInviteForUser,
   validateMagicLinkRequest,
+  validatePendingInviteForUser,
   validateRevokeRequest,
 } from './validators';
 
@@ -41,6 +52,24 @@ export const emitAcceptanceSideEffects = async (
   await swallow(() => ports.notifyMemberAdded(data));
   await swallow(() => ports.trackInviteMember({ ...data, permissionsGranted }));
   await swallow(() => ports.auditPermissionGranted(data));
+};
+
+export const emitPageAcceptanceSideEffects = async (
+  ports: PageAcceptancePorts,
+  data: AcceptedPageInviteData,
+): Promise<void> => {
+  await swallow(() => ports.broadcastPagePermissionGranted(data));
+  await swallow(() => ports.notifyPagePermissionGranted(data));
+  await swallow(() => ports.auditPagePermissionGranted(data));
+};
+
+export const emitConnectionAcceptanceSideEffects = async (
+  ports: ConnectionAcceptancePorts,
+  data: AcceptedConnectionData,
+): Promise<void> => {
+  await swallow(() => ports.broadcastConnectionRequested(data));
+  await swallow(() => ports.notifyConnectionRequested(data));
+  await swallow(() => ports.auditConnectionRequested(data));
 };
 
 export const acceptInviteForExistingUser =
@@ -218,6 +247,187 @@ export const acceptInviteForNewUser =
     };
 
     await emitAcceptanceSideEffects(ports, data);
+
+    return { ok: true, data };
+  };
+
+// --- Page-share-by-email --------------------------------------------------
+
+const buildPageAcceptedData = (input: {
+  invite: import('./types').PageInvite;
+  userId: string;
+  memberId: string | null;
+}): AcceptedPageInviteData => ({
+  inviteId: input.invite.id,
+  inviteEmail: input.invite.email,
+  pageId: input.invite.pageId,
+  pageTitle: input.invite.pageTitle,
+  driveId: input.invite.driveId,
+  driveName: input.invite.driveName,
+  permissions: input.invite.permissions,
+  memberId: input.memberId,
+  invitedUserId: input.userId,
+  inviterUserId: input.invite.invitedBy,
+});
+
+export const acceptPageInviteForExistingUser =
+  (ports: PageAcceptancePorts) =>
+  async (input: AcceptInviteInput): Promise<AcceptPageInviteResult> => {
+    const invite = await ports.loadInvite({ token: input.token });
+    if (!invite) return { ok: false, error: 'TOKEN_NOT_FOUND' };
+
+    const validated = validatePendingInviteForUser({
+      invite,
+      userEmail: input.userEmail,
+      suspendedAt: input.suspendedAt,
+      now: input.now,
+    });
+    if (!validated.ok) return validated;
+
+    const existing = await ports.findExistingPagePermission({
+      pageId: invite.pageId,
+      userId: input.userId,
+    });
+    if (existing) {
+      return { ok: false, error: 'ALREADY_HAS_PERMISSION' };
+    }
+
+    const consumed = await ports.consumeInviteAndGrantPage({
+      invite,
+      userId: input.userId,
+      now: input.now,
+    });
+    if (!consumed.ok) return { ok: false, error: consumed.reason };
+
+    const data = buildPageAcceptedData({
+      invite,
+      userId: input.userId,
+      memberId: consumed.memberId,
+    });
+
+    await emitPageAcceptanceSideEffects(ports, data);
+
+    return { ok: true, data };
+  };
+
+export const acceptPageInviteForNewUser =
+  (ports: PageAcceptancePorts) =>
+  async (input: AcceptInviteInput): Promise<AcceptPageInviteResult> => {
+    const invite = await ports.loadInvite({ token: input.token });
+    if (!invite) return { ok: false, error: 'TOKEN_NOT_FOUND' };
+
+    const validated = validatePendingInviteForUser({
+      invite,
+      userEmail: input.userEmail,
+      suspendedAt: input.suspendedAt,
+      now: input.now,
+    });
+    if (!validated.ok) return validated;
+
+    const consumed = await ports.consumeInviteAndGrantPage({
+      invite,
+      userId: input.userId,
+      now: input.now,
+    });
+    if (!consumed.ok) return { ok: false, error: consumed.reason };
+
+    const data = buildPageAcceptedData({
+      invite,
+      userId: input.userId,
+      memberId: consumed.memberId,
+    });
+
+    await emitPageAcceptanceSideEffects(ports, data);
+
+    return { ok: true, data };
+  };
+
+// --- Connection-by-email --------------------------------------------------
+
+const buildConnectionAcceptedData = (input: {
+  invite: import('./types').ConnectionInvite;
+  userId: string;
+  connectionId: string;
+  status: 'PENDING' | 'ACCEPTED';
+}): AcceptedConnectionData => ({
+  inviteId: input.invite.id,
+  inviteEmail: input.invite.email,
+  connectionId: input.connectionId,
+  status: input.status,
+  invitedUserId: input.userId,
+  inviterUserId: input.invite.invitedBy,
+});
+
+export const acceptConnectionInviteForExistingUser =
+  (ports: ConnectionAcceptancePorts) =>
+  async (input: AcceptInviteInput): Promise<AcceptConnectionInviteResult> => {
+    const invite = await ports.loadInvite({ token: input.token });
+    if (!invite) return { ok: false, error: 'TOKEN_NOT_FOUND' };
+
+    const validated = validatePendingInviteForUser({
+      invite,
+      userEmail: input.userEmail,
+      suspendedAt: input.suspendedAt,
+      now: input.now,
+    });
+    if (!validated.ok) return validated;
+
+    const existing = await ports.findExistingConnection({
+      userId: input.userId,
+      inviterId: invite.invitedBy,
+    });
+    if (existing) {
+      return { ok: false, error: 'ALREADY_CONNECTED' };
+    }
+
+    const consumed = await ports.consumeInviteAndCreateConnection({
+      invite,
+      userId: input.userId,
+      now: input.now,
+    });
+    if (!consumed.ok) return { ok: false, error: consumed.reason };
+
+    const data = buildConnectionAcceptedData({
+      invite,
+      userId: input.userId,
+      connectionId: consumed.connectionId,
+      status: consumed.status,
+    });
+
+    await emitConnectionAcceptanceSideEffects(ports, data);
+
+    return { ok: true, data };
+  };
+
+export const acceptConnectionInviteForNewUser =
+  (ports: ConnectionAcceptancePorts) =>
+  async (input: AcceptInviteInput): Promise<AcceptConnectionInviteResult> => {
+    const invite = await ports.loadInvite({ token: input.token });
+    if (!invite) return { ok: false, error: 'TOKEN_NOT_FOUND' };
+
+    const validated = validatePendingInviteForUser({
+      invite,
+      userEmail: input.userEmail,
+      suspendedAt: input.suspendedAt,
+      now: input.now,
+    });
+    if (!validated.ok) return validated;
+
+    const consumed = await ports.consumeInviteAndCreateConnection({
+      invite,
+      userId: input.userId,
+      now: input.now,
+    });
+    if (!consumed.ok) return { ok: false, error: consumed.reason };
+
+    const data = buildConnectionAcceptedData({
+      invite,
+      userId: input.userId,
+      connectionId: consumed.connectionId,
+      status: consumed.status,
+    });
+
+    await emitConnectionAcceptanceSideEffects(ports, data);
 
     return { ok: true, data };
   };
