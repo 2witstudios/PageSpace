@@ -218,12 +218,14 @@ export async function GET(req: Request) {
           // If the link was opened on a different device, the exchange code is
           // ignored and the user still has a valid cookie session.
           const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-          const desktopRedirectPath = await resolvePostLoginRedirectPath({
-            isNewUser,
-            userId,
-            next: safeNext,
-            invitedDriveId,
-          });
+          const desktopRedirectPath =
+            inviteResult?.kind === 'connection'
+              ? '/dashboard/connections'
+              : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
+                ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
+                : await resolvePostLoginRedirectPath({
+                    isNewUser, userId, next: safeNext, invitedDriveId,
+                  });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
           desktopRedirectUrl.searchParams.set('desktopExchange', exchangeCode);
@@ -281,14 +283,16 @@ export async function GET(req: Request) {
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
 
-    // Determine redirect URL via the shared helper so the desktop and web
-    // post-login flows cannot drift on the next redirect-rule change.
-    const redirectPath = await resolvePostLoginRedirectPath({
-      isNewUser,
-      userId,
-      next: safeNext,
-      invitedDriveId,
-    });
+    // Determine redirect URL — kind-specific overrides win, then fall back to
+    // the shared helper so new-user provisioning and `next` still work.
+    const redirectPath =
+      inviteResult?.kind === 'connection'
+        ? '/dashboard/connections'
+        : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
+          ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
+          : await resolvePostLoginRedirectPath({
+              isNewUser, userId, next: safeNext, invitedDriveId,
+            });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
     const redirectUrl = new URL(redirectPath, baseUrl);
