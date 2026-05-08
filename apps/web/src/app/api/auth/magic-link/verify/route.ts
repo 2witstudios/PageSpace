@@ -20,7 +20,11 @@ import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+  type NativeInviteAcceptanceResult,
+} from '@/lib/auth/native-invite-acceptance';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -142,20 +146,19 @@ export async function GET(req: Request) {
     // the verification-status lookup must not redirect the user to signin
     // when they already hold a valid session. Worst case the invite stays
     // pending and the user reclaims it from the consent page.
-    let invitedDriveId: string | null = null;
+    let inviteResult: NativeInviteAcceptanceResult | null = null;
     let inviteError: string | null = null;
-    if (boundInviteToken) {
-      try {
-        const status = await driveInviteRepository.findUserVerificationStatusById(userId);
-        if (status) {
-          const inviteResult = await consumeInviteIfPresent({
+    try {
+      const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+      if (status) {
+        if (boundInviteToken) {
+          inviteResult = await consumeAnyInviteIfPresent({
             request: req,
             inviteToken: boundInviteToken,
             user: { id: userId, suspendedAt: status.suspendedAt },
             isNewUser,
             email: status.email,
           });
-          invitedDriveId = inviteResult.invitedDriveId;
           if (inviteResult.inviteError) {
             inviteError = inviteResult.inviteError;
             loggers.auth.info('Bound invite acceptance failed during magic link verify', {
@@ -163,18 +166,25 @@ export async function GET(req: Request) {
               reason: inviteResult.inviteError,
             });
           }
-        } else {
-          loggers.auth.warn('Authenticated session has no user record on invite consume', {
-            userId,
-          });
         }
-      } catch (error) {
-        loggers.auth.error('Invite consume threw during magic link verify', error as Error, {
+        await consumeAllInvitesForEmail({
+          request: req,
+          email: status.email,
+          user: { id: userId, suspendedAt: status.suspendedAt },
+          now: new Date(),
+        });
+      } else {
+        loggers.auth.warn('Authenticated session has no user record on invite consume', {
           userId,
         });
-        // Continue with login — the session is valid; user can re-attempt invite.
       }
+    } catch (error) {
+      loggers.auth.error('Invite consume threw during magic link verify', error as Error, {
+        userId,
+      });
+      // Continue with login — the session is valid; user can re-attempt invite.
     }
+    const invitedDriveId = inviteResult?.invitedDriveId ?? null;
 
     // DESKTOP: additionally create device token + exchange code for desktop token handoff
     // The web session (cookies) is always created above — this is a supplementary step.
@@ -220,7 +230,9 @@ export async function GET(req: Request) {
           if (isNewUser) {
             desktopRedirectUrl.searchParams.set('welcome', 'true');
           }
-          if (invitedDriveId) {
+          if (inviteResult?.kind === 'connection') {
+            desktopRedirectUrl.searchParams.set('connection_requested', '1');
+          } else if (invitedDriveId) {
             desktopRedirectUrl.searchParams.set('invited', '1');
           } else if (inviteError) {
             desktopRedirectUrl.searchParams.set('inviteError', inviteError);
@@ -281,7 +293,9 @@ export async function GET(req: Request) {
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
-    if (invitedDriveId) {
+    if (inviteResult?.kind === 'connection') {
+      redirectUrl.searchParams.set('connection_requested', '1');
+    } else if (invitedDriveId) {
       redirectUrl.searchParams.set('invited', '1');
     } else if (inviteError) {
       redirectUrl.searchParams.set('inviteError', inviteError);

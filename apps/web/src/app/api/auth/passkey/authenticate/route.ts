@@ -17,7 +17,11 @@ import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/au
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import {
+  consumeAnyInviteIfPresent,
+  consumeAllInvitesForEmail,
+  type NativeInviteAcceptanceResult,
+} from '@/lib/auth/native-invite-acceptance';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const verifySchema = z.object({
@@ -195,20 +199,19 @@ export async function POST(req: Request) {
     // gate. A failed invite never blocks login. Wrapped in try/catch so a
     // DB blip on findUserVerificationStatusById doesn't 500 the response
     // after the session has already committed.
-    let invitedDriveId: string | null = null;
+    let inviteResult: NativeInviteAcceptanceResult | null = null;
     let inviteError: string | null = null;
-    if (inviteToken) {
-      try {
-        const status = await driveInviteRepository.findUserVerificationStatusById(userId);
-        if (status) {
-          const inviteResult = await consumeInviteIfPresent({
+    try {
+      const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+      if (status) {
+        if (inviteToken) {
+          inviteResult = await consumeAnyInviteIfPresent({
             request: req,
             inviteToken,
             user: { id: userId, suspendedAt: status.suspendedAt },
             isNewUser: false,
             email: status.email,
           });
-          invitedDriveId = inviteResult.invitedDriveId;
           if (inviteResult.inviteError) {
             inviteError = inviteResult.inviteError;
             loggers.auth.info('Bound invite acceptance failed during passkey auth', {
@@ -217,18 +220,30 @@ export async function POST(req: Request) {
             });
           }
         }
-      } catch (error) {
-        loggers.auth.error('Invite consume threw during passkey auth', error as Error, {
-          userId,
+        await consumeAllInvitesForEmail({
+          request: req,
+          email: status.email,
+          user: { id: userId, suspendedAt: status.suspendedAt },
+          now: new Date(),
         });
       }
+    } catch (error) {
+      loggers.auth.error('Invite consume threw during passkey auth', error as Error, {
+        userId,
+      });
     }
 
-    const successRedirect = invitedDriveId
-      ? `/dashboard/${invitedDriveId}?invited=1`
-      : inviteError
-        ? `/dashboard?inviteError=${inviteError}`
-        : '/dashboard';
+    const invitedDriveId = inviteResult?.invitedDriveId ?? null;
+    const successRedirect =
+      inviteResult?.kind === 'connection'
+        ? '/dashboard/connections?connection_requested=1'
+        : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
+          ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}?invited=1`
+          : invitedDriveId
+            ? `/dashboard/${invitedDriveId}?invited=1`
+            : inviteError
+              ? `/dashboard?inviteError=${inviteError}`
+              : '/dashboard';
 
     // Track successful passkey login
     trackAuthEvent(userId, 'passkey_login', {
