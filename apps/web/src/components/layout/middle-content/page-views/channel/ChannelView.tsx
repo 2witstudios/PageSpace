@@ -12,7 +12,8 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from '@/components/ai/ui/conversation';
-import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
+import { type ChannelInputRef, type FileAttachment } from './ChannelInput';
+import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
@@ -25,6 +26,9 @@ import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
+import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { useMobile } from '@/hooks/useMobile';
 import {
   type AttachmentMeta,
   type FileRelation,
@@ -67,7 +71,19 @@ function ChannelView({ page }: ChannelViewProps) {
   const socket = useSocketStore((state) => state.socket);
   const connectionStatus = useSocketStore((state) => state.connectionStatus);
   const connect = useSocketStore((state) => state.connect);
+  const threadPanelOpen = useThreadPanelStore((state) => state.open);
+  const threadPanelSource = useThreadPanelStore((state) => state.source);
+  const threadPanelContextId = useThreadPanelStore((state) => state.contextId);
+  const threadPanelParentId = useThreadPanelStore((state) => state.parentId);
   const openThread = useThreadPanelStore((state) => state.openThread);
+  const closeThread = useThreadPanelStore((state) => state.close);
+  const isMobile = useMobile();
+
+  const isThreadVisible =
+    threadPanelOpen &&
+    threadPanelSource === 'channel' &&
+    threadPanelContextId === page.id &&
+    !!threadPanelParentId;
 
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
@@ -86,6 +102,16 @@ function ChannelView({ page }: ChannelViewProps) {
   const quotedPreview = activeQuotedSnapshot
     ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
     : null;
+
+  // Close any open thread when navigating between channels — `useThreadPanelStore`
+  // is global, so a stale parentId from a previous page would otherwise reappear
+  // when CenterPanel reuses ChannelView without a per-page key.
+  useEffect(() => {
+    closeThread();
+    setQuotedMessageId(null);
+    setActiveQuotedSnapshot(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page.id]);
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -253,17 +279,24 @@ function ChannelView({ page }: ChannelViewProps) {
     }
   };
 
-  const handleSendMessage = (attachment?: FileAttachment) => {
-    // Allow sending if there's text or an attachment
-    if (!inputValue.trim() && !attachment) return;
+  const handleTopLevelSubmit = ({
+    content,
+    attachment,
+  }: {
+    content: string;
+    attachment?: FileAttachment;
+  }) => {
+    if (!content.trim() && !attachment) return;
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
-    handleSubmit(inputValue, attachment, quotedMessageId, activeQuotedSnapshot);
-    channelInputRef.current?.clear();
+    const activeQuoteId = quotedMessageId;
+    const activeQuoteSnapshot = activeQuotedSnapshot;
     setInputValue('');
+    channelInputRef.current?.clear();
     clearQuote();
+    handleSubmit(content, attachment, activeQuoteId, activeQuoteSnapshot);
   };
 
   // Load older messages when scrolling to top
@@ -460,8 +493,77 @@ function ChannelView({ page }: ChannelViewProps) {
     }
   }, [page.id]);
 
+  const threadParent = isThreadVisible
+    ? messages.find((mm) => mm.id === threadPanelParentId) ?? null
+    : null;
+
+  const renderParentSlot = () => {
+    if (!threadParent) {
+      return (
+        <div className="text-sm text-muted-foreground italic">
+          Original message unavailable
+        </div>
+      );
+    }
+    const m = threadParent;
+    const isAi = !!m.aiMeta;
+    const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;
+    const avatarFallback = isAi
+      ? m.aiMeta!.senderType === 'agent'
+        ? 'A'
+        : m.aiMeta!.senderName?.[0]
+      : m.user?.name?.[0];
+    return (
+      <div className="flex items-start gap-3">
+        <Avatar className="shrink-0">
+          {!isAi && <AvatarImage src={m.user?.image || ''} />}
+          <AvatarFallback>{avatarFallback}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-sm">{displayName}</span>
+            <span className="text-xs text-muted-foreground">
+              {new Date(m.createdAt).toLocaleTimeString()}
+            </span>
+          </div>
+          {m.content && (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <StreamingMarkdown content={m.content} isStreaming={false} />
+            </div>
+          )}
+          <MessageAttachment message={m} />
+        </div>
+      </div>
+    );
+  };
+
+  const resolveThreadAuthor = (authorId: string | null | undefined, fallbackName?: string | null) => {
+    const fromList = messages.find((mm) => mm.userId === authorId);
+    if (fromList?.user) {
+      return { name: fromList.user.name ?? fallbackName ?? 'Member', image: fromList.user.image };
+    }
+    if (authorId === user?.id) {
+      return { name: user?.name ?? 'You', image: null };
+    }
+    return { name: fallbackName ?? 'Member', image: null };
+  };
+
+  const threadPanel = isThreadVisible && threadPanelParentId ? (
+    <ThreadPanel
+      source="channel"
+      contextId={page.id}
+      parentId={threadPanelParentId}
+      currentUserId={user?.id ?? null}
+      parentSlot={renderParentSlot()}
+      resolveAuthor={resolveThreadAuthor}
+      replyCountHint={threadParent?.replyCount}
+      onClose={closeThread}
+    />
+  ) : null;
+
   return (
-    <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full">
+    <div className="flex h-full w-full">
+    <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
           <Conversation className="h-full">
             <ConversationContent className="max-w-4xl mx-auto p-4">
@@ -576,11 +678,8 @@ function ChannelView({ page }: ChannelViewProps) {
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}
                                     {m.content && (
-                                      <div className="prose prose-sm dark:prose-invert max-w-none">
-                                        <StreamingMarkdown
-                                          content={m.content}
-                                          isStreaming={false}
-                                        />
+                                      <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
+                                        <StreamingMarkdown content={m.content} isStreaming={false} />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (
@@ -618,7 +717,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canReact={permissions?.canView || false}
                                     canEdit={showOwnerActions}
                                     canDelete={showOwnerActions}
-                                    canReplyInThread={!isAi && !m.id.startsWith('temp-')}
+                                    canReplyInThread={!m.id.startsWith('temp-')}
                                     canQuoteReply={true}
                                     reactions={m.reactions}
                                     currentUserId={user?.id}
@@ -644,14 +743,15 @@ function ChannelView({ page }: ChannelViewProps) {
         <div className="flex-shrink-0 border-t border-border p-4">
           <div className="max-w-4xl mx-auto">
             {canEdit ? (
-              <ChannelInput
+              <MessageInput
                 ref={channelInputRef}
+                source="channel"
+                contextId={page.id}
                 value={inputValue}
                 onChange={setInputValue}
-                onSend={handleSendMessage}
+                onSubmit={handleTopLevelSubmit}
                 placeholder="Type a message... (use @ to mention, supports **markdown**)"
                 driveId={page.driveId}
-                channelId={page.id}
                 attachmentsEnabled
                 quotedPreview={quotedPreview}
                 onClearQuote={clearQuote}
@@ -667,6 +767,20 @@ function ChannelView({ page }: ChannelViewProps) {
           </div>
         </div>
     </MessageDropZone>
+    {threadPanel && !isMobile && (
+      <div className="hidden md:flex w-[420px] shrink-0 h-full">
+        {threadPanel}
+      </div>
+    )}
+    {threadPanel && isMobile && (
+      <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
+        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+          <SheetTitle className="sr-only">Thread</SheetTitle>
+          {threadPanel}
+        </SheetContent>
+      </Sheet>
+    )}
+    </div>
   );
 }
 
