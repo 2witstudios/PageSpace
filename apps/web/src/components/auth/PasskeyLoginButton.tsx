@@ -171,11 +171,12 @@ export function PasskeyLoginButton({
 
       if (await handleDesktopAuthResponse(verifyData)) return;
 
-      // Successful invite acceptance always wins (lands on the joined drive);
-      // pre-validated nextPath is the fallback for non-invite flows; server
-      // default redirect is the fallback for plain sign-in.
-      const targetUrl = verifyData.invitedDriveId
-        ? `/dashboard/${verifyData.invitedDriveId}?invited=1`
+      // When the request carried an invite, the server already encoded the
+      // correct landing path (drive on success, /dashboard?inviteError=… on
+      // race). Honour the server URL for invite flows; otherwise fall back to
+      // a pre-validated nextPath, then to the default redirect.
+      const targetUrl = inviteToken
+        ? verifyData.redirectUrl
         : (nextPath ?? verifyData.redirectUrl);
 
       if (onSuccess) {

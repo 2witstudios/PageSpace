@@ -122,6 +122,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const createVerifyRequest = (token?: string) => {
   const url = token
@@ -594,6 +595,92 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_abc');
       expect(location).not.toContain('provisioned-drive-id');
+    });
+  });
+
+  describe('invite metadata binding', () => {
+    const inviteRequest = (token: string) =>
+      new Request(`http://localhost/api/auth/magic-link/verify?token=${token}`, {
+        method: 'GET',
+        headers: { 'User-Agent': 'TestBrowser/1.0' },
+      });
+
+    it('given an inviteToken in metadata, consumes the invite and lands on /dashboard/<driveId>?invited=1', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
+        },
+      });
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: 'drive_invited_42',
+      });
+
+      const response = await GET(inviteRequest('valid-token'));
+
+      expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+        expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
+      );
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_invited_42');
+      expect(location).toContain('invited=1');
+      expect(location).toContain('auth=success');
+    });
+
+    it('given inviteToken metadata but a race-consumed invite, surfaces ?inviteError=<code> on /dashboard so the UI can toast', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
+        },
+      });
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: null,
+        inviteError: 'TOKEN_CONSUMED',
+      });
+
+      const response = await GET(inviteRequest('valid-token'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('invited=1');
+      expect(location).toContain('inviteError=TOKEN_CONSUMED');
+    });
+
+    it('given no inviteToken in metadata, does not call consumeInviteIfPresent', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: { userId: 'test-user-id', isNewUser: false, metadata: null },
+      });
+
+      await GET(inviteRequest('valid-token'));
+
+      expect(consumeInviteIfPresent).not.toHaveBeenCalled();
+    });
+
+    it('given inviteToken AND a safe next, the invite drive wins (server-controlled binding overrides URL next)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
+        },
+      });
+      vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+        invitedDriveId: 'drive_invited_42',
+      });
+
+      const url = `http://localhost/api/auth/magic-link/verify?token=valid&next=${encodeURIComponent('/dashboard/some_other_drive')}`;
+      const response = await GET(new Request(url, { method: 'GET' }));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_invited_42');
+      expect(location).not.toContain('some_other_drive');
     });
   });
 

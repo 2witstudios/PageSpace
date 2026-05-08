@@ -138,6 +138,7 @@ export async function GET(req: Request) {
     // here because the pipe needs the authoritative email + suspendedAt for
     // the second validation gate inside acceptInviteForExistingUser.
     let invitedDriveId: string | null = null;
+    let inviteError: string | null = null;
     if (boundInviteToken) {
       const status = await driveInviteRepository.findUserVerificationStatusById(userId);
       if (status) {
@@ -150,6 +151,7 @@ export async function GET(req: Request) {
         });
         invitedDriveId = inviteResult.invitedDriveId;
         if (inviteResult.inviteError) {
+          inviteError = inviteResult.inviteError;
           loggers.auth.info('Bound invite acceptance failed during magic link verify', {
             userId,
             reason: inviteResult.inviteError,
@@ -208,6 +210,8 @@ export async function GET(req: Request) {
           }
           if (invitedDriveId) {
             desktopRedirectUrl.searchParams.set('invited', '1');
+          } else if (inviteError) {
+            desktopRedirectUrl.searchParams.set('inviteError', inviteError);
           }
 
           auditRequest(req, {
@@ -267,6 +271,8 @@ export async function GET(req: Request) {
     redirectUrl.searchParams.set('auth', 'success');
     if (invitedDriveId) {
       redirectUrl.searchParams.set('invited', '1');
+    } else if (inviteError) {
+      redirectUrl.searchParams.set('inviteError', inviteError);
     }
 
     // Store CSRF token in a temporary cookie for the client to retrieve

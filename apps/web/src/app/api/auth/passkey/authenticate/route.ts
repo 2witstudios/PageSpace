@@ -193,6 +193,7 @@ export async function POST(req: Request) {
     // — passing inviteToken here is unauthenticated input, the pipe is the
     // gate. A failed invite never blocks login.
     let invitedDriveId: string | null = null;
+    let inviteError: string | null = null;
     if (inviteToken) {
       const status = await driveInviteRepository.findUserVerificationStatusById(userId);
       if (status) {
@@ -205,6 +206,7 @@ export async function POST(req: Request) {
         });
         invitedDriveId = inviteResult.invitedDriveId;
         if (inviteResult.inviteError) {
+          inviteError = inviteResult.inviteError;
           loggers.auth.info('Bound invite acceptance failed during passkey auth', {
             userId,
             reason: inviteResult.inviteError,
@@ -212,6 +214,12 @@ export async function POST(req: Request) {
         }
       }
     }
+
+    const successRedirect = invitedDriveId
+      ? `/dashboard/${invitedDriveId}?invited=1`
+      : inviteError
+        ? `/dashboard?inviteError=${inviteError}`
+        : '/dashboard';
 
     // Track successful passkey login
     trackAuthEvent(userId, 'passkey_login', {
@@ -274,7 +282,7 @@ export async function POST(req: Request) {
         {
           success: true,
           userId,
-          redirectUrl: invitedDriveId ? `/dashboard/${invitedDriveId}?invited=1` : '/dashboard',
+          redirectUrl: successRedirect,
           desktopExchangeCode: code,
           ...(invitedDriveId && { invitedDriveId }),
         },
