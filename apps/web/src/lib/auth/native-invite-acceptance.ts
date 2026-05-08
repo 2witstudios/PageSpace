@@ -30,9 +30,7 @@ import {
   type AcceptedConnectionData,
   type AcceptedInviteData,
   type AcceptedPageInviteData,
-  type Invite,
   type InviteAcceptanceErrorCode,
-  type PageInvite,
 } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
@@ -222,14 +220,12 @@ export const consumeAllInvitesForEmail = async ({
 
     for (const inviteRow of driveInvites) {
       try {
-        const hydration = await hydrateDriveInviteById(inviteRow.id);
-        if (!hydration) continue;
         const consumed = await driveInviteRepository.consumeInviteAndCreateMembership({
           inviteId: inviteRow.id,
           driveId: inviteRow.driveId,
           userId: user.id,
-          role: hydration.role,
-          invitedBy: hydration.invitedBy,
+          role: inviteRow.role,
+          invitedBy: inviteRow.invitedBy,
           acceptedAt: now,
         });
         if (!consumed.ok) continue;
@@ -239,10 +235,10 @@ export const consumeAllInvitesForEmail = async ({
           inviteEmail: normalizedEmail,
           memberId: consumed.memberId,
           driveId: inviteRow.driveId,
-          driveName: hydration.driveName,
-          role: hydration.role,
+          driveName: inviteRow.driveName,
+          role: inviteRow.role,
           invitedUserId: user.id,
-          inviterUserId: hydration.invitedBy,
+          inviterUserId: inviteRow.invitedBy,
         };
         await emitAcceptanceSideEffects(drivePorts, data);
         summary.drivesAccepted += 1;
@@ -256,12 +252,10 @@ export const consumeAllInvitesForEmail = async ({
 
     for (const inviteRow of pageInvites) {
       try {
-        const hydration = await hydratePageInviteById(inviteRow.id);
-        if (!hydration) continue;
         const consumed = await pageInviteRepository.consumeInviteAndGrantPage({
           inviteId: inviteRow.id,
           pageId: inviteRow.pageId,
-          driveId: hydration.driveId,
+          driveId: inviteRow.driveId,
           userId: user.id,
           permissions: inviteRow.permissions,
           invitedBy: inviteRow.invitedBy,
@@ -273,9 +267,9 @@ export const consumeAllInvitesForEmail = async ({
           inviteId: inviteRow.id,
           inviteEmail: normalizedEmail,
           pageId: inviteRow.pageId,
-          pageTitle: hydration.pageTitle,
-          driveId: hydration.driveId,
-          driveName: hydration.driveName,
+          pageTitle: inviteRow.pageTitle,
+          driveId: inviteRow.driveId,
+          driveName: inviteRow.driveName,
           permissions: inviteRow.permissions,
           memberId: consumed.memberId,
           invitedUserId: user.id,
@@ -327,52 +321,5 @@ export const consumeAllInvitesForEmail = async ({
   }
 
   return summary;
-};
-
-// Hydration helpers used by consumeAllInvitesForEmail to fill in the
-// drive-name / page-title / inviter-id fields the side-effect helpers and
-// the consume calls need. We could do these in the by-email lookup itself,
-// but the per-row hop keeps the lookup index-only.
-const hydrateDriveInviteById = async (
-  inviteId: string,
-): Promise<Pick<Invite, 'driveName' | 'role' | 'invitedBy'> | null> => {
-  // Re-derive via the existing tokenHash lookup is not possible here (we
-  // don't have the token). Use a small dedicated loader instead.
-  const { db } = await import('@pagespace/db/db');
-  const { eq } = await import('@pagespace/db/operators');
-  const { pendingInvites } = await import('@pagespace/db/schema/pending-invites');
-  const { drives } = await import('@pagespace/db/schema/core');
-  const rows = await db
-    .select({
-      driveName: drives.name,
-      role: pendingInvites.role,
-      invitedBy: pendingInvites.invitedBy,
-    })
-    .from(pendingInvites)
-    .innerJoin(drives, eq(drives.id, pendingInvites.driveId))
-    .where(eq(pendingInvites.id, inviteId))
-    .limit(1);
-  return rows.at(0) ?? null;
-};
-
-const hydratePageInviteById = async (
-  inviteId: string,
-): Promise<Pick<PageInvite, 'pageTitle' | 'driveId' | 'driveName'> | null> => {
-  const { db } = await import('@pagespace/db/db');
-  const { eq } = await import('@pagespace/db/operators');
-  const { pendingPageInvites } = await import('@pagespace/db/schema/pending-page-invites');
-  const { pages, drives } = await import('@pagespace/db/schema/core');
-  const rows = await db
-    .select({
-      pageTitle: pages.title,
-      driveId: pages.driveId,
-      driveName: drives.name,
-    })
-    .from(pendingPageInvites)
-    .innerJoin(pages, eq(pages.id, pendingPageInvites.pageId))
-    .innerJoin(drives, eq(drives.id, pages.driveId))
-    .where(eq(pendingPageInvites.id, inviteId))
-    .limit(1);
-  return rows.at(0) ?? null;
 };
 

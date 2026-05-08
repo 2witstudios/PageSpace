@@ -132,6 +132,9 @@ export const pageInviteRepository = {
   ): Promise<Array<{
     id: string;
     pageId: string;
+    pageTitle: string;
+    driveId: string;
+    driveName: string;
     invitedBy: string;
     permissions: PendingPagePermission[];
   }>> {
@@ -139,10 +142,15 @@ export const pageInviteRepository = {
       .select({
         id: pendingPageInvites.id,
         pageId: pendingPageInvites.pageId,
+        pageTitle: pages.title,
+        driveId: pages.driveId,
+        driveName: drives.name,
         invitedBy: pendingPageInvites.invitedBy,
         permissions: pendingPageInvites.permissions,
       })
       .from(pendingPageInvites)
+      .innerJoin(pages, eq(pages.id, pendingPageInvites.pageId))
+      .innerJoin(drives, eq(drives.id, pages.driveId))
       .where(
         and(
           eq(pendingPageInvites.email, email),
