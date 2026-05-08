@@ -6,6 +6,7 @@ import { notifications } from '@pagespace/db/schema/notifications';
 import { pages } from '@pagespace/db/schema/core';
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -90,6 +91,8 @@ export async function GET(req: Request) {
             )
           ),
       ]);
+
+    auditRequest(req, { eventType: 'data.read', userId, resourceType: 'badge', resourceId: 'self' });
 
     return NextResponse.json({
       dms: Number(dmResult[0]?.count ?? 0),
