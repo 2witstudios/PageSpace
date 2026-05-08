@@ -73,8 +73,16 @@ export interface RequestMagicLinkInput {
   deviceName?: string;
   // Same-origin redirect target embedded in the verify URL. The caller must
   // have already validated against an allowlist; the pipe forwards verbatim
-  // to the email-send port and never inspects it.
+  // to the email-send port and never inspects it. Mutually exclusive with
+  // inviteToken — when an invite is bound, the verify route computes the
+  // redirect from invite data and never honours next.
   next?: string;
+  // Invite token to bind to this magic-link. The caller MUST have already
+  // verified the invite exists, is unconsumed, unexpired, and that its email
+  // matches `email`. The pipe forwards verbatim into the verification-token
+  // metadata so the verify route can consume the invite atomically with
+  // authentication, eliminating the URL-fragility of next=/invite/<t>/accept.
+  inviteToken?: string;
   // Affirmative ToS acceptance from the inline form. Required to auto-create
   // the user when no account exists for `email`. Must be true for unknown
   // emails or the pipe returns TOS_REQUIRED. Existing users are unaffected.

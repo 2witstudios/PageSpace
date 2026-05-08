@@ -63,6 +63,11 @@ export interface MagicLinkPorts {
     platform?: 'web' | 'desktop' | 'ios';
     deviceId?: string;
     deviceName?: string;
+    // Invite token bound to this magic-link at mint time. Persisted in the
+    // verification-token metadata so the verify route can consume the invite
+    // server-side without trusting URL query params. The pipe forwards
+    // verbatim from a pre-validated input — adapters must NOT re-validate.
+    inviteToken?: string;
   }) => Promise<{ token: string }>;
   sendMagicLinkEmail: (input: {
     email: string;

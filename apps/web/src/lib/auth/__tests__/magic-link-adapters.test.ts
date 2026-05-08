@@ -128,6 +128,76 @@ describe('buildMagicLinkPorts.sendMagicLinkEmail', () => {
   });
 });
 
+describe('buildMagicLinkPorts.createTokenAndPersist', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given no platform/invite, persists the token row with no metadata column', async () => {
+    const ports = buildMagicLinkPorts();
+    await ports.createTokenAndPersist({
+      userId: 'u_1',
+      expiresAt: new Date('2026-05-07T00:00:00.000Z'),
+    });
+
+    const valuesCall = dbInsertMock.mock.results[0].value.values as ReturnType<typeof vi.fn>;
+    const inserted = valuesCall.mock.calls[0][0] as { metadata?: string };
+    expect(inserted.metadata).toBeUndefined();
+  });
+
+  it('given an inviteToken, stamps it into the metadata JSON so the verify route can consume the invite atomically', async () => {
+    const ports = buildMagicLinkPorts();
+    await ports.createTokenAndPersist({
+      userId: 'u_1',
+      expiresAt: new Date('2026-05-07T00:00:00.000Z'),
+      inviteToken: 'ps_invite_abc',
+    });
+
+    const valuesCall = dbInsertMock.mock.results[0].value.values as ReturnType<typeof vi.fn>;
+    const inserted = valuesCall.mock.calls[0][0] as { metadata?: string };
+    expect(inserted.metadata).toBeDefined();
+    const parsed = JSON.parse(inserted.metadata!);
+    expect(parsed).toEqual({ inviteToken: 'ps_invite_abc' });
+  });
+
+  it('given desktop platform AND invite, co-stamps both fields under one metadata envelope', async () => {
+    const ports = buildMagicLinkPorts();
+    await ports.createTokenAndPersist({
+      userId: 'u_1',
+      expiresAt: new Date('2026-05-07T00:00:00.000Z'),
+      platform: 'desktop',
+      deviceId: 'dev_1',
+      deviceName: 'Mac',
+      inviteToken: 'ps_invite_abc',
+    });
+
+    const valuesCall = dbInsertMock.mock.results[0].value.values as ReturnType<typeof vi.fn>;
+    const inserted = valuesCall.mock.calls[0][0] as { metadata?: string };
+    const parsed = JSON.parse(inserted.metadata!);
+    expect(parsed).toEqual({
+      platform: 'desktop',
+      deviceId: 'dev_1',
+      deviceName: 'Mac',
+      inviteToken: 'ps_invite_abc',
+    });
+  });
+
+  it('given non-desktop platform with invite, omits desktop fields and keeps only inviteToken', async () => {
+    const ports = buildMagicLinkPorts();
+    await ports.createTokenAndPersist({
+      userId: 'u_1',
+      expiresAt: new Date('2026-05-07T00:00:00.000Z'),
+      platform: 'web',
+      inviteToken: 'ps_invite_abc',
+    });
+
+    const valuesCall = dbInsertMock.mock.results[0].value.values as ReturnType<typeof vi.fn>;
+    const inserted = valuesCall.mock.calls[0][0] as { metadata?: string };
+    const parsed = JSON.parse(inserted.metadata!);
+    expect(parsed).toEqual({ inviteToken: 'ps_invite_abc' });
+  });
+});
+
 describe('buildMagicLinkPorts.createUserAccount', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -124,13 +124,17 @@ function SignInForm() {
               csrfToken={csrfToken}
               refreshToken={refreshToken}
               {...(nextPath && { nextPath })}
+              {...(inviteToken && { inviteToken })}
             />
           </motion.div>
         )}
 
         <AuthDivider delay={0.3} />
 
-        <MagicLinkForm {...(nextPath && { nextPath })} />
+        <MagicLinkForm
+          {...(nextPath && { nextPath })}
+          {...(inviteToken && { inviteToken })}
+        />
       </AuthShell>
     );
   }
@@ -170,6 +174,7 @@ function SignInForm() {
             csrfToken={csrfToken}
             refreshToken={refreshToken}
             {...(nextPath && { nextPath })}
+            {...(inviteToken && { inviteToken })}
           />
         </motion.div>
       )}
@@ -204,7 +209,10 @@ function SignInForm() {
       >
         {showMagicLink ? (
           <div className="mt-2">
-            <MagicLinkForm {...(nextPath && { nextPath })} />
+            <MagicLinkForm
+              {...(nextPath && { nextPath })}
+              {...(inviteToken && { inviteToken })}
+            />
           </div>
         ) : (
           <button

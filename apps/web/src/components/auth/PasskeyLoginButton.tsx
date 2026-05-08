@@ -28,6 +28,13 @@ interface PasskeyLoginButtonProps {
    * `verifyData.redirectUrl`.
    */
   nextPath?: string;
+  /**
+   * Invite token to consume server-side as part of authentication. The verify
+   * route validates against `pending_invites` and creates the membership in
+   * the same response. On success the redirect target becomes the invited
+   * drive, overriding `nextPath` and the server default.
+   */
+  inviteToken?: string;
   className?: string;
   variant?: 'default' | 'outline' | 'secondary';
 }
@@ -38,6 +45,7 @@ export function PasskeyLoginButton({
   email,
   onSuccess,
   nextPath,
+  inviteToken,
   className,
   variant = 'default',
 }: PasskeyLoginButtonProps) {
@@ -136,6 +144,7 @@ export function PasskeyLoginButton({
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
           ...platformFields,
+          ...(inviteToken && { inviteToken }),
         }),
       });
 
@@ -162,10 +171,13 @@ export function PasskeyLoginButton({
 
       if (await handleDesktopAuthResponse(verifyData)) return;
 
-      // Pre-validated nextPath wins over the server's default redirect so the
-      // user lands where they were trying to go (e.g. an /invite/[token] page
-      // they were forced to sign in from).
-      const targetUrl = nextPath ?? verifyData.redirectUrl;
+      // When the request carried an invite, the server already encoded the
+      // correct landing path (drive on success, /dashboard?inviteError=… on
+      // race). Honour the server URL for invite flows; otherwise fall back to
+      // a pre-validated nextPath, then to the default redirect.
+      const targetUrl = inviteToken
+        ? verifyData.redirectUrl
+        : (nextPath ?? verifyData.redirectUrl);
 
       if (onSuccess) {
         onSuccess(targetUrl);
@@ -187,7 +199,7 @@ export function PasskeyLoginButton({
     } finally {
       setIsAuthenticating(false);
     }
-  }, [csrfToken, refreshToken, email, onSuccess, nextPath]);
+  }, [csrfToken, refreshToken, email, onSuccess, nextPath, inviteToken]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {

@@ -99,6 +99,12 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
+vi.mock('@/lib/auth/native-invite-acceptance', () => ({
+  consumeInviteIfPresent: vi.fn().mockResolvedValue({ invitedDriveId: null }),
+}));
+vi.mock('@/lib/auth/invite-resolver', () => ({
+  resolveInviteContext: vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' }),
+}));
 vi.mock('cookie', () => ({
   parse: vi.fn().mockReturnValue({ login_csrf: 'valid-csrf-token' }),
 }));
@@ -209,5 +215,94 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
     const location = verifyResp.headers.get('Location')!;
     expect(location).toContain('/dashboard');
     expect(location).not.toContain('evil.com');
+  });
+});
+
+describe('magic-link round-trip — inviteToken metadata binding end-to-end', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('WEB_APP_URL', 'https://example.com');
+    vi.stubEnv('NODE_ENV', 'test');
+    sendEmailMock.mockResolvedValue(undefined);
+    generateTokenMock.mockReturnValue({
+      token: 'tok_round_trip',
+      hash: 'tok_hash',
+      tokenPrefix: 'tok_',
+    });
+    loadUserAccountByEmailMock.mockResolvedValue({ id: 'user_test', suspendedAt: null });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('inviteToken survives send → adapter → metadata → verify and lands on the invited drive', async () => {
+    const { resolveInviteContext } = await import('@/lib/auth/invite-resolver');
+    const { consumeInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
+    const { driveInviteRepository } = await import('@/lib/repositories/drive-invite-repository');
+    vi.mocked(driveInviteRepository).findUserVerificationStatusById = vi
+      .fn()
+      .mockResolvedValue({ email: 'invitee@example.com', emailVerified: null, suspendedAt: null });
+
+    vi.mocked(resolveInviteContext).mockResolvedValueOnce({
+      ok: true,
+      data: {
+        driveName: 'Acme',
+        inviterName: 'Jane',
+        role: 'MEMBER',
+        email: 'invitee@example.com',
+        isExistingUser: true,
+      },
+    });
+
+    // Drive the send route — capture the metadata the adapter persists.
+    let persistedMetadata: string | undefined;
+    dbInsertMock.mockReturnValueOnce({
+      values: vi.fn((row: { metadata?: string }) => {
+        persistedMetadata = row.metadata;
+        return Promise.resolve(undefined);
+      }),
+    });
+
+    const sendResp = await sendPost(
+      buildSendRequest({
+        email: 'invitee@example.com',
+        inviteToken: 'ps_invite_abc',
+        tosAccepted: true,
+      }),
+    );
+    expect(sendResp.status).toBe(200);
+
+    // Adapter persisted the inviteToken in metadata, not in next= on the URL.
+    expect(persistedMetadata).toBeDefined();
+    expect(JSON.parse(persistedMetadata!)).toEqual({ inviteToken: 'ps_invite_abc' });
+
+    const url = extractUrlFromEmailCall();
+    expect(url).toContain('token=tok_round_trip');
+    expect(url).not.toContain('next=');
+    expect(url).not.toContain('inviteToken');
+
+    // Feed the captured metadata back via verifyMagicLinkToken — the verify
+    // route must read it, consume the invite via consumeInviteIfPresent, and
+    // land the user on the invited drive.
+    verifyMagicLinkTokenMock.mockResolvedValueOnce({
+      ok: true,
+      data: { userId: 'user_test', isNewUser: false, metadata: persistedMetadata },
+    });
+    vi.mocked(consumeInviteIfPresent).mockResolvedValueOnce({
+      invitedDriveId: 'drive_invited_abc',
+    });
+
+    const verifyResp = await verifyGet(new Request(url, { method: 'GET' }));
+    expect(verifyResp.status).toBe(302);
+
+    expect(consumeInviteIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ inviteToken: 'ps_invite_abc' }),
+    );
+
+    const location = verifyResp.headers.get('Location')!;
+    expect(location).toContain('/dashboard/drive_invited_abc');
+    expect(location).toContain('invited=1');
+    expect(location).toContain('auth=success');
   });
 });

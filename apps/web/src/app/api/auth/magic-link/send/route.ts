@@ -4,14 +4,16 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { requestMagicLink } from '@pagespace/lib/services/invites';
+import { isEmailMatch, requestMagicLink } from '@pagespace/lib/services/invites';
 import { buildMagicLinkPorts } from '@/lib/auth/magic-link-adapters';
+import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
@@ -19,6 +21,7 @@ const sendMagicLinkSchema = z.object({
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
   next: z.string().min(1).max(2048).optional(),
+  inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
   tosAccepted: z.boolean(),
 }).refine(
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
@@ -102,7 +105,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, platform, deviceId, deviceName, next, tosAccepted } = validation.data;
+    const { email, platform, deviceId, deviceName, next, inviteToken, tosAccepted } =
+      validation.data;
     const normalizedEmail = email.toLowerCase().trim();
 
     // Defense in depth: the form's submit button is gated on the checkbox,
@@ -129,7 +133,9 @@ export async function POST(req: Request) {
         ? next
         : undefined;
 
-    // Rate limit by IP and email
+    // Rate limit by IP and email BEFORE doing any DB work — invite resolution
+    // hits pending_invites + users, so allowing it pre-rate-limit lets an
+    // attacker amplify load by spamming /send with invite-token guesses.
     const [ipRateLimit, emailRateLimit] = await Promise.all([
       checkDistributedRateLimit(`magic_link:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
       checkDistributedRateLimit(`magic_link:email:${normalizedEmail}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
@@ -179,6 +185,36 @@ export async function POST(req: Request) {
       );
     }
 
+    // Validate inviteToken AFTER rate-limit checks so over-limit requests
+    // never reach pending_invites / users. Two gates protect against stolen-
+    // token replay: the invite must exist + not be consumed + not be expired
+    // AND its email must match the address we're emailing. A mismatch (or any
+    // failure) drops the inviteToken silently — we still send the magic link
+    // so an attacker who guesses someone else's invite token can't enumerate
+    // which addresses it belongs to. The user just signs in normally; the
+    // invite stays pending.
+    let safeInviteToken: string | undefined;
+    if (inviteToken) {
+      try {
+        const resolution = await resolveInviteContext({ token: inviteToken, now: new Date() });
+        if (
+          resolution.ok &&
+          isEmailMatch({ inviteEmail: resolution.data.email, userEmail: normalizedEmail })
+        ) {
+          safeInviteToken = inviteToken;
+        } else {
+          loggers.auth.info('Magic link invite binding rejected', {
+            email: maskEmail(normalizedEmail),
+            reason: resolution.ok ? 'EMAIL_MISMATCH' : resolution.error,
+          });
+        }
+      } catch (error) {
+        loggers.auth.warn('Invite resolution threw during magic link send', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     let result;
     try {
       result = await requestMagicLink(buildMagicLinkPorts())({
@@ -189,6 +225,7 @@ export async function POST(req: Request) {
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
         ...(safeNext && { next: safeNext }),
+        ...(safeInviteToken && { inviteToken: safeInviteToken }),
       });
     } catch (error) {
       // Email send (or any other adapter throw) failed AFTER the pipe minted

@@ -5,7 +5,11 @@ import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
-import { verifyMagicLinkToken, type DesktopMagicLinkMetadata } from '@pagespace/lib/auth/magic-link-service';
+import {
+  verifyMagicLinkToken,
+  type DesktopMagicLinkMetadata,
+  type MagicLinkMetadata,
+} from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -15,6 +19,8 @@ import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-he
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { consumeInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -67,20 +73,27 @@ export async function GET(req: Request) {
 
     const { userId, isNewUser, metadata } = result.data;
 
-    // Parse desktop metadata if present (stored when magic link was sent from desktop app)
-    let desktopMeta: DesktopMagicLinkMetadata | null = null;
+    // Parse metadata once. The shape carries optional desktop fields and an
+    // optional invite-token binding — desktop and invite can co-exist on the
+    // same row (invited user signing in from desktop).
+    let parsedMeta: MagicLinkMetadata | null = null;
     if (metadata) {
       try {
-        const parsed = JSON.parse(metadata) as Partial<DesktopMagicLinkMetadata>;
-        if (parsed.platform !== 'desktop' || !parsed.deviceId) {
-          desktopMeta = null;
-        } else {
-          desktopMeta = parsed as DesktopMagicLinkMetadata;
-        }
+        parsedMeta = JSON.parse(metadata) as MagicLinkMetadata;
       } catch {
         loggers.auth.warn('Invalid magic link metadata JSON', { userId, metadata: metadata.slice(0, 100) });
       }
     }
+
+    let desktopMeta: DesktopMagicLinkMetadata | null = null;
+    if (parsedMeta && parsedMeta.platform === 'desktop' && parsedMeta.deviceId) {
+      desktopMeta = {
+        platform: 'desktop',
+        deviceId: parsedMeta.deviceId,
+        ...(parsedMeta.deviceName !== undefined && { deviceName: parsedMeta.deviceName }),
+      };
+    }
+    const boundInviteToken = parsedMeta?.inviteToken;
 
     // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
     const revokedCount = await sessionService.revokeAllUserSessions(userId, 'magic_link_login');
@@ -119,6 +132,50 @@ export async function GET(req: Request) {
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    // Consume the invite atomically with authentication. The invite token was
+    // bound to the magic-link at mint time, validated against this email +
+    // pending-invite state then. We re-load the user's verification status
+    // here because the pipe needs the authoritative email + suspendedAt for
+    // the second validation gate inside acceptInviteForExistingUser.
+    //
+    // Wrapped in try/catch: the session is already committed; a DB blip on
+    // the verification-status lookup must not redirect the user to signin
+    // when they already hold a valid session. Worst case the invite stays
+    // pending and the user reclaims it from the consent page.
+    let invitedDriveId: string | null = null;
+    let inviteError: string | null = null;
+    if (boundInviteToken) {
+      try {
+        const status = await driveInviteRepository.findUserVerificationStatusById(userId);
+        if (status) {
+          const inviteResult = await consumeInviteIfPresent({
+            request: req,
+            inviteToken: boundInviteToken,
+            user: { id: userId, suspendedAt: status.suspendedAt },
+            isNewUser,
+            email: status.email,
+          });
+          invitedDriveId = inviteResult.invitedDriveId;
+          if (inviteResult.inviteError) {
+            inviteError = inviteResult.inviteError;
+            loggers.auth.info('Bound invite acceptance failed during magic link verify', {
+              userId,
+              reason: inviteResult.inviteError,
+            });
+          }
+        } else {
+          loggers.auth.warn('Authenticated session has no user record on invite consume', {
+            userId,
+          });
+        }
+      } catch (error) {
+        loggers.auth.error('Invite consume threw during magic link verify', error as Error, {
+          userId,
+        });
+        // Continue with login — the session is valid; user can re-attempt invite.
+      }
+    }
+
     // DESKTOP: additionally create device token + exchange code for desktop token handoff
     // The web session (cookies) is always created above — this is a supplementary step.
     // If the magic link opens outside the desktop device, the cookie session still works.
@@ -155,12 +212,18 @@ export async function GET(req: Request) {
             isNewUser,
             userId,
             next: safeNext,
+            invitedDriveId,
           });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
           desktopRedirectUrl.searchParams.set('desktopExchange', exchangeCode);
           if (isNewUser) {
             desktopRedirectUrl.searchParams.set('welcome', 'true');
+          }
+          if (invitedDriveId) {
+            desktopRedirectUrl.searchParams.set('invited', '1');
+          } else if (inviteError) {
+            desktopRedirectUrl.searchParams.set('inviteError', inviteError);
           }
 
           auditRequest(req, {
@@ -212,11 +275,17 @@ export async function GET(req: Request) {
       isNewUser,
       userId,
       next: safeNext,
+      invitedDriveId,
     });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
+    if (invitedDriveId) {
+      redirectUrl.searchParams.set('invited', '1');
+    } else if (inviteError) {
+      redirectUrl.searchParams.set('inviteError', inviteError);
+    }
 
     // Store CSRF token in a temporary cookie for the client to retrieve
     // This follows the pattern from login - client-side JS will read and store this
@@ -258,20 +327,26 @@ function redirectWithError(error: string): NextResponse {
 /**
  * Resolve the post-login dashboard redirect path. Single source of truth for
  * both the desktop exchange and web cookie flows so the two paths cannot drift
- * out of sync on the next redirect-rule change. A pre-validated `next` always
- * wins so the user lands on whatever drive/invite they were trying to reach.
- * Provisioning errors are logged and swallowed — the user still lands on
- * /dashboard.
+ * out of sync on the next redirect-rule change. A successfully consumed invite
+ * always wins (lands the user on the drive they joined); a pre-validated
+ * `next` is the fallback for non-invite flows. Provisioning errors are logged
+ * and swallowed — the user still lands on /dashboard.
  */
 async function resolvePostLoginRedirectPath({
   isNewUser,
   userId,
   next,
+  invitedDriveId,
 }: {
   isNewUser: boolean;
   userId: string;
   next?: string;
+  invitedDriveId?: string | null;
 }): Promise<string> {
+  if (invitedDriveId) {
+    return `/dashboard/${invitedDriveId}`;
+  }
+
   if (next) {
     return next;
   }

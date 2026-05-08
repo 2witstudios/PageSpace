@@ -35,6 +35,21 @@ export interface DesktopMagicLinkMetadata {
   deviceName?: string;
 }
 
+/**
+ * Metadata stored with an invite-bound magic link. The verify route reads
+ * `inviteToken` after authenticating and consumes the invite via the existing
+ * acceptance pipe — atomic with session creation, no URL param round-trip.
+ *
+ * Desktop and invite metadata can co-exist on the same row (e.g. desktop user
+ * accepting an invite); they are separate fields under the same JSON envelope.
+ */
+export interface MagicLinkMetadata {
+  platform?: 'desktop';
+  deviceId?: string;
+  deviceName?: string;
+  inviteToken?: string;
+}
+
 export type MagicLinkError =
   | { code: 'VALIDATION_FAILED'; message: string }
   | { code: 'TOKEN_EXPIRED' }

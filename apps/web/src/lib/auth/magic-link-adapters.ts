@@ -55,12 +55,25 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
     }
   },
 
-  createTokenAndPersist: async ({ userId, expiresAt, platform, deviceId, deviceName }) => {
+  createTokenAndPersist: async ({
+    userId,
+    expiresAt,
+    platform,
+    deviceId,
+    deviceName,
+    inviteToken,
+  }) => {
     const { token, hash, tokenPrefix } = generateToken('ps_magic');
-    const metadata =
-      platform === 'desktop' && deviceId
-        ? JSON.stringify({ platform, deviceId, deviceName })
-        : undefined;
+    const metadataObj: Record<string, unknown> = {};
+    if (platform === 'desktop' && deviceId) {
+      metadataObj.platform = platform;
+      metadataObj.deviceId = deviceId;
+      if (deviceName) metadataObj.deviceName = deviceName;
+    }
+    if (inviteToken) {
+      metadataObj.inviteToken = inviteToken;
+    }
+    const metadata = Object.keys(metadataObj).length > 0 ? JSON.stringify(metadataObj) : undefined;
     await db.insert(verificationTokens).values({
       id: createId(),
       userId,
