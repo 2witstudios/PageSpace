@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
-import { join, resolve } from 'path';
+import { resolve } from 'path';
 import { resolveAvatarPath, verifyPathWithinBase } from '@/lib/security/safe-path';
 
 /**
