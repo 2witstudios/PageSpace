@@ -11,10 +11,30 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
-const mockUser = { id: 'user-me', name: 'Me', email: 'me@x.test', image: null };
+const mockUser = {
+  id: 'user-me',
+  name: 'Me',
+  email: 'me@x.test',
+  image: '/api/avatar/user-me/avatar.png?t=1',
+};
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({ user: mockUser }),
 }));
+
+vi.mock('@/components/ui/avatar', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+
+  return {
+    Avatar: ({ children, className }: React.ComponentProps<'div'>) => (
+      <div data-slot="avatar" className={className}>{children}</div>
+    ),
+    AvatarImage: ({ src }: React.ComponentProps<'img'>) =>
+      src ? React.createElement('img', { 'data-slot': 'avatar-image', src, alt: '' }) : null,
+    AvatarFallback: ({ children, className }: React.ComponentProps<'div'>) => (
+      <div data-slot="avatar-fallback" className={className}>{children}</div>
+    ),
+  };
+});
 
 // Controllable socket mock
 type Handler = (...args: unknown[]) => void;
@@ -218,6 +238,33 @@ describe('InboxDMPage — attachments', () => {
     expect(body).toMatchObject({ content: 'hello' });
     expect(body.fileId).toBeUndefined();
     expect(body.attachmentMeta).toBeUndefined();
+  });
+
+  it('renders the current user avatar for own DM messages', async () => {
+    swrMessages = {
+      messages: [
+        {
+          id: 'msg-own',
+          conversationId: 'conv-1',
+          senderId: 'user-me',
+          content: 'hello from me',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-05-06T12:00:00.000Z',
+          parentId: null,
+          reactions: [],
+        },
+      ],
+    };
+
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    const avatarImage = document.querySelector('[data-slot="avatar-image"]');
+    expect(avatarImage).toHaveAttribute('src', mockUser.image);
   });
 
   it('renderMessage_withFileId_rendersMessageAttachment', async () => {

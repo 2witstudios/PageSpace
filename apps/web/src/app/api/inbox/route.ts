@@ -188,6 +188,7 @@ export async function GET(request: Request) {
             dd."lastMessageAt" as last_message_at,
             dd."lastMessagePreview" as last_message,
             u.name as other_user_name,
+            u.image as other_user_image,
             up."displayName" as other_user_display_name,
             up."avatarUrl" as other_user_avatar_url,
             COALESCE(uc.unread_count, 0) as unread_count
@@ -209,7 +210,7 @@ export async function GET(request: Request) {
             id: row.id,
             type: 'dm',
             name: row.other_user_display_name || row.other_user_name,
-            avatarUrl: row.other_user_avatar_url,
+            avatarUrl: row.other_user_image || row.other_user_avatar_url,
             lastMessageAt: toISOTimestamp(row.last_message_at),
             lastMessagePreview: row.last_message,
             lastMessageSender: null,

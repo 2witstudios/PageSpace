@@ -232,7 +232,7 @@ function ChannelView({ page }: ChannelViewProps) {
       user: {
         id: user.id,
         name: user.name || 'You',
-        image: null,
+        image: user.image ?? null,
       },
       // Include attachment info in optimistic message
       fileId: attachment?.id || null,
@@ -544,7 +544,7 @@ function ChannelView({ page }: ChannelViewProps) {
       return { name: fromList.user.name ?? fallbackName ?? 'Member', image: fromList.user.image };
     }
     if (authorId === user?.id) {
-      return { name: user?.name ?? 'You', image: null };
+      return { name: user?.name ?? 'You', image: user?.image ?? null };
     }
     return { name: fallbackName ?? 'Member', image: null };
   };

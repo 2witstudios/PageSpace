@@ -349,7 +349,7 @@ export default function InboxDMPage() {
     const authorName = isOwn
       ? user?.name ?? 'You'
       : conversation?.otherUser?.displayName ?? conversation?.otherUser?.name ?? 'Member';
-    const authorImage = isOwn ? null : conversation?.otherUser?.image ?? conversation?.otherUser?.avatarUrl ?? null;
+    const authorImage = isOwn ? user?.image ?? null : conversation?.otherUser?.image ?? conversation?.otherUser?.avatarUrl ?? null;
     setQuotedMessageId(m.id);
     setActiveQuotedSnapshot({
       id: m.id,
@@ -471,11 +471,12 @@ export default function InboxDMPage() {
     const m = threadParent;
     const isOwn = m.senderId === user?.id;
     const name = isOwn ? user?.name ?? 'You' : displayName;
+    const image = isOwn ? user?.image ?? null : otherUser.image || otherUser.avatarUrl;
     const initial = (name?.charAt(0) ?? '?').toUpperCase();
     return (
       <div className="flex items-start gap-3">
         <Avatar className="h-8 w-8 shrink-0">
-          {!isOwn && <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />}
+          {image && <AvatarImage src={image} />}
           <AvatarFallback>{initial}</AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
@@ -498,7 +499,7 @@ export default function InboxDMPage() {
 
   const resolveThreadAuthor = (authorId: string | null | undefined, fallbackName?: string | null) => {
     if (authorId === user?.id) {
-      return { name: user?.name ?? 'You', image: null };
+      return { name: user?.name ?? 'You', image: user?.image ?? null };
     }
     if (authorId === otherUser.id) {
       return { name: displayName, image: otherUser.image || otherUser.avatarUrl };
@@ -572,9 +573,12 @@ export default function InboxDMPage() {
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (
-                        <AvatarFallback className="bg-primary text-primary-foreground">
-                          {senderAvatar?.charAt(0).toUpperCase()}
-                        </AvatarFallback>
+                        <>
+                          {user?.image && <AvatarImage src={user.image} />}
+                          <AvatarFallback className="bg-primary text-primary-foreground">
+                            {senderAvatar?.charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        </>
                       ) : (
                         <>
                           <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />

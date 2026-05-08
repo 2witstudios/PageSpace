@@ -85,6 +85,37 @@ export default function AccountPage() {
   const { devices, refetch: refetchDevices } = useDevices();
   const [isRevokeAllDialogOpen, setIsRevokeAllDialogOpen] = useState(false);
 
+  const uploadAvatarFile = async (file: File): Promise<void> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Use fetchWithAuth directly - post() helper sets Content-Type: application/json
+    // which breaks FormData uploads. fetchWithAuth lets browser set correct boundary.
+    const response = await fetchWithAuth('/api/account/avatar', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const data: unknown = await response.json().catch(() => ({}));
+      const errorMessage =
+        data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
+          ? data.error
+          : 'Failed to upload avatar';
+      throw new Error(errorMessage);
+    }
+
+    const data: unknown = await response.json().catch(() => ({}));
+    const avatarUrl =
+      data && typeof data === 'object' && 'avatarUrl' in data && typeof data.avatarUrl === 'string'
+        ? data.avatarUrl
+        : null;
+
+    if (avatarUrl) {
+      setAvatarPreview(avatarUrl);
+    }
+  };
+
   // Load user data into form
   useEffect(() => {
     if (user) {
@@ -105,18 +136,25 @@ export default function AccountPage() {
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+    const pendingAvatarFile = avatarFile;
     setIsSavingProfile(true);
+    if (pendingAvatarFile) {
+      setIsUploadingAvatar(true);
+    }
 
     try {
       await patch("/api/account", { name, email });
 
-      if (mutate) {
-        await mutate(); // Refresh user data
+      if (pendingAvatarFile) {
+        await uploadAvatarFile(pendingAvatarFile);
+        setAvatarFile(null);
       }
     } catch (error) {
       console.error("Profile update error:", error);
       toast.error(error instanceof Error ? error.message : "Failed to update profile");
     } finally {
+      mutate?.();
+      setIsUploadingAvatar(false);
       setIsSavingProfile(false);
     }
   };
@@ -163,22 +201,9 @@ export default function AccountPage() {
     if (!avatarFile) return;
 
     setIsUploadingAvatar(true);
-    const formData = new FormData();
-    formData.append('file', avatarFile);
 
     try {
-      // Use fetchWithAuth directly - post() helper sets Content-Type: application/json
-      // which breaks FormData uploads. fetchWithAuth lets browser set correct boundary.
-      const response = await fetchWithAuth('/api/account/avatar', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to upload avatar');
-      }
-
+      await uploadAvatarFile(avatarFile);
       setAvatarFile(null);
 
       // Refresh user data to get new avatar URL
@@ -370,6 +395,7 @@ export default function AccountPage() {
                 </Avatar>
                 {avatarPreview && (
                   <Button
+                    type="button"
                     size="icon"
                     variant="destructive"
                     className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
@@ -402,6 +428,7 @@ export default function AccountPage() {
                   </Label>
                   {avatarFile && (
                     <Button
+                      type="button"
                       size="sm"
                       onClick={handleAvatarUpload}
                       disabled={isUploadingAvatar}
