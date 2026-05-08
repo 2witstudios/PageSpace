@@ -511,14 +511,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       const mentionedIds = extractMentionedUserIds(description);
       const candidates = mentionedIds.filter((id) => id !== userId);
       if (candidates.length > 0) {
+        const taskPageId = result.page.id;
         const viewChecks = await Promise.all(
-          candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
+          candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, taskPageId) }))
         );
         await Promise.all(
           viewChecks
             .filter((e) => e.canView)
             .map((e) =>
-              createMentionNotification(e.id, pageId, userId).catch((err) =>
+              createMentionNotification(e.id, taskPageId, userId).catch((err) =>
                 loggers.api.error('Failed to send mention notification', err as Error)
               )
             )

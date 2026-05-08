@@ -392,14 +392,15 @@ export async function PATCH(
       const newMentionIds = extractMentionedUserIds(updates.description ?? '');
       const newlyAdded = newMentionIds.filter((id) => id !== userId && !oldMentionIds.has(id));
       if (newlyAdded.length > 0) {
+        const taskPageId = existingTask.pageId;
         const viewChecks = await Promise.all(
-          newlyAdded.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
+          newlyAdded.map(async (id) => ({ id, canView: await canUserViewPage(id, taskPageId) }))
         );
         await Promise.all(
           viewChecks
             .filter((e) => e.canView)
             .map((e) =>
-              createMentionNotification(e.id, pageId, userId).catch((err) =>
+              createMentionNotification(e.id, taskPageId, userId).catch((err) =>
                 loggers.api.error('Failed to send mention notification', err as Error)
               )
             )

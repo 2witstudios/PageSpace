@@ -752,7 +752,8 @@ describe('Task API Routes', () => {
       );
 
       expect(response.status).toBe(201);
-      expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', mockPageId, mockUserId);
+      // Notification must link to the individual task page, not the task list page
+      expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', mockNewPage.id, mockUserId);
     });
 
     it('does not notify the task creator even when self-mentioned in description', async () => {
@@ -788,7 +789,7 @@ describe('Task API Routes', () => {
       );
     });
 
-    it('does not notify a @mentioned user who cannot view the task list page', async () => {
+    it('does not notify a @mentioned user who cannot view the task page', async () => {
       const mockTaskList = { id: mockTaskListId };
       const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
       const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };

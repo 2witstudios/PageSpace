@@ -1020,7 +1020,8 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(createMentionNotification).toHaveBeenCalledWith('user-alice', mockPageId, mockUserId);
+    // Notification must link to the individual task page, not the task list page
+    expect(createMentionNotification).toHaveBeenCalledWith('user-alice', baseTask.pageId, mockUserId);
   });
 
   it('does not re-notify for @mentions already present in the previous description', async () => {
@@ -1044,8 +1045,8 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(response.status).toBe(200);
     // Alice was already in old description — no re-notification
     expect(createMentionNotification).not.toHaveBeenCalledWith('user-alice', expect.anything(), expect.anything());
-    // Bob is newly added — should be notified
-    expect(createMentionNotification).toHaveBeenCalledWith('user-bob', mockPageId, mockUserId);
+    // Bob is newly added — should be notified at the task's own page ID
+    expect(createMentionNotification).toHaveBeenCalledWith('user-bob', baseTask.pageId, mockUserId);
   });
 
   it('does not fire createMentionNotification when description is not part of the update', async () => {
@@ -1084,7 +1085,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     );
   });
 
-  it('does not notify a @mentioned user who cannot view the task list page', async () => {
+  it('does not notify a @mentioned user who cannot view the task page', async () => {
     setupAuth();
     setupCanEdit(true);
     const newDesc = 'cc @[Outsider](user-outsider:user)';
