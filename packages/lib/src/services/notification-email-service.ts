@@ -4,6 +4,7 @@ import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { sendEmail } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
+import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
 import { ConnectionRequestEmail } from '../email-templates/ConnectionRequestEmail';
 import { PageSharedEmail } from '../email-templates/PageSharedEmail';
@@ -298,6 +299,36 @@ export async function sendPendingDriveInvitationEmail(input: {
       userName: input.recipientEmail,
       inviterName: safeInviterName,
       driveName: safeDriveName,
+      acceptUrl: input.inviteUrl,
+    }),
+  });
+}
+
+/**
+ * Send a "you've been invited to view a page" email to a recipient who does not
+ * yet hold an active session. Errors propagate so the caller can compensating-delete
+ * the pending row on failure.
+ */
+export async function sendPendingPageShareInvitationEmail(input: {
+  recipientEmail: string;
+  inviterName: string;
+  pageTitle: string;
+  driveName: string;
+  permissions: string[];
+  inviteUrl: string;
+}): Promise<void> {
+  const safeInviterName = stripHeaderControls(input.inviterName) || 'Someone';
+  const safePageTitle = stripHeaderControls(input.pageTitle) || 'a document';
+  const safeDriveName = stripHeaderControls(input.driveName) || 'a workspace';
+
+  await sendEmail({
+    to: input.recipientEmail,
+    subject: `${safeInviterName} shared "${safePageTitle}" with you on PageSpace`,
+    react: PageShareInvitationEmail({
+      inviterName: safeInviterName,
+      pageTitle: safePageTitle,
+      driveName: safeDriveName,
+      permissions: input.permissions,
       acceptUrl: input.inviteUrl,
     }),
   });

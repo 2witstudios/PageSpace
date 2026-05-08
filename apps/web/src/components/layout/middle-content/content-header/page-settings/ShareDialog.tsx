@@ -48,6 +48,7 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   const [isOpen, setIsOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [offPlatformEmail, setOffPlatformEmail] = useState<string | null>(null);
   const [permissions, setPermissions] = useState({
     canView: true,
     canEdit: false,
@@ -84,6 +85,13 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
     setPermissions(newPerms);
   };
 
+  const resetForm = () => {
+    setEmail('');
+    setOffPlatformEmail(null);
+    setPermissions({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    setPermissionsVersion(v => v + 1);
+  };
+
   const handleInvite = async () => {
     if (!email) {
       toast.error('Please enter an email address.');
@@ -94,6 +102,11 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
       // 1. Find the user by email
       const userResponse = await fetchWithAuth(`/api/users/find?email=${encodeURIComponent(email)}`);
       if (!userResponse.ok) {
+        if (userResponse.status === 404) {
+          // User not found — switch to off-platform invite mode
+          setOffPlatformEmail(email);
+          return;
+        }
         const { error } = await userResponse.json();
         throw new Error(error || 'User not found.');
       }
@@ -106,16 +119,43 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
       });
 
       toast.success(`Permission granted to ${email}`);
-      setEmail('');
-      // Reset permissions to default
-      setPermissions({
-        canView: true,
-        canEdit: false,
-        canShare: false,
-        canDelete: false,
+      resetForm();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      toast.error(errorMessage);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleOffPlatformInvite = async () => {
+    if (!offPlatformEmail) return;
+    setIsSubmitting(true);
+    try {
+      // Translate checkbox state → VIEW/EDIT/SHARE array (DELETE excluded for off-platform)
+      const permissionsArray: Array<'VIEW' | 'EDIT' | 'SHARE'> = ['VIEW'];
+      if (permissions.canEdit) permissionsArray.push('EDIT');
+      if (permissions.canShare) permissionsArray.push('SHARE');
+
+      const response = await fetchWithAuth(`/api/pages/${page.id}/share-invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: offPlatformEmail, permissions: permissionsArray }),
       });
-      // Increment version to trigger re-render of PermissionsList
-      setPermissionsVersion(v => v + 1);
+
+      if (response.status === 409) {
+        toast.info(`An invite is already pending for ${offPlatformEmail}`);
+        resetForm();
+        return;
+      }
+
+      if (!response.ok) {
+        const json = await response.json().catch(() => ({}));
+        throw new Error((json as { error?: string }).error || 'Failed to send invite.');
+      }
+
+      toast.success(`Invite sent to ${offPlatformEmail}`);
+      resetForm();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
       toast.error(errorMessage);
@@ -178,15 +218,38 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
               </TabsTrigger>
             </TabsList>
             <TabsContent value="share" className="mt-4 space-y-4">
+              {offPlatformEmail ? (
+                <Alert>
+                  <AlertDescription>
+                    <strong>{offPlatformEmail}</strong> is not yet on PageSpace. They will receive an
+                    email invitation to create an account and access this page.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
               <div className="flex space-x-2">
                 <Input
                   type="email"
                   placeholder="Add people by email..."
                   className="flex-1"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={isSubmitting || !canShare}
+                  value={offPlatformEmail ?? email}
+                  onChange={(e) => {
+                    if (offPlatformEmail) {
+                      setOffPlatformEmail(null);
+                    }
+                    setEmail(e.target.value);
+                  }}
+                  disabled={isSubmitting || !canShare || !!offPlatformEmail}
                 />
+                {offPlatformEmail && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setOffPlatformEmail(null)}
+                    disabled={isSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                )}
               </div>
 
               {/* Permission Checkboxes */}
@@ -231,24 +294,51 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
                     </Label>
                   </div>
 
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="canDelete"
-                      checked={permissions.canDelete}
-                      disabled={!permissions.canView}
-                      onCheckedChange={(checked) => handlePermissionChange('canDelete', !!checked)}
-                    />
-                    <Label htmlFor="canDelete" className="text-sm">
-                      Delete
-                      <span className="text-xs text-gray-500 block">Can delete this page</span>
-                    </Label>
-                  </div>
+                  {offPlatformEmail ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center space-x-2 opacity-50">
+                            <Checkbox id="canDelete" checked={false} disabled />
+                            <Label htmlFor="canDelete" className="text-sm cursor-not-allowed">
+                              Delete
+                              <span className="text-xs text-gray-500 block">Can delete this page</span>
+                            </Label>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Delete cannot be granted to off-platform invites</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : (
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="canDelete"
+                        checked={permissions.canDelete}
+                        disabled={!permissions.canView}
+                        onCheckedChange={(checked) => handlePermissionChange('canDelete', !!checked)}
+                      />
+                      <Label htmlFor="canDelete" className="text-sm">
+                        Delete
+                        <span className="text-xs text-gray-500 block">Can delete this page</span>
+                      </Label>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <Button onClick={handleInvite} disabled={isSubmitting} className="w-full">
-                {isSubmitting ? 'Granting Access...' : 'Grant Access'}
-              </Button>
+              {offPlatformEmail ? (
+                <Button onClick={handleOffPlatformInvite} disabled={isSubmitting} className="w-full">
+                  {isSubmitting
+                    ? 'Sending Invite...'
+                    : `Invite ${offPlatformEmail} to PageSpace and share this page`}
+                </Button>
+              ) : (
+                <Button onClick={handleInvite} disabled={isSubmitting} className="w-full">
+                  {isSubmitting ? 'Granting Access...' : 'Grant Access'}
+                </Button>
+              )}
             </TabsContent>
             <TabsContent value="permissions" className="mt-4">
               <PermissionsList key={permissionsVersion} />
