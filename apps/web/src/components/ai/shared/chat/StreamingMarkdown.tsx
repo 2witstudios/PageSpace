@@ -200,11 +200,29 @@ function CustomTable({ children, ...props }: TableHTMLAttributes<HTMLTableElemen
 }
 
 // Custom list item component with smart word breaking and hyphenation
-function CustomListItem({ children, ...props }: HTMLAttributes<HTMLLIElement> & { children?: ReactNode }) {
+function CustomListItem({ children, className, ...props }: HTMLAttributes<HTMLLIElement> & { children?: ReactNode }) {
   return (
-    <li className="min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]" {...props}>
+    <li className={cn("min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]", className)} {...props}>
       {children}
     </li>
+  );
+}
+
+// Custom ordered list — list-outside with padding keeps markers inside the padded area,
+// safe from overflow:hidden on ancestor containers (Streamdown's list-inside can be clipped).
+function CustomOrderedList({ children, className, ...props }: HTMLAttributes<HTMLOListElement> & { children?: ReactNode }) {
+  return (
+    <ol className={cn("list-decimal list-outside pl-6 my-2", className)} {...props}>
+      {children}
+    </ol>
+  );
+}
+
+function CustomUnorderedList({ children, className, ...props }: HTMLAttributes<HTMLUListElement> & { children?: ReactNode }) {
+  return (
+    <ul className={cn("list-disc list-outside pl-6 my-2", className)} {...props}>
+      {children}
+    </ul>
   );
 }
 
@@ -298,6 +316,8 @@ function createStreamdownComponents(router: RouterLike) {
     pre: CustomPre,
     p: CustomParagraph,
     table: CustomTable,
+    ol: CustomOrderedList,
+    ul: CustomUnorderedList,
     li: CustomListItem,
     span: CustomSpan,
   };
