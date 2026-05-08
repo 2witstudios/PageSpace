@@ -682,6 +682,30 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('/dashboard/drive_invited_42');
       expect(location).not.toContain('some_other_drive');
     });
+
+    it('given consumeInviteIfPresent throws (DB blip), still completes login and lands on /dashboard (session is already committed)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
+        },
+      });
+      vi.mocked(consumeInviteIfPresent).mockRejectedValueOnce(new Error('postgres down'));
+
+      const response = await GET(inviteRequest('valid-token'));
+
+      expect(response.status).toBe(302);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).toContain('auth=success');
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Invite consume threw during magic link verify',
+        expect.any(Error),
+        expect.objectContaining({ userId: 'test-user-id' }),
+      );
+    });
   });
 
 });
