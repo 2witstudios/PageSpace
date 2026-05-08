@@ -2,6 +2,8 @@ import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { isInviteExpired, isInviteConsumed } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { connectionInviteRepository } from '@/lib/repositories/connection-invite-repository';
+import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
+import type { PendingPagePermission } from '@pagespace/db/schema/pending-page-invites';
 
 export type InviteResolutionError = 'NOT_FOUND' | 'EXPIRED' | 'CONSUMED';
 
@@ -11,6 +13,15 @@ export type InviteContextData =
       driveName: string;
       inviterName: string;
       role: 'OWNER' | 'ADMIN' | 'MEMBER';
+      email: string;
+      isExistingUser: boolean;
+    }
+  | {
+      kind: 'page';
+      pageTitle: string;
+      driveName: string;
+      inviterName: string;
+      permissions: PendingPagePermission[];
       email: string;
       isExistingUser: boolean;
     }
@@ -47,12 +58,13 @@ export const resolveInviteContext = async ({
 }): Promise<InviteResolution> => {
   const tokenHash = hashToken(token);
 
-  const [driveRow, connectionRow] = await Promise.all([
+  const [driveRow, pageRow, connectionRow] = await Promise.all([
     driveInviteRepository.findPendingInviteByTokenHash(tokenHash),
+    pageInviteRepository.findPendingInviteByTokenHash(tokenHash),
     connectionInviteRepository.findPendingInviteByTokenHash(tokenHash),
   ]);
 
-  const row = driveRow ?? connectionRow;
+  const row = driveRow ?? pageRow ?? connectionRow;
   if (!row) {
     return { ok: false, error: 'NOT_FOUND' };
   }
@@ -78,6 +90,21 @@ export const resolveInviteContext = async ({
         inviterName: driveRow.inviterName,
         role: driveRow.role,
         email: driveRow.email,
+        isExistingUser,
+      },
+    };
+  }
+
+  if (pageRow) {
+    return {
+      ok: true,
+      data: {
+        kind: 'page',
+        pageTitle: pageRow.pageTitle,
+        driveName: pageRow.driveName,
+        inviterName: pageRow.inviterName,
+        permissions: pageRow.permissions,
+        email: pageRow.email,
         isExistingUser,
       },
     };
