@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, or, count, isNull } from '@pagespace/db/operators';
+import { eq, ne, and, or, count, isNull, gte } from '@pagespace/db/operators';
 import { directMessages, dmConversations } from '@pagespace/db/schema/social';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { pages } from '@pagespace/db/schema/core';
@@ -77,7 +77,7 @@ export async function GET(req: Request) {
             )
           ),
 
-        // Pending calendar invites where user is not the organizer
+        // Pending RSVP invites for upcoming events where user is not the organizer
         db
           .select({ count: count() })
           .from(eventAttendees)
@@ -87,7 +87,8 @@ export async function GET(req: Request) {
               eq(eventAttendees.userId, userId),
               eq(eventAttendees.status, 'PENDING'),
               eq(eventAttendees.isOrganizer, false),
-              eq(calendarEvents.isTrashed, false)
+              eq(calendarEvents.isTrashed, false),
+              gte(calendarEvents.startAt, new Date())
             )
           ),
       ]);
