@@ -98,7 +98,7 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
-import { pageSpaceTools } from '../ai-tools';
+import { pageSpaceTools, pageSpaceToolsStubbed } from '../ai-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
@@ -176,6 +176,28 @@ describe('ai-tools', () => {
           throw new Error(`Tool "${name}" is ${tool}`);
         }
       }
+    });
+  });
+
+  describe('pageSpaceToolsStubbed', () => {
+    it('is exported and defined', () => {
+      expect(pageSpaceToolsStubbed).toBeDefined();
+    });
+
+    it('has the same keys as pageSpaceTools', () => {
+      expect(Object.keys(pageSpaceToolsStubbed).sort()).toEqual(
+        Object.keys(pageSpaceTools).sort()
+      );
+    });
+
+    it('keeps core tools as the same object reference', () => {
+      expect(pageSpaceToolsStubbed.list_drives).toBe(pageSpaceTools.list_drives);
+      expect(pageSpaceToolsStubbed.read_page).toBe(pageSpaceTools.read_page);
+    });
+
+    it('replaces non-core tools with distinct stub objects', () => {
+      expect(pageSpaceToolsStubbed.list_calendar_events).not.toBe(pageSpaceTools.list_calendar_events);
+      expect(pageSpaceToolsStubbed.update_task).not.toBe(pageSpaceTools.update_task);
     });
   });
 });
