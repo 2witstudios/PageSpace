@@ -17,7 +17,7 @@ export const pendingPageInvites = pgTable('pending_page_invites', {
   invitedBy: text('invited_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   pageId: text('page_id').notNull().references(() => pages.id, { onDelete: 'cascade' }),
   permissions: jsonb('permissions').notNull().$type<PendingPagePermission[]>(),
-  expiresAt: timestamp('expires_at', { mode: 'date' }).notNull(),
+  expiresAt: timestamp('expires_at', { mode: 'date' }),
   consumedAt: timestamp('consumed_at', { mode: 'date' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({

@@ -22,6 +22,7 @@ const shareInviteBodySchema = z
     permissions: z
       .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
       .min(1, 'At least VIEW permission is required'),
+    expiryDays: z.number().int().min(1).max(365).nullable().optional(),
   })
   .superRefine(({ permissions }, ctx) => {
     if (
@@ -184,7 +185,10 @@ export async function POST(
       );
     }
 
-    const { token, tokenHash, expiresAt } = createInviteToken({ now });
+    const { token, tokenHash, expiresAt } = createInviteToken({
+      now,
+      expiryMinutes: body.expiryDays ? body.expiryDays * 24 * 60 : null,
+    });
 
     let pendingInvite: { id: string };
     try {

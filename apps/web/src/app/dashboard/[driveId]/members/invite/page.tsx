@@ -47,6 +47,7 @@ export default function InviteMemberPage() {
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
   const [selectedUnifiedRole, setSelectedUnifiedRole] = useState<UnifiedRole>(null);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(new Map());
+  const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [showVerificationAlert, setShowVerificationAlert] = useState(false);
   const permissionsGridRef = useRef<PermissionsGridRef>(null);
@@ -118,6 +119,7 @@ export default function InviteMemberPage() {
     setPendingEmail(null);
     setPermissions(new Map());
     setSelectedUnifiedRole(null);
+    setExpiryDays(null);
   };
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
@@ -150,6 +152,7 @@ export default function InviteMemberPage() {
         role: backendRole,
         customRoleId: backendCustomRoleId,
         permissions: [],
+        ...(expiryDays !== null && { expiryDays }),
       };
     } else if (isAdmin) {
       payload = {
@@ -387,6 +390,36 @@ export default function InviteMemberPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Invite expiry — only relevant for email invites that create a pending row */}
+            {pendingEmail && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle>Invite expiry</CardTitle>
+                  <CardDescription>
+                    Set when this invite link expires. Leave as &ldquo;Never&rdquo; for a permanent invite.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-w-xs">
+                    <Select
+                      value={expiryDays === null ? 'never' : String(expiryDays)}
+                      onValueChange={(v) => setExpiryDays(v === 'never' ? null : Number(v))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="never">Never</SelectItem>
+                        <SelectItem value="1">1 day</SelectItem>
+                        <SelectItem value="7">7 days</SelectItem>
+                        <SelectItem value="30">30 days</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Permissions Card - Hidden when Admin is selected or for pending email invites */}
             {selectedUnifiedRole?.type !== 'admin' && !pendingEmail && (

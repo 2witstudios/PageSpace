@@ -39,6 +39,7 @@ const inviteBodySchema = z.union([
     role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
     customRoleId: z.string().nullable().optional(),
     permissions: z.array(permissionEntrySchema).default([]),
+    expiryDays: z.number().int().min(1).max(365).nullable().optional(),
   }),
 ]);
 
@@ -402,7 +403,11 @@ async function handleEmailPath(args: {
     );
   }
 
-  const { token, tokenHash, expiresAt } = createInviteToken({ now });
+  const expiryDays = 'expiryDays' in body ? body.expiryDays : undefined;
+  const { token, tokenHash, expiresAt } = createInviteToken({
+    now,
+    expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
+  });
 
   let pendingInvite: { id: string };
   try {

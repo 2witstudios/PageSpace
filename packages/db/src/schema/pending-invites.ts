@@ -12,7 +12,7 @@ export const pendingInvites = pgTable('pending_invites', {
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   role: memberRole('role').notNull(),
   invitedBy: text('invited_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  expiresAt: timestamp('expires_at', { mode: 'date' }).notNull(),
+  expiresAt: timestamp('expires_at', { mode: 'date' }),
   consumedAt: timestamp('consumed_at', { mode: 'date' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
