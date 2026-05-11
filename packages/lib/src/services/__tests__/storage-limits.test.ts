@@ -71,8 +71,8 @@ describe('storage-limits', () => {
 
     it('STORAGE_TIERS_freeTier_hasExpectedQuota', () => {
       expect(STORAGE_TIERS.free.quotaBytes).toBe(500 * 1024 * 1024);
-      expect(STORAGE_TIERS.free.maxFileSize).toBe(20 * 1024 * 1024);
-      expect(STORAGE_TIERS.free.maxConcurrentUploads).toBe(2);
+      expect(STORAGE_TIERS.free.maxFileSize).toBe(50 * 1024 * 1024);
+      expect(STORAGE_TIERS.free.maxConcurrentUploads).toBe(3);
       expect(STORAGE_TIERS.free.maxFileCount).toBe(100);
     });
   });
@@ -157,11 +157,11 @@ describe('storage-limits', () => {
         id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
 
-      const result = await checkStorageQuota('user-1', 25 * 1024 * 1024);
+      const result = await checkStorageQuota('user-1', 60 * 1024 * 1024);
 
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('exceeds');
-      expect(result.requiredBytes).toBe(25 * 1024 * 1024);
+      expect(result.requiredBytes).toBe(60 * 1024 * 1024);
     });
 
     it('checkStorageQuota_withInsufficientStorage_rejectsWithReason', async () => {
@@ -219,7 +219,7 @@ describe('storage-limits', () => {
 
     it('checkConcurrentUploads_withUploadsAtLimit_returnsFalse', async () => {
       vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
-        activeUploads: 2, subscriptionTier: 'free',
+        activeUploads: 3, subscriptionTier: 'free',
       });
 
       expect(await checkConcurrentUploads('user-1')).toBe(false);

@@ -1,5 +1,6 @@
-import { createReadStream } from 'fs';
-import { stat } from 'fs/promises';
+import { createReadStream, createWriteStream } from 'fs';
+import { stat, mkdir } from 'fs/promises';
+import { pipeline } from 'stream/promises';
 import path from 'path';
 import crypto from 'crypto';
 import {
@@ -450,6 +451,16 @@ export class ContentStore {
     } catch {
       return null;
     }
+  }
+
+  async streamOriginalToFile(contentHash: string, destPath: string): Promise<void> {
+    const normalizedHash = this.normalizeContentHash(contentHash);
+    const resp = await this.s3.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
+    );
+    if (!resp.Body) throw new Error(`File not found in S3: ${contentHash}`);
+    await mkdir(path.dirname(destPath), { recursive: true });
+    await pipeline(resp.Body as NodeJS.ReadableStream, createWriteStream(destPath));
   }
 
   async getCacheUrl(contentHash: string, preset: string): Promise<string> {

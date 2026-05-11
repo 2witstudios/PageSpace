@@ -161,28 +161,30 @@ export interface ProcessAttachmentUploadArgs {
   authContext: EnforcedAuthContext;
 }
 
+export interface AttachmentUploadFileResult {
+  id: string;
+  originalName: string;
+  sanitizedName: string;
+  size: number;
+  mimeType: string;
+  contentHash: string;
+}
+
 interface ProcessorUploadResult {
   contentHash?: unknown;
   size?: unknown;
 }
 
-/**
- * Owns the full attachment-upload pipeline shared by channel and DM uploads.
- *
- * The caller is responsible for target-specific authorization (e.g. canUserEditPage
- * for channels), but the user identity must come from a validated EnforcedAuthContext.
- * This function then enforces user-scoped concerns — quota, semaphore, dedup, audit —
- * that must be identical across targets.
- *
- * Returns a Response with a target-agnostic JSON shape so the client uploader
- * does not have to branch.
- */
-export async function processAttachmentUpload(
-  args: ProcessAttachmentUploadArgs
-): Promise<Response> {
-  const { request, target, authContext } = args;
-  const { userId } = authContext;
+type SingleFileResult =
+  | { ok: true; file: AttachmentUploadFileResult; storageInfo?: { used: number; quota: number; formattedUsed: string; formattedQuota: string } }
+  | { ok: false; error: string; status: number };
 
+async function uploadOneFile(
+  file: File,
+  target: AttachmentTarget,
+  userId: string,
+  request: Request
+): Promise<SingleFileResult> {
   let uploadSlot: string | null = null;
   let uploadSlotReleased = false;
 
@@ -194,31 +196,23 @@ export async function processAttachmentUpload(
   };
 
   try {
-    const formData = await request.formData();
-    const file = formData.get('file');
-    if (!(file instanceof File)) {
-      return jsonResponse({ error: 'No file provided' }, 400);
-    }
-
     const quotaCheck = await checkStorageQuota(userId, file.size);
     if (!quotaCheck.allowed) {
-      return jsonResponse(
-        { error: quotaCheck.reason, storageInfo: quotaCheck.quota },
-        413
-      );
+      return { ok: false, error: quotaCheck.reason ?? 'Storage quota exceeded', status: 413 };
     }
 
     const userQuota = await getUserStorageQuota(userId);
     if (!userQuota) {
-      return jsonResponse({ error: 'Could not retrieve storage quota' }, 500);
+      return { ok: false, error: 'Could not retrieve storage quota', status: 500 };
     }
 
     uploadSlot = await uploadSemaphore.acquireUploadSlot(userId, userQuota.tier, file.size);
     if (!uploadSlot) {
-      return jsonResponse(
-        { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
-        429
-      );
+      return {
+        ok: false,
+        error: 'Too many concurrent uploads. Please wait for current uploads to complete.',
+        status: 429,
+      };
     }
 
     const mimeType = file.type || 'application/octet-stream';
@@ -232,7 +226,7 @@ export async function processAttachmentUpload(
     } catch (error) {
       if (isPermissionDeniedError(error)) {
         releaseSlot();
-        return jsonResponse({ error: 'Permission denied for file upload' }, 403);
+        return { ok: false, error: 'Permission denied for file upload', status: 403 };
       }
       throw error;
     }
@@ -256,7 +250,7 @@ export async function processAttachmentUpload(
 
     if (!processorResponse.ok) {
       const errorData = await processorResponse.json().catch(() => ({}));
-      throw new Error(errorData?.error || 'Processor upload failed');
+      throw new Error((errorData as { error?: string })?.error || 'Processor upload failed');
     }
 
     const processorResult = (await processorResponse.json()) as ProcessorUploadResult;
@@ -272,11 +266,10 @@ export async function processAttachmentUpload(
         userId,
       });
       releaseSlot();
-      return jsonResponse({ error: 'Processor upload integrity check failed' }, 502);
+      return { ok: false, error: 'Processor upload integrity check failed', status: 502 };
     }
 
     const { contentHash, resolvedSize } = integrityCheck;
-
     const fileDriveId = target.type === 'page' ? target.driveId : null;
 
     await attachmentUploadRepository.saveFileRecord({
@@ -330,13 +323,11 @@ export async function processAttachmentUpload(
       userId,
       resourceType: 'file',
       resourceId: target.type === 'page' ? target.pageId : target.conversationId,
-      details: {
-        source: target.type === 'page' ? 'channel-upload' : 'dm-upload',
-      },
+      details: { source: target.type === 'page' ? 'channel-upload' : 'dm-upload' },
     });
 
-    return jsonResponse({
-      success: true,
+    return {
+      ok: true,
       file: {
         id: contentHash,
         originalName: file.name,
@@ -353,15 +344,83 @@ export async function processAttachmentUpload(
             formattedQuota: formatBytes(updatedQuota.quotaBytes),
           }
         : undefined,
-    });
+    };
   } catch (error) {
     loggers.api.error('Attachment upload error', error as Error);
     releaseSlot();
-    return jsonResponse({ error: 'Failed to upload file' }, 500);
+    return { ok: false, error: 'Failed to upload file', status: 500 };
   } finally {
-    // Defense-in-depth: ensure the slot is released on any unexpected exit path.
     releaseSlot();
   }
+}
+
+/**
+ * Owns the full attachment-upload pipeline shared by channel and DM uploads.
+ *
+ * The caller is responsible for target-specific authorization (e.g. canUserEditPage
+ * for channels), but the user identity must come from a validated EnforcedAuthContext.
+ * This function then enforces user-scoped concerns — quota, semaphore, dedup, audit —
+ * that must be identical across targets.
+ *
+ * Returns a Response with a target-agnostic JSON shape so the client uploader
+ * does not have to branch.
+ */
+export async function processAttachmentUpload(
+  args: ProcessAttachmentUploadArgs
+): Promise<Response> {
+  const { request, target, authContext } = args;
+  const { userId } = authContext;
+
+  const formData = await request.formData();
+  const file = formData.get('file');
+  if (!(file instanceof File)) {
+    return jsonResponse({ error: 'No file provided' }, 400);
+  }
+
+  const result = await uploadOneFile(file, target, userId, request);
+  if (!result.ok) {
+    return jsonResponse({ error: result.error }, result.status);
+  }
+  return jsonResponse({ success: true, ...result });
+}
+
+export interface ProcessAttachmentUploadsArgs {
+  request: Request;
+  target: AttachmentTarget;
+  authContext: EnforcedAuthContext;
+}
+
+/**
+ * Batch variant of the attachment-upload pipeline. Reads all `file` fields from the
+ * request body, processes them serially (to avoid semaphore contention), and returns
+ * an array of per-file results. Partial failures are included inline so the client can
+ * surface per-file errors without aborting the whole batch.
+ */
+export async function processAttachmentUploads(
+  args: ProcessAttachmentUploadsArgs
+): Promise<Response> {
+  const { request, target, authContext } = args;
+  const { userId } = authContext;
+
+  const formData = await request.formData();
+  const files = formData.getAll('file').filter((f): f is File => f instanceof File);
+
+  if (files.length === 0) {
+    return jsonResponse({ error: 'No files provided' }, 400);
+  }
+
+  const results: Array<{ success: true; file: AttachmentUploadFileResult } | { success: false; error: string; fileName?: string }> = [];
+
+  for (const file of files) {
+    const result = await uploadOneFile(file, target, userId, request);
+    if (result.ok) {
+      results.push({ success: true, file: result.file });
+    } else {
+      results.push({ success: false, error: result.error, fileName: file.name });
+    }
+  }
+
+  return jsonResponse({ files: results });
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

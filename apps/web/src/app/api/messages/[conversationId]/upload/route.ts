@@ -7,7 +7,7 @@ import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
-  processAttachmentUpload,
+  processAttachmentUploads,
   type AttachmentTarget,
 } from '@pagespace/lib/services/attachment-upload';
 
@@ -82,7 +82,7 @@ export async function POST(
       conversationId,
     };
 
-    return await processAttachmentUpload({ request, target, authContext: ctx });
+    return await processAttachmentUploads({ request, target, authContext: ctx });
   } catch (error) {
     loggers.api.error('DM upload wrapper error', error as Error, { conversationId });
     return NextResponse.json({ error: 'Failed to upload file' }, { status: 500 });

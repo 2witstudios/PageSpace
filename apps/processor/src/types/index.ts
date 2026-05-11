@@ -63,12 +63,28 @@ export interface OCRJobData {
   provider?: 'tesseract' | 'ai-vision';
 }
 
+export interface VideoProcessJobData {
+  contentHash: string;
+  fileId?: string;
+  mimeType: string;
+}
+
+export interface VideoProcessResult {
+  success: boolean;
+  duration?: number;
+  width?: number;
+  height?: number;
+  thumbnailKey?: string;
+  error?: string;
+}
+
 // Discriminated union for addJob
 export type JobDataMap = {
   'ingest-file': IngestFileJobData;
   'image-optimize': ImageOptimizeJobData;
   'text-extract': TextExtractJobData;
   'ocr-process': OCRJobData;
+  'video-process': VideoProcessJobData;
   'siem-delivery': Record<string, never>;
 };
 

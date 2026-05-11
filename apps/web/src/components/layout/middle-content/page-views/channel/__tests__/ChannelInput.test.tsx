@@ -139,7 +139,11 @@ const uploadHookCalls: Array<{
 let mockAttachment: FileAttachment | null = null;
 let mockIsUploading = false;
 const mockUploadFile = vi.fn(async (_file: File) => {});
+const mockUploadFiles = vi.fn(async (_files: File[]) => {});
 const mockClearAttachment = vi.fn(() => {
+  mockAttachment = null;
+});
+const mockRemoveAttachment = vi.fn((_id: string) => {
   mockAttachment = null;
 });
 vi.mock('@/hooks/useAttachmentUpload', async () => {
@@ -155,10 +159,13 @@ vi.mock('@/hooks/useAttachmentUpload', async () => {
     }) => {
       uploadHookCalls.push(opts);
       return {
+        attachments: mockAttachment ? [mockAttachment] : [],
         attachment: mockAttachment,
         isUploading: mockIsUploading,
         uploadFile: mockUploadFile,
+        uploadFiles: mockUploadFiles,
         clearAttachment: mockClearAttachment,
+        removeAttachment: mockRemoveAttachment,
       };
     },
   };
@@ -232,18 +239,18 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(onSend).toHaveBeenCalledWith(undefined);
   });
 
-  it('textAndAttachment_send_callsOnSendWithAttachmentObject', async () => {
+  it('textAndAttachment_send_callsOnSendWithAttachmentArray', async () => {
     mockAttachment = sampleAttachment;
     const user = userEvent.setup();
     const { onSend } = renderInput({ value: 'with file' });
 
     await user.type(screen.getByTestId('chat-textarea'), '{enter}');
 
-    expect(onSend).toHaveBeenCalledWith(sampleAttachment);
+    expect(onSend).toHaveBeenCalledWith([sampleAttachment]);
     expect(mockClearAttachment).toHaveBeenCalledTimes(1);
   });
 
-  it('attachmentOnly_emptyText_send_callsOnSendWithAttachment_andDoesNotBlockSend', async () => {
+  it('attachmentOnly_emptyText_send_callsOnSendWithAttachmentArray_andDoesNotBlockSend', async () => {
     mockAttachment = sampleAttachment;
     const user = userEvent.setup();
     const { onSend } = renderInput({ value: '' });
@@ -251,7 +258,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     // Empty textarea + Enter should still send because there is an attachment.
     await user.type(screen.getByTestId('chat-textarea'), '{enter}');
 
-    expect(onSend).toHaveBeenCalledWith(sampleAttachment);
+    expect(onSend).toHaveBeenCalledWith([sampleAttachment]);
   });
 
   it('isUploading_disablesSendButton_andEnterToSend', async () => {
@@ -275,7 +282,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(screen.getByText('photo.png')).toBeInTheDocument();
     const remove = screen.getByRole('button', { name: /remove attachment/i });
     await user.click(remove);
-    expect(mockClearAttachment).toHaveBeenCalledTimes(1);
+    expect(mockRemoveAttachment).toHaveBeenCalledWith('file-abc');
 
     // Simulate the hook clearing by re-rendering with attachment null + empty value
     mockAttachment = null;
@@ -292,7 +299,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(sendBtn).toBeDisabled();
   });
 
-  it('pasteImageFile_invokesUploadFile_withTheFile', () => {
+  it('pasteImageFile_invokesUploadFiles_withTheFile', () => {
     renderInput();
 
     const file = new File(['x'], 'pasted.png', { type: 'image/png' });
@@ -310,11 +317,11 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(file);
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1);
+    expect(mockUploadFiles).toHaveBeenCalledWith([file]);
   });
 
-  it('pastePlainText_doesNotInvokeUploadFile', () => {
+  it('pastePlainText_doesNotInvokeUploadFiles', () => {
     renderInput();
     const textarea = screen.getByTestId('chat-textarea');
 
@@ -330,10 +337,10 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).not.toHaveBeenCalled();
+    expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 
-  it('dragDropImageFile_invokesUploadFile_withTheFile', () => {
+  it('dragDropImageFile_invokesUploadFiles_withTheFile', () => {
     const { container } = renderInput();
 
     const file = new File(['x'], 'dropped.png', { type: 'image/png' });
@@ -350,11 +357,11 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(file);
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1);
+    expect(mockUploadFiles).toHaveBeenCalledWith([file]);
   });
 
-  it('filePickerButton_choosingFile_invokesUploadFile', () => {
+  it('filePickerButton_choosingFile_invokesUploadFiles', () => {
     const { container } = renderInput();
 
     const attach = screen.getByTestId('attach-button');
@@ -366,8 +373,8 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     const file = new File(['x'], 'picked.pdf', { type: 'application/pdf' });
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(file);
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1);
+    expect(mockUploadFiles).toHaveBeenCalledWith([file]);
   });
 
   it('filePicker_hasNoAcceptRestriction_allowsAnyFileType', () => {
@@ -391,7 +398,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).not.toHaveBeenCalled();
+    expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 
   it('mentionsAndIme_propsForwardedToChatTextarea_unchangedByAttachmentFeature', () => {

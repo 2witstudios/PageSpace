@@ -54,6 +54,11 @@ vi.mock('../ocr-processor', () => ({
   processOCR: vi.fn().mockResolvedValue({ success: true, cached: false, text: 'ocr text', provider: 'tesseract' }),
 }));
 
+vi.mock('../video-processor', () => ({
+  processVideo: vi.fn().mockResolvedValue({ success: true, duration: 10, width: 1920, height: 1080, thumbnailKey: 'cache/hash/thumbnail.webp' }),
+  isVideo: vi.fn().mockReturnValue(false),
+}));
+
 import { QueueManager, mapJobState } from '../queue-manager';
 import { setPageProcessing, setPageCompleted, setPageFailed, setPageVisual } from '../../db';
 import { needsTextExtraction, extractText } from '../text-extractor';
@@ -98,17 +103,19 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(5);
+      expect(mockBossWork).toHaveBeenCalledTimes(6);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
       expect(mockBossWork.mock.calls[3][0]).toBe('ocr-process');
-      expect(mockBossWork.mock.calls[4][0]).toBe('siem-delivery');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(5);
+      expect(mockBossWork.mock.calls[4][0]).toBe('video-process');
+      expect(mockBossWork.mock.calls[5][0]).toBe('siem-delivery');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(6);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('text-extract');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('video-process');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
     });

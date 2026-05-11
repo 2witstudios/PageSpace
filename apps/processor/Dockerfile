@@ -47,10 +47,10 @@ RUN pnpm build
 FROM node:22.17.0-bookworm-slim AS production
 
 # Sharp 0.33+ and tesseract.js ship self-contained glibc prebuilds; no extra
-# runtime libs are needed. ca-certificates is kept for outbound HTTPS from
-# any worker that fetches over the network.
+# runtime libs are needed. ffmpeg is needed for video thumbnail extraction.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
+      ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -59,14 +59,6 @@ WORKDIR /app
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages ./packages
 COPY --from=base /app/apps/processor ./apps/processor
-
-# Create data directories with correct ownership (using UID 1000 for node user)
-RUN mkdir -p /data/cache /data/files && \
-    chown -R 1000:1000 /data
-
-# Declare volumes AFTER setting ownership
-# This ensures Docker preserves permissions when creating new volumes
-VOLUME ["/data/files", "/data/cache"]
 
 # The node:22.17.0-bookworm-slim base image already ships a `node` user
 # with UID/GID 1000, matching the /data ownership set above.

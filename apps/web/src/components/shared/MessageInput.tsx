@@ -91,14 +91,23 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
     ref,
   ) {
     const handleSend = useCallback(
-      (attachment?: FileAttachment, options?: ChannelInputSendOptions) => {
+      (attachments?: FileAttachment[], options?: ChannelInputSendOptions) => {
         const content = value;
-        if (!content.trim() && !attachment) return;
+        if (!content.trim() && (!attachments || attachments.length === 0)) return;
+
+        const [first, ...rest] = attachments ?? [];
+
+        // First (or only) message carries the composed text + first file
         onSubmit({
           content,
-          attachment,
+          attachment: first,
           alsoSendToParent: Boolean(options?.alsoSendToParent),
         });
+
+        // Additional files each become their own message with empty text
+        for (const extra of rest) {
+          onSubmit({ content: '', attachment: extra, alsoSendToParent: false });
+        }
       },
       [value, onSubmit],
     );
