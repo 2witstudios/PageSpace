@@ -47,8 +47,8 @@ export async function checkMemoryMiddleware(): Promise<{
   return { allowed: true };
 }
 
-export function setupMemoryProtection(_intervalMs?: number): NodeJS.Timer {
-  return setInterval(() => {}, 3600000) as NodeJS.Timer;
+export function setupMemoryProtection(_intervalMs?: number): NodeJS.Timeout {
+  return setInterval(() => {}, 3600000);
 }
 
 export function formatMemory(mb: number): string {

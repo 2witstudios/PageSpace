@@ -124,7 +124,7 @@ export interface OCRResult {
   provider: string;
 }
 
-export type JobResult = IngestResult | ImageProcessResult | TextExtractResult | OCRResult;
+export type JobResult = IngestResult | ImageProcessResult | TextExtractResult | OCRResult | VideoProcessResult;
 
 // Queue status reporting
 export interface QueueStats {

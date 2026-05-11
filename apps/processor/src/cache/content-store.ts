@@ -1,3 +1,4 @@
+import { Readable } from 'stream';
 import { createReadStream, createWriteStream } from 'fs';
 import { stat, mkdir } from 'fs/promises';
 import { pipeline } from 'stream/promises';
@@ -68,10 +69,17 @@ export interface SaveOriginalOptions {
   service?: string;
 }
 
+const STREAM_TO_BUFFER_MAX_BYTES = 50 * 1024 * 1024; // 50 MB — cache/metadata objects only
+
 async function streamToBuffer(body: GetObjectCommandOutput['Body']): Promise<Buffer> {
   if (!body) return Buffer.alloc(0);
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    total += chunk.length;
+    if (total > STREAM_TO_BUFFER_MAX_BYTES) {
+      throw new Error(`S3 object exceeds maximum buffer size of ${STREAM_TO_BUFFER_MAX_BYTES} bytes`);
+    }
     chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
@@ -460,7 +468,7 @@ export class ContentStore {
     );
     if (!resp.Body) throw new Error(`File not found in S3: ${contentHash}`);
     await mkdir(path.dirname(destPath), { recursive: true });
-    await pipeline(resp.Body as NodeJS.ReadableStream, createWriteStream(destPath));
+    await pipeline(Readable.from(resp.Body as AsyncIterable<Uint8Array>), createWriteStream(destPath));
   }
 
   async getCacheUrl(contentHash: string, preset: string): Promise<string> {

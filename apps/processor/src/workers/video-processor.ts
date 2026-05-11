@@ -9,6 +9,8 @@ import type { VideoProcessJobData, VideoProcessResult } from '../types';
 const execFileAsync = promisify(execFile);
 
 const TEMP_ROOT = process.env.TEMP_UPLOADS_PATH || '/tmp/processor-uploads';
+const FFMPEG_TIMEOUT_MS = 120_000;
+const FFPROBE_TIMEOUT_MS = 30_000;
 
 export async function processVideo(data: VideoProcessJobData): Promise<VideoProcessResult> {
   const { contentHash, fileId } = data;
@@ -49,14 +51,11 @@ export async function processVideo(data: VideoProcessJobData): Promise<VideoProc
 }
 
 async function extractThumbnail(inputPath: string, thumbPath: string): Promise<void> {
-  await execFileAsync('ffmpeg', [
-    '-y',
-    '-i', inputPath,
-    '-vf', 'select=eq(n\\,0)',
-    '-vframes', '1',
-    '-f', 'webp',
-    thumbPath,
-  ]);
+  await execFileAsync(
+    'ffmpeg',
+    ['-y', '-i', inputPath, '-vf', 'select=eq(n\\,0)', '-vframes', '1', '-f', 'webp', thumbPath],
+    { timeout: FFMPEG_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+  );
 }
 
 interface VideoMeta {
@@ -66,13 +65,11 @@ interface VideoMeta {
 }
 
 async function probeVideo(inputPath: string): Promise<VideoMeta> {
-  const { stdout } = await execFileAsync('ffprobe', [
-    '-v', 'quiet',
-    '-print_format', 'json',
-    '-show_streams',
-    '-select_streams', 'v:0',
-    inputPath,
-  ]);
+  const { stdout } = await execFileAsync(
+    'ffprobe',
+    ['-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'v:0', inputPath],
+    { timeout: FFPROBE_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 5 * 1024 * 1024 },
+  );
 
   const probe = JSON.parse(stdout) as { streams?: Array<{ duration?: string; width?: number; height?: number }> };
   const stream = probe.streams?.[0];

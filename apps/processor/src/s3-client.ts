@@ -4,10 +4,10 @@ export function createS3Client(): S3Client {
   return new S3Client({
     region: process.env.AWS_REGION ?? 'auto',
     endpoint: process.env.AWS_ENDPOINT_URL_S3,
-    credentials: process.env.AWS_ACCESS_KEY_ID
+    credentials: process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
       ? {
           accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? '',
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
         }
       : undefined,
     forcePathStyle: false,
