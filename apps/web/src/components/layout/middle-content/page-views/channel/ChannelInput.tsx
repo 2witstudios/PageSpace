@@ -24,7 +24,7 @@ export interface ChannelInputProps {
   /** Input change handler */
   onChange: (value: string) => void;
   /** Send message handler - receives optional attachment and thread options */
-  onSend: (attachment?: FileAttachment, options?: ChannelInputSendOptions) => void;
+  onSend: (attachments?: FileAttachment[], options?: ChannelInputSendOptions) => void;
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
@@ -127,7 +127,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         : null;
     const hasUploadTarget = !!uploadUrl;
 
-    const { attachment, isUploading, uploadFile, clearAttachment } = useAttachmentUpload({
+    const { attachments, isUploading, uploadFiles, clearAttachment, removeAttachment } = useAttachmentUpload({
       uploadUrl,
       onUploaded: () => textareaRef.current?.focus(),
     });
@@ -142,17 +142,18 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       },
       uploadFile: (file: File) => {
         if (!canUpload) return;
-        void uploadFile(file);
+        void uploadFiles([file]);
       },
       canAcceptDrop: () => canUpload,
     }));
 
     const handleSend = () => {
-      if ((value.trim() || attachment) && !disabled && !isUploading) {
+      if ((value.trim() || attachments.length > 0) && !disabled && !isUploading) {
+        const toSend = attachments.length > 0 ? attachments : undefined;
         if (parentId) {
-          onSend(attachment || undefined, { alsoSendToParent });
+          onSend(toSend, { alsoSendToParent });
         } else {
-          onSend(attachment || undefined);
+          onSend(toSend);
         }
         clearAttachment();
         if (parentId) setAlsoSendToParent(false);
@@ -160,10 +161,10 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+      const files = Array.from(e.target.files ?? []);
+      if (files.length === 0) return;
       try {
-        await uploadFile(file);
+        await uploadFiles(files);
       } finally {
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
@@ -176,9 +177,8 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     const canUpload = attachmentsEnabled && hasUploadTarget && !isUploading;
 
     const handlePasteFiles = (files: File[]) => {
-      if (!canUpload) return;
-      const first = files[0];
-      if (first) void uploadFile(first);
+      if (!canUpload || files.length === 0) return;
+      void uploadFiles(files);
     };
 
     const handleDragOver = (e: React.DragEvent) => {
@@ -191,8 +191,8 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       if (!canUpload) return;
       e.preventDefault();
       e.stopPropagation();
-      const file = Array.from(e.dataTransfer?.files ?? [])[0];
-      if (file) void uploadFile(file);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length > 0) void uploadFiles(files);
     };
 
     const getFileIcon = (mimeType: string) => {
@@ -228,7 +228,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       textareaRef.current?.focus();
     };
 
-    const canSend = (value.trim().length > 0 || attachment) && !disabled && !isUploading;
+    const canSend = (value.trim().length > 0 || attachments.length > 0) && !disabled && !isUploading;
 
     const sendButton = (
       <button
@@ -264,6 +264,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="hidden"
           onChange={handleFileSelect}
         />
@@ -305,49 +306,48 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             </div>
           )}
 
-          {/* Attachment preview */}
-          {(attachment || isUploading) && (
-            <div className="px-3 pt-3">
-              <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
-                {isUploading ? (
-                  <>
-                    <div className="w-8 h-8 rounded bg-muted animate-pulse" />
-                    <div className="flex-1 min-w-0">
-                      <div className="h-4 w-24 bg-muted animate-pulse rounded" />
-                      <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
+          {/* Attachment previews */}
+          {(attachments.length > 0 || isUploading) && (
+            <div className="px-3 pt-3 flex flex-col gap-1">
+              {isUploading && (
+                <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                  <div className="w-8 h-8 rounded bg-muted animate-pulse" />
+                  <div className="flex-1 min-w-0">
+                    <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                    <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
+                  </div>
+                </div>
+              )}
+              {attachments.map(att => (
+                <div key={att.id} className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                  {att.mimeType.startsWith('image/') ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- 32px thumbnail preview; auth-gated API route
+                    <img
+                      src={`/api/files/${att.id}/view`}
+                      alt={att.originalName}
+                      className="w-8 h-8 rounded object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
+                      {(() => {
+                        const Icon = getFileIcon(att.mimeType);
+                        return <Icon className="h-4 w-4 text-muted-foreground" />;
+                      })()}
                     </div>
-                  </>
-                ) : attachment ? (
-                  <>
-                    {attachment.mimeType.startsWith('image/') ? (
-                      // eslint-disable-next-line @next/next/no-img-element -- 32px thumbnail preview; auth-gated API route
-                      <img
-                        src={`/api/files/${attachment.id}/view`}
-                        alt={attachment.originalName}
-                        className="w-8 h-8 rounded object-cover"
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
-                        {(() => {
-                          const Icon = getFileIcon(attachment.mimeType);
-                          return <Icon className="h-4 w-4 text-muted-foreground" />;
-                        })()}
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{attachment.originalName}</p>
-                      <p className="text-xs text-muted-foreground">{formatFileSize(attachment.size)}</p>
-                    </div>
-                    <button
-                      onClick={clearAttachment}
-                      className="p-1 hover:bg-muted rounded"
-                      title="Remove attachment"
-                    >
-                      <X className="h-4 w-4 text-muted-foreground" />
-                    </button>
-                  </>
-                ) : null}
-              </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{att.originalName}</p>
+                    <p className="text-xs text-muted-foreground">{formatFileSize(att.size)}</p>
+                  </div>
+                  <button
+                    onClick={() => removeAttachment(att.instanceId)}
+                    className="p-1 hover:bg-muted rounded"
+                    title="Remove attachment"
+                  >
+                    <X className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
@@ -362,7 +362,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
               value={value}
               onChange={onChange}
               onSend={handleSend}
-              canSendEmpty={!!attachment}
+              canSendEmpty={attachments.length > 0}
               placeholder={placeholder}
               driveId={driveId}
               crossDrive={crossDrive}

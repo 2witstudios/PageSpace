@@ -1,7 +1,3 @@
-/**
- * Security audit tests for /api/files/[id]/view
- * Verifies auditRequest is called for GET (read).
- */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth', () => ({
@@ -35,20 +31,9 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
     isFilePage: vi.fn().mockReturnValue(true),
 }));
-vi.mock('@pagespace/lib/services/validated-service-token', () => ({
-    createPageServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
-    createDriveServiceToken: vi.fn().mockResolvedValue({ token: 'mock-token' }),
-    createFileServiceToken: vi.fn().mockResolvedValue({ token: 'mock-file-token' }),
-}));
 
 vi.mock('@pagespace/lib/permissions/file-access', () => ({
     canUserAccessFile: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock('@pagespace/lib/utils/file-security', () => ({
-  sanitizeFilenameForHeader: vi.fn((name: string) => name),
-  isDangerousMimeType: vi.fn().mockReturnValue(false),
-  getCSPHeaderForFile: vi.fn().mockReturnValue("default-src 'none'"),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -56,7 +41,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   },
-
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -64,33 +48,36 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
+const mockGeneratePresignedUrl = vi.fn().mockResolvedValue('https://fly.storage.tigris.dev/presigned-url');
+vi.mock('@/lib/presigned-url', () => ({
+  generatePresignedUrl: (...args: unknown[]) => mockGeneratePresignedUrl(...args),
+  getPresignedUrlTtl: vi.fn().mockReturnValue(3600),
+}));
+
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
-import { createFileServiceToken } from '@pagespace/lib/services/validated-service-token';
 
 const mockUserId = 'user_123';
 const mockFileId = 'file-1';
+const VALID_HASH = 'a'.repeat(64);
 
-describe('GET /api/files/[id]/view audit', () => {
+describe('GET /api/files/[id]/view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(verifyAuth).mockResolvedValue({ id: mockUserId, email: 'test@test.com' } as unknown as Awaited<ReturnType<typeof verifyAuth>>);
+    mockGeneratePresignedUrl.mockResolvedValue('https://fly.storage.tigris.dev/presigned-url');
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({
       id: mockFileId,
       title: 'test.pdf',
       type: 'FILE',
-      filePath: 'hash-123',
+      filePath: VALID_HASH,
       mimeType: 'application/pdf',
       originalFileName: 'test.pdf',
       fileSize: 1024,
     } as never);
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(10)),
-    });
   });
 
   it('logs read audit event on file view', async () => {
@@ -104,32 +91,72 @@ describe('GET /api/files/[id]/view audit', () => {
     );
   });
 
-  it('serves a DM-linked null-drive file with a file-bound read token', async () => {
+  it('redirects to presigned URL for file page', async () => {
+    const request = new Request('http://localhost/api/files/file-1/view');
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://fly.storage.tigris.dev/presigned-url');
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number));
+  });
+
+  it('redirects to presigned URL for DM-linked null-drive file', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
     vi.mocked(db.query.files.findFirst).mockResolvedValue({
       id: mockFileId,
       driveId: null,
-      storagePath: 'a'.repeat(64),
+      storagePath: VALID_HASH,
       mimeType: 'image/png',
       sizeBytes: 10,
     } as never);
     vi.mocked(canUserAccessFile).mockResolvedValue(true);
 
-    const request = new Request('http://localhost/api/files/file-1/view?filename=dm.png');
+    const request = new Request('http://localhost/api/files/file-1/view');
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(response.status).toBe(200);
-    expect(createFileServiceToken).toHaveBeenCalledWith(
-      mockUserId,
-      mockFileId,
-      ['files:read'],
-      '5m'
-    );
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      'http://processor:3003/cache/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/original',
-      expect.objectContaining({
-        headers: { Authorization: 'Bearer mock-file-token' },
-      })
-    );
+    expect(response.status).toBe(302);
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number));
+  });
+
+  it('returns 401 when unauthenticated', async () => {
+    vi.mocked(verifyAuth).mockResolvedValue(null as never);
+
+    const request = new Request('http://localhost/api/files/file-1/view');
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('returns 403 when user lacks access to file page', async () => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValueOnce(false);
+
+    const request = new Request('http://localhost/api/files/file-1/view');
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('returns 403 when user lacks access to attachment file', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({
+      id: mockFileId, driveId: null, storagePath: VALID_HASH, mimeType: 'image/png', sizeBytes: 10,
+    } as never);
+    vi.mocked(canUserAccessFile).mockResolvedValue(false);
+
+    const request = new Request('http://localhost/api/files/file-1/view');
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('returns 404 when file not found in either table', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.files.findFirst).mockResolvedValue(null as never);
+
+    const request = new Request('http://localhost/api/files/file-1/view');
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(404);
   });
 });

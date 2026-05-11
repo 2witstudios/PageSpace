@@ -1,5 +1,3 @@
-import path from 'path';
-import fs from 'fs/promises';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -56,12 +54,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     // Clean extracted text - remove null bytes and other invalid UTF-8 characters
     extractedText = extractedText.replace(/\0/g, '').trim();
 
-    const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'text'));
-    await fs.mkdir(cacheDir, { recursive: true });
-    await fs.writeFile(
-      path.join(cacheDir, 'extracted-text.txt'),
-      extractedText
-    );
+    await contentStore.saveCache(contentHash, 'extracted-text.txt', Buffer.from(extractedText), 'text/plain');
 
     loggers.processor.info('Text extraction succeeded', {
       contentHash,

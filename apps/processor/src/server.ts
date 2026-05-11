@@ -3,6 +3,7 @@ import cors from 'cors';
 import multer from 'multer';
 import path from 'path';
 import { ContentStore } from './cache/content-store';
+import { createS3Client, getS3Bucket } from './s3-client';
 import { imageRouter } from './api/optimize';
 import { uploadRouter } from './api/upload';
 import { cacheRouter } from './api/serve';
@@ -32,11 +33,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3003;
 
-// Initialize content store
-const CACHE_PATH = process.env.CACHE_PATH || '/data/cache';
-const FILE_STORAGE_PATH = process.env.FILE_STORAGE_PATH || '/data/files';
-
-export const contentStore = new ContentStore(CACHE_PATH, FILE_STORAGE_PATH);
+export const contentStore = new ContentStore(createS3Client(), getS3Bucket());
 export const queueManager = new QueueManager();
 
 // CORS configuration
@@ -340,9 +337,7 @@ async function start() {
     // Start server
     app.listen(PORT, () => {
       console.log(`🚀 Processor service running on port ${PORT}`);
-      console.log(`📁 Cache path: ${CACHE_PATH}`);
-      console.log(`📁 Storage path: ${FILE_STORAGE_PATH}`);
-      console.log(`💾 Memory limit: ${process.env.NODE_OPTIONS || 'default'}`);
+      console.log(`☁️  Storage: S3 bucket=${getS3Bucket()}`);
     });
 
     // Cleanup old cache periodically (every hour)

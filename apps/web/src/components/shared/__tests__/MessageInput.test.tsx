@@ -84,10 +84,13 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
 
 vi.mock('@/hooks/useAttachmentUpload', () => ({
   useAttachmentUpload: () => ({
+    attachments: [],
     attachment: null,
     isUploading: false,
     uploadFile: vi.fn(),
+    uploadFiles: vi.fn(),
     clearAttachment: vi.fn(),
+    removeAttachment: vi.fn(),
   }),
 }));
 

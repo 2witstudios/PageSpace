@@ -67,43 +67,17 @@ services:
         condition: service_completed_successfully
       processor:
         condition: service_healthy
-    volumes:
-      - file_storage:/app/storage
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
-      - FILE_STORAGE_PATH=/app/storage
       - PROCESSOR_URL=http://processor:3003
       - PORT=3000
       - HOSTNAME=0.0.0.0
       - NODE_OPTIONS=--max-old-space-size=640
-    deploy:
-      resources:
-        limits:
-          memory: 768M
     networks:
       - internal
       - frontend
-
-  # Permission fixer - runs once to fix existing volume permissions
-  processor-permissions:
-    build:
-      context: .
-      dockerfile: apps/processor/Dockerfile
-    user: root
-    volumes:
-      - file_storage:/data/files
-      - cache_storage:/data/cache
-    command: |
-      sh -c '
-        echo "Fixing volume permissions..."
-        chown -R 1000:1000 /data/files /data/cache
-        echo "Permissions fixed successfully"
-      '
-    restart: "no"
-    networks:
-      - internal
 
   processor:
     # @tensorflow/tfjs-node has no Linux-arm64 prebuild. CI + prod build on
@@ -122,16 +96,9 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      processor-permissions:
-        condition: service_completed_successfully
-    volumes:
-      - file_storage:/data/files
-      - cache_storage:/data/cache
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
-      - FILE_STORAGE_PATH=/data/files
-      - CACHE_PATH=/data/cache
       - PORT=3003
       - NODE_OPTIONS=--max-old-space-size=1024
       - ENABLE_OCR=${ENABLE_OCR:-false}
@@ -139,16 +106,17 @@ services:
       - PROCESSOR_AUTH_REQUIRED=${PROCESSOR_AUTH_REQUIRED:-true}
       - PROCESSOR_UPLOAD_RATE_LIMIT=${PROCESSOR_UPLOAD_RATE_LIMIT:-100}
       - PROCESSOR_UPLOAD_RATE_WINDOW=${PROCESSOR_UPLOAD_RATE_WINDOW:-3600}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-auto}
+      - TIGRIS_BUCKET=${TIGRIS_BUCKET:-pagespace-files}
+      - AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3003/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 1280M
     restart: unless-stopped
     networks:
       - internal
@@ -253,25 +221,7 @@ services:
     profiles:
       - test
 
-  # Optional nginx service for efficient static file serving
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "3004:80"
-    volumes:
-      - cache_storage:/usr/share/nginx/html/cache:ro
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      processor:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-    profiles:
-      - production
-    networks:
-      - frontend
+  # nginx is no longer used for file serving — files are served directly from Tigris via presigned URLs
 
 networks:
   internal:
@@ -282,6 +232,4 @@ networks:
 
 volumes:
   postgres_data:
-  file_storage:
-  cache_storage:
   cron_logs:

@@ -8,6 +8,7 @@ import type {
   ImageOptimizeJobData,
   TextExtractJobData,
   OCRJobData,
+  VideoProcessJobData,
   TextExtractResult,
   IngestResult,
 } from '../types';
@@ -79,6 +80,7 @@ export class QueueManager {
       await this.boss.createQueue('image-optimize');
       await this.boss.createQueue('text-extract');
       await this.boss.createQueue('ocr-process');
+      await this.boss.createQueue('video-process');
       await this.boss.createQueue('siem-delivery');
       console.log('PgBoss queues created/verified');
     } catch (err) {
@@ -93,6 +95,7 @@ export class QueueManager {
     const { processImage } = await import('./image-processor');
     const { extractText } = await import('./text-extractor');
     const { processOCR } = await import('./ocr-processor');
+    const { processVideo } = await import('./video-processor');
 
     // Unified ingestion worker
     await this.boss.work('ingest-file',
@@ -108,6 +111,13 @@ export class QueueManager {
 
           // Set page status to processing
           await setPageProcessing(fileId);
+
+          // Videos → mark visual and queue thumbnail/metadata extraction
+          if (mimeType && mimeType.startsWith('video/')) {
+            await setPageVisual(fileId);
+            await this.addJob('video-process', { contentHash, fileId, mimeType });
+            return { success: true, status: 'visual' } satisfies IngestResult;
+          }
 
           // Images → mark visual and queue optimizations
           if (mimeType && mimeType.startsWith('image/')) {
@@ -189,6 +199,14 @@ export class QueueManager {
       }
     );
 
+    // Video processing worker
+    await this.boss.work('video-process',
+      async ([job]) => {
+        console.log(`Processing video job: ${job.id}`);
+        return await processVideo(job.data as VideoProcessJobData);
+      }
+    );
+
     // SIEM delivery worker — cursor-based polling, ignores job data
     const { processSiemDelivery } = await import('./siem-delivery-worker');
     await this.boss.work('siem-delivery',
@@ -252,7 +270,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process', 'siem-delivery'];
+    const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;
