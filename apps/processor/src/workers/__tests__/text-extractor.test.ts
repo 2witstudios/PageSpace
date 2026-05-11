@@ -13,27 +13,14 @@ vi.mock('mammoth', () => ({
   extractRawText: vi.fn(),
 }));
 
-// Mock fs/promises
-const mockMkdir = vi.fn().mockResolvedValue(undefined);
-const mockWriteFile = vi.fn().mockResolvedValue(undefined);
-
-vi.mock('fs/promises', () => ({
-  default: {
-    mkdir: (...args: unknown[]) => mockMkdir(...args),
-    writeFile: (...args: unknown[]) => mockWriteFile(...args),
-  },
-  mkdir: (...args: unknown[]) => mockMkdir(...args),
-  writeFile: (...args: unknown[]) => mockWriteFile(...args),
-}));
-
 // Mock content store
 const mockGetOriginal = vi.fn();
-const mockGetCachePath = vi.fn().mockResolvedValue('/cache/hash/text.jpg');
+const mockSaveCache = vi.fn().mockResolvedValue({ contentHash: 'a'.repeat(64), preset: 'extracted-text.txt', path: 'cache/x/extracted-text.txt', size: 0, mimeType: 'text/plain', createdAt: new Date(), lastAccessed: new Date() });
 
 vi.mock('../../server', () => ({
   contentStore: {
     getOriginal: (...args: unknown[]) => mockGetOriginal(...args),
-    getCachePath: (...args: unknown[]) => mockGetCachePath(...args),
+    saveCache: (...args: unknown[]) => mockSaveCache(...args),
   },
 }));
 
@@ -47,7 +34,7 @@ describe('extractText', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetOriginal.mockResolvedValue(Buffer.from('file-content'));
-    mockGetCachePath.mockResolvedValue(`/cache/${VALID_HASH}/text.jpg`);
+    mockSaveCache.mockResolvedValue({ contentHash: VALID_HASH, preset: 'extracted-text.txt', path: `cache/${VALID_HASH}/extracted-text.txt`, size: 0, mimeType: 'text/plain', createdAt: new Date(), lastAccessed: new Date() });
   });
 
   it('throws when original file not found', async () => {
@@ -307,13 +294,11 @@ describe('extractText', () => {
       originalName: 'test.txt',
     });
 
-    expect(mockMkdir).toHaveBeenCalledWith(
-      expect.stringContaining(VALID_HASH),
-      expect.objectContaining({ recursive: true })
-    );
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      expect.stringContaining('extracted-text.txt'),
-      'Hello world'
+    expect(mockSaveCache).toHaveBeenCalledWith(
+      VALID_HASH,
+      'extracted-text.txt',
+      Buffer.from('Hello world'),
+      'text/plain'
     );
   });
 

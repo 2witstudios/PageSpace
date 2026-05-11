@@ -2,6 +2,7 @@
 
 ## Active Epics
 
+- [Fly.io Upload Infrastructure](tasks/fly-upload-infra.md) — migrate from local VPS filesystem to Tigris S3, presigned URL delivery, remove memory monitor, raise limits for video support, batch upload in channels/DMs.
 - [Inline Quote Replies](tasks/inline-quote-replies.md) — Slack/Twitter-style inline quote-reply embeds in channels and DMs via additive `quotedMessageId` self-FK + read-time enrichment helper; orthogonal to the just-shipped thread panel.
 - [Slack DM Support](tasks/slack-dm-support.md) — extend the Slack provider adapter with `im:*` + `mpim:*` scopes and default `conversations.list` to all conversation types so agents can read 1:1 and group DMs alongside channels.
 - [DM File Attachments](tasks/dm-file-attachments.md) — bring DM conversations to channel parity for file attachments via a `fileConversations` join table, nullable `files.driveId`, and shared upload/token/processor/composer/renderer infrastructure.

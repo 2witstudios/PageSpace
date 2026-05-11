@@ -1,42 +1,31 @@
-import { promises as fs } from 'fs';
 import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import {
+  S3Client,
+  HeadObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
+  type GetObjectCommandOutput,
+} from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { CacheEntry } from '../types';
 
 export const CONTENT_HASH_REGEX = /^[a-f0-9]{64}$/i;
 
-/**
- * Validate that a preset name is safe for use as a filename and property key.
- * Allows alphanumeric, hyphens, underscores, and dots (for presets like
- * "extracted-text.txt", "ocr-text.txt", "thumbnail.webp").
- * Rejects ".." sequences to prevent path traversal.
- */
 const SAFE_PRESET_REGEX = /^[a-zA-Z0-9_.\-]{1,64}$/;
 export function isValidPreset(preset: string): boolean {
   return typeof preset === 'string' && SAFE_PRESET_REGEX.test(preset) && !preset.includes('..');
 }
 
-/**
- * Prototype-pollution-safe property keys that must never be used as dynamic keys.
- */
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function isSafePropertyKey(key: string): boolean {
   return !FORBIDDEN_KEYS.has(key);
-}
-
-/**
- * Assert that a resolved path is contained within the expected base directory.
- * Prevents path traversal even if upstream validation is bypassed.
- */
-function assertPathWithin(resolvedPath: string, baseDir: string): void {
-  const normalizedResolved = path.resolve(resolvedPath);
-  const normalizedBase = path.resolve(baseDir);
-  /* c8 ignore next 3 */
-  if (!normalizedResolved.startsWith(normalizedBase + path.sep) && normalizedResolved !== normalizedBase) {
-    throw new Error('Path escapes base directory');
-  }
 }
 
 export function isValidContentHash(contentHash: string): boolean {
@@ -44,13 +33,12 @@ export function isValidContentHash(contentHash: string): boolean {
 }
 
 export class InvalidContentHashError extends Error {
+  contentHash: string;
   constructor(contentHash: string) {
     super('Invalid content hash format');
     this.name = 'InvalidContentHashError';
     this.contentHash = contentHash;
   }
-
-  contentHash: string;
 }
 
 export interface OriginalUploadRecord {
@@ -79,61 +67,60 @@ export interface SaveOriginalOptions {
   service?: string;
 }
 
-export class ContentStore {
-  private cachePath: string;
-  private storagePath: string;
+async function streamToBuffer(body: GetObjectCommandOutput['Body']): Promise<Buffer> {
+  if (!body) return Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 
-  constructor(cachePath: string, storagePath: string) {
-    this.cachePath = cachePath;
-    this.storagePath = storagePath;
+function isS3NotFound(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as Record<string, unknown>;
+  return (
+    e['name'] === 'NotFound' ||
+    e['Code'] === 'NoSuchKey' ||
+    e['name'] === 'NoSuchKey' ||
+    (e['$metadata'] as Record<string, unknown> | undefined)?.['httpStatusCode'] === 404
+  );
+}
+
+export class ContentStore {
+  private s3: S3Client;
+  private bucket: string;
+
+  constructor(s3: S3Client, bucket: string) {
+    this.s3 = s3;
+    this.bucket = bucket;
   }
 
   private normalizeContentHash(contentHash: string): string {
     if (!isValidContentHash(contentHash)) {
       throw new InvalidContentHashError(contentHash);
     }
-
     return contentHash.toLowerCase();
   }
 
-  private getCacheDir(normalizedHash: string): string {
-    return path.join(this.cachePath, normalizedHash);
+  private originalKey(hash: string): string {
+    return `files/${hash}/original`;
   }
 
-  private getOriginalDir(normalizedHash: string): string {
-    return path.join(this.storagePath, normalizedHash);
+  private originalMetaKey(hash: string): string {
+    return `files/${hash}/metadata.json`;
   }
 
-  private getCacheFilePath(normalizedHash: string, preset: string): string {
-    if (!isValidPreset(preset)) {
-      throw new Error('Invalid preset name');
-    }
-    const filePath = path.join(this.getCacheDir(normalizedHash), `${preset}.jpg`);
-    assertPathWithin(filePath, this.cachePath);
-    return filePath;
+  private cacheKey(hash: string, preset: string): string {
+    return `cache/${hash}/${preset}`;
   }
 
-  private getCacheMetadataPath(normalizedHash: string): string {
-    const metadataPath = path.join(this.getCacheDir(normalizedHash), 'metadata.json');
-    assertPathWithin(metadataPath, this.cachePath);
-    return metadataPath;
-  }
-
-  private getOriginalFilePath(normalizedHash: string): string {
-    const filePath = path.join(this.getOriginalDir(normalizedHash), 'original');
-    assertPathWithin(filePath, this.storagePath);
-    return filePath;
-  }
-
-  private getOriginalMetadataPath(normalizedHash: string): string {
-    const metadataPath = path.join(this.getOriginalDir(normalizedHash), 'metadata.json');
-    assertPathWithin(metadataPath, this.storagePath);
-    return metadataPath;
+  private cacheMetaKey(hash: string): string {
+    return `cache/${hash}/metadata.json`;
   }
 
   async initialize(): Promise<void> {
-    await fs.mkdir(this.cachePath, { recursive: true });
-    await fs.mkdir(this.storagePath, { recursive: true });
+    // S3 bucket is pre-created — no local dirs to initialize
   }
 
   private normalizeOriginalMetadata(raw: unknown): OriginalFileMetadata {
@@ -150,37 +137,39 @@ export class ContentStore {
         ? Array.from(new Set(data.drives.filter((item: unknown) => typeof item === 'string')))
         : undefined,
       uploads: Array.isArray(data.uploads)
-        ? data.uploads
-            .map((entry: unknown) => {
-              const e = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
-              return {
-                tenantId: typeof e.tenantId === 'string' ? e.tenantId : undefined,
-                userId: typeof e.userId === 'string' ? e.userId : undefined,
-                driveId: typeof e.driveId === 'string' ? e.driveId : undefined,
-                service: typeof e.service === 'string' ? e.service : undefined,
-                uploadedAt:
-                  typeof e.uploadedAt === 'string'
-                    ? e.uploadedAt
-                    : new Date().toISOString()
-              };
-            })
+        ? data.uploads.map((entry: unknown) => {
+            const e = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
+            return {
+              tenantId: typeof e.tenantId === 'string' ? e.tenantId : undefined,
+              userId: typeof e.userId === 'string' ? e.userId : undefined,
+              driveId: typeof e.driveId === 'string' ? e.driveId : undefined,
+              service: typeof e.service === 'string' ? e.service : undefined,
+              uploadedAt: typeof e.uploadedAt === 'string' ? e.uploadedAt : new Date().toISOString(),
+            };
+          })
         : undefined,
-      lastAccessedAt:
-        typeof data.lastAccessedAt === 'string' ? data.lastAccessedAt : undefined
+      lastAccessedAt: typeof data.lastAccessedAt === 'string' ? data.lastAccessedAt : undefined,
     };
 
     if (!metadata.contentHash) {
-      metadata.contentHash = crypto.createHash('sha256').update(`${metadata.originalName}:${metadata.size}`).digest('hex');
+      metadata.contentHash = crypto
+        .createHash('sha256')
+        .update(`${metadata.originalName}:${metadata.size}`)
+        .digest('hex');
     }
 
     return metadata;
   }
 
   private async writeOriginalMetadata(normalizedHash: string, metadata: OriginalFileMetadata): Promise<void> {
-    const metadataPath = this.getOriginalMetadataPath(normalizedHash);
-    const dir = path.dirname(metadataPath);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: this.originalMetaKey(normalizedHash),
+        Body: JSON.stringify(metadata, null, 2),
+        ContentType: 'application/json',
+      }),
+    );
   }
 
   async getOriginalMetadata(contentHash: string): Promise<OriginalFileMetadata | null> {
@@ -188,16 +177,16 @@ export class ContentStore {
     try {
       normalizedHash = this.normalizeContentHash(contentHash);
     } catch (error) {
-      if (error instanceof InvalidContentHashError) {
-        return null;
-      }
+      if (error instanceof InvalidContentHashError) return null;
       throw error;
     }
 
     try {
-      const raw = await fs.readFile(this.getOriginalMetadataPath(normalizedHash), 'utf-8');
-      const data = JSON.parse(raw);
-      return this.normalizeOriginalMetadata(data);
+      const resp = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.originalMetaKey(normalizedHash) }),
+      );
+      const buf = await streamToBuffer(resp.Body);
+      return this.normalizeOriginalMetadata(JSON.parse(buf.toString('utf-8')));
     } catch {
       return null;
     }
@@ -209,7 +198,7 @@ export class ContentStore {
       originalName: 'file',
       contentHash: normalizedHash,
       size: 0,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
     };
 
     metadata.tenants = this.mergeUnique(metadata.tenants, options.tenantId);
@@ -221,7 +210,7 @@ export class ContentStore {
       userId: options.userId,
       driveId: options.driveId,
       service: options.service,
-      uploadedAt: new Date().toISOString()
+      uploadedAt: new Date().toISOString(),
     });
     metadata.uploads = uploads;
 
@@ -229,140 +218,126 @@ export class ContentStore {
   }
 
   private mergeUnique(collection: string[] | undefined, value?: string): string[] | undefined {
-    if (!value) {
-      return collection;
-    }
-
+    if (!value) return collection;
     const result = new Set(collection ?? []);
     result.add(value);
     return Array.from(result);
   }
 
   async tenantHasAccess(contentHash: string, tenantId: string | undefined | null): Promise<boolean> {
-    if (!tenantId) {
-      return false;
-    }
-
+    if (!tenantId) return false;
     const metadata = await this.getOriginalMetadata(contentHash);
-    if (!metadata) {
-      return false;
-    }
-
-    if (!metadata.tenants || metadata.tenants.length === 0) {
-      return true;
-    }
-
+    if (!metadata) return false;
+    if (!metadata.tenants || metadata.tenants.length === 0) return true;
     return metadata.tenants.includes(tenantId);
   }
 
+  // Returns S3 key for the cache object — kept for interface compatibility.
   async getCachePath(contentHash: string, preset: string): Promise<string> {
     const normalizedHash = this.normalizeContentHash(contentHash);
-    return this.getCacheFilePath(normalizedHash, preset);
+    return this.cacheKey(normalizedHash, preset);
   }
 
+  // Returns S3 key for the original — kept for interface compatibility.
   async getOriginalPath(contentHash: string): Promise<string> {
     const normalizedHash = this.normalizeContentHash(contentHash);
-    return this.getOriginalFilePath(normalizedHash);
+    return this.originalKey(normalizedHash);
   }
 
   async cacheExists(contentHash: string, preset: string): Promise<boolean> {
-    let cachePath: string;
+    let normalizedHash: string;
     try {
-      cachePath = await this.getCachePath(contentHash, preset);
+      normalizedHash = this.normalizeContentHash(contentHash);
     } catch (error) {
-      if (error instanceof InvalidContentHashError) {
-        return false;
-      }
+      if (error instanceof InvalidContentHashError) return false;
       throw error;
     }
 
+    if (!isValidPreset(preset)) return false;
+
     try {
-      await fs.access(cachePath);
+      await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: this.cacheKey(normalizedHash, preset) }),
+      );
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      if (isS3NotFound(err)) return false;
+      throw err;
     }
   }
 
-  async saveCache(
-    contentHash: string,
-    preset: string,
-    buffer: Buffer,
-    mimeType: string
-  ): Promise<CacheEntry> {
+  async saveCache(contentHash: string, preset: string, buffer: Buffer, mimeType: string): Promise<CacheEntry> {
     const normalizedHash = this.normalizeContentHash(contentHash);
-    const cachePath = this.getCacheFilePath(normalizedHash, preset);
-    const dir = path.dirname(cachePath);
+    const key = this.cacheKey(normalizedHash, preset);
 
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(cachePath, buffer);
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: mimeType,
+      }),
+    );
 
     const entry: CacheEntry = {
       contentHash: normalizedHash,
       preset,
-      path: cachePath,
+      path: key,
       size: buffer.length,
       mimeType,
       createdAt: new Date(),
-      lastAccessed: new Date()
+      lastAccessed: new Date(),
     };
 
-    const metadataPath = this.getCacheMetadataPath(normalizedHash);
+    // Update cache metadata
+    const metaKey = this.cacheMetaKey(normalizedHash);
     let metadata: Record<string, CacheEntry> = Object.create(null);
 
     try {
-      const existing = await fs.readFile(metadataPath, 'utf-8');
-      const parsed = JSON.parse(existing);
-      // Copy only safe keys to null-prototype object
-      for (const key of Object.keys(parsed)) {
-        if (isSafePropertyKey(key) && isValidPreset(key)) {
-          metadata[key] = parsed[key];
+      const resp = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: metaKey }));
+      const buf = await streamToBuffer(resp.Body);
+      const parsed = JSON.parse(buf.toString('utf-8'));
+      for (const k of Object.keys(parsed)) {
+        if (isSafePropertyKey(k) && isValidPreset(k)) {
+          metadata[k] = parsed[k];
         }
       }
     } catch {
-      // File doesn't exist yet
+      // No existing metadata
     }
 
     if (isValidPreset(preset)) {
       metadata[preset] = entry;
     }
-    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: metaKey,
+        Body: JSON.stringify(metadata, null, 2),
+        ContentType: 'application/json',
+      }),
+    );
 
     return entry;
   }
 
   async getCache(contentHash: string, preset: string): Promise<Buffer | null> {
-    let cachePath: string;
+    let normalizedHash: string;
     try {
-      cachePath = await this.getCachePath(contentHash, preset);
+      normalizedHash = this.normalizeContentHash(contentHash);
     } catch (error) {
-      if (error instanceof InvalidContentHashError) {
-        return null;
-      }
+      if (error instanceof InvalidContentHashError) return null;
       throw error;
     }
 
+    if (!isValidPreset(preset)) return null;
+
     try {
-      const buffer = await fs.readFile(cachePath);
-
-      const metadataPath = this.getCacheMetadataPath(this.normalizeContentHash(contentHash));
-      try {
-        const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
-        const metadata: Record<string, Record<string, unknown>> = Object.create(null);
-        for (const key of Object.keys(rawParsed)) {
-          if (isSafePropertyKey(key) && isValidPreset(key)) {
-            metadata[key] = rawParsed[key];
-          }
-        }
-        if (isValidPreset(preset) && preset in metadata) {
-          metadata[preset].lastAccessed = new Date();
-          await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
-        }
-      } catch {
-        // Ignore metadata update errors
-      }
-
-      return buffer;
+      const resp = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.cacheKey(normalizedHash, preset) }),
+      );
+      return streamToBuffer(resp.Body);
     } catch {
       return null;
     }
@@ -371,66 +346,80 @@ export class ContentStore {
   async saveOriginal(
     buffer: Buffer,
     originalName: string,
-    options: SaveOriginalOptions = {}
+    options: SaveOriginalOptions = {},
   ): Promise<{ contentHash: string; path: string }> {
     const rawHash = crypto.createHash('sha256').update(buffer).digest('hex');
     const normalizedHash = this.normalizeContentHash(rawHash);
-    const originalPath = this.getOriginalFilePath(normalizedHash);
-    const dir = path.dirname(originalPath);
+    const key = this.originalKey(normalizedHash);
 
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(originalPath, buffer);
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+      }),
+    );
 
     const metadata: OriginalFileMetadata = {
       originalName,
       contentHash: normalizedHash,
       size: buffer.length,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
     };
 
     await this.writeOriginalMetadata(normalizedHash, metadata);
     await this.appendUploadMetadata(normalizedHash, options);
 
-    return { contentHash: normalizedHash, path: originalPath };
+    return { contentHash: normalizedHash, path: key };
   }
 
   async saveOriginalFromFile(
     tempFilePath: string,
     originalName: string,
     precomputedHash?: string,
-    options: SaveOriginalOptions = {}
+    options: SaveOriginalOptions = {},
   ): Promise<{ contentHash: string; path: string }> {
-    const rawHash = precomputedHash ?? await this.hashFile(tempFilePath);
+    const rawHash = precomputedHash ?? (await this.hashFile(tempFilePath));
     const normalizedHash = this.normalizeContentHash(rawHash);
-    const originalPath = this.getOriginalFilePath(normalizedHash);
-    const dir = path.dirname(originalPath);
+    const key = this.originalKey(normalizedHash);
 
-    await fs.mkdir(dir, { recursive: true });
+    const fileStream = createReadStream(tempFilePath);
+    const upload = new Upload({
+      client: this.s3,
+      params: {
+        Bucket: this.bucket,
+        Key: key,
+        Body: fileStream,
+      },
+    });
+    await upload.done();
 
-    await fs.copyFile(tempFilePath, originalPath);
-
-    const stats = await fs.stat(originalPath);
+    const fileStat = await stat(tempFilePath);
 
     const metadata: OriginalFileMetadata = {
       originalName,
       contentHash: normalizedHash,
-      size: stats.size,
-      savedAt: new Date().toISOString()
+      size: fileStat.size,
+      savedAt: new Date().toISOString(),
     };
 
     await this.writeOriginalMetadata(normalizedHash, metadata);
     await this.appendUploadMetadata(normalizedHash, options);
 
-    return { contentHash: normalizedHash, path: originalPath };
+    return { contentHash: normalizedHash, path: key };
   }
 
   async originalExists(contentHash: string): Promise<boolean> {
     try {
-      const originalPath = await this.getOriginalPath(contentHash);
-      await fs.access(originalPath);
+      const normalizedHash = this.normalizeContentHash(contentHash);
+      await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
+      );
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      if (isS3NotFound(err)) return false;
+      if (err instanceof InvalidContentHashError) return false;
+      throw err;
     }
   }
 
@@ -438,33 +427,26 @@ export class ContentStore {
     return new Promise((resolve, reject) => {
       const hash = crypto.createHash('sha256');
       const stream = createReadStream(filePath);
-
       stream.on('error', reject);
-      stream.on('data', chunk => hash.update(chunk));
+      stream.on('data', (chunk) => hash.update(chunk));
       stream.on('end', () => resolve(hash.digest('hex')));
     });
   }
 
   async getOriginal(contentHash: string): Promise<Buffer | null> {
-    let originalPath: string;
+    let normalizedHash: string;
     try {
-      originalPath = await this.getOriginalPath(contentHash);
+      normalizedHash = this.normalizeContentHash(contentHash);
     } catch (error) {
-      if (error instanceof InvalidContentHashError) {
-        return null;
-      }
+      if (error instanceof InvalidContentHashError) return null;
       throw error;
     }
 
     try {
-      const buffer = await fs.readFile(originalPath);
-      const metadata = await this.getOriginalMetadata(contentHash);
-      if (metadata) {
-        metadata.lastAccessedAt = new Date().toISOString();
-        const normalizedHash = this.normalizeContentHash(contentHash);
-        await this.writeOriginalMetadata(normalizedHash, metadata);
-      }
-      return buffer;
+      const resp = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
+      );
+      return streamToBuffer(resp.Body);
     } catch {
       return null;
     }
@@ -477,42 +459,37 @@ export class ContentStore {
 
   async getCacheMetadata(contentHash: string): Promise<Record<string, CacheEntry>> {
     const normalizedHash = this.normalizeContentHash(contentHash);
-    const metadataPath = this.getCacheMetadataPath(normalizedHash);
 
     try {
-      const raw = await fs.readFile(metadataPath, 'utf-8');
-      const data = JSON.parse(raw);
-      if (typeof data !== 'object' || data === null) {
-        return {};
-      }
+      const resp = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.cacheMetaKey(normalizedHash) }),
+      );
+      const buf = await streamToBuffer(resp.Body);
+      const data = JSON.parse(buf.toString('utf-8'));
+
+      if (typeof data !== 'object' || data === null) return {};
 
       const entries: Record<string, CacheEntry> = {};
       for (const [preset, value] of Object.entries(data as Record<string, unknown>)) {
-        if (!value || typeof value !== 'object') {
-          continue;
-        }
-        if (!isSafePropertyKey(preset) || !isValidPreset(preset)) {
-          continue;
-        }
+        if (!value || typeof value !== 'object') continue;
+        if (!isSafePropertyKey(preset) || !isValidPreset(preset)) continue;
 
         const entry = value as Record<string, unknown>;
         entries[preset] = {
           contentHash: normalizedHash,
           preset,
-          path: typeof entry.path === 'string' ? entry.path : this.getCacheFilePath(normalizedHash, preset),
+          path: typeof entry.path === 'string' ? entry.path : this.cacheKey(normalizedHash, preset),
           size: typeof entry.size === 'number' ? entry.size : 0,
           mimeType: typeof entry.mimeType === 'string' ? entry.mimeType : 'application/octet-stream',
           createdAt: entry.createdAt ? new Date(entry.createdAt as string) : new Date(0),
-          lastAccessed: entry.lastAccessed ? new Date(entry.lastAccessed as string) : new Date(0)
+          lastAccessed: entry.lastAccessed ? new Date(entry.lastAccessed as string) : new Date(0),
         };
       }
 
       return entries;
-    } catch (error: unknown) {
-      if (error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {};
-      }
-      throw error;
+    } catch (err) {
+      if (isS3NotFound(err)) return {};
+      throw err;
     }
   }
 
@@ -521,16 +498,15 @@ export class ContentStore {
     try {
       normalizedHash = this.normalizeContentHash(contentHash);
     } catch (error) {
-      if (error instanceof InvalidContentHashError) {
-        return false;
-      }
+      if (error instanceof InvalidContentHashError) return false;
       throw error;
     }
 
-    const dir = this.getOriginalDir(normalizedHash);
-    assertPathWithin(dir, this.storagePath);
     try {
-      await fs.rm(dir, { recursive: true });
+      await Promise.all([
+        this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) })),
+        this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.originalMetaKey(normalizedHash) })),
+      ]);
       return true;
     } catch {
       return false;
@@ -542,16 +518,24 @@ export class ContentStore {
     try {
       normalizedHash = this.normalizeContentHash(contentHash);
     } catch (error) {
-      if (error instanceof InvalidContentHashError) {
-        return false;
-      }
+      if (error instanceof InvalidContentHashError) return false;
       throw error;
     }
 
-    const dir = this.getCacheDir(normalizedHash);
-    assertPathWithin(dir, this.cachePath);
     try {
-      await fs.rm(dir, { recursive: true });
+      const listResp = await this.s3.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: `cache/${normalizedHash}/` }),
+      );
+
+      const objects = listResp.Contents ?? [];
+      if (objects.length === 0) return true;
+
+      await this.s3.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: objects.map((obj) => ({ Key: obj.Key! })) },
+        }),
+      );
       return true;
     } catch {
       return false;
@@ -566,55 +550,8 @@ export class ContentStore {
     return { originalDeleted, cacheDeleted };
   }
 
-  async cleanupOldCache(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
-    let deletedCount = 0;
-    const now = Date.now();
-
-    const contentDirs = await fs.readdir(this.cachePath);
-
-    for (const contentHash of contentDirs) {
-      if (!isValidContentHash(contentHash)) {
-        continue;
-      }
-      const dirPath = path.join(this.cachePath, contentHash);
-      assertPathWithin(dirPath, this.cachePath);
-      const metadataPath = path.join(dirPath, 'metadata.json');
-
-      try {
-        const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
-        const metadata: Record<string, CacheEntry> = Object.create(null);
-        for (const key of Object.keys(rawParsed)) {
-          if (isSafePropertyKey(key) && isValidPreset(key)) {
-            metadata[key] = rawParsed[key];
-          }
-        }
-
-        for (const [preset, entry] of Object.entries(metadata)) {
-          const lastAccessed = new Date(entry.lastAccessed).getTime();
-
-          if (now - lastAccessed > maxAgeMs) {
-            const filePath = path.join(dirPath, `${preset}.jpg`);
-            assertPathWithin(filePath, this.cachePath);
-            try {
-              await fs.unlink(filePath);
-              delete metadata[preset];
-              deletedCount++;
-            } catch {
-              // File already deleted
-            }
-          }
-        }
-
-        if (Object.keys(metadata).length === 0) {
-          await fs.rmdir(dirPath, { recursive: true });
-        } else {
-          await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
-        }
-      } catch {
-        // Skip directories without metadata
-      }
-    }
-
-    return deletedCount;
+  async cleanupOldCache(_maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
+    // S3 lifecycle rules handle TTL — no-op here
+    return 0;
   }
 }
