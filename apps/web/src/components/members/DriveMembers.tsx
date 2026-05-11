@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { PendingInvitesSection } from './PendingInvitesSection';
+import { DriveShareLinkSection } from './DriveShareLinkSection';
 import type { PendingInvite } from './PendingInviteRow';
 import { useToast } from '@/hooks/useToast';
 import { useSocket } from '@/hooks/useSocket';
@@ -202,6 +203,10 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         currentUserRole={currentUserRole}
         onRevoke={handleRevokeInvite}
       />
+
+      {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        <DriveShareLinkSection driveId={driveId} />
+      )}
     </div>
   );
 }
