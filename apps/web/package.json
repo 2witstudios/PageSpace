@@ -19,6 +19,8 @@
     "@ai-sdk/openai-compatible": "^1.0.18",
     "@ai-sdk/react": "^2.0.12",
     "@ai-sdk/xai": "^2.0.8",
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@capacitor/browser": "^7.0.3",
     "@capacitor/haptics": "^7.0.3",
     "@capacitor/keyboard": "^7.0.4",

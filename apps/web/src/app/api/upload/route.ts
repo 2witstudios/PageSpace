@@ -14,7 +14,6 @@ import {
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 import {
   createUploadServiceToken,
   isPermissionDeniedError,
@@ -86,15 +85,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Note: Parent page validation is handled by createUploadServiceToken()
-
-    // Check memory availability first
-    const memCheck = await checkMemoryMiddleware();
-    if (!memCheck.allowed) {
-      return NextResponse.json({
-        error: memCheck.reason || 'Server is busy. Please try again later.',
-        memoryStatus: memCheck.status
-      }, { status: 503 });
-    }
 
     // Check storage quota
     const quotaCheck = await checkStorageQuota(userId, file.size);

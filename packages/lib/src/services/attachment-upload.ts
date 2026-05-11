@@ -30,7 +30,6 @@ import {
   updateStorageUsage,
 } from './storage-limits';
 import { uploadSemaphore } from './upload-semaphore';
-import { checkMemoryMiddleware } from './memory-monitor';
 import { sanitizeFilenameForHeader } from '../utils/file-security';
 import { auditRequest } from '../audit/audit-log';
 import { getActorInfo, logFileActivity } from '../monitoring/activity-logger';
@@ -199,14 +198,6 @@ export async function processAttachmentUpload(
     const file = formData.get('file');
     if (!(file instanceof File)) {
       return jsonResponse({ error: 'No file provided' }, 400);
-    }
-
-    const memCheck = await checkMemoryMiddleware();
-    if (!memCheck.allowed) {
-      return jsonResponse(
-        { error: memCheck.reason || 'Server is busy. Please try again later.' },
-        503
-      );
     }
 
     const quotaCheck = await checkStorageQuota(userId, file.size);

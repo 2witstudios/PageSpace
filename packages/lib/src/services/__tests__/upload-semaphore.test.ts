@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock dependencies
 vi.mock('../storage-limits', () => ({
   STORAGE_TIERS: {
     free: { maxConcurrentUploads: 2 },
@@ -8,18 +7,6 @@ vi.mock('../storage-limits', () => ({
     pro: { maxConcurrentUploads: 5 },
     enterprise: { maxConcurrentUploads: 10 },
   },
-}));
-
-// Default: 70% memory used, 500MB free = "normal" but no permit increase
-const mockGetMemoryStatus = vi.fn().mockResolvedValue({
-  percentUsed: 70,
-  availableMB: 500,
-  warningLevel: 'normal',
-  canAcceptUpload: true,
-});
-
-vi.mock('../memory-monitor', () => ({
-  getMemoryStatus: (...args: unknown[]) => mockGetMemoryStatus(...args),
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -35,13 +22,8 @@ describe('upload-semaphore', () => {
     vi.useFakeTimers();
     vi.resetModules();
 
-    // Reset the memory mock to default
-    mockGetMemoryStatus.mockResolvedValue({
-      percentUsed: 70,
-      availableMB: 500,
-      warningLevel: 'normal',
-      canAcceptUpload: true,
-    });
+    // UPLOAD_MAX_PERMITS controls global limit; default in tests is env var or 20
+    process.env.UPLOAD_MAX_PERMITS = '3';
 
     const mod = await import('../upload-semaphore');
     uploadSemaphore = mod.uploadSemaphore;
@@ -50,17 +32,17 @@ describe('upload-semaphore', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete process.env.UPLOAD_MAX_PERMITS;
   });
 
   describe('acquireUploadSlot', () => {
-    it('should grant a slot and return slotId', async () => {
+    it('grants a slot and returns slotId', async () => {
       const slotId = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       expect(slotId).not.toBeNull();
       expect(typeof slotId).toBe('string');
     });
 
-    it('should reject when global limit reached', async () => {
-      // Fill all 3 slots (base = 3)
+    it('rejects when global limit reached', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'pro', 1024);
       await uploadSemaphore.acquireUploadSlot('user-2', 'pro', 1024);
       await uploadSemaphore.acquireUploadSlot('user-3', 'pro', 1024);
@@ -69,8 +51,8 @@ describe('upload-semaphore', () => {
       expect(result).toBeNull();
     });
 
-    it('should reject when user tier limit reached', async () => {
-      // Free tier allows 2 concurrent
+    it('rejects when user tier limit reached', async () => {
+      // free tier: maxConcurrentUploads = 2
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
 
@@ -78,41 +60,19 @@ describe('upload-semaphore', () => {
       expect(result).toBeNull();
     });
 
-    it('should reject when memory check fails (canAcceptUpload = false)', async () => {
-      mockGetMemoryStatus.mockResolvedValue({
-        percentUsed: 95,
-        availableMB: 100,
-        warningLevel: 'critical',
-        canAcceptUpload: false,
-      });
+    it('allows different users up to global limit', async () => {
+      const s1 = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+      const s2 = await uploadSemaphore.acquireUploadSlot('user-2', 'free', 1024);
+      const s3 = await uploadSemaphore.acquireUploadSlot('user-3', 'free', 1024);
 
-      const result = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
-      expect(result).toBeNull();
-    });
-
-    it('should reject large files during memory warning', async () => {
-      mockGetMemoryStatus.mockResolvedValue({
-        percentUsed: 80,
-        availableMB: 500,
-        warningLevel: 'warning',
-        canAcceptUpload: true,
-      });
-
-      // 15MB file should be rejected during warning
-      const result = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 15 * 1024 * 1024);
-      expect(result).toBeNull();
-    });
-
-    it('should allow upload when memory check throws', async () => {
-      mockGetMemoryStatus.mockRejectedValue(new Error('mem error'));
-
-      const result = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
-      expect(result).not.toBeNull();
+      expect(s1).not.toBeNull();
+      expect(s2).not.toBeNull();
+      expect(s3).not.toBeNull();
     });
   });
 
   describe('releaseUploadSlot', () => {
-    it('should release a slot', async () => {
+    it('releases a slot', async () => {
       const slotId = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       uploadSemaphore.releaseUploadSlot(slotId!);
 
@@ -120,46 +80,53 @@ describe('upload-semaphore', () => {
       expect(status.activeSlots).toBe(0);
     });
 
-    it('should handle non-existent slot gracefully', () => {
-      uploadSemaphore.releaseUploadSlot('non-existent-slot');
-      // Should not throw
+    it('handles non-existent slot gracefully', () => {
+      expect(() => uploadSemaphore.releaseUploadSlot('non-existent-slot')).not.toThrow();
     });
 
-    it('should clean up user permits when all released', async () => {
+    it('cleans up user permits when all released', async () => {
       const slotId = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       uploadSemaphore.releaseUploadSlot(slotId!);
 
       const status = uploadSemaphore.getStatus();
       expect(status.userUploads.has('user-1')).toBe(false);
     });
+
+    it('frees up a global slot for the next requester', async () => {
+      const s1 = await uploadSemaphore.acquireUploadSlot('user-1', 'pro', 1024);
+      await uploadSemaphore.acquireUploadSlot('user-2', 'pro', 1024);
+      await uploadSemaphore.acquireUploadSlot('user-3', 'pro', 1024);
+
+      uploadSemaphore.releaseUploadSlot(s1!);
+
+      const s4 = await uploadSemaphore.acquireUploadSlot('user-4', 'pro', 1024);
+      expect(s4).not.toBeNull();
+    });
   });
 
   describe('canAcquireSlot', () => {
-    it('should return true when slot available', async () => {
-      const result = await uploadSemaphore.canAcquireSlot('user-1', 'free');
-      expect(result).toBe(true);
+    it('returns true when slot available', async () => {
+      expect(await uploadSemaphore.canAcquireSlot('user-1', 'free')).toBe(true);
     });
 
-    it('should return false when global limit reached', async () => {
+    it('returns false when global limit reached', async () => {
       await uploadSemaphore.acquireUploadSlot('u1', 'pro', 1024);
       await uploadSemaphore.acquireUploadSlot('u2', 'pro', 1024);
       await uploadSemaphore.acquireUploadSlot('u3', 'pro', 1024);
 
-      const result = await uploadSemaphore.canAcquireSlot('u4', 'pro');
-      expect(result).toBe(false);
+      expect(await uploadSemaphore.canAcquireSlot('u4', 'pro')).toBe(false);
     });
 
-    it('should return false when user tier limit reached', async () => {
+    it('returns false when user tier limit reached', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
 
-      const result = await uploadSemaphore.canAcquireSlot('user-1', 'free');
-      expect(result).toBe(false);
+      expect(await uploadSemaphore.canAcquireSlot('user-1', 'free')).toBe(false);
     });
   });
 
   describe('getStatus', () => {
-    it('should return current status', async () => {
+    it('returns current status', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
 
       const status = uploadSemaphore.getStatus();
@@ -170,56 +137,33 @@ describe('upload-semaphore', () => {
   });
 
   describe('releaseUserSlots', () => {
-    it('should release all slots for a user', async () => {
+    it('releases all slots for a user', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 2048);
 
       uploadSemaphore.releaseUserSlots('user-1');
 
-      const status = uploadSemaphore.getStatus();
-      expect(status.activeSlots).toBe(0);
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
     });
 
-    it('should not affect other users', async () => {
+    it('does not affect other users', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       await uploadSemaphore.acquireUploadSlot('user-2', 'free', 1024);
 
       uploadSemaphore.releaseUserSlots('user-1');
 
-      const status = uploadSemaphore.getStatus();
-      expect(status.activeSlots).toBe(1);
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(1);
     });
   });
 
   describe('reset', () => {
-    it('should reset all state', async () => {
+    it('resets all state', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       uploadSemaphore.reset();
 
       const status = uploadSemaphore.getStatus();
       expect(status.activeSlots).toBe(0);
       expect(status.globalSlotsAvailable).toBe(3);
-    });
-  });
-
-  describe('dynamic limits', () => {
-    it('should reduce permits under critical memory', async () => {
-      mockGetMemoryStatus.mockResolvedValue({
-        percentUsed: 95,
-        availableMB: 100,
-        warningLevel: 'critical',
-        canAcceptUpload: true,
-      });
-
-      // Force dynamic limit update by advancing past memoryCheckInterval
-      vi.advanceTimersByTime(31000);
-
-      // Acquire triggers updateDynamicLimits
-      await uploadSemaphore.acquireUploadSlot('user-1', 'pro', 1024);
-
-      const status = uploadSemaphore.getStatus();
-      // Critical memory should reduce limit below the base of 3
-      expect(status.configuredLimit).toBeLessThan(3);
     });
   });
 });
