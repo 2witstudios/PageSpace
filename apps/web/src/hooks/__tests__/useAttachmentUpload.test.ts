@@ -70,7 +70,8 @@ describe('useAttachmentUpload', () => {
       '/api/x/upload',
       expect.objectContaining({ method: 'POST' })
     );
-    expect(result.current.attachment).toEqual(fileData);
+    expect(result.current.attachment).toMatchObject(fileData);
+    expect(typeof result.current.attachment?.instanceId).toBe('string');
     expect(result.current.attachments).toHaveLength(1);
     expect(result.current.isUploading).toBe(false);
     expect(onUploaded).toHaveBeenCalledWith(result.current.attachment);
@@ -158,7 +159,8 @@ describe('useAttachmentUpload', () => {
     });
     expect(result.current.attachments).toHaveLength(2);
 
-    act(() => result.current.removeAttachment('file-1'));
+    const instanceIdToRemove = result.current.attachments.find(a => a.id === 'file-1')!.instanceId;
+    act(() => result.current.removeAttachment(instanceIdToRemove));
     expect(result.current.attachments).toHaveLength(1);
     expect(result.current.attachments[0].id).toBe('file-2');
   });

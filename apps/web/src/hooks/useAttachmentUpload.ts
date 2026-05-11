@@ -7,6 +7,8 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 export interface FileAttachment {
+  /** Client-side unique key for UI tracking (e.g. remove-by-slot). NOT the server file id. */
+  instanceId: string;
   id: string;
   originalName: string;
   size: number;
@@ -101,6 +103,7 @@ export function useAttachmentUpload({
         for (const result of body.files ?? []) {
           if (result.success && result.file) {
             const attachment: FileAttachment = {
+              instanceId: createId(),
               id: result.file.id,
               originalName: result.file.originalName,
               size: result.file.size,
@@ -139,7 +142,7 @@ export function useAttachmentUpload({
   const clearAttachment = useCallback(() => setAttachments([]), []);
 
   const removeAttachment = useCallback(
-    (id: string) => setAttachments(prev => prev.filter(a => a.id !== id)),
+    (instanceId: string) => setAttachments(prev => prev.filter(a => a.instanceId !== instanceId)),
     []
   );
 

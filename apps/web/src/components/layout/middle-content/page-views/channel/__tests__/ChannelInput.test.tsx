@@ -174,6 +174,7 @@ vi.mock('@/hooks/useAttachmentUpload', async () => {
 import { ChannelInput } from '../ChannelInput';
 
 const sampleAttachment: FileAttachment = {
+  instanceId: 'instance-abc',
   id: 'file-abc',
   originalName: 'photo.png',
   size: 12345,
@@ -282,7 +283,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(screen.getByText('photo.png')).toBeInTheDocument();
     const remove = screen.getByRole('button', { name: /remove attachment/i });
     await user.click(remove);
-    expect(mockRemoveAttachment).toHaveBeenCalledWith('file-abc');
+    expect(mockRemoveAttachment).toHaveBeenCalledWith('instance-abc');
 
     // Simulate the hook clearing by re-rendering with attachment null + empty value
     mockAttachment = null;

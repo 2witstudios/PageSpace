@@ -149,6 +149,7 @@ vi.mock(
               data-testid="send-with-attachment"
               onClick={() =>
                 props.onSend([{
+                  instanceId: 'instance-x',
                   id: 'file-x',
                   originalName: 'pic.png',
                   size: 1024,
@@ -170,6 +171,7 @@ vi.mock(
 import InboxDMPage from '../page';
 
 const sampleAttachment: FileAttachment = {
+  instanceId: 'instance-x',
   id: 'file-x',
   originalName: 'pic.png',
   size: 1024,

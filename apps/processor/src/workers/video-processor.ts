@@ -15,8 +15,8 @@ export async function processVideo(data: VideoProcessJobData): Promise<VideoProc
 
   loggers.processor.info('Video processing started', { contentHash, fileId });
 
-  const inputPath = path.join(TEMP_ROOT, `video-${contentHash}`);
-  const thumbPath = path.join(TEMP_ROOT, `video-${contentHash}-thumb.webp`);
+  const inputPath = path.join(TEMP_ROOT, `video-${fileId}`);
+  const thumbPath = path.join(TEMP_ROOT, `video-${fileId}-thumb.webp`);
 
   try {
     await contentStore.streamOriginalToFile(contentHash, inputPath);

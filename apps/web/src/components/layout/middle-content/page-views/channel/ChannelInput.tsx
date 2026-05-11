@@ -340,7 +340,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
                     <p className="text-xs text-muted-foreground">{formatFileSize(att.size)}</p>
                   </div>
                   <button
-                    onClick={() => removeAttachment(att.id)}
+                    onClick={() => removeAttachment(att.instanceId)}
                     className="p-1 hover:bg-muted rounded"
                     title="Remove attachment"
                   >
