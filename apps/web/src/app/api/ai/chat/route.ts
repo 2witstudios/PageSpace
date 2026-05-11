@@ -524,7 +524,7 @@ export async function POST(request: Request) {
       Object.keys(filteredTools)
         .filter((name) => name in pageSpaceTools)
         .map((name) => [name, pageSpaceTools[name as keyof typeof pageSpaceTools]])
-    );
+    ) as ToolSet;
     filteredTools = {
       ...filteredTools,
       tool_search: createToolSearchTool(enabledFullSchemaTools),

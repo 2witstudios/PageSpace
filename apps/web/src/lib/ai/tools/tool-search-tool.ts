@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { Tool } from 'ai';
+import type { Tool, ToolSet } from 'ai';
 
-export function createToolSearchTool(fullTools: Record<string, Tool>): Tool {
+export function createToolSearchTool(fullTools: ToolSet): Tool {
   return {
     description:
       'Get full parameter schemas for any PageSpace tool before calling it. Use "select:name1,name2" for specific tools by name, or a keyword like "calendar", "agent", "task", "channel", "drive" to find all tools in that area.',
@@ -22,7 +22,7 @@ export function createToolSearchTool(fullTools: Record<string, Tool>): Tool {
   };
 }
 
-function resolveMatches(tools: Record<string, Tool>, query: string): Record<string, Tool> {
+function resolveMatches(tools: ToolSet, query: string): ToolSet {
   if (query.startsWith('select:')) {
     const names = query.slice(7).split(',').map((s) => s.trim());
     return Object.fromEntries(names.filter((n) => tools[n]).map((n) => [n, tools[n]]));
