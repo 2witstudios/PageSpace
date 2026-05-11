@@ -59,7 +59,7 @@ describe('processVideo', () => {
   it('streams original from S3, extracts thumbnail, saves to cache', async () => {
     await processVideo({ contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'video/mp4' });
 
-    expect(mocks.streamOriginalToFile).toHaveBeenCalledWith(VALID_HASH, expect.stringContaining(VALID_HASH));
+    expect(mocks.streamOriginalToFile).toHaveBeenCalledWith(VALID_HASH, expect.stringContaining('video-page-1'));
     expect(mocks.saveCache).toHaveBeenCalledWith(
       VALID_HASH,
       'thumbnail.webp',
