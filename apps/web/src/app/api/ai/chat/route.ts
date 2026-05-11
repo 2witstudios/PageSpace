@@ -517,15 +517,21 @@ export async function POST(request: Request) {
       webSearchEnabled: webSearchMode,
     });
 
-    // Inject tool_search with a reference to the full (non-stubbed) registry so it can
-    // return complete parameter schemas on demand.
+    // Inject tool_search scoped to the enabled tool set (with full schemas).
+    // Using the filtered key set prevents tool_search from advertising tools that are
+    // unavailable in this request (e.g. write tools in read-only, web_search when disabled).
+    const enabledFullSchemaTools = Object.fromEntries(
+      Object.keys(filteredTools)
+        .filter((name) => name in pageSpaceTools)
+        .map((name) => [name, pageSpaceTools[name as keyof typeof pageSpaceTools]])
+    );
     filteredTools = {
       ...filteredTools,
-      tool_search: createToolSearchTool(pageSpaceTools),
+      tool_search: createToolSearchTool(enabledFullSchemaTools),
     } as ToolSet;
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
-      totalTools: Object.keys(pageSpaceTools).length,
+      totalTools: Object.keys(pageSpaceToolsStubbed).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode
