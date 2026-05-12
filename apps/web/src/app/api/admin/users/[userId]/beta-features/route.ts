@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { sql } from 'drizzle-orm';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { withAdminAuth } from '@/lib/auth';
 import { BETA_FEATURES } from '@pagespace/lib/services/beta-features';
