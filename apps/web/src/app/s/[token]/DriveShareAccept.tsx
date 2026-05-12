@@ -31,7 +31,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
         credentials: 'include',
       });
 
-      if (!res.ok && res.status !== 200) {
+      if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setError((body as { error?: string }).error ?? 'Failed to join. Please try again.');
         return;

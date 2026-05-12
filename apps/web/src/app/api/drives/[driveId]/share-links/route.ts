@@ -52,7 +52,13 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     }
     role = parsed.data.role;
-    expiresAt = parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : undefined;
+    if (parsed.data.expiresAt) {
+      const d = new Date(parsed.data.expiresAt);
+      if (isNaN(d.getTime()) || d <= new Date()) {
+        return NextResponse.json({ error: 'expiresAt must be a future date' }, { status: 400 });
+      }
+      expiresAt = d;
+    }
   } catch {
     // empty body is fine — all fields optional
   }
