@@ -202,7 +202,7 @@ export async function createPageShareLink(
 ): Promise<ShareLinkResult<{ id: string; rawToken: string }>> {
   const perms: ShareLinkPermission[] = opts.permissions ?? ['VIEW'];
 
-  if (perms.includes('EDIT') && !perms.includes('VIEW')) {
+  if (!perms.includes('VIEW')) {
     return { ok: false, error: 'INVALID_PERMISSIONS' };
   }
 
@@ -304,16 +304,16 @@ export async function redeemPageShareLink(
 
   const link = { ...row, driveId: row.driveId as string };
 
-  const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
-  if (!alreadyMember) {
-    await db.insert(driveMembers).values({
-      id: createId(),
-      driveId: link.driveId,
-      userId: ctx.userId,
-      role: 'MEMBER',
-      acceptedAt: new Date(),
-    });
-  }
+  await db.insert(driveMembers).values({
+    id: createId(),
+    driveId: link.driveId,
+    userId: ctx.userId,
+    role: 'MEMBER',
+    acceptedAt: new Date(),
+  }).onConflictDoNothing();
+
+  const canView = link.permissions.includes('VIEW');
+  const canEdit = link.permissions.includes('EDIT');
 
   await db
     .insert(pagePermissions)
@@ -321,14 +321,21 @@ export async function redeemPageShareLink(
       id: createId(),
       pageId: link.pageId,
       userId: ctx.userId,
-      canView: link.permissions.includes('VIEW'),
-      canEdit: link.permissions.includes('EDIT'),
+      canView,
+      canEdit,
       canShare: false,
       canDelete: false,
       grantedBy: null,
       grantedAt: new Date(),
     })
-    .onConflictDoNothing({ target: [pagePermissions.pageId, pagePermissions.userId] });
+    .onConflictDoUpdate({
+      target: [pagePermissions.pageId, pagePermissions.userId],
+      set: {
+        canView: sql`${pagePermissions.canView} OR EXCLUDED.can_view`,
+        canEdit: sql`${pagePermissions.canEdit} OR EXCLUDED.can_edit`,
+        grantedAt: new Date(),
+      },
+    });
 
   await db
     .update(pageShareLinks)

@@ -48,8 +48,14 @@ export async function POST(
 
   let permissions: ShareLinkPermission[] | undefined;
   let expiresAt: Date | undefined;
-  try {
-    const raw = await request.json();
+  const rawText = await request.text();
+  if (rawText.trim().length > 0) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(rawText);
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
     const parsed = CreateBodySchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
@@ -62,8 +68,6 @@ export async function POST(
       }
       expiresAt = d;
     }
-  } catch {
-    // empty body is fine — permissions defaults to ['VIEW'] in service
   }
 
   const result = await createPageShareLink(auth.ctx, pageId, { permissions, expiresAt });
@@ -81,7 +85,7 @@ export async function POST(
     return NextResponse.json({ error: 'Failed to create share link' }, { status: 500 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
+  const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || '';
   return NextResponse.json(
     {
       id: result.data.id,

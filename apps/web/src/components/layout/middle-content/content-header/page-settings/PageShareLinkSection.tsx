@@ -102,6 +102,7 @@ export function PageShareLinkSection({ pageId }: PageShareLinkSectionProps) {
               onClick={handleRevoke}
               disabled={isRevoking}
               className="text-destructive hover:text-destructive"
+              aria-label="Revoke share link"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
