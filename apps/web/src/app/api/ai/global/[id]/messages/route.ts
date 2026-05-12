@@ -28,6 +28,7 @@ import {
   buildMentionSystemPrompt,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
+  buildNonCoreToolNamesPrompt,
   TOOL_DISCOVERY_PROMPT,
   buildAgentAwarenessPrompt,
   filterToolsForReadOnly,
@@ -690,10 +691,6 @@ MENTION PROCESSING:
       }
     }
 
-    const finalSystemPrompt = systemPrompt
-      + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
-      + pageTreePrompt;
-
     // Full filtered tool set. NOT sent to model directly; used as dispatch map for
     // execute_tool and as tool_search catalog.
     const filteredAllTools = filterToolsForWebSearch(
@@ -710,6 +707,11 @@ MENTION PROCESSING:
     const nonCoreTools = Object.fromEntries(
       Object.entries(filteredAllTools).filter(([name]) => !CORE_TOOL_NAMES.has(name))
     ) as ToolSet;
+
+    const finalSystemPrompt = systemPrompt
+      + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
+      + pageTreePrompt
+      + '\n\n' + buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
 
     let finalTools: ToolSet = {
       ...coreTools,

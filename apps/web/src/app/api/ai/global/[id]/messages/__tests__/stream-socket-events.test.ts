@@ -167,6 +167,7 @@ vi.mock('@/lib/ai/core', () => ({
   buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
   buildSystemPrompt: vi.fn().mockReturnValue(''),
+  buildNonCoreToolNamesPrompt: vi.fn().mockReturnValue(''),
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
