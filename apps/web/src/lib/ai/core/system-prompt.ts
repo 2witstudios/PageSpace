@@ -37,8 +37,41 @@ STYLE:
 • Match user energy - conversational when exploring, efficient when executing`;
 
 export const TOOL_DISCOVERY_PROMPT = `TOOLS:
-• Core tools are always ready: list/read drives and pages, search, create, edit content
-• For other tools (calendar, agents, channels, tasks, etc.): call tool_search("keyword") or tool_search("select:tool_name") first to get the full parameter schema`;
+Core tools (list/read drives and pages, search, create, edit content) can be called directly.
+All other tools are listed below — call execute_tool({tool_name, parameters}) to run them. Use tool_search("select:tool_name") to get parameter schemas first.`;
+
+const CATEGORY_MAP: Record<string, string> = {
+  create_drive: 'drive', rename_drive: 'drive', update_drive_context: 'drive',
+  list_trash: 'pages', list_conversations: 'pages', read_conversation: 'pages',
+  rename_page: 'pages', trash: 'pages', restore: 'pages', move_page: 'pages', edit_sheet_cells: 'pages',
+  glob_search: 'search',
+  update_task: 'tasks', get_assigned_tasks: 'tasks',
+  update_agent_config: 'agents', list_agents: 'agents', multi_drive_list_agents: 'agents', ask_agent: 'agents',
+  web_search: 'search',
+  get_activity: 'activity',
+  list_calendar_events: 'calendar', get_calendar_event: 'calendar', check_calendar_availability: 'calendar',
+  create_calendar_event: 'calendar', update_calendar_event: 'calendar', delete_calendar_event: 'calendar',
+  rsvp_calendar_event: 'calendar', invite_calendar_attendees: 'calendar', remove_calendar_attendee: 'calendar',
+  send_channel_message: 'channels',
+};
+
+export function buildNonCoreToolNamesPrompt(toolNames: string[]): string {
+  if (toolNames.length === 0) return '';
+
+  const groups = new Map<string, string[]>();
+  for (const name of toolNames) {
+    const category = CATEGORY_MAP[name] ?? 'other';
+    const bucket = groups.get(category) ?? [];
+    bucket.push(name);
+    groups.set(category, bucket);
+  }
+
+  const lines = Array.from(groups.entries())
+    .map(([category, names]) => `  ${category}: ${names.join(', ')}`)
+    .join('\n');
+
+  return `NON-CORE TOOLS (use execute_tool to call; use tool_search("select:tool_name") for parameter schemas):\n${lines}`;
+}
 
 const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 • You cannot modify, create, or delete any content
