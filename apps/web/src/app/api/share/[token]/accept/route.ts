@@ -35,13 +35,11 @@ export async function POST(
       }
       return NextResponse.json({ error: 'Failed to redeem share link' }, { status: 500 });
     }
-    securityAudit
-      .logDataAccess(auth.ctx.userId, 'write', 'drive', info.driveId, {
-        action: 'share_link_redeem',
-        linkId: info.linkId,
-        ipAddress: clientIP,
-      })
-      .catch(() => undefined);
+    securityAudit.logDataAccess(auth.ctx.userId, 'write', 'drive', info.driveId, {
+      action: 'share_link_redeem',
+      linkId: info.linkId,
+      ipAddress: clientIP,
+    }).catch(() => undefined);
     return NextResponse.json({ type: 'drive', driveId: info.driveId });
   }
 
@@ -55,13 +53,11 @@ export async function POST(
     }
     return NextResponse.json({ error: 'Failed to redeem share link' }, { status: 500 });
   }
-  securityAudit
-    .logDataAccess(auth.ctx.userId, 'write', 'page', info.pageId ?? info.driveId, {
-      action: 'share_link_redeem',
-      linkId: info.linkId,
-      ipAddress: clientIP,
-    })
-    .catch(() => undefined);
+  securityAudit.logDataAccess(auth.ctx.userId, 'write', 'page', info.pageId ?? info.driveId, {
+    action: 'share_link_redeem',
+    linkId: info.linkId,
+    ipAddress: clientIP,
+  }).catch(() => undefined);
   return NextResponse.json({
     type: 'page',
     pageId: info.pageId,
