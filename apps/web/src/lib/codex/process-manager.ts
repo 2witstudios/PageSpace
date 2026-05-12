@@ -36,6 +36,8 @@ interface ProcessState {
 
 // Singleton map: userId → process state
 const processes = new Map<string, ProcessState>();
+// In-flight spawn promises — prevents duplicate processes under concurrent requests
+const spawning = new Map<string, Promise<ProcessState>>();
 
 function getNextId(state: ProcessState): number {
   return state.nextId++;
@@ -69,8 +71,13 @@ function handleLine(state: ProcessState, line: string): void {
     return;
   }
 
-  if ('id' in msg && msg.id !== undefined) {
-    // It's a response
+  // JSON-RPC distinguishes by presence of `method`: server-to-client requests/notifications
+  // have `method`; client responses have `result` or `error`. Checking `method` first
+  // ensures approval requests (which carry both `method` and `id`) are routed as
+  // notifications rather than being misidentified as pending-request responses.
+  if ('method' in msg) {
+    fanoutNotification(state, msg as CodexNotification);
+  } else if ('id' in msg && msg.id !== undefined) {
     const response = msg as CodexResponse;
     const pending = state.pending.get(response.id);
     if (pending) {
@@ -81,10 +88,6 @@ function handleLine(state: ProcessState, line: string): void {
         pending.resolve(response.result);
       }
     }
-  } else {
-    // It's a notification
-    const notification = msg as CodexNotification;
-    fanoutNotification(state, notification);
   }
 }
 
@@ -184,9 +187,24 @@ async function spawnProcess(userId: string, openAiKey: string): Promise<ProcessS
 export async function getOrSpawnProcess(userId: string, openAiKey: string): Promise<ProcessState> {
   const existing = processes.get(userId);
   if (existing?.initialized) return existing;
-  const state = await spawnProcess(userId, openAiKey);
-  processes.set(userId, state);
-  return state;
+
+  // Coalesce concurrent spawn requests to guarantee exactly one codex process per user
+  const pending = spawning.get(userId);
+  if (pending) return pending;
+
+  const promise = spawnProcess(userId, openAiKey)
+    .then((state) => {
+      processes.set(userId, state);
+      spawning.delete(userId);
+      return state;
+    })
+    .catch((err) => {
+      spawning.delete(userId);
+      throw err;
+    });
+
+  spawning.set(userId, promise);
+  return promise;
 }
 
 export async function threadStart(userId: string, openAiKey: string, params: ThreadStartParams): Promise<ThreadResult> {
@@ -240,6 +258,8 @@ export function resolveApproval(userId: string, requestId: string, decision: App
   if (!state) return false;
   const approval = state.approvals.get(requestId);
   if (!approval) return false;
+  // Delete synchronously before resolving so concurrent requests both return false
+  state.approvals.delete(requestId);
   approval.resolve(decision);
   return true;
 }

@@ -388,8 +388,24 @@ export async function POST(request: Request) {
       if (!openAiKey) {
         return NextResponse.json({ error: 'Codex provider is not configured on this server' }, { status: 503 });
       }
+
+      // Validate message before delegating
       const userMessage = messages[messages.length - 1];
+      if (!userMessage || userMessage.role !== 'user') {
+        return NextResponse.json({ error: 'No user message provided' }, { status: 400 });
+      }
       const text = extractMessageContent(userMessage);
+      if (!text?.trim()) {
+        return NextResponse.json({ error: 'Message content is empty' }, { status: 400 });
+      }
+
+      // Enforce the same per-tier quota as other providers
+      const providerType = getProviderTier(currentProvider, currentModel);
+      const currentUsage = await getCurrentUsage(userId, providerType);
+      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
+        return createRateLimitResponse(providerType, currentUsage.limit);
+      }
+
       const { handleCodexChat } = await import('@/lib/codex/codex-chat-handler');
       return handleCodexChat({ userId, conversationId, pageId: chatId, text, openAiKey });
     }
