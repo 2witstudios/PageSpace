@@ -113,9 +113,11 @@ describe('AI settings route', () => {
 
       expect(response.status).toBe(200);
       expect(body.providers.anthropic.isAvailable).toBe(false);
-      expect(body.providers.pagespace.isAvailable).toBe(false);
+      // pagespace is always available — it is PageSpace's own hosted backend
+      expect(body.providers.pagespace.isAvailable).toBe(true);
       expect(body.providers.openai.isAvailable).toBe(false);
-      expect(body.isAnyProviderConfigured).toBe(false);
+      // pagespace always available means isAnyProviderConfigured is always true
+      expect(body.isAnyProviderConfigured).toBe(true);
     });
 
     it('reports isAnyProviderConfigured true when at least one provider has an env key', async () => {
