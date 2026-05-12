@@ -119,10 +119,3 @@ export type ApprovalDecision =
   | 'acceptForSession'
   | 'decline'
   | 'cancel';
-
-// Pending approval stored in process manager
-export interface PendingApproval {
-  requestId: string;
-  rpcId: number;
-  resolve: (decision: ApprovalDecision) => void;
-}

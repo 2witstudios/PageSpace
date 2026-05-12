@@ -181,6 +181,11 @@
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
     },
+    "./services/beta-features": {
+      "types": "./dist/services/beta-features.d.ts",
+      "import": "./dist/services/beta-features.js",
+      "require": "./dist/services/beta-features.js"
+    },
     "./services/validated-service-token": {
       "types": "./dist/services/validated-service-token.d.ts",
       "import": "./dist/services/validated-service-token.js",

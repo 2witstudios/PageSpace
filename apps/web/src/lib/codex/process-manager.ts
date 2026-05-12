@@ -5,7 +5,6 @@ import type {
   CodexRequest,
   CodexResponse,
   CodexNotification,
-  PendingApproval,
   ApprovalDecision,
   ThreadStartParams,
   ThreadResumeParams,
@@ -128,16 +127,13 @@ function fanoutNotification(state: ProcessState, notification: CodexNotification
     };
     state.approvals.set(requestId, meta);
 
-    // Enrich notification with our requestId so subscribers can surface it to the client
-    (notification.params as Record<string, unknown>).__requestId = requestId;
-
     promise.then((decision) => {
       state.approvals.delete(requestId);
       if (rpcId >= 0) {
         const response = { id: rpcId, result: decision };
         state.proc.stdin.write(JSON.stringify(response) + '\n');
       }
-    });
+    }).catch(() => { /* process may have exited */ });
   }
 }
 
