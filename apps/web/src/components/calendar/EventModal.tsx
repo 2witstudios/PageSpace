@@ -449,7 +449,6 @@ export function EventModal({
               />
             </div>
 
-            {/* RSVP section — only shown when the current user is a non-organizer attendee */}
             {myAttendee && onRsvp && (
               <div className="space-y-2 rounded-md border p-3">
                 <Label className="text-sm font-medium">Your RSVP</Label>
