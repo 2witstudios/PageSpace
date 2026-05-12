@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, lte, inArray, asc, sql, isNotNull, gt } from '@pagespace/db/operators'
+import { eq, and, lte, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
 import { calendarEvents } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
@@ -81,6 +81,7 @@ export async function POST(req: Request) {
       .limit(MAX_DUE_TRIGGERS);
 
     if (dueTriggers.length === 0) {
+      await refillRecurringTriggers(now);
       audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } });
       return NextResponse.json({ message: 'No calendar triggers due', executed: 0 });
     }
@@ -180,22 +181,24 @@ async function refillRecurringTriggers(now: Date): Promise<void> {
   const lookaheadCutoff = new Date(now.getTime() + REFILL_LOOKAHEAD_DAYS * 86_400_000);
 
   // Find recurring events whose trigger queue has no rows beyond the lookahead
-  // window — these need a fresh batch of future occurrence rows.
+  // window — these need a fresh batch of future occurrence rows. Driving from
+  // calendarEvents (not calendarTriggers) means events whose all trigger rows
+  // were fired and none remain are still found correctly.
   const needsRefill = await db
     .selectDistinct({
-      calendarEventId: calendarTriggers.calendarEventId,
+      calendarEventId: calendarEvents.id,
       workflowId: calendarTriggers.workflowId,
-      driveId: calendarTriggers.driveId,
+      driveId: calendarEvents.driveId,
       scheduledById: calendarTriggers.scheduledById,
     })
-    .from(calendarTriggers)
-    .innerJoin(calendarEvents, eq(calendarTriggers.calendarEventId, calendarEvents.id))
+    .from(calendarEvents)
+    .innerJoin(calendarTriggers, eq(calendarTriggers.calendarEventId, calendarEvents.id))
     .where(and(
       isNotNull(calendarEvents.recurrenceRule),
       eq(calendarEvents.isTrashed, false),
       sql`NOT EXISTS (
         SELECT 1 FROM ${calendarTriggers} ct2
-        WHERE ct2."calendarEventId" = ${calendarTriggers.calendarEventId}
+        WHERE ct2."calendarEventId" = ${calendarEvents.id}
           AND ct2."triggerAt" > ${lookaheadCutoff}
       )`,
     ))

@@ -1,10 +1,8 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, sql } from '@pagespace/db/operators'
+import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
-import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
-import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -14,6 +12,7 @@ import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrat
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import {
   removeCalendarTrigger,
+  resyncCalendarTriggerTimings,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
@@ -291,34 +290,16 @@ export async function PATCH(
         .where(eq(calendarEvents.id, eventId))
         .returning();
 
-      if (adjustedStartAt && data.agentTrigger === undefined) {
-        // Caller didn't touch the trigger payload — keep the existing
-        // re-aim semantics: only triggers that haven't been processed yet
-        // get their triggerAt bumped. If the caller IS upserting the
-        // trigger this tick, the upsert below will set triggerAt itself
-        // and there's no point doing the re-aim sweep.
-        await tx
-          .update(calendarTriggers)
-          .set({ triggerAt: adjustedStartAt })
-          .where(and(
-            eq(calendarTriggers.calendarEventId, eventId),
-            sql`NOT EXISTS (
-              SELECT 1 FROM ${workflowRuns}
-              WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
-                AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-            )`,
-          ));
-      }
+      // Effective recurrence rule after the update (undefined = unchanged).
+      const effectiveRecurrenceRule = data.recurrenceRule !== undefined
+        ? data.recurrenceRule
+        : event.recurrenceRule;
 
       // Apply agentTrigger changes inside the same tx so partial writes
       // can't leave the event mutated but the trigger out of sync.
       if (data.agentTrigger === null) {
         await removeCalendarTrigger(tx, eventId);
       } else if (data.agentTrigger && event.driveId) {
-        // Effective recurrence rule after the update (data.recurrenceRule=undefined means unchanged)
-        const effectiveRecurrenceRule = data.recurrenceRule !== undefined
-          ? data.recurrenceRule
-          : event.recurrenceRule;
         await upsertCalendarTriggerWorkflowInTx(tx, {
           driveId: event.driveId,
           scheduledById: userId,
@@ -329,6 +310,17 @@ export async function PATCH(
           recurrenceRule: effectiveRecurrenceRule,
           recurrenceExceptions: event.recurrenceExceptions ?? [],
         });
+      } else if (data.agentTrigger === undefined && (adjustedStartAt || data.recurrenceRule !== undefined)) {
+        // Caller didn't touch agentTrigger but timing/recurrence changed.
+        // For recurring events: re-expand the full occurrence series.
+        // For one-shot events: re-aim the single pending trigger row.
+        await resyncCalendarTriggerTimings(
+          tx,
+          eventId,
+          newStartAt,
+          effectiveRecurrenceRule,
+          event.recurrenceExceptions ?? [],
+        );
       }
 
       return result;

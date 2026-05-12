@@ -105,16 +105,20 @@ export function expandOccurrences(
     }
 
     case 'MONTHLY': {
-      const targetDay = rule.byMonthDay?.[0] ?? baseStartAt.getUTCDate();
+      const targetDays = rule.byMonthDay ?? [baseStartAt.getUTCDate()];
       let y = baseStartAt.getUTCFullYear();
       let m = baseStartAt.getUTCMonth();
 
-      while (true) {
-        const candidate = new Date(Date.UTC(
-          y, m, targetDay,
-          baseStartAt.getUTCHours(), baseStartAt.getUTCMinutes(), baseStartAt.getUTCSeconds(), 0,
-        ));
-        if (!collect(candidate)) break;
+      outer: while (true) {
+        const maxDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+        for (const targetDay of targetDays) {
+          if (targetDay > maxDay) continue; // skip days that don't exist in this month
+          const candidate = new Date(Date.UTC(
+            y, m, targetDay,
+            baseStartAt.getUTCHours(), baseStartAt.getUTCMinutes(), baseStartAt.getUTCSeconds(), 0,
+          ));
+          if (!collect(candidate)) break outer;
+        }
         m += rule.interval;
         if (m >= 12) { y += Math.floor(m / 12); m %= 12; }
       }
@@ -123,13 +127,22 @@ export function expandOccurrences(
 
     case 'YEARLY': {
       let y = baseStartAt.getUTCFullYear();
+      // byMonth uses 1-indexed month numbers; convert to 0-indexed for Date.UTC
+      const months = rule.byMonth?.map((mo) => mo - 1) ?? [baseStartAt.getUTCMonth()];
+      const days = rule.byMonthDay ?? [baseStartAt.getUTCDate()];
 
-      while (true) {
-        const candidate = new Date(Date.UTC(
-          y, baseStartAt.getUTCMonth(), baseStartAt.getUTCDate(),
-          baseStartAt.getUTCHours(), baseStartAt.getUTCMinutes(), baseStartAt.getUTCSeconds(), 0,
-        ));
-        if (!collect(candidate)) break;
+      outer: while (true) {
+        for (const mo of months) {
+          const maxDay = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+          for (const d of days) {
+            if (d > maxDay) continue; // skip days that don't exist in this month
+            const candidate = new Date(Date.UTC(
+              y, mo, d,
+              baseStartAt.getUTCHours(), baseStartAt.getUTCMinutes(), baseStartAt.getUTCSeconds(), 0,
+            ));
+            if (!collect(candidate)) break outer;
+          }
+        }
         y += rule.interval;
       }
       break;

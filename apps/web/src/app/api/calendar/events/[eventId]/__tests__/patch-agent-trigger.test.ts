@@ -49,6 +49,7 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
   validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
+  resyncCalendarTriggerTimings: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../../../../../lib/ai/core/timestamp-utils', () => ({
@@ -92,6 +93,7 @@ import {
   upsertCalendarTriggerWorkflowInTx,
   removeCalendarTrigger,
   validateCalendarAgentTrigger,
+  resyncCalendarTriggerTimings,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
 const USER_ID = 'user_creator';
@@ -276,6 +278,38 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
         recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
         recurrenceExceptions: [],
       }),
+    );
+  });
+
+  it('calls resyncCalendarTriggerTimings — not upsertCalendarTriggerWorkflowInTx — when only startAt changes on a recurring event', async () => {
+    // Regression: the old code updated all unfired trigger rows to the same
+    // adjustedStartAt, collapsing all occurrences onto one timestamp. Now the
+    // route delegates timing re-sync to resyncCalendarTriggerTimings which
+    // does a proper occurrence re-expansion for recurring events.
+    const recurringEvent = {
+      ...baseEvent,
+      recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+      recurrenceExceptions: [] as string[],
+    };
+    setupSuccessfulPatch();
+    (db.query.calendarEvents.findFirst as Mock).mockReset();
+    (db.query.calendarEvents.findFirst as Mock)
+      .mockResolvedValueOnce(recurringEvent)
+      .mockResolvedValueOnce(recurringEvent);
+
+    const res = await PATCH(makeRequest({
+      startAt: '2026-06-01T10:00:00Z',
+      endAt: '2026-06-01T11:00:00Z',
+    }), ctx());
+
+    expect(res.status).toBe(200);
+    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
+    expect(resyncCalendarTriggerTimings).toHaveBeenCalledWith(
+      expect.anything(),
+      EVENT_ID,
+      expect.any(Date),
+      expect.objectContaining({ frequency: 'WEEKLY' }),
+      [],
     );
   });
 });

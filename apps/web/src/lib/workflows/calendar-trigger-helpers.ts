@@ -1,5 +1,5 @@
 import type { db as DbType } from '@pagespace/db/db';
-import { eq, and, inArray, gt, sql } from '@pagespace/db/operators';
+import { eq, and, inArray, ne, gt, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
@@ -284,8 +284,22 @@ export async function upsertCalendarTriggerWorkflowInTx(
     return { workflowId, triggerId: '' };
   }
 
-  // One-shot path: update existing trigger row's triggerAt, or create one.
+  // One-shot path: clean up any leftover occurrence rows (from a previous
+  // recurring configuration), then update or create the single trigger row.
   if (existing.length > 0) {
+    // Delete all unfired rows for this event except the one we'll update.
+    // This removes stale occurrence rows when a recurring event becomes one-shot.
+    await tx.delete(calendarTriggers).where(
+      and(
+        eq(calendarTriggers.calendarEventId, params.calendarEventId),
+        ne(calendarTriggers.id, existing[0].id),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        )`,
+      ),
+    );
     await tx.update(calendarTriggers).set({
       triggerAt: params.triggerAt,
     }).where(eq(calendarTriggers.id, existing[0].id));
@@ -321,4 +335,81 @@ export async function upsertCalendarTriggerWorkflow(
   });
 
   return database.transaction((tx) => upsertCalendarTriggerWorkflowInTx(tx, params));
+}
+
+/**
+ * Re-synchronise trigger rows when the event's timing or recurrence rule changes
+ * but the caller did NOT explicitly supply a new agentTrigger payload.
+ *
+ * For recurring events: deletes unfired future rows and re-expands the series
+ * from newBaseAt using the caller-supplied recurrenceRule, preserving the
+ * existing workflowId so history stays linked.
+ *
+ * For one-shot events: re-aims the single pending trigger row to newBaseAt.
+ *
+ * No-op if the event has no trigger rows at all.
+ */
+export async function resyncCalendarTriggerTimings(
+  tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0],
+  calendarEventId: string,
+  newBaseAt: Date,
+  effectiveRecurrenceRule: RecurrenceRule | null | undefined,
+  exceptions: string[],
+): Promise<void> {
+  if (effectiveRecurrenceRule) {
+    const existingTrigger = await tx
+      .select({
+        workflowId: calendarTriggers.workflowId,
+        driveId: calendarTriggers.driveId,
+        scheduledById: calendarTriggers.scheduledById,
+      })
+      .from(calendarTriggers)
+      .where(eq(calendarTriggers.calendarEventId, calendarEventId))
+      .limit(1);
+
+    if (existingTrigger.length === 0) return;
+
+    const { workflowId, driveId, scheduledById } = existingTrigger[0];
+    const now = new Date();
+    await tx.delete(calendarTriggers).where(
+      and(
+        eq(calendarTriggers.calendarEventId, calendarEventId),
+        gt(calendarTriggers.triggerAt, now),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        )`,
+      ),
+    );
+
+    const horizon = new Date(now.getTime() + TRIGGER_HORIZON_DAYS * 86_400_000);
+    const occurrences = expandOccurrences(
+      effectiveRecurrenceRule,
+      newBaseAt,
+      now,
+      horizon,
+      exceptions,
+    );
+
+    await bulkCreateOccurrenceTriggerRows(tx, {
+      workflowId,
+      calendarEventId,
+      driveId,
+      scheduledById,
+      occurrences,
+    });
+  } else {
+    await tx
+      .update(calendarTriggers)
+      .set({ triggerAt: newBaseAt })
+      .where(and(
+        eq(calendarTriggers.calendarEventId, calendarEventId),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        )`,
+      ));
+  }
 }

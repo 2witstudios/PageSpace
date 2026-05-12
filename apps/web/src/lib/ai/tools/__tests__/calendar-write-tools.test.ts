@@ -168,6 +168,7 @@ import { db } from '@pagespace/db/db'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { upsertCalendarTriggerWorkflowInTx } from '@/lib/workflows/calendar-trigger-helpers';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
@@ -458,8 +459,24 @@ describe('calendar-write-tools', () => {
     });
 
     describe('agentTrigger', () => {
-      it('does NOT reject agentTrigger combined with recurrence (recurring triggers are now supported)', async () => {
+      it('passes recurrenceRule to upsertCalendarTriggerWorkflowInTx when agentTrigger + recurrence are combined', async () => {
         mockIsUserDriveMember.mockResolvedValue(true);
+
+        // Return a valid AI_CHAT agent page for the agent-page lookup
+        (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{
+          id: 'agent-1',
+          type: 'AI_CHAT',
+          title: 'Test Agent',
+          isTrashed: false,
+          driveId: 'drive-1',
+        }]);
+
+        const newEvent = createMockEvent({ recurrenceRule: { frequency: 'WEEKLY', interval: 1 } });
+        (mockDb.insert as ReturnType<typeof vi.fn>).mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([newEvent]),
+          }),
+        });
 
         const input = {
           title: 'Recurring Agent Task',
@@ -473,20 +490,16 @@ describe('calendar-write-tools', () => {
           },
         };
 
-        const result = await calendarWriteTools.create_calendar_event.execute!(
-          input,
-          createAuthContext()
-        );
+        await calendarWriteTools.create_calendar_event.execute!(input, createAuthContext());
 
-        // The old guard returned { success: false, error: '...recurring...' }.
-        // Now it must NOT return that specific recurrence error — the feature is
-        // enabled. The result may succeed or fail for unrelated mock reasons, but
-        // the recurrence guard itself must be gone.
+        const upsertCalls = vi.mocked(upsertCalendarTriggerWorkflowInTx).mock.calls;
         assert({
           given: 'agentTrigger with recurrence',
-          should: 'not reject with a recurring-specific error message',
-          actual: (result as { error?: string }).error?.toLowerCase().includes('recur') ?? false,
-          expected: false,
+          should: 'call upsertCalendarTriggerWorkflowInTx with the recurrence rule',
+          actual: upsertCalls.some(
+            ([, params]) => (params as { recurrenceRule?: { frequency: string } }).recurrenceRule?.frequency === 'WEEKLY',
+          ),
+          expected: true,
         });
       });
 
