@@ -1016,7 +1016,7 @@
           "type": "text[]",
           "primaryKey": false,
           "notNull": true,
-          "default": []
+          "default": "ARRAY[]::text[]"
         },
         "createdAt": {
           "name": "createdAt",

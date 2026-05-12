@@ -39,7 +39,7 @@ export const users = pgTable('users', {
   // User timezone for correct time-of-day calculations (IANA timezone, e.g., "America/New_York")
   timezone: text('timezone'),
   // Beta feature access flags (e.g., 'codex') — managed by admins
-  betaFeatures: text('betaFeatures').array().default([]).notNull(),
+  betaFeatures: text('betaFeatures').array().notNull().default(sql`ARRAY[]::text[]`),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });
