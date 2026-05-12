@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
-import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
 import {
   Conversation,
   ConversationContent,
@@ -529,7 +529,7 @@ function ChannelView({ page }: ChannelViewProps) {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <StreamingMarkdown content={m.content} isStreaming={false} />
+              <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -680,7 +680,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        <StreamingMarkdown content={m.content} isStreaming={false} />
+                                        <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (
