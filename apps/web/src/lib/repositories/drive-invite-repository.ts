@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, gt, lte, isNotNull, isNull } from '@pagespace/db/operators'
+import { eq, and, or, gt, lte, isNotNull, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -245,7 +245,7 @@ export const driveInviteRepository = {
     driveId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
     invitedBy: string;
-    expiresAt: Date;
+    expiresAt: Date | null;
     now: Date;
   }) {
     const { tokenHash, email, driveId, role, invitedBy, expiresAt, now } = input;
@@ -276,7 +276,7 @@ export const driveInviteRepository = {
     driveId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
     invitedBy: string;
-    expiresAt: Date;
+    expiresAt: Date | null;
     consumedAt: Date | null;
     driveName: string;
     inviterName: string;
@@ -314,7 +314,7 @@ export const driveInviteRepository = {
           eq(pendingInvites.driveId, driveId),
           eq(pendingInvites.email, email),
           isNull(pendingInvites.consumedAt),
-          gt(pendingInvites.expiresAt, now),
+          or(isNull(pendingInvites.expiresAt), gt(pendingInvites.expiresAt, now)),
         )
       )
       .limit(1);
@@ -385,7 +385,7 @@ export const driveInviteRepository = {
         and(
           eq(pendingInvites.email, email),
           isNull(pendingInvites.consumedAt),
-          gt(pendingInvites.expiresAt, now),
+          or(isNull(pendingInvites.expiresAt), gt(pendingInvites.expiresAt, now)),
         ),
       );
   },
@@ -397,7 +397,7 @@ export const driveInviteRepository = {
     driveId: string;
     invitedByName: string;
     createdAt: Date;
-    expiresAt: Date;
+    expiresAt: Date | null;
   }>> {
     return db
       .select({

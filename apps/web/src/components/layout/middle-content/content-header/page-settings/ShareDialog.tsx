@@ -32,6 +32,7 @@ import { useMobile } from '@/hooks/useMobile';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PermissionsList } from './PermissionsList';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -49,6 +50,7 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [offPlatformEmail, setOffPlatformEmail] = useState<string | null>(null);
+  const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [permissions, setPermissions] = useState({
     canView: true,
     canEdit: false,
@@ -88,6 +90,7 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   const resetForm = () => {
     setEmail('');
     setOffPlatformEmail(null);
+    setExpiryDays(null);
     setPermissions({ canView: true, canEdit: false, canShare: false, canDelete: false });
     setPermissionsVersion(v => v + 1);
   };
@@ -140,7 +143,11 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
       const response = await fetchWithAuth(`/api/pages/${page.id}/share-invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: offPlatformEmail, permissions: permissionsArray }),
+        body: JSON.stringify({
+          email: offPlatformEmail,
+          permissions: permissionsArray,
+          ...(expiryDays !== null && { expiryDays }),
+        }),
       });
 
       if (response.status === 409) {
@@ -331,6 +338,26 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
                   )}
                 </div>
               </div>
+
+              {offPlatformEmail && (
+                <div className="flex items-center gap-3">
+                  <Label className="text-sm text-muted-foreground whitespace-nowrap">Invite expires</Label>
+                  <Select
+                    value={expiryDays === null ? 'never' : String(expiryDays)}
+                    onValueChange={(v) => setExpiryDays(v === 'never' ? null : Number(v))}
+                  >
+                    <SelectTrigger className="w-36">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="never">Never</SelectItem>
+                      <SelectItem value="1">1 day</SelectItem>
+                      <SelectItem value="7">7 days</SelectItem>
+                      <SelectItem value="30">30 days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {offPlatformEmail ? (
                 <Button onClick={handleOffPlatformInvite} disabled={isSubmitting} className="w-full">

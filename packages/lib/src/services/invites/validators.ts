@@ -22,7 +22,7 @@ import type {
 // narrowed without losing the surface-specific fields.
 export interface MinimalInvite {
   email: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   consumedAt: Date | null;
 }
 

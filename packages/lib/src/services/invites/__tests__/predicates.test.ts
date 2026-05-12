@@ -32,6 +32,10 @@ describe('isInviteExpired', () => {
       isInviteExpired({ expiresAt: new Date('2000-01-01T00:00:00.000Z'), now }),
     ).toBe(true);
   });
+
+  it('given expiresAt is null (no expiry), should return false', () => {
+    expect(isInviteExpired({ expiresAt: null, now })).toBe(false);
+  });
 });
 
 describe('isInviteConsumed', () => {
