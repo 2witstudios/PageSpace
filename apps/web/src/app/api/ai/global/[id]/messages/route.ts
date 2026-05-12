@@ -826,7 +826,7 @@ MENTION PROCESSING:
 
     // Calculate context size BEFORE streaming (for real context window tracking)
     const contextCalculation = calculateTotalContextSize({
-      systemPrompt,
+      systemPrompt: finalSystemPrompt,
       messages: processedMessages, // Use UIMessage array (not model messages)
       tools: finalTools,
       model: currentModel,
