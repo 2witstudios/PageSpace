@@ -1,6 +1,6 @@
 {
-  "id": "e824a52a-6c82-4b06-9f9f-b62531128529",
-  "prevId": "e49ec255-8da6-43ea-b363-a82f3b4a6b68",
+  "id": "9238b06b-f3b8-4a67-adde-22283ff64768",
+  "prevId": "e824a52a-6c82-4b06-9f9f-b62531128529",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1024,6 +1024,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "betaFeatures": {
+          "name": "betaFeatures",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
         }
       },
       "indexes": {},
@@ -4258,6 +4265,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": true
+        },
+        "codexThreadId": {
+          "name": "codexThreadId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
