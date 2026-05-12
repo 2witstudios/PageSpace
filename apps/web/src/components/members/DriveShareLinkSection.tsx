@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -10,15 +10,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Link2, Copy, Trash2, RefreshCw } from 'lucide-react';
-import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { Link2, Copy, Trash2 } from 'lucide-react';
+import { post, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 
 interface ActiveLink {
   id: string;
   role: 'MEMBER' | 'ADMIN';
-  createdAt: string;
-  expiresAt: string | null;
   useCount: number;
 }
 
@@ -29,22 +27,11 @@ interface DriveShareLinkSectionProps {
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? '';
 
 export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
-  const [activeLink, setActiveLink] = useState<ActiveLink | null | undefined>(undefined);
+  const [activeLink, setActiveLink] = useState<ActiveLink | null>(null);
   const [rawToken, setRawToken] = useState<string | null>(null);
   const [role, setRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
-
-  useEffect(() => {
-    fetchWithAuth(`/api/drives/${driveId}/share-links`)
-      .then((res) => res.json())
-      .then((data: { links?: ActiveLink[] }) => {
-        const first = data.links?.find((l) => l) ?? null;
-        setActiveLink(first);
-        if (first) setRole(first.role);
-      })
-      .catch(() => setActiveLink(null));
-  }, [driveId]);
 
   async function handleGenerate() {
     setIsGenerating(true);
@@ -55,7 +42,7 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
       );
       const token = data.shareUrl.split('/s/')[1];
       setRawToken(token);
-      setActiveLink({ id: data.id, role, createdAt: new Date().toISOString(), expiresAt: null, useCount: 0 });
+      setActiveLink({ id: data.id, role, useCount: 0 });
       await navigator.clipboard.writeText(data.shareUrl).catch(() => undefined);
       toast.success('Invite link created and copied to clipboard');
     } catch {
@@ -86,34 +73,6 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
     }
   }
 
-  async function handleRegenerate() {
-    if (!activeLink) return;
-    setIsRevoking(true);
-    try {
-      await del(`/api/drives/${driveId}/share-links/${activeLink.id}`);
-      setActiveLink(null);
-      setRawToken(null);
-    } catch {
-      toast.error('Failed to revoke existing link');
-      return;
-    } finally {
-      setIsRevoking(false);
-    }
-    await handleGenerate();
-  }
-
-  if (activeLink === undefined) {
-    return (
-      <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <h3 className="text-sm font-medium flex items-center gap-2 mb-2">
-          <Link2 className="h-4 w-4" />
-          Invite link
-        </h3>
-        <p className="text-xs text-muted-foreground">Loading…</p>
-      </div>
-    );
-  }
-
   return (
     <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
       <div>
@@ -137,23 +96,10 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
             </span>
           </div>
           <div className="flex gap-2">
-            {rawToken ? (
-              <Button variant="outline" size="sm" className="flex-1" onClick={handleCopy}>
-                <Copy className="mr-1.5 h-3.5 w-3.5" />
-                Copy link
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                onClick={handleRegenerate}
-                disabled={isRevoking || isGenerating}
-              >
-                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                {isRevoking || isGenerating ? 'Working…' : 'Regenerate'}
-              </Button>
-            )}
+            <Button variant="outline" size="sm" className="flex-1" onClick={handleCopy} disabled={!rawToken}>
+              <Copy className="mr-1.5 h-3.5 w-3.5" />
+              Copy link
+            </Button>
             <Button
               variant="ghost"
               size="sm"
