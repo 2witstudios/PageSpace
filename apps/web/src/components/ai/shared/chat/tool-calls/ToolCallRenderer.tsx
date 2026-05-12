@@ -815,17 +815,23 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
 });
 
 export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part }) {
-  const toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
+  let toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
+  let resolvedPart = part;
 
-  // Task management - has its own dedicated renderer
-  if (toolName === 'update_task') {
-    return <TaskRenderer part={part} />;
+  if (toolName === 'tool_search') return null;
+
+  if (toolName === 'execute_tool') {
+    const raw = safeJsonParse(part.input);
+    const innerName = typeof raw?.tool_name === 'string' ? raw.tool_name : null;
+    if (innerName) {
+      toolName = innerName;
+      resolvedPart = { ...part, input: raw?.parameters ?? {} };
+    }
   }
 
-  // Ask Agent - has its own conversation UI
-  if (toolName === 'ask_agent') {
-    return <PageAgentConversationRenderer part={part} />;
-  }
+  if (toolName === 'tool_search') return null;
 
-  return <ToolCallRendererInternal part={part} toolName={toolName} />;
+  if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
+  if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
+  return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });
