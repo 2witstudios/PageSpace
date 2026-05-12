@@ -7,7 +7,7 @@ export function createExecuteTool(allowedTools: ToolSet): Tool {
       'Execute any PageSpace tool by name. Call tool_search first to discover available tools and get their parameter schemas.',
     inputSchema: z.object({
       tool_name: z.string(),
-      parameters: z.record(z.unknown()).default({}),
+      parameters: z.record(z.string(), z.unknown()).default({}),
     }),
     execute: async (
       { tool_name, parameters }: { tool_name: string; parameters: Record<string, unknown> },
