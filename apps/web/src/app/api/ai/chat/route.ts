@@ -389,8 +389,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Codex provider is not configured on this server' }, { status: 503 });
       }
 
-      // Validate message before delegating
-      const userMessage = messages[messages.length - 1];
+      // Validate message before delegating (userMessage declared in outer scope)
       if (!userMessage || userMessage.role !== 'user') {
         return NextResponse.json({ error: 'No user message provided' }, { status: 400 });
       }

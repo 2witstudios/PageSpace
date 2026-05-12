@@ -17,11 +17,13 @@ export interface CodexNotification {
   params?: unknown;
 }
 
+export type ApprovalPolicy = 'never' | 'onRequest' | 'unlessTrusted' | 'always';
+
 // thread/start params
 export interface ThreadStartParams {
   model?: string;
   cwd?: string;
-  approvalPolicy?: 'never' | 'onRequest' | 'unlessTrusted' | 'always';
+  approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
 }
 
@@ -45,7 +47,7 @@ export interface ThreadResult {
 export interface TurnStartParams {
   threadId: string;
   input: TurnInput[];
-  approvalPolicy?: string;
+  approvalPolicy?: ApprovalPolicy;
   sandboxPolicy?: unknown;
   model?: string;
 }

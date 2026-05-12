@@ -41,9 +41,9 @@ const PROVIDER_CATEGORIES: Record<string, 'default' | 'cloud' | 'local' | 'beta'
 };
 
 /** Beta providers and the feature flag required to see them */
-const BETA_PROVIDER_FEATURES: Record<string, string> = {
+const BETA_PROVIDER_FEATURES = {
   codex: 'codex',
-};
+} as const;
 
 /** Derive provider groups from visible providers (filtered by deployment mode) */
 function buildProviderGroups() {
