@@ -35,7 +35,6 @@ import {
   type ProviderRequest,
   buildProviderAvailabilityMap,
   pageSpaceTools,
-  pageSpaceToolsStubbed,
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
@@ -68,7 +67,6 @@ import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
-import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import {
   createStreamAbortController,
@@ -277,10 +275,11 @@ export async function POST(request: Request) {
     }
 
     // Extract custom agent configuration from page.
-    // Note: page.enabledTools is intentionally NOT consulted here. It seeds the
-    // composer's tool toggles on the client; the toggles in the request body
-    // are the source of truth at runtime so the UI doesn't lie about what the
-    // model can actually do.
+    // page.enabledTools seeds the composer's tool toggles on the client.
+    // Request-body toggles (isReadOnly, webSearchEnabled) are applied first via
+    // buildPageAITools, then the per-agent allowlist is enforced server-side
+    // (see agentEnabledTools filter below) so the client UI and server agree on
+    // which tools the model can actually use.
     const customSystemPrompt = page.systemPrompt;
 
     // Fetch drive prompt if page has includeDrivePrompt enabled
@@ -509,32 +508,30 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Build tools: non-core tools use passthrough stub schemas to reduce context window usage.
-    // The AI calls tool_search to get full parameter schemas before using non-core tools.
-    // See stub-tools.ts for the core tool set definition.
-    let filteredTools: ToolSet = buildPageAITools(pageSpaceToolsStubbed, {
+    // Build tools filtered by runtime toggles, then enforce the per-agent allowlist.
+    let filteredTools: ToolSet = buildPageAITools(pageSpaceTools, {
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
     });
 
-    // Inject tool_search scoped to the enabled tool set (with full schemas).
-    // Using the filtered key set prevents tool_search from advertising tools that are
-    // unavailable in this request (e.g. write tools in read-only, web_search when disabled).
-    const enabledFullSchemaTools = Object.fromEntries(
-      Object.keys(filteredTools)
-        .filter((name) => name in pageSpaceTools)
-        .map((name) => [name, pageSpaceTools[name as keyof typeof pageSpaceTools]])
-    ) as ToolSet;
-    filteredTools = {
-      ...filteredTools,
-      tool_search: createToolSearchTool(enabledFullSchemaTools),
-    } as ToolSet;
+    // Enforce per-agent tool allowlist. When enabledTools is a non-empty array,
+    // only tools explicitly listed are made available to the agent. This is a
+    // server-side security boundary — the client toggles (isReadOnly, webSearchEnabled)
+    // are still applied first so read-only mode always wins.
+    // null/undefined = no per-tool restriction (backwards compat for unconfigured pages).
+    const agentEnabledTools = page.enabledTools as string[] | null;
+    if (agentEnabledTools && agentEnabledTools.length > 0) {
+      filteredTools = Object.fromEntries(
+        Object.entries(filteredTools).filter(([name]) => agentEnabledTools.includes(name))
+      ) as ToolSet;
+    }
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
-      totalTools: Object.keys(pageSpaceToolsStubbed).length,
+      totalTools: Object.keys(pageSpaceTools).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode
+      webSearchEnabled: webSearchMode,
+      enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent

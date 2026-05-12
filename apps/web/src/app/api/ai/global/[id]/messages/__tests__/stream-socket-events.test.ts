@@ -155,6 +155,8 @@ vi.mock('@/lib/ai/core', () => ({
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
   pageSpaceTools: {},
+  pageSpaceToolsStubbed: {},
+  TOOL_DISCOVERY_PROMPT: 'TOOLS: mock',
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
@@ -263,6 +265,10 @@ vi.mock('@/lib/ai/core/tool-utils', () => ({
 vi.mock('@/lib/ai/tools/finish-tool', () => ({
   finishTool: {},
   FINISH_TOOL_NAME: 'finish',
+}));
+
+vi.mock('@/lib/ai/tools/tool-search-tool', () => ({
+  createToolSearchTool: vi.fn().mockReturnValue({}),
 }));
 
 import { POST } from '../route';

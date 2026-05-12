@@ -36,7 +36,7 @@ STYLE:
 • Be concise but conversational - like a knowledgeable colleague
 • Match user energy - conversational when exploring, efficient when executing`;
 
-const TOOL_DISCOVERY_PROMPT = `TOOLS:
+export const TOOL_DISCOVERY_PROMPT = `TOOLS:
 • Core tools are always ready: list/read drives and pages, search, create, edit content
 • For other tools (calendar, agents, channels, tasks, etc.): call tool_search("keyword") or tool_search("select:tool_name") first to get the full parameter schema`;
 
@@ -131,7 +131,6 @@ export function buildSystemPrompt(
     personalizationPrompt,
     contextPrompt,
     BEHAVIOR_PROMPT,
-    TOOL_DISCOVERY_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,
   ].filter(Boolean);
 

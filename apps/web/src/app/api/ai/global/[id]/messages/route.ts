@@ -18,6 +18,7 @@ import {
   isProviderError,
   type ProviderRequest,
   pageSpaceTools,
+  pageSpaceToolsStubbed,
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
@@ -28,6 +29,7 @@ import {
   buildMentionSystemPrompt,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
+  TOOL_DISCOVERY_PROMPT,
   buildAgentAwarenessPrompt,
   filterToolsForReadOnly,
   filterToolsForWebSearch,
@@ -64,6 +66,7 @@ import {
 import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -589,8 +592,8 @@ export async function POST(
       }
     }
 
-    // Add global assistant specific instructions
-    const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
+    // Add global assistant specific instructions (including tool discovery — only this route has tool_search)
+    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + mentionSystemPrompt + timestampSystemPrompt + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
@@ -690,10 +693,25 @@ MENTION PROCESSING:
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt;
 
-    // Filter tools based on read-only mode and web search toggle
-    const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    // Filter tools based on read-only mode and web search toggle.
+    // Non-core tools use passthrough stub schemas to reduce context window usage (~7–16k tokens/request).
+    // The AI calls tool_search to get full parameter schemas before using non-core tools.
+    const postReadOnlyTools = filterToolsForReadOnly(pageSpaceToolsStubbed, readOnlyMode);
     // Apply web search filtering (exclude web_search if disabled)
     let finalTools: ToolSet = filterToolsForWebSearch(postReadOnlyTools, webSearchMode) as ToolSet;
+
+    // Inject tool_search scoped to the currently-enabled PageSpace tools (full schemas).
+    // Using the filtered key set prevents tool_search from advertising tools that are
+    // unavailable in this request (e.g. write tools in read-only, web_search when disabled).
+    const enabledFullSchemaTools = Object.fromEntries(
+      Object.keys(finalTools)
+        .filter((name) => name in pageSpaceTools)
+        .map((name) => [name, pageSpaceTools[name as keyof typeof pageSpaceTools]])
+    ) as ToolSet;
+    finalTools = {
+      ...finalTools,
+      tool_search: createToolSearchTool(enabledFullSchemaTools),
+    } as ToolSet;
 
     loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
