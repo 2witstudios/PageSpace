@@ -708,10 +708,11 @@ MENTION PROCESSING:
       Object.entries(filteredAllTools).filter(([name]) => !CORE_TOOL_NAMES.has(name))
     ) as ToolSet;
 
+    const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt
-      + '\n\n' + buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
+      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '');
 
     let finalTools: ToolSet = {
       ...coreTools,

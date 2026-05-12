@@ -19,6 +19,9 @@ export function createExecuteTool(allowedTools: ToolSet): Tool {
           error: `Unknown tool "${tool_name}". Call tool_search("keyword") to discover available tools.`,
         };
       }
+      if (!t.execute) {
+        return { error: `Tool "${tool_name}" has no execute implementation.` };
+      }
       const realSchema = t.inputSchema as z.ZodType;
       const parsed = realSchema.safeParse(parameters);
       if (!parsed.success) {
