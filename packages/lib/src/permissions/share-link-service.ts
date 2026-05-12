@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, or, isNull, gt } from '@pagespace/db/operators';
+import { and, eq, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
@@ -181,11 +181,11 @@ export async function redeemDriveShareLink(
     userId: ctx.userId,
     role: link.role,
     acceptedAt: new Date(),
-  });
+  }).onConflictDoNothing();
 
   await db
     .update(driveShareLinks)
-    .set({ useCount: link.useCount + 1 } as Partial<typeof driveShareLinks.$inferInsert>)
+    .set({ useCount: sql`${driveShareLinks.useCount} + 1` })
     .where(eq(driveShareLinks.id, link.id));
 
   return { ok: true, data: { driveId: link.driveId } };
@@ -325,14 +325,14 @@ export async function redeemPageShareLink(
       canEdit: link.permissions.includes('EDIT'),
       canShare: false,
       canDelete: false,
-      grantedBy: link.id,
+      grantedBy: null,
       grantedAt: new Date(),
     })
     .onConflictDoNothing({ target: [pagePermissions.pageId, pagePermissions.userId] });
 
   await db
     .update(pageShareLinks)
-    .set({ useCount: link.useCount + 1 } as Partial<typeof pageShareLinks.$inferInsert>)
+    .set({ useCount: sql`${pageShareLinks.useCount} + 1` })
     .where(eq(pageShareLinks.id, link.id));
 
   return { ok: true, data: { pageId: link.pageId, driveId: link.driveId } };
