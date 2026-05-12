@@ -14,7 +14,7 @@ const PermissionEnum = z.enum(['VIEW', 'EDIT']);
 
 const CreateBodySchema = z.object({
   permissions: z.array(PermissionEnum).optional(),
-  expiresAt: z.string().optional(),
+  expiresAt: z.string().datetime().optional(),
 });
 
 export async function GET(

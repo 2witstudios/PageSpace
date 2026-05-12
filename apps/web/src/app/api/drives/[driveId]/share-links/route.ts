@@ -11,7 +11,7 @@ const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const CreateBodySchema = z.object({
   role: z.enum(['MEMBER', 'ADMIN']).optional(),
-  expiresAt: z.string().optional(),
+  expiresAt: z.string().datetime().optional(),
 });
 
 export async function GET(
