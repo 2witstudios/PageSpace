@@ -37,8 +37,8 @@ STYLE:
 • Match user energy - conversational when exploring, efficient when executing`;
 
 export const TOOL_DISCOVERY_PROMPT = `TOOLS:
-• Core tools are always ready: list/read drives and pages, search, create, edit content
-• For other tools (calendar, agents, channels, tasks, etc.): call tool_search("keyword") or tool_search("select:tool_name") first to get the full parameter schema`;
+Core tools (list/read drives and pages, search, create, edit content) can be called directly
+All other tools run via execute_tool — use tool_search("keyword") first to discover available tools and get their parameter schemas, then call execute_tool({tool_name, parameters})`;
 
 const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 • You cannot modify, create, or delete any content

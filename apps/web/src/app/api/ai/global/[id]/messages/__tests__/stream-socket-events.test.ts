@@ -155,7 +155,7 @@ vi.mock('@/lib/ai/core', () => ({
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
   pageSpaceTools: {},
-  pageSpaceToolsStubbed: {},
+  corePageSpaceTools: {},
   TOOL_DISCOVERY_PROMPT: 'TOOLS: mock',
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
@@ -178,6 +178,14 @@ vi.mock('@/lib/ai/core', () => ({
   sanitizeToolNamesForProvider: vi.fn((t: unknown) => t),
   getUserPersonalization: vi.fn().mockResolvedValue(null),
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+
+vi.mock('@/lib/ai/core/stub-tools', () => ({
+  CORE_TOOL_NAMES: new Set(['list_drives', 'list_pages', 'read_page', 'get_page_details', 'create_page', 'replace_lines', 'regex_search', 'multi_drive_search']),
+}));
+
+vi.mock('@/lib/ai/tools/execute-tool', () => ({
+  createExecuteTool: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock('ai', () => ({
