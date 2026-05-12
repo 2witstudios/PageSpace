@@ -124,7 +124,7 @@ export function isProviderAvailable(
     return false;
   }
   if (provider === 'pagespace') {
-    return getDefaultPageSpaceSettings() !== null;
+    return true;
   }
   return getManagedProviderKey(provider) !== null;
 }
