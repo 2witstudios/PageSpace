@@ -22,7 +22,7 @@ export interface PendingInvite {
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   invitedByName: string;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
 }
 
 interface PendingInviteRowProps {
@@ -63,8 +63,11 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
           </Badge>
         );
 
-  const expiresAt = new Date(invite.expiresAt);
-  const isExpired = expiresAt.getTime() < Date.now();
+  const isExpired = invite.expiresAt !== null && new Date(invite.expiresAt).getTime() < Date.now();
+  const expiryLabel =
+    invite.expiresAt !== null && !isExpired
+      ? `Expires ${new Date(invite.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : null;
 
   return (
     <div
@@ -93,6 +96,9 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Invited by {invite.invitedByName}
+            {expiryLabel && (
+              <span className="ml-2 text-gray-400 dark:text-gray-500">· {expiryLabel}</span>
+            )}
           </p>
         </div>
       </div>

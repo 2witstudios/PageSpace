@@ -22,6 +22,7 @@ const shareInviteBodySchema = z
     permissions: z
       .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
       .min(1, 'At least VIEW permission is required'),
+    expiryDays: z.number().int().min(1).max(365).nullable().optional(),
   })
   .superRefine(({ permissions }, ctx) => {
     if (
@@ -87,7 +88,7 @@ export async function POST(
         { status: 400 },
       );
     }
-    const { email, permissions } = parsed.data;
+    const { email, permissions, expiryDays } = parsed.data;
 
     // R5: DELETE is blocked at the zod layer above; this is a belt-and-suspenders guard
     // (the zod enum only allows VIEW | EDIT | SHARE, so DELETE can never reach here)
@@ -184,7 +185,10 @@ export async function POST(
       );
     }
 
-    const { token, tokenHash, expiresAt } = createInviteToken({ now });
+    const { token, tokenHash, expiresAt } = createInviteToken({
+      now,
+      expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
+    });
 
     let pendingInvite: { id: string };
     try {
