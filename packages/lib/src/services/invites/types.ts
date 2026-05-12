@@ -162,7 +162,7 @@ export interface ConnectionInvite {
   invitedBy: string;
   inviterName: string;
   requestMessage: string | null;
-  expiresAt: Date | null;
+  expiresAt: Date;
   consumedAt: Date | null;
 }
 

@@ -210,7 +210,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const { token, tokenHash, expiresAt } = createInviteToken({ now });
+    const { token, tokenHash, expiresAt } = createInviteToken({ now, expiryMinutes: 60 * 48 });
 
     let pendingInvite: { id: string };
     try {
