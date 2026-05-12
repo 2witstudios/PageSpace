@@ -27,12 +27,14 @@ import { MobileCalendarView } from './MobileCalendarView';
 import { EventModal } from './EventModal';
 import { CalendarSidebar } from './CalendarSidebar';
 import {
+  AttendeeStatus,
   CalendarViewMode,
   CalendarEvent,
   CalendarHandlers,
   EventColorConfig,
   getDriveCalendarColor,
 } from './calendar-types';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface CalendarViewProps {
   context: 'user' | 'drive';
@@ -70,6 +72,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     allDay: boolean;
   } | null>(null);
 
+  const currentUserId = useAuthStore((s) => s.user?.id);
+
   const {
     events,
     tasks,
@@ -78,6 +82,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     createEvent,
     updateEvent,
     deleteEvent,
+    updateRsvp,
     refresh: _refresh,
   } = useCalendarData({
     context,
@@ -266,6 +271,23 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     setIsEventModalOpen(false);
   };
 
+  const handleRsvp = useCallback(async (status: AttendeeStatus) => {
+    if (!selectedEvent) return;
+    await updateRsvp(selectedEvent.id, status);
+    setSelectedEvent((prev) =>
+      prev
+        ? {
+            ...prev,
+            attendees: prev.attendees.map((a) =>
+              a.userId === currentUserId
+                ? { ...a, status, respondedAt: new Date().toISOString() }
+                : a,
+            ),
+          }
+        : null,
+    );
+  }, [selectedEvent, updateRsvp, currentUserId]);
+
   // Get header title based on view mode
   const getHeaderTitle = () => {
     switch (viewMode) {
@@ -316,6 +338,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           defaultValues={newEventDefaults}
           onSave={handleEventSave}
           onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
+          onRsvp={handleRsvp}
           driveId={driveId}
           context={context}
         />
@@ -576,6 +599,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         defaultValues={newEventDefaults}
         onSave={handleEventSave}
         onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
+        onRsvp={handleRsvp}
         driveId={driveId}
         context={context}
       />

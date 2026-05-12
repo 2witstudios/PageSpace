@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { format } from 'date-fns';
-import { AlertCircle, Bot, CalendarIcon, ChevronRight, Clock, MapPin, Trash2, Zap } from 'lucide-react';
+import { AlertCircle, Bot, CalendarIcon, Check, ChevronRight, CircleHelp, Clock, MapPin, Trash2, X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 import {
@@ -40,7 +40,8 @@ import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useEditingSession } from '@/stores/useEditingSession';
-import { CalendarEvent, EVENT_COLORS } from './calendar-types';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { AttendeeStatus, CalendarEvent, EVENT_COLORS } from './calendar-types';
 import { TriggerPagePicker } from '@/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
 import {
   AgentTriggerSection,
@@ -77,6 +78,7 @@ interface EventModalProps {
     agentTrigger?: AgentTriggerSavePayload | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
+  onRsvp?: (status: AttendeeStatus) => Promise<void>;
   driveId?: string;
   context: 'user' | 'drive';
 }
@@ -138,6 +140,7 @@ export function EventModal({
   defaultValues,
   onSave,
   onDelete,
+  onRsvp,
   driveId,
   context,
 }: EventModalProps) {
@@ -160,6 +163,25 @@ export function EventModal({
   const [allDay, setAllDay] = useState(false);
   const [color, setColor] = useState<keyof typeof EVENT_COLORS>('default');
   const [isSaving, setIsSaving] = useState(false);
+  const [rsvpLoading, setRsvpLoading] = useState(false);
+
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  const myAttendee = useMemo(
+    () => event?.attendees.find((a) => a.userId === currentUserId) ?? null,
+    [event, currentUserId],
+  );
+
+  const handleRsvp = async (status: AttendeeStatus) => {
+    if (!onRsvp) return;
+    setRsvpLoading(true);
+    try {
+      await onRsvp(status);
+    } catch {
+      toast.error('Failed to update RSVP');
+    } finally {
+      setRsvpLoading(false);
+    }
+  };
 
   // Agent trigger state
   const [agentEnabled, setAgentEnabled] = useState(false);
@@ -412,7 +434,7 @@ export function EventModal({
           </DialogDescription>
         </DialogHeader>
 
-        <fieldset disabled={isSaving}>
+        <fieldset disabled={isSaving || rsvpLoading}>
           <div className="space-y-4 py-4">
             {/* Title */}
             <div className="space-y-2">
@@ -425,6 +447,45 @@ export function EventModal({
                 autoFocus
               />
             </div>
+
+          {/* RSVP section — only shown when the current user is an attendee */}
+          {myAttendee && onRsvp && (
+            <div className="space-y-2 rounded-md border p-3">
+              <Label className="text-sm font-medium">Your RSVP</Label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={myAttendee.status === 'ACCEPTED' ? 'default' : 'outline'}
+                  onClick={() => handleRsvp('ACCEPTED')}
+                  disabled={rsvpLoading}
+                >
+                  <Check className="h-3.5 w-3.5 mr-1.5" />
+                  Accept
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={myAttendee.status === 'TENTATIVE' ? 'secondary' : 'outline'}
+                  onClick={() => handleRsvp('TENTATIVE')}
+                  disabled={rsvpLoading}
+                >
+                  <CircleHelp className="h-3.5 w-3.5 mr-1.5" />
+                  Maybe
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={myAttendee.status === 'DECLINED' ? 'destructive' : 'outline'}
+                  onClick={() => handleRsvp('DECLINED')}
+                  disabled={rsvpLoading}
+                >
+                  <X className="h-3.5 w-3.5 mr-1.5" />
+                  Decline
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* All-day toggle */}
           <div className="flex items-center justify-between">
