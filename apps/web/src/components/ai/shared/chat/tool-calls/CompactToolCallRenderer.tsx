@@ -823,12 +823,20 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
 });
 
 export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part }) {
-  const toolName = part.toolName || part.type?.replace('tool-', '') || '';
+  let toolName = part.toolName || part.type?.replace('tool-', '') || '';
+  let resolvedPart = part;
 
-  // Task management tools - render with TaskRenderer
-  if (toolName === 'update_task') {
-    return <TaskRenderer part={part} />;
+  if (toolName === 'tool_search') return null;
+
+  if (toolName === 'execute_tool') {
+    const raw = safeJsonParse(part.input);
+    const innerName = typeof raw?.tool_name === 'string' ? raw.tool_name : null;
+    if (innerName) {
+      toolName = innerName;
+      resolvedPart = { ...part, input: raw?.parameters ?? {} };
+    }
   }
 
-  return <CompactToolCallRendererInternal part={part} toolName={toolName} />;
+  if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
+  return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });
