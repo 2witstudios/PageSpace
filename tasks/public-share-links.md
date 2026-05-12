@@ -1,6 +1,6 @@
 # Public Share Links Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-05-12)
 **Goal**: Add reusable share links for pages (Google Drive-style access) and drives (Discord-style join links), requiring sign-in to redeem, fully revocable, zero PII in the link record.
 
 ## Overview

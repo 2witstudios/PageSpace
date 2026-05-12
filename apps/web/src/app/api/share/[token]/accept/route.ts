@@ -24,14 +24,26 @@ export async function POST(
 
   if (info.type === 'drive') {
     const result = await redeemDriveShareLink(auth.ctx, token);
-    if (!result.ok && result.error !== 'ALREADY_MEMBER') {
+    if (!result.ok) {
+      if (result.error === 'ALREADY_MEMBER') {
+        return NextResponse.json({ type: 'drive', driveId: info.driveId });
+      }
+      if (result.error === 'NOT_FOUND') {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      }
       return NextResponse.json({ error: 'Failed to redeem share link' }, { status: 500 });
     }
     return NextResponse.json({ type: 'drive', driveId: info.driveId });
   }
 
   const result = await redeemPageShareLink(auth.ctx, token);
-  if (!result.ok && result.error !== 'ALREADY_MEMBER') {
+  if (!result.ok) {
+    if (result.error === 'ALREADY_MEMBER') {
+      return NextResponse.json({ type: 'page', pageId: info.pageId, driveId: info.driveId });
+    }
+    if (result.error === 'NOT_FOUND') {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
     return NextResponse.json({ error: 'Failed to redeem share link' }, { status: 500 });
   }
   return NextResponse.json({
