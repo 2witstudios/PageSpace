@@ -556,7 +556,7 @@ const SidebarChatTab: React.FC = () => {
   const handleAppResume = useCallback(async () => {
     if (selectedAgent) {
       await refreshAgentConversation();
-    } else if (globalConversationId) {
+    } else if (globalConversationId && globalIsInitialized) {
       try {
         const res = await fetchWithAuth(`/api/ai/global/${globalConversationId}/messages`);
         if (res.ok) {
@@ -567,7 +567,7 @@ const SidebarChatTab: React.FC = () => {
         console.error('Failed to refresh global messages after resume:', err);
       }
     }
-  }, [selectedAgent, refreshAgentConversation, globalConversationId, setGlobalMessages]);
+  }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, setGlobalMessages]);
 
   useAppStateRecovery({
     onResume: handleAppResume,
