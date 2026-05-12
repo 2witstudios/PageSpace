@@ -118,6 +118,7 @@ vi.mock('@/lib/ai/core', () => ({
   getUserLMStudioSettings: vi.fn(),
   getUserGLMSettings: vi.fn(),
   pageSpaceTools: {},
+  pageSpaceToolsStubbed: {},
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
@@ -191,6 +192,10 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('@/lib/ai/tools/tool-search-tool', () => ({
+  createToolSearchTool: vi.fn().mockReturnValue({}),
 }));
 
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';

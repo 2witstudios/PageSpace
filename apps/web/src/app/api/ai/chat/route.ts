@@ -35,6 +35,7 @@ import {
   type ProviderRequest,
   buildProviderAvailabilityMap,
   pageSpaceTools,
+  pageSpaceToolsStubbed,
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
@@ -67,6 +68,7 @@ import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
+import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import {
   createStreamAbortController,
@@ -507,16 +509,29 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Build tools from the full PageSpace baseline, modulated by the composer's
-    // runtime toggles (read-only + web search). This makes the popover the
-    // single source of truth — see comment near customSystemPrompt above.
-    let filteredTools: ToolSet = buildPageAITools(pageSpaceTools, {
+    // Build tools: non-core tools use passthrough stub schemas to reduce context window usage.
+    // The AI calls tool_search to get full parameter schemas before using non-core tools.
+    // See stub-tools.ts for the core tool set definition.
+    let filteredTools: ToolSet = buildPageAITools(pageSpaceToolsStubbed, {
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
     });
 
+    // Inject tool_search scoped to the enabled tool set (with full schemas).
+    // Using the filtered key set prevents tool_search from advertising tools that are
+    // unavailable in this request (e.g. write tools in read-only, web_search when disabled).
+    const enabledFullSchemaTools = Object.fromEntries(
+      Object.keys(filteredTools)
+        .filter((name) => name in pageSpaceTools)
+        .map((name) => [name, pageSpaceTools[name as keyof typeof pageSpaceTools]])
+    ) as ToolSet;
+    filteredTools = {
+      ...filteredTools,
+      tool_search: createToolSearchTool(enabledFullSchemaTools),
+    } as ToolSet;
+
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
-      totalTools: Object.keys(pageSpaceTools).length,
+      totalTools: Object.keys(pageSpaceToolsStubbed).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode

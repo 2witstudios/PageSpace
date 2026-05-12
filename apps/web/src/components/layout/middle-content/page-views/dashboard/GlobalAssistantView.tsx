@@ -892,11 +892,15 @@ const GlobalAssistantView: React.FC = () => {
         welcomeTitle={
           selectedAgent
             ? `Chat with ${selectedAgent.title}`
+            : locationContext?.currentDrive
+            ? locationContext.currentDrive.name
             : 'How can I help you today?'
         }
         welcomeSubtitle={
           selectedAgent
             ? 'Ask me anything!'
+            : locationContext?.currentDrive
+            ? 'Ask about pages in this drive, or tell me what you\'re working on.'
             : 'Tell me what you\'re thinking about or working on.'
         }
         onEdit={handleEdit}

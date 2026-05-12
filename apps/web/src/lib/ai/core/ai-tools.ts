@@ -10,6 +10,7 @@ import { activityTools } from '../tools/activity-tools';
 import { calendarReadTools } from '../tools/calendar-read-tools';
 import { calendarWriteTools } from '../tools/calendar-write-tools';
 import { channelTools } from '../tools/channel-tools';
+import { buildStubbedTools } from './stub-tools';
 
 /**
  * PageSpace AI Tools - Internal AI SDK tool implementations
@@ -32,3 +33,5 @@ export const pageSpaceTools = {
 };
 
 export type PageSpaceTools = typeof pageSpaceTools;
+
+export const pageSpaceToolsStubbed = buildStubbedTools(pageSpaceTools);
