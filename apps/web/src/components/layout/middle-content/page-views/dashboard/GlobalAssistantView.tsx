@@ -49,7 +49,7 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useGlobalChatConfig, useGlobalChatStream, useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -99,17 +99,9 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
   // ============================================
-  const {
-    chatConfig: globalChatConfig,
-    setMessages: setGlobalMessages,
-    setIsStreaming: setGlobalIsStreaming,
-    setStopStreaming: setGlobalStopStreaming,
-    isStreaming: contextIsStreaming,
-    stopStreaming: contextStopStreaming,
-    currentConversationId: globalConversationId,
-    isInitialized: globalIsInitialized,
-    createNewConversation,
-  } = useGlobalChat();
+  const { chatConfig: globalChatConfig, setIsStreaming: setGlobalIsStreaming, setStopStreaming: setGlobalStopStreaming } = useGlobalChatConfig();
+  const { isStreaming: contextIsStreaming, stopStreaming: contextStopStreaming } = useGlobalChatStream();
+  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, createNewConversation, refreshSignal } = useGlobalChatConversation();
 
   // ============================================
   // AGENT STORE - for agent selection and conversation management
@@ -398,10 +390,9 @@ const GlobalAssistantView: React.FC = () => {
         typeof nextOrUpdater === 'function'
           ? nextOrUpdater(latestGlobalMessagesRef.current)
           : nextOrUpdater;
-      setGlobalMessages(nextMessages);
       setGlobalLocalMessages(nextMessages);
     },
-    [setGlobalMessages, setGlobalLocalMessages]
+    [setGlobalLocalMessages]
   );
 
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
@@ -429,7 +420,6 @@ const GlobalAssistantView: React.FC = () => {
           setAgentMessages(data.messages);
           setAgentStoreMessages(data.messages);
         } else {
-          setGlobalMessages(data.messages);
           setGlobalLocalMessages(data.messages);
         }
       }
@@ -441,7 +431,6 @@ const GlobalAssistantView: React.FC = () => {
     selectedAgent,
     setAgentMessages,
     setAgentStoreMessages,
-    setGlobalMessages,
     setGlobalLocalMessages,
   ]);
 
@@ -459,7 +448,6 @@ const GlobalAssistantView: React.FC = () => {
           setAgentMessages(data.messages);
           setAgentStoreMessages(data.messages);
         } else {
-          setGlobalMessages(data.messages);
           setGlobalLocalMessages(data.messages);
         }
       }
@@ -471,7 +459,6 @@ const GlobalAssistantView: React.FC = () => {
     selectedAgent,
     setAgentMessages,
     setAgentStoreMessages,
-    setGlobalMessages,
     setGlobalLocalMessages,
   ]);
 
@@ -510,14 +497,18 @@ const GlobalAssistantView: React.FC = () => {
     }
   }, [selectedAgent, globalStatus, globalStop]);
 
-  // Sync local messages to global context (global mode only)
-  // Only sync when initialized to prevent race conditions during conversation loading.
-  // This ensures we don't overwrite context with stale messages from a previous conversation.
+  // When remote events fire (reconnect, undo from another tab, cross-tab
+  // edit/delete), the context increments refreshSignal. React to it here.
+  const isInitializedRef = useRef(isInitialized);
+  isInitializedRef.current = isInitialized;
+  const prevRefreshSignalRef = useRef(refreshSignal);
   useEffect(() => {
-    if (!selectedAgent && globalIsInitialized) {
-      setGlobalMessages(globalLocalMessages);
+    if (refreshSignal === prevRefreshSignalRef.current) return;
+    prevRefreshSignalRef.current = refreshSignal;
+    if (!selectedAgent && isInitializedRef.current) {
+      handlePullUpRefresh();
     }
-  }, [selectedAgent, globalLocalMessages, setGlobalMessages, globalIsInitialized]);
+  }, [refreshSignal, selectedAgent, handlePullUpRefresh]);
 
   // Sync streaming status to global context (global mode only)
   useEffect(() => {

@@ -180,12 +180,11 @@ const SidebarChatTab: React.FC = () => {
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
     createNewConversation: createGlobalConversation,
-    refreshConversation: refreshGlobalConversation,
+    refreshSignal,
   } = useGlobalChatConversation();
 
   const {
     chatConfig: globalChatConfig,
-    setMessages: setGlobalContextMessages,
   } = useGlobalChatConfig();
 
   const {
@@ -482,12 +481,27 @@ const SidebarChatTab: React.FC = () => {
     { conversationId: currentConversationId || undefined, componentName: 'SidebarChatTab' }
   );
 
+  // When remote events fire (reconnect, undo from another tab, cross-tab
+  // edit/delete), GlobalChatContext increments refreshSignal. If
+  // GlobalAssistantView is not mounted (user is on a page, not the dashboard),
+  // this sidebar is responsible for re-fetching global messages.
+  const prevSidebarRefreshSignalRef = useRef(refreshSignal);
+  const globalIsInitializedRef = useRef(globalIsInitialized);
+  globalIsInitializedRef.current = globalIsInitialized;
+  useEffect(() => {
+    if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
+    prevSidebarRefreshSignalRef.current = refreshSignal;
+    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
+      fetchWithAuth(`/api/ai/global/${globalConversationId}/messages`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (data) setGlobalMessages(data.messages); })
+        .catch((err) => console.error('Sidebar refreshSignal fetch failed:', err));
+    }
+  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, setGlobalMessages]);
+
   // ============================================
   // Effects: UI State
   // ============================================
-  // Note: Removed unconditional scroll on every message change
-  // The sidebar will be updated with use-stick-to-bottom in a future iteration
-  // For now, scroll is called explicitly after sending messages
 
   useEffect(() => {
     if (error) setShowError(true);
@@ -542,10 +556,18 @@ const SidebarChatTab: React.FC = () => {
   const handleAppResume = useCallback(async () => {
     if (selectedAgent) {
       await refreshAgentConversation();
-    } else {
-      await refreshGlobalConversation();
+    } else if (globalConversationId && globalIsInitialized) {
+      try {
+        const res = await fetchWithAuth(`/api/ai/global/${globalConversationId}/messages`);
+        if (res.ok) {
+          const data = await res.json();
+          setGlobalMessages(data.messages);
+        }
+      } catch (err) {
+        console.error('Failed to refresh global messages after resume:', err);
+      }
     }
-  }, [selectedAgent, refreshAgentConversation, refreshGlobalConversation]);
+  }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, setGlobalMessages]);
 
   useAppStateRecovery({
     onResume: handleAppResume,
@@ -697,16 +719,11 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
-  // Unified setMessages that syncs to global context when in global mode
-  // Forward updater functions directly — useChat's setMessages handles them with latest state
   const unifiedSetMessages = useCallback(
     (msgs: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => {
       setMessages(msgs);
-      if (!selectedAgent) {
-        setGlobalMessages(msgs);
-      }
     },
-    [selectedAgent, setMessages, setGlobalMessages]
+    [setMessages]
   );
 
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
@@ -767,13 +784,12 @@ const SidebarChatTab: React.FC = () => {
           setMessages(data.messages);
         } else {
           setGlobalMessages(data.messages);
-          setGlobalContextMessages(data.messages);
         }
       }
     } catch (error) {
       console.error('Failed to refresh messages after undo:', error);
     }
-  }, [currentConversationId, selectedAgent, setMessages, setGlobalMessages, setGlobalContextMessages]);
+  }, [currentConversationId, selectedAgent, setMessages, setGlobalMessages]);
 
   // ============================================
   // Computed Values for Rendering
