@@ -88,7 +88,7 @@ export async function POST(
         { status: 400 },
       );
     }
-    const { email, permissions } = parsed.data;
+    const { email, permissions, expiryDays } = parsed.data;
 
     // R5: DELETE is blocked at the zod layer above; this is a belt-and-suspenders guard
     // (the zod enum only allows VIEW | EDIT | SHARE, so DELETE can never reach here)
@@ -187,7 +187,7 @@ export async function POST(
 
     const { token, tokenHash, expiresAt } = createInviteToken({
       now,
-      expiryMinutes: body.expiryDays ? body.expiryDays * 24 * 60 : null,
+      expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
     });
 
     let pendingInvite: { id: string };

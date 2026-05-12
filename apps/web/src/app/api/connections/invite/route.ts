@@ -210,7 +210,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const { token, tokenHash, expiresAt } = createInviteToken({ now, expiryMinutes: 60 * 48 });
+    const { token, tokenHash, expiresAt: rawExpiresAt } = createInviteToken({ now, expiryMinutes: 60 * 48 });
+    // expiryMinutes is always provided here, so expiresAt is never null
+    const expiresAt = rawExpiresAt as Date;
 
     let pendingInvite: { id: string };
     try {

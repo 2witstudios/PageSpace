@@ -148,6 +148,7 @@ interface EmailBody {
   role: 'MEMBER' | 'ADMIN';
   customRoleId?: string | null;
   permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+  expiryDays?: number | null;
 }
 
 async function handleUserIdPath(args: {
