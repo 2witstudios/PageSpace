@@ -829,6 +829,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
     }
   }
 
+  if (toolName === 'tool_search') return null;
+
   if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
   return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} />;

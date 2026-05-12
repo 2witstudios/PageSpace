@@ -837,6 +837,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
     }
   }
 
+  if (toolName === 'tool_search') return null;
+
   if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
   return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });
