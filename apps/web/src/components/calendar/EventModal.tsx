@@ -167,7 +167,7 @@ export function EventModal({
 
   const currentUserId = useAuthStore((s) => s.user?.id);
   const myAttendee = useMemo(
-    () => event?.attendees.find((a) => a.userId === currentUserId) ?? null,
+    () => event?.attendees.find((a) => a.userId === currentUserId && !a.isOrganizer) ?? null,
     [event, currentUserId],
   );
 
@@ -176,6 +176,7 @@ export function EventModal({
     setRsvpLoading(true);
     try {
       await onRsvp(status);
+      toast.success('RSVP updated');
     } catch {
       toast.error('Failed to update RSVP');
     } finally {
@@ -448,44 +449,41 @@ export function EventModal({
               />
             </div>
 
-          {/* RSVP section — only shown when the current user is an attendee */}
-          {myAttendee && onRsvp && (
-            <div className="space-y-2 rounded-md border p-3">
-              <Label className="text-sm font-medium">Your RSVP</Label>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={myAttendee.status === 'ACCEPTED' ? 'default' : 'outline'}
-                  onClick={() => handleRsvp('ACCEPTED')}
-                  disabled={rsvpLoading}
-                >
-                  <Check className="h-3.5 w-3.5 mr-1.5" />
-                  Accept
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={myAttendee.status === 'TENTATIVE' ? 'secondary' : 'outline'}
-                  onClick={() => handleRsvp('TENTATIVE')}
-                  disabled={rsvpLoading}
-                >
-                  <CircleHelp className="h-3.5 w-3.5 mr-1.5" />
-                  Maybe
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={myAttendee.status === 'DECLINED' ? 'destructive' : 'outline'}
-                  onClick={() => handleRsvp('DECLINED')}
-                  disabled={rsvpLoading}
-                >
-                  <X className="h-3.5 w-3.5 mr-1.5" />
-                  Decline
-                </Button>
+            {/* RSVP section — only shown when the current user is a non-organizer attendee */}
+            {myAttendee && onRsvp && (
+              <div className="space-y-2 rounded-md border p-3">
+                <Label className="text-sm font-medium">Your RSVP</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={myAttendee.status === 'ACCEPTED' ? 'default' : 'outline'}
+                    onClick={() => handleRsvp('ACCEPTED')}
+                  >
+                    <Check className="h-3.5 w-3.5 mr-1.5" />
+                    Accept
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={myAttendee.status === 'TENTATIVE' ? 'secondary' : 'outline'}
+                    onClick={() => handleRsvp('TENTATIVE')}
+                  >
+                    <CircleHelp className="h-3.5 w-3.5 mr-1.5" />
+                    Maybe
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={myAttendee.status === 'DECLINED' ? 'destructive' : 'outline'}
+                    onClick={() => handleRsvp('DECLINED')}
+                  >
+                    <X className="h-3.5 w-3.5 mr-1.5" />
+                    Decline
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           {/* All-day toggle */}
           <div className="flex items-center justify-between">
