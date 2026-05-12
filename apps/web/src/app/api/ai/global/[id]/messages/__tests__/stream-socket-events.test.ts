@@ -156,6 +156,7 @@ vi.mock('@/lib/ai/core', () => ({
   isProviderError: vi.fn().mockReturnValue(false),
   pageSpaceTools: {},
   pageSpaceToolsStubbed: {},
+  TOOL_DISCOVERY_PROMPT: 'TOOLS: mock',
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),

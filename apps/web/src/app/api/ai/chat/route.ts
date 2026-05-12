@@ -275,10 +275,11 @@ export async function POST(request: Request) {
     }
 
     // Extract custom agent configuration from page.
-    // Note: page.enabledTools is intentionally NOT consulted here. It seeds the
-    // composer's tool toggles on the client; the toggles in the request body
-    // are the source of truth at runtime so the UI doesn't lie about what the
-    // model can actually do.
+    // page.enabledTools seeds the composer's tool toggles on the client.
+    // Request-body toggles (isReadOnly, webSearchEnabled) are applied first via
+    // buildPageAITools, then the per-agent allowlist is enforced server-side
+    // (see agentEnabledTools filter below) so the client UI and server agree on
+    // which tools the model can actually use.
     const customSystemPrompt = page.systemPrompt;
 
     // Fetch drive prompt if page has includeDrivePrompt enabled
