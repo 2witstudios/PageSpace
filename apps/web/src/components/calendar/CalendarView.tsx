@@ -273,7 +273,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
 
   const handleRsvp = useCallback(async (status: AttendeeStatus) => {
     if (!selectedEvent) return;
-    await updateRsvp(selectedEvent.id, status);
+    const previousEvent = selectedEvent;
     setSelectedEvent((prev) =>
       prev
         ? {
@@ -286,6 +286,12 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           }
         : null,
     );
+    try {
+      await updateRsvp(selectedEvent.id, status);
+    } catch {
+      setSelectedEvent(previousEvent);
+      throw new Error('Failed to update RSVP');
+    }
   }, [selectedEvent, updateRsvp, currentUserId]);
 
   // Get header title based on view mode
