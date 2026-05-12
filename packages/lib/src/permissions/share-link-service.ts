@@ -331,8 +331,8 @@ export async function redeemPageShareLink(
     .onConflictDoUpdate({
       target: [pagePermissions.pageId, pagePermissions.userId],
       set: {
-        canView: sql`${pagePermissions.canView} OR EXCLUDED.can_view`,
-        canEdit: sql`${pagePermissions.canEdit} OR EXCLUDED.can_edit`,
+        canView: sql`${pagePermissions.canView} OR EXCLUDED."canView"`,
+        canEdit: sql`${pagePermissions.canEdit} OR EXCLUDED."canEdit"`,
         grantedAt: new Date(),
       },
     });
