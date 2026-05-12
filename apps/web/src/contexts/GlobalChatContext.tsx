@@ -16,6 +16,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 
 /**
  * Global Chat Context - Split into three tiers to minimize re-render noise:
@@ -300,8 +302,19 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
       refreshConversationRef.current();
     },
-    onStreamComplete: () => {
-      refreshConversationRef.current();
+    onStreamComplete: (messageId) => {
+      const stream = usePendingStreamsStore.getState().streams.get(messageId);
+      // Remote/bootstrapped stream with accumulated parts — synthesize locally.
+      if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationId) {
+        setMessages((prev) =>
+          prev.some((m) => m.id === messageId)
+            ? prev
+            : [...prev, synthesizeAssistantMessage(messageId, stream.parts)],
+        );
+        return;
+      }
+      // Own fresh stream: GlobalAssistantView's sync effect already keeps context
+      // messages current. No server reload needed.
     },
     onOwnStreamBootstrap: ({ messageId }) => {
       setIsStreamingRef.current(true);
