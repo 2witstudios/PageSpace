@@ -307,6 +307,13 @@ describe('createPageShareLink', () => {
     expect(canUserSharePage).not.toHaveBeenCalled();
   });
 
+  it('returns INVALID_PERMISSIONS when empty permissions array is specified', async () => {
+    const result = await createPageShareLink(makeCtx(), PAGE_ID, { permissions: [] });
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_PERMISSIONS' });
+    expect(canUserSharePage).not.toHaveBeenCalled();
+  });
+
   it('returns UNAUTHORIZED when caller lacks canShare', async () => {
     vi.mocked(canUserSharePage).mockResolvedValue(false);
 
@@ -418,11 +425,11 @@ describe('redeemPageShareLink', () => {
         return Promise.resolve([]);
       }),
     }));
-    vi.mocked(isUserDriveMember).mockResolvedValue(false);
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnThis(),
       returning: vi.fn().mockResolvedValue([{ id: 'new-pp-id' }]),
-      onConflictDoNothing: vi.fn().mockReturnThis(),
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
     });
     makeUpdateChain();
 
