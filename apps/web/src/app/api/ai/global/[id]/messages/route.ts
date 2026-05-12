@@ -29,6 +29,7 @@ import {
   buildMentionSystemPrompt,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
+  TOOL_DISCOVERY_PROMPT,
   buildAgentAwarenessPrompt,
   filterToolsForReadOnly,
   filterToolsForWebSearch,
@@ -591,8 +592,8 @@ export async function POST(
       }
     }
 
-    // Add global assistant specific instructions
-    const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
+    // Add global assistant specific instructions (including tool discovery — only this route has tool_search)
+    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + mentionSystemPrompt + timestampSystemPrompt + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
