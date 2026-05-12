@@ -24,7 +24,7 @@ import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef
 import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
-import { useSWRConfig } from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
@@ -56,6 +56,7 @@ import {
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
+import { CodexApprovalBanner, type CodexApprovalAnnotation } from '@/components/ai/codex/CodexApprovalBanner';
 import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import {
@@ -204,6 +205,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Poll for pending Codex approvals while streaming with the Codex provider
+  const isCodexStreaming = selectedProvider === 'codex' && isStreaming;
+  const { data: pendingCodexApprovals = [], mutate: mutatePendingApprovals } = useSWR<CodexApprovalAnnotation[]>(
+    isCodexStreaming ? '/api/codex/approvals/pending' : null,
+    (url: string) => fetchWithAuth(url).then((r) => r.json()).then((d: { approvals?: CodexApprovalAnnotation[] }) => d.approvals ?? []),
+    { refreshInterval: 1500 },
+  );
+  const handleApprovalResolved = useCallback((_requestId: string) => {
+    mutatePendingApprovals();
+  }, [mutatePendingApprovals]);
+
   const { wrapSend } = useSendHandoff(currentConversationId, status);
   const stop = useChatStop(streamTrackingId, chatStop);
 
@@ -776,6 +789,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             remoteStreams={remoteStreams}
             renderInput={(props) => (
               <>
+                {pendingCodexApprovals.map((approval) => (
+                  <CodexApprovalBanner
+                    key={approval.requestId}
+                    approval={approval}
+                    onResolved={handleApprovalResolved}
+                  />
+                ))}
                 {isVoiceModeActive && (
                   <VoiceCallPanel
                     owner={VOICE_OWNER}

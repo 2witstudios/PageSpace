@@ -7,6 +7,7 @@ import { PushActionHandler } from "@/components/PushActionHandler";
 import QuickCreatePalette from "@/components/create/QuickCreatePalette";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
+import { FeatureTogglesProvider } from "@/components/providers/FeatureTogglesProvider";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
@@ -35,11 +36,11 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
 
 
   return (
-    <>
+    <FeatureTogglesProvider>
       <PushNotificationManager />
       <PushActionHandler />
       <QuickCreatePalette />
       {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
-    </>
+    </FeatureTogglesProvider>
   );
 }

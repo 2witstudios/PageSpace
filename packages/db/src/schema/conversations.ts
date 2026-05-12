@@ -14,6 +14,8 @@ export const conversations = pgTable('conversations', {
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
+  // Codex app-server thread mapping — set when provider='codex' is used
+  codexThreadId: text('codexThreadId'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   isActive: boolean('isActive').default(true).notNull(),

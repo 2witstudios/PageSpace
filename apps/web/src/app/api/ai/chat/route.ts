@@ -376,6 +376,22 @@ export async function POST(request: Request) {
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
 
+    // Codex app-server provider — early return before standard AI SDK path
+    if (currentProvider === 'codex') {
+      const { hasBetaFeature, BETA_FEATURES } = await import('@pagespace/lib/services/beta-features');
+      if (!hasBetaFeature(user ?? { betaFeatures: [] }, BETA_FEATURES.CODEX)) {
+        return NextResponse.json({ error: 'Codex access not enabled for your account' }, { status: 403 });
+      }
+      const openAiKey = process.env.OPENAI_DEFAULT_API_KEY ?? '';
+      if (!openAiKey) {
+        return NextResponse.json({ error: 'Codex provider is not configured on this server' }, { status: 503 });
+      }
+      const userMessage = messages[messages.length - 1];
+      const text = extractMessageContent(userMessage);
+      const { handleCodexChat } = await import('@/lib/codex/codex-chat-handler');
+      return handleCodexChat({ userId, conversationId, pageId: chatId, text, openAiKey });
+    }
+
     // Kick off the userProfiles displayName fetch early so it overlaps with downstream
     // setup (rate-limit checks, tool resolution, conversation load) and never blocks the
     // lifecycle handoff. Falls back to [] on failure so consumers don't have to handle rejection.

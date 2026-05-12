@@ -81,6 +81,13 @@ export const AI_PROVIDERS = {
       'glm-5': 'Pro (Pro/Business)',
     },
   },
+  // Beta provider: requires 'codex' betaFeature — gated in ProviderModelSelector
+  codex: {
+    name: 'Codex (Beta)',
+    models: {
+      'codex-agent': 'Codex Agent',
+    },
+  },
   openrouter: {
     name: 'OpenRouter (Paid)',
     models: {

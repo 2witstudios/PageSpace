@@ -18,6 +18,7 @@ import {
   getDefaultModel,
   getVisibleProviders,
 } from '@/lib/ai/core/ai-providers-config';
+import { useFeatureToggles } from '@/components/providers/FeatureTogglesProvider';
 
 interface ProviderStatus {
   isAvailable: boolean;
@@ -30,21 +31,28 @@ interface ProviderSettings {
 }
 
 /** Category mapping for providers */
-const PROVIDER_CATEGORIES: Record<string, 'default' | 'cloud' | 'local'> = {
+const PROVIDER_CATEGORIES: Record<string, 'default' | 'cloud' | 'local' | 'beta'> = {
   pagespace: 'default',
   ollama: 'local',
   lmstudio: 'local',
   azure_openai: 'cloud',
+  codex: 'beta',
   // All others default to 'cloud'
+};
+
+/** Beta providers and the feature flag required to see them */
+const BETA_PROVIDER_FEATURES: Record<string, string> = {
+  codex: 'codex',
 };
 
 /** Derive provider groups from visible providers (filtered by deployment mode) */
 function buildProviderGroups() {
   const visibleProviders = getVisibleProviders();
-  const groups: { label: string; providers: { id: string; name: string }[] }[] = [
+  const groups: { label: string; isBeta?: boolean; providers: { id: string; name: string }[] }[] = [
     { label: 'Default', providers: [] },
     { label: 'Cloud Providers', providers: [] },
     { label: 'Local', providers: [] },
+    { label: 'Beta', isBeta: true, providers: [] },
   ];
 
   for (const [id, config] of Object.entries(visibleProviders)) {
@@ -55,6 +63,8 @@ function buildProviderGroups() {
       groups[0].providers.push(provider);
     } else if (category === 'local') {
       groups[2].providers.push(provider);
+    } else if (category === 'beta') {
+      groups[3].providers.push(provider);
     } else {
       groups[1].providers.push(provider);
     }
@@ -91,6 +101,7 @@ export function ProviderModelSelector({
   className,
   disabled = false,
 }: ProviderModelSelectorProps) {
+  const { hasFeature } = useFeatureToggles();
   const [providerOpen, setProviderOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [providerSettings, setProviderSettings] =
@@ -336,7 +347,14 @@ export function ProviderModelSelector({
               {PROVIDER_GROUPS
                 .map((group) => ({
                   ...group,
-                  providers: group.providers.filter((p) => isProviderAvailable(p.id)),
+                  providers: group.providers.filter((p) => {
+                    const requiredFeature = BETA_PROVIDER_FEATURES[p.id];
+                    if (requiredFeature) {
+                      // Beta providers: only gate by feature flag, not by server availability
+                      return hasFeature(requiredFeature);
+                    }
+                    return isProviderAvailable(p.id);
+                  }),
                 }))
                 .filter((group) => group.providers.length > 0)
                 .map((group) => (
