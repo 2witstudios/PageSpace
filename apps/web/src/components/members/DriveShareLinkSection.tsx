@@ -43,8 +43,8 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
       const token = data.shareUrl.split('/s/')[1];
       setRawToken(token);
       setActiveLink({ id: data.id, role, useCount: 0 });
-      await navigator.clipboard.writeText(data.shareUrl).catch(() => undefined);
-      toast.success('Invite link created and copied to clipboard');
+      const copied = await navigator.clipboard.writeText(data.shareUrl).then(() => true).catch(() => false);
+      toast.success(copied ? 'Invite link created and copied to clipboard' : 'Invite link created');
     } catch {
       toast.error('Failed to create invite link');
     } finally {
@@ -54,8 +54,9 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
 
   async function handleCopy() {
     if (!rawToken) return;
-    await navigator.clipboard.writeText(`${APP_URL}/s/${rawToken}`).catch(() => undefined);
-    toast.success('Invite link copied to clipboard');
+    const copied = await navigator.clipboard.writeText(`${APP_URL}/s/${rawToken}`).then(() => true).catch(() => false);
+    if (copied) toast.success('Invite link copied to clipboard');
+    else toast.error('Could not copy link to clipboard');
   }
 
   async function handleRevoke() {

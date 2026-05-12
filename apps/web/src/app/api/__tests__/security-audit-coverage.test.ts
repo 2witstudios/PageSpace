@@ -83,7 +83,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/share-links', 'Page share link CRUD — covered by page canShare check, follow-up'],
   ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
   ['share/[token]', 'Public token info — unauthenticated info display, no user data written'],
-  ['share/[token]/accept', 'Token redemption — membership row is the audit trail (GDPR: no PII in link)'],
 
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR

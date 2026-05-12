@@ -44,8 +44,8 @@ export function PageShareLinkSection({ pageId }: PageShareLinkSectionProps) {
         useCount: 0,
       };
       setActiveLink(link);
-      await navigator.clipboard.writeText(data.shareUrl).catch(() => undefined);
-      toast.success('Link created and copied to clipboard');
+      const copied = await navigator.clipboard.writeText(data.shareUrl).then(() => true).catch(() => false);
+      toast.success(copied ? 'Link created and copied to clipboard' : 'Link created');
     } catch {
       toast.error('Failed to create link');
     } finally {
@@ -55,8 +55,9 @@ export function PageShareLinkSection({ pageId }: PageShareLinkSectionProps) {
 
   async function handleCopy() {
     if (!rawToken) return;
-    await navigator.clipboard.writeText(`${APP_URL}/s/${rawToken}`).catch(() => undefined);
-    toast.success('Link copied to clipboard');
+    const copied = await navigator.clipboard.writeText(`${APP_URL}/s/${rawToken}`).then(() => true).catch(() => false);
+    if (copied) toast.success('Link copied to clipboard');
+    else toast.error('Could not copy link to clipboard');
   }
 
   async function handleRevoke() {
