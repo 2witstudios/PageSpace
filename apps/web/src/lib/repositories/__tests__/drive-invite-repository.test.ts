@@ -32,6 +32,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
+  or: vi.fn((...conditions) => ({ kind: 'or', conditions })),
   gt: vi.fn((field, value) => ({ kind: 'gt', field, value })),
   lte: vi.fn((field, value) => ({ kind: 'lte', field, value })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
