@@ -46,7 +46,7 @@ import {
   buildTimestampSystemPrompt,
   buildSystemPrompt,
   buildPersonalizationPrompt,
-  buildPageAITools,
+  filterToolsForReadOnly,
   getPageTreeContext,
   getModelCapabilities,
   convertMCPToolsToAISDKSchemas,
@@ -275,11 +275,10 @@ export async function POST(request: Request) {
     }
 
     // Extract custom agent configuration from page.
-    // page.enabledTools seeds the composer's tool toggles on the client.
-    // Request-body toggles (isReadOnly, webSearchEnabled) are applied first via
-    // buildPageAITools, then the per-agent allowlist is enforced server-side
-    // (see agentEnabledTools filter below) so the client UI and server agree on
-    // which tools the model can actually use.
+    // page.enabledTools seeds the composer's tool toggles on the client and is
+    // enforced server-side (see agentEnabledTools filter below).
+    // Request-body toggles (isReadOnly, webSearchEnabled) are applied independently:
+    // isReadOnly filters the baseline; webSearchEnabled overrides the allowlist.
     const customSystemPrompt = page.systemPrompt;
 
     // Fetch drive prompt if page has includeDrivePrompt enabled
@@ -508,22 +507,31 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Build tools filtered by runtime toggles, then enforce the per-agent allowlist.
-    let filteredTools: ToolSet = buildPageAITools(pageSpaceTools, {
-      isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode,
-    });
+    // Step 1: Apply isReadOnly filter to PageSpace baseline tools.
+    const baseTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
 
-    // Enforce per-agent tool allowlist. When enabledTools is a non-empty array,
-    // only tools explicitly listed are made available to the agent. This is a
-    // server-side security boundary — the client toggles (isReadOnly, webSearchEnabled)
-    // are still applied first so read-only mode always wins.
-    // null/undefined = no per-tool restriction (backwards compat for unconfigured pages).
+    // Step 2: Extract web_search so it can be handled as a runtime-toggle override
+    // independently of the per-agent allowlist.
+    const { web_search: webSearchToolDef, ...baseToolsWithoutWebSearch } = baseTools as Record<string, ToolSet[string]>;
+
+    // Step 3: Apply per-agent PageSpace tool allowlist.
+    // null/undefined = unconfigured page — no restriction (backwards compat).
+    // []            = zero tools selected — block all PageSpace tools.
+    // ['tool1', …]  = only those tools.
     const agentEnabledTools = page.enabledTools as string[] | null;
-    if (agentEnabledTools && agentEnabledTools.length > 0) {
+    let filteredTools: ToolSet;
+    if (agentEnabledTools != null) {
       filteredTools = Object.fromEntries(
-        Object.entries(filteredTools).filter(([name]) => agentEnabledTools.includes(name))
+        Object.entries(baseToolsWithoutWebSearch).filter(([name]) => agentEnabledTools.includes(name))
       ) as ToolSet;
+    } else {
+      filteredTools = baseToolsWithoutWebSearch as ToolSet;
+    }
+
+    // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
+    // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
+    if (webSearchMode && webSearchToolDef) {
+      filteredTools = { ...filteredTools, web_search: webSearchToolDef };
     }
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
