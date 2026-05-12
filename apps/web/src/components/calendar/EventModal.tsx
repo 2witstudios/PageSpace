@@ -309,8 +309,12 @@ export function EventModal({
   const agents = useMemo(() => agentsData?.agents ?? [], [agentsData]);
   const noAgents = !agentsLoading && agents.length === 0;
 
-  // Fetch drive members for the attendee picker (drive events only)
-  const assigneesKey = isOpen && isDriveContext && driveId ? `/api/drives/${driveId}/assignees` : null;
+  // Attendees make sense whenever the event has a drive association. Derive from the event
+  // itself when editing so the section works even in user-context CalendarView.
+  const effectiveDriveId = event?.driveId ?? driveId;
+  const showAttendeesSection = !!effectiveDriveId;
+
+  const assigneesKey = isOpen && showAttendeesSection ? `/api/drives/${effectiveDriveId}/assignees` : null;
   const { data: assigneesData } = useSWR<AssigneesResponse>(assigneesKey, assigneesFetcher, {
     revalidateOnFocus: false,
   });
@@ -416,7 +420,11 @@ export function EventModal({
 
   const handleAddAttendee = async (userId: string) => {
     if (event) {
-      await onAddAttendee?.(userId);
+      try {
+        await onAddAttendee?.(userId);
+      } catch {
+        toast.error('Failed to add attendee');
+      }
     } else {
       const member = driveUsers.find((u) => u.id === userId);
       setPendingAttendees((prev) => {
@@ -442,7 +450,11 @@ export function EventModal({
 
   const handleRemoveAttendee = async (userId: string) => {
     if (event) {
-      await onRemoveAttendee?.(userId);
+      try {
+        await onRemoveAttendee?.(userId);
+      } catch {
+        toast.error('Failed to remove attendee');
+      }
     } else {
       setPendingAttendees((prev) => prev.filter((a) => a.userId !== userId));
     }
@@ -763,8 +775,8 @@ export function EventModal({
             />
           </div>
 
-          {/* Attendees — drive events only */}
-          {isDriveContext && (
+          {/* Attendees — drive events only (gate on actual driveId, not view context) */}
+          {showAttendeesSection && (
             <div className="space-y-2 rounded-md border p-3">
               <Label className="text-sm font-medium">Attendees</Label>
               {shownAttendees.length > 0 && (
@@ -793,6 +805,7 @@ export function EventModal({
                             size="icon"
                             variant="ghost"
                             className="h-5 w-5"
+                            aria-label={`Remove ${a.user.name ?? a.userId}`}
                             onClick={() => handleRemoveAttendee(a.userId)}
                           >
                             <X className="h-3 w-3" />
