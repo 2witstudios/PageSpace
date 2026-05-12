@@ -4,7 +4,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
-import type { DriveShareLink, PageShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
+import type { DriveShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
 import { createId } from '@paralleldrive/cuid2';
 import { generateToken, hashToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
