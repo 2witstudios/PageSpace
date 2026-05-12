@@ -204,6 +204,22 @@ export function useCalendarData({
     [eventsUrl]
   );
 
+  const addAttendees = useCallback(
+    async (eventId: string, userIds: string[], isOptional = false) => {
+      await post(`/api/calendar/events/${eventId}/attendees`, { userIds, isOptional });
+      mutate(eventsUrl);
+    },
+    [eventsUrl]
+  );
+
+  const removeAttendee = useCallback(
+    async (eventId: string, userId: string) => {
+      await del(`/api/calendar/events/${eventId}/attendees?userId=${userId}`);
+      mutate(eventsUrl);
+    },
+    [eventsUrl]
+  );
+
   // Refresh data
   const refresh = useCallback(() => {
     mutate(eventsUrl);
@@ -231,6 +247,8 @@ export function useCalendarData({
     updateEvent,
     deleteEvent,
     updateRsvp,
+    addAttendees,
+    removeAttendee,
     refresh,
   };
 }
