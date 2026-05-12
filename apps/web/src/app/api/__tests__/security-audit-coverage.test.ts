@@ -115,6 +115,10 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- Monitoring with admin auth (already audited via withAdminAuth wrapper) ---
   ['monitoring/[metric]', 'Uses withAdminAuth which includes audit — verify after merge'],
+
+  // --- Codex beta routes ---
+  ['codex/approvals/pending', 'Read-only poll for pending approvals during active Codex turn — write action audited in POST [requestId] route'],
+  ['user/features', 'Read-only beta feature flags for the authenticated user — no PII or sensitive data written'],
 ]);
 
 function collectRouteFiles(dir: string): string[] {

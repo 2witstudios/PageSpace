@@ -6,6 +6,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { hasBetaFeature, BETA_FEATURES } from '@pagespace/lib/services/beta-features';
 import { resolveApproval } from '@/lib/codex/process-manager';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -41,6 +42,14 @@ export async function POST(request: Request, context: RouteContext) {
   if (!resolved) {
     return NextResponse.json({ error: 'Approval request not found or already resolved' }, { status: 404 });
   }
+
+  auditRequest(request, {
+    eventType: 'data.write',
+    userId: auth.userId,
+    resourceType: 'codex_approval',
+    resourceId: requestId,
+    details: { action: 'resolve_approval', decision: parsed.data.decision },
+  });
 
   return NextResponse.json({ ok: true });
 }
