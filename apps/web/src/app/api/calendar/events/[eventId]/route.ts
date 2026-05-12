@@ -250,18 +250,6 @@ export async function PATCH(
       );
     }
 
-    // Reject agent-trigger upserts on recurring events. The cron poller
-    // fires one-shot occurrences, so attaching one trigger to a recurring
-    // event would silently misfire on every occurrence past the first.
-    // Mirrors the POST /events and PUT /triggers guards.
-    const willBeRecurring = data.recurrenceRule !== undefined ? data.recurrenceRule !== null : event.recurrenceRule !== null;
-    if (data.agentTrigger && willBeRecurring) {
-      return NextResponse.json(
-        { error: 'Agent triggers are not supported for recurring events' },
-        { status: 400 }
-      );
-    }
-
     // Pre-validate agent trigger before opening the event update tx so a bad
     // payload (off-drive agent / context page, missing prompt-or-instruction)
     // returns 400 without dirtying event state.
@@ -327,6 +315,10 @@ export async function PATCH(
       if (data.agentTrigger === null) {
         await removeCalendarTrigger(tx, eventId);
       } else if (data.agentTrigger && event.driveId) {
+        // Effective recurrence rule after the update (data.recurrenceRule=undefined means unchanged)
+        const effectiveRecurrenceRule = data.recurrenceRule !== undefined
+          ? data.recurrenceRule
+          : event.recurrenceRule;
         await upsertCalendarTriggerWorkflowInTx(tx, {
           driveId: event.driveId,
           scheduledById: userId,
@@ -334,6 +326,8 @@ export async function PATCH(
           triggerAt: newStartAt,
           timezone: data.timezone ?? event.timezone ?? 'UTC',
           agentTrigger: data.agentTrigger,
+          recurrenceRule: effectiveRecurrenceRule,
+          recurrenceExceptions: event.recurrenceExceptions ?? [],
         });
       }
 

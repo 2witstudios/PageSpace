@@ -458,7 +458,7 @@ describe('calendar-write-tools', () => {
     });
 
     describe('agentTrigger', () => {
-      it('returns error when agentTrigger combined with recurrence', async () => {
+      it('does NOT reject agentTrigger combined with recurrence (recurring triggers are now supported)', async () => {
         mockIsUserDriveMember.mockResolvedValue(true);
 
         const input = {
@@ -478,18 +478,15 @@ describe('calendar-write-tools', () => {
           createAuthContext()
         );
 
+        // The old guard returned { success: false, error: '...recurring...' }.
+        // Now it must NOT return that specific recurrence error — the feature is
+        // enabled. The result may succeed or fail for unrelated mock reasons, but
+        // the recurrence guard itself must be gone.
         assert({
           given: 'agentTrigger with recurrence',
-          should: 'return error',
-          actual: (result as { success: boolean }).success,
+          should: 'not reject with a recurring-specific error message',
+          actual: (result as { error?: string }).error?.toLowerCase().includes('recur') ?? false,
           expected: false,
-        });
-
-        assert({
-          given: 'agentTrigger with recurrence',
-          should: 'mention recurring in error',
-          actual: (result as { error?: string }).error?.toLowerCase().includes('recur'),
-          expected: true,
         });
       });
 

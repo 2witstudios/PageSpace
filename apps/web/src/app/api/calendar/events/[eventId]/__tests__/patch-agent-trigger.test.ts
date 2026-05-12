@@ -249,8 +249,17 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
     expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
   });
 
-  it('rejects an agent-trigger upsert on a recurring event', async () => {
-    const recurringEvent = { ...baseEvent, recurrenceRule: { frequency: 'WEEKLY', interval: 1 } };
+  it('allows an agent-trigger upsert on a recurring event and passes recurrenceRule to the helper', async () => {
+    // Recurring events now support agent triggers — the recurrence rule is
+    // expanded into individual trigger rows by the helper. The PATCH route
+    // must pass recurrenceRule (and recurrenceExceptions) to the helper so
+    // it can do the expansion.
+    const recurringEvent = {
+      ...baseEvent,
+      recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+      recurrenceExceptions: [] as string[],
+    };
+    setupSuccessfulPatch();
     (db.query.calendarEvents.findFirst as Mock).mockReset();
     (db.query.calendarEvents.findFirst as Mock)
       .mockResolvedValueOnce(recurringEvent)
@@ -260,8 +269,13 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
       agentTrigger: { agentPageId: 'agent-1', prompt: 'p' },
     }), ctx());
 
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/recur/i);
-    expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+        recurrenceExceptions: [],
+      }),
+    );
   });
 });

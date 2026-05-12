@@ -7,7 +7,7 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { desc } from '@pagespace/db/operators';
-import { createCalendarTriggerWorkflow, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
+import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -490,13 +490,6 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      if (data.recurrenceRule) {
-        return NextResponse.json(
-          { error: 'Agent triggers are not supported for recurring events' },
-          { status: 400 }
-        );
-      }
-
       try {
         const validated = await validateCalendarAgentTrigger(db, {
           driveId: data.driveId,
@@ -588,8 +581,7 @@ export async function POST(request: Request) {
       }
 
       if (data.agentTrigger && agentPageId && data.driveId) {
-        await createCalendarTriggerWorkflow({
-          tx,
+        await upsertCalendarTriggerWorkflowInTx(tx, {
           driveId: data.driveId,
           scheduledById: userId,
           calendarEventId: created.id,
@@ -601,6 +593,8 @@ export async function POST(request: Request) {
             instructionPageId: data.agentTrigger.instructionPageId ?? null,
             contextPageIds: data.agentTrigger.contextPageIds ?? [],
           },
+          recurrenceRule: data.recurrenceRule ?? null,
+          recurrenceExceptions: [],
         });
       }
 
