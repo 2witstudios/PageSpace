@@ -77,10 +77,10 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
 
       // If no mentions found, just return the plain text
       if (textElements.length === 0) {
-        return <span key={index} className="break-words [overflow-wrap:anywhere]">{text}</span>;
+        return <span key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{text}</span>;
       }
 
-      return <span key={index} className="break-words [overflow-wrap:anywhere]">{textElements}</span>;
+      return <span key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{textElements}</span>;
 
     case 'rich-text':
       const textContent = typeof part.content === 'string'

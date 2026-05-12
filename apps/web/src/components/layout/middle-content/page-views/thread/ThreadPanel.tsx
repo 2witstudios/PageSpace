@@ -27,7 +27,7 @@ import useSWR from 'swr';
 import { Bell, BellOff, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
@@ -530,7 +530,7 @@ export function ThreadPanel({
                   {reply.content && (
                     <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
                       {source === 'channel' ? (
-                        <StreamingMarkdown content={reply.content} isStreaming={false} />
+                        <StreamingMarkdown content={addHardLineBreaks(reply.content)} isStreaming={false} />
                       ) : (
                         renderMessageParts(convertToMessageParts(reply.content))
                       )}

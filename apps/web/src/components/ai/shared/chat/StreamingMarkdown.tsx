@@ -35,6 +35,13 @@ function preprocessMentions(content: string): string {
   });
 }
 
+/** Converts single \n to CommonMark hard line breaks (two trailing spaces + \n).
+ * Leaves \n\n paragraph breaks untouched. Use for user-typed content only —
+ * not AI-generated markdown where \n has structural meaning (lists, code blocks). */
+export function addHardLineBreaks(content: string): string {
+  return content.replace(/(?<=[^\n])\n(?=[^\n])/g, '  \n');
+}
+
 interface MarkdownNode {
   type: string;
   value?: string;
