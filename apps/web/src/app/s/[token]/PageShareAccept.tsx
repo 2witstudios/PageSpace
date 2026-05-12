@@ -9,7 +9,7 @@ import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-servi
 
 interface PageShareAcceptProps {
   token: string;
-  info: ShareTokenInfo & { type: 'page' };
+  info: ShareTokenInfo;
 }
 
 export function PageShareAccept({ token, info }: PageShareAcceptProps) {

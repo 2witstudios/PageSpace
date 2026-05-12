@@ -10,7 +10,7 @@ import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-servi
 
 interface DriveShareAcceptProps {
   token: string;
-  info: ShareTokenInfo & { type: 'drive' };
+  info: ShareTokenInfo;
 }
 
 export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
