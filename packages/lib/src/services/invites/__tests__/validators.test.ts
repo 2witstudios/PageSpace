@@ -87,6 +87,13 @@ describe('validateInviteForUser', () => {
     });
     expect(result).toEqual({ ok: false, error: 'TOKEN_EXPIRED' });
   });
+
+  it('given an invite with null expiresAt (no expiry), should return ok', () => {
+    const invite = baseInvite({ expiresAt: null });
+    expect(
+      validateInviteForUser({ invite, userEmail, suspendedAt: null, now }),
+    ).toEqual({ ok: true, data: invite });
+  });
 });
 
 describe('validateMagicLinkRequest', () => {

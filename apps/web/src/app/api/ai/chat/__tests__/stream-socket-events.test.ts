@@ -133,6 +133,7 @@ vi.mock('@/lib/ai/core', () => ({
   getUserLMStudioSettings: vi.fn(),
   getUserGLMSettings: vi.fn(),
   pageSpaceTools: {},
+  pageSpaceToolsStubbed: {},
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
@@ -223,6 +224,10 @@ vi.mock('@/lib/ai/core/tool-utils', () => ({
 vi.mock('@/lib/ai/tools/finish-tool', () => ({
   finishTool: {},
   FINISH_TOOL_NAME: 'finish',
+}));
+
+vi.mock('@/lib/ai/tools/tool-search-tool', () => ({
+  createToolSearchTool: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock('@/lib/ai/core/stream-pipe-utils', () => ({

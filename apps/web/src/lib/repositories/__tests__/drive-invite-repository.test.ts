@@ -32,6 +32,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
+  or: vi.fn((...conditions) => ({ kind: 'or', conditions })),
   gt: vi.fn((field, value) => ({ kind: 'gt', field, value })),
   lte: vi.fn((field, value) => ({ kind: 'lte', field, value })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
@@ -334,7 +335,14 @@ describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
         expect.objectContaining({ kind: 'eq', field: 'pendingInvites.driveId', value: 'drive_1' }),
         expect.objectContaining({ kind: 'eq', field: 'pendingInvites.email', value: 'a@b.com' }),
         expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
-        expect.objectContaining({ kind: 'gt', field: 'pendingInvites.expiresAt', value: now }),
+        // null expiresAt = no expiry; otherwise require expiresAt > now
+        expect.objectContaining({
+          kind: 'or',
+          conditions: expect.arrayContaining([
+            expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.expiresAt' }),
+            expect.objectContaining({ kind: 'gt', field: 'pendingInvites.expiresAt', value: now }),
+          ]),
+        }),
       ])
     );
   });

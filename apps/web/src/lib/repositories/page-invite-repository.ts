@@ -10,7 +10,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, gt, lte, isNull } from '@pagespace/db/operators'
+import { eq, and, or, gt, lte, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -39,7 +39,7 @@ export const pageInviteRepository = {
     permissions: PendingPagePermission[];
     invitedBy: string;
     inviterName: string;
-    expiresAt: Date;
+    expiresAt: Date | null;
     consumedAt: Date | null;
   } | null> {
     const results = await db
@@ -71,7 +71,7 @@ export const pageInviteRepository = {
     pageId: string;
     permissions: PendingPagePermission[];
     invitedBy: string;
-    expiresAt: Date;
+    expiresAt: Date | null;
     now: Date;
   }) {
     const { tokenHash, email, pageId, permissions, invitedBy, expiresAt, now } = input;
@@ -112,7 +112,7 @@ export const pageInviteRepository = {
           eq(pendingPageInvites.pageId, pageId),
           eq(pendingPageInvites.email, email),
           isNull(pendingPageInvites.consumedAt),
-          gt(pendingPageInvites.expiresAt, now),
+          or(isNull(pendingPageInvites.expiresAt), gt(pendingPageInvites.expiresAt, now)),
         )
       )
       .limit(1);
@@ -159,7 +159,7 @@ export const pageInviteRepository = {
         and(
           eq(pendingPageInvites.email, email),
           isNull(pendingPageInvites.consumedAt),
-          gt(pendingPageInvites.expiresAt, now),
+          or(isNull(pendingPageInvites.expiresAt), gt(pendingPageInvites.expiresAt, now)),
         ),
       );
   },

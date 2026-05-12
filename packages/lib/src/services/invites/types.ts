@@ -11,7 +11,7 @@ export interface Invite {
   driveName: string;
   role: Role;
   invitedBy: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   consumedAt: Date | null;
 }
 
@@ -103,7 +103,7 @@ export interface PendingInviteSummary {
   driveId: string;
   invitedByName: string;
   createdAt: Date;
-  expiresAt: Date;
+  expiresAt: Date | null;
 }
 
 export interface UserAccount {
@@ -128,7 +128,7 @@ export interface PageInvite {
   driveName: string;
   permissions: PendingPagePermission[];
   invitedBy: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   consumedAt: Date | null;
 }
 
