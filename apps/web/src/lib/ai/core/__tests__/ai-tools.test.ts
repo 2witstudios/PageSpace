@@ -98,7 +98,8 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
-import { pageSpaceTools, pageSpaceToolsStubbed } from '../ai-tools';
+import { pageSpaceTools, corePageSpaceTools } from '../ai-tools';
+import { CORE_TOOL_NAMES } from '../stub-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
@@ -179,25 +180,30 @@ describe('ai-tools', () => {
     });
   });
 
-  describe('pageSpaceToolsStubbed', () => {
+  describe('corePageSpaceTools', () => {
     it('is exported and defined', () => {
-      expect(pageSpaceToolsStubbed).toBeDefined();
+      expect(corePageSpaceTools).toBeDefined();
     });
 
-    it('has the same keys as pageSpaceTools', () => {
-      expect(Object.keys(pageSpaceToolsStubbed).sort()).toEqual(
-        Object.keys(pageSpaceTools).sort()
-      );
+    it('contains only tools in CORE_TOOL_NAMES', () => {
+      const keys = Object.keys(corePageSpaceTools);
+      for (const key of keys) {
+        expect(CORE_TOOL_NAMES.has(key)).toBe(true);
+      }
     });
 
-    it('keeps core tools as the same object reference', () => {
-      expect(pageSpaceToolsStubbed.list_drives).toBe(pageSpaceTools.list_drives);
-      expect(pageSpaceToolsStubbed.read_page).toBe(pageSpaceTools.read_page);
+    it('contains all CORE_TOOL_NAMES tools that exist in pageSpaceTools', () => {
+      for (const name of CORE_TOOL_NAMES) {
+        if (name in pageSpaceTools) {
+          expect(corePageSpaceTools).toHaveProperty(name);
+        }
+      }
     });
 
-    it('replaces non-core tools with distinct stub objects', () => {
-      expect(pageSpaceToolsStubbed.list_calendar_events).not.toBe(pageSpaceTools.list_calendar_events);
-      expect(pageSpaceToolsStubbed.update_task).not.toBe(pageSpaceTools.update_task);
+    it('core tool objects are the same references as in pageSpaceTools', () => {
+      for (const [name, tool] of Object.entries(corePageSpaceTools)) {
+        expect(tool).toBe(pageSpaceTools[name as keyof typeof pageSpaceTools]);
+      }
     });
   });
 });
