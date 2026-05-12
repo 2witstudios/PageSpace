@@ -530,7 +530,7 @@ export function ThreadPanel({
                   {reply.content && (
                     <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
                       {source === 'channel' ? (
-                        <StreamingMarkdown content={addHardLineBreaks(reply.content)} isStreaming={false} />
+                        <StreamingMarkdown content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)} isStreaming={false} />
                       ) : (
                         renderMessageParts(convertToMessageParts(reply.content))
                       )}

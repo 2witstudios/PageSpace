@@ -529,7 +529,7 @@ function ChannelView({ page }: ChannelViewProps) {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <StreamingMarkdown content={addHardLineBreaks(m.content)} isStreaming={false} />
+              <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -680,7 +680,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        <StreamingMarkdown content={addHardLineBreaks(m.content)} isStreaming={false} />
+                                        <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (
