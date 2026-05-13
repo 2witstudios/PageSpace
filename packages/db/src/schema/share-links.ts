@@ -5,7 +5,7 @@ import { users } from './auth';
 import { drives, pages } from './core';
 import { memberRole } from './members';
 
-export type ShareLinkPermission = 'VIEW' | 'EDIT';
+export type ShareLinkPermission = 'VIEW' | 'EDIT' | 'SHARE' | 'DELETE';
 
 export const driveShareLinks = pgTable('drive_share_links', {
   id: text('id').primaryKey().$defaultFn(() => createId()),

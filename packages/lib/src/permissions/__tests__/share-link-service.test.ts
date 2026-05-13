@@ -497,6 +497,94 @@ describe('redeemPageShareLink', () => {
     expect(mockDb.insert).toHaveBeenCalledTimes(2);
   });
 
+  it('maps SHARE and DELETE permissions from link into pagePermissions insert', async () => {
+    let callCount = 0;
+    mockDb.select.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve([{
+            id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
+            permissions: ['VIEW', 'SHARE', 'DELETE'], isActive: true, expiresAt: null,
+          }]);
+        }
+        return Promise.resolve([]);
+      }),
+    }));
+    const valuesCapture = vi.fn().mockReturnThis();
+    mockDb.insert.mockReturnValue({
+      values: valuesCapture,
+      returning: vi.fn().mockResolvedValue([{ id: 'new-pp-id' }]),
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    });
+    makeUpdateChain();
+
+    await redeemPageShareLink(makeCtx(), 'valid-token');
+
+    // Second insert call is pagePermissions — check its values contain canShare and canDelete
+    const allCalls = valuesCapture.mock.calls;
+    const pagePermCall = allCalls.find((args) => {
+      const v = args[0];
+      return typeof v === 'object' && v !== null && 'canView' in v;
+    });
+    expect(pagePermCall).toBeDefined();
+    expect(pagePermCall![0]).toMatchObject({
+      canView: true,
+      canShare: true,
+      canDelete: true,
+    });
+  });
+
+  it('does not grant SHARE or DELETE when link only has VIEW+EDIT', async () => {
+    let callCount = 0;
+    mockDb.select.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve([{
+            id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
+            permissions: ['VIEW', 'EDIT'], isActive: true, expiresAt: null,
+          }]);
+        }
+        return Promise.resolve([]);
+      }),
+    }));
+    const valuesCapture = vi.fn().mockReturnThis();
+    mockDb.insert.mockReturnValue({
+      values: valuesCapture,
+      returning: vi.fn().mockResolvedValue([{ id: 'new-pp-id' }]),
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    });
+    makeUpdateChain();
+
+    await redeemPageShareLink(makeCtx(), 'valid-token');
+
+    const allCalls = valuesCapture.mock.calls;
+    const pagePermCall = allCalls.find((args) => {
+      const v = args[0];
+      return typeof v === 'object' && v !== null && 'canView' in v;
+    });
+    expect(pagePermCall).toBeDefined();
+    expect(pagePermCall![0]).toMatchObject({
+      canView: true,
+      canEdit: true,
+      canShare: false,
+      canDelete: false,
+    });
+  });
+
   it('skips useCount increment when user already has canView access', async () => {
     let callCount = 0;
     mockDb.select.mockImplementation(() => ({

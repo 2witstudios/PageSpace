@@ -82,28 +82,31 @@ describe('usePageShareLink', () => {
   });
 
   describe('generating a link', () => {
-    it('Given POST succeeds with VIEW permissions, should update shareUrl and activeLink', async () => {
+    it('Given VIEW-only permissions, should POST with only VIEW in permissions array', async () => {
       mockFetchResolve({ links: [] });
       vi.mocked(post).mockResolvedValueOnce({
         id: LINK_ID,
         rawToken: 'ps_share_abc',
         shareUrl: SHARE_URL,
       });
+      Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
 
       const { result } = renderHook(() => usePageShareLink(PAGE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-      Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
-
       await act(async () => {
-        await result.current.handleGenerate();
+        await result.current.handleGenerate({ canView: true, canEdit: false, canShare: false, canDelete: false });
       });
 
       expect(result.current.shareUrl).toBe(SHARE_URL);
       expect(result.current.activeLink?.permissions).toEqual(['VIEW']);
+      expect(vi.mocked(post)).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ permissions: ['VIEW'] })
+      );
     });
 
-    it('Given includeEdit is true before generate, should include EDIT in permissions body', async () => {
+    it('Given canEdit is true, should include EDIT in permissions body', async () => {
       mockFetchResolve({ links: [] });
       vi.mocked(post).mockResolvedValueOnce({ id: LINK_ID, rawToken: 'tok', shareUrl: SHARE_URL });
       Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
@@ -111,15 +114,49 @@ describe('usePageShareLink', () => {
       const { result } = renderHook(() => usePageShareLink(PAGE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-      act(() => { result.current.setIncludeEdit(true); });
-
       await act(async () => {
-        await result.current.handleGenerate();
+        await result.current.handleGenerate({ canView: true, canEdit: true, canShare: false, canDelete: false });
       });
 
       expect(vi.mocked(post)).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ permissions: ['VIEW', 'EDIT'] })
+      );
+    });
+
+    it('Given canShare and canDelete are true, should include SHARE and DELETE in permissions body', async () => {
+      mockFetchResolve({ links: [] });
+      vi.mocked(post).mockResolvedValueOnce({ id: LINK_ID, rawToken: 'tok', shareUrl: SHARE_URL });
+      Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+
+      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.handleGenerate({ canView: true, canEdit: false, canShare: true, canDelete: true });
+      });
+
+      expect(vi.mocked(post)).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ permissions: ['VIEW', 'SHARE', 'DELETE'] })
+      );
+    });
+
+    it('Given all permissions true, should include all four in permissions body', async () => {
+      mockFetchResolve({ links: [] });
+      vi.mocked(post).mockResolvedValueOnce({ id: LINK_ID, rawToken: 'tok', shareUrl: SHARE_URL });
+      Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+
+      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.handleGenerate({ canView: true, canEdit: true, canShare: true, canDelete: true });
+      });
+
+      expect(vi.mocked(post)).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ permissions: ['VIEW', 'EDIT', 'SHARE', 'DELETE'] })
       );
     });
   });
@@ -159,17 +196,6 @@ describe('usePageShareLink', () => {
 
       expect(result.current.activeLink).toBeNull();
       expect(result.current.shareUrl).toBeNull();
-    });
-  });
-
-  describe('includeEdit state', () => {
-    it('should default includeEdit to false', async () => {
-      mockFetchResolve({ links: [] });
-
-      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
-      await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-      expect(result.current.includeEdit).toBe(false);
     });
   });
 });

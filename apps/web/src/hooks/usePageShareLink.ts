@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 
 const PageLinkSchema = z.object({
   id: z.string(),
-  permissions: z.array(z.enum(['VIEW', 'EDIT'])),
+  permissions: z.array(z.enum(['VIEW', 'EDIT', 'SHARE', 'DELETE'])),
   useCount: z.number(),
   shareUrl: z.string().nullable(),
 });
@@ -18,10 +18,16 @@ const PageListResponseSchema = z.object({
 
 type PageLink = z.infer<typeof PageLinkSchema>;
 
+export interface ShareLinkPermissions {
+  canView: boolean;
+  canEdit: boolean;
+  canShare: boolean;
+  canDelete: boolean;
+}
+
 export function usePageShareLink(pageId: string) {
   const [activeLink, setActiveLink] = useState<PageLink | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [includeEdit, setIncludeEdit] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
@@ -53,9 +59,12 @@ export function usePageShareLink(pageId: string) {
     return () => { cancelled = true; };
   }, [pageId]);
 
-  async function handleGenerate() {
+  async function handleGenerate(perms: ShareLinkPermissions) {
     setIsGenerating(true);
-    const permissions: Array<'VIEW' | 'EDIT'> = includeEdit ? ['VIEW', 'EDIT'] : ['VIEW'];
+    const permissions: Array<'VIEW' | 'EDIT' | 'SHARE' | 'DELETE'> = ['VIEW'];
+    if (perms.canEdit)   permissions.push('EDIT');
+    if (perms.canShare)  permissions.push('SHARE');
+    if (perms.canDelete) permissions.push('DELETE');
     try {
       const data = await post<{ id: string; rawToken: string; shareUrl: string }>(
         `/api/pages/${pageId}/share-links`,
@@ -94,5 +103,5 @@ export function usePageShareLink(pageId: string) {
     }
   }
 
-  return { activeLink, shareUrl, includeEdit, setIncludeEdit, isLoading, isGenerating, isRevoking, handleGenerate, handleCopy, handleRevoke };
+  return { activeLink, shareUrl, isLoading, isGenerating, isRevoking, handleGenerate, handleCopy, handleRevoke };
 }
