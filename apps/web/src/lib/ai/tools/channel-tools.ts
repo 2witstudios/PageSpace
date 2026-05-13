@@ -89,7 +89,7 @@ export const channelTools = {
         }
 
         // Check edit permissions
-        const canEdit = await canActorEditPage(context, channel.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext, channel.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to send messages in this channel');
         }
