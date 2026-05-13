@@ -646,6 +646,11 @@
       "import": "./dist/permissions/permission-mutations.js",
       "require": "./dist/permissions/permission-mutations.js"
     },
+    "./permissions/share-link-service": {
+      "types": "./dist/permissions/share-link-service.d.ts",
+      "import": "./dist/permissions/share-link-service.js",
+      "require": "./dist/permissions/share-link-service.js"
+    },
     "./permissions/schemas": {
       "types": "./dist/permissions/schemas.d.ts",
       "import": "./dist/permissions/schemas.js",
@@ -1045,6 +1050,9 @@
       ],
       "permissions/permission-mutations": [
         "./dist/permissions/permission-mutations.d.ts"
+      ],
+      "permissions/share-link-service": [
+        "./dist/permissions/share-link-service.d.ts"
       ],
       "permissions/schemas": [
         "./dist/permissions/schemas.d.ts"

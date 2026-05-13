@@ -19,6 +19,10 @@
       "types": "./dist/schema/ai-streams.d.ts",
       "default": "./dist/schema/ai-streams.js"
     },
+    "./schema/share-links": {
+      "types": "./dist/schema/share-links.d.ts",
+      "default": "./dist/schema/share-links.js"
+    },
     "./schema/auth": {
       "types": "./dist/schema/auth.d.ts",
       "default": "./dist/schema/auth.js"
