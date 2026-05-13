@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render, act, screen, fireEvent } from '@testing-library/react';
 
 const pushMock = vi.fn();
 
@@ -34,20 +34,32 @@ describe('DriveShareAccept', () => {
     vi.mocked(useCSRFToken).mockReturnValue(csrfBase);
   });
 
-  it('Given auth is loading, should not redirect', () => {
+  it('Given auth is loading, should not redirect and disable the button', () => {
     vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: true } as ReturnType<typeof useAuth>);
 
     render(<DriveShareAccept token="tok" info={INFO} />);
 
     expect(pushMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /join/i })).toBeDisabled();
   });
 
-  it('Given unauthenticated user after auth loads, should redirect to signin', async () => {
+  it('Given unauthenticated user after auth loads, should show invite landing page without redirecting', async () => {
     vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: false } as ReturnType<typeof useAuth>);
 
     render(<DriveShareAccept token="tok-abc" info={INFO} />);
 
     await act(async () => {});
+
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /join/i })).toBeEnabled();
+  });
+
+  it('Given unauthenticated user clicks Join, should redirect to signin with next param', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: false } as ReturnType<typeof useAuth>);
+
+    render(<DriveShareAccept token="tok-abc" info={INFO} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /join/i }));
 
     expect(pushMock).toHaveBeenCalledWith('/auth/signin?next=/s/tok-abc');
   });

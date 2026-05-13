@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render, act, screen, fireEvent } from '@testing-library/react';
 
 const pushMock = vi.fn();
 
@@ -51,13 +51,26 @@ describe('PageShareAccept', () => {
     expect(pushMock).not.toHaveBeenCalledWith(expect.stringContaining('signin'));
   });
 
-  it('Given unauthenticated user after auth loads, should redirect to signin', async () => {
+  it('Given unauthenticated user after auth loads, should render sign-in prompt without redirecting', async () => {
     vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: false } as ReturnType<typeof useAuth>);
     vi.mocked(useCSRFToken).mockReturnValue(csrfBase);
 
     render(<PageShareAccept token="tok-xyz" info={INFO} />);
 
     await act(async () => {});
+
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /sign in to continue/i })).toBeInTheDocument();
+    expect(screen.getByText(/you're invited/i)).toBeInTheDocument();
+  });
+
+  it('Given unauthenticated user clicks Sign in to continue, should redirect to signin with next param', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: false } as ReturnType<typeof useAuth>);
+    vi.mocked(useCSRFToken).mockReturnValue(csrfBase);
+
+    render(<PageShareAccept token="tok-xyz" info={INFO} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /sign in to continue/i }));
 
     expect(pushMock).toHaveBeenCalledWith('/auth/signin?next=/s/tok-xyz');
   });
