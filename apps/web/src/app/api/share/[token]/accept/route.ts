@@ -5,6 +5,9 @@ import {
   redeemPageShareLink,
 } from '@pagespace/lib/permissions/share-link-service';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
+import { emitAcceptanceSideEffects } from '@pagespace/lib/services/invites';
+import type { AcceptedInviteData } from '@pagespace/lib/services/invites';
 
 const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -26,6 +29,16 @@ export async function POST(
       linkId: driveResult.data.linkId,
       ipAddress: clientIP,
     }).catch(() => undefined);
+    const ports = buildAcceptancePorts(request);
+    const acceptData: AcceptedInviteData = {
+      memberId: driveResult.data.memberId,
+      driveId: driveResult.data.driveId,
+      driveName: driveResult.data.driveName,
+      role: driveResult.data.role,
+      invitedUserId: auth.ctx.userId,
+      inviterUserId: driveResult.data.createdBy,
+    };
+    await emitAcceptanceSideEffects(ports, acceptData, 0).catch(() => undefined);
     return NextResponse.json({ type: 'drive', driveId: driveResult.data.driveId });
   }
 
