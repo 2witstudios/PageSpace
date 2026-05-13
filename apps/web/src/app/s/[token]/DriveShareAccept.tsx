@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -21,13 +21,11 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      router.push(`/auth/signin?next=/s/${token}`);
-    }
-  }, [authLoading, isAuthenticated, router, token]);
-
   async function handleJoin() {
+    if (!isAuthenticated) {
+      router.push(`/auth/signin?next=/s/${token}`);
+      return;
+    }
     if (!csrfToken) return;
     setIsPending(true);
     setError(null);
@@ -81,7 +79,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
       <Button
         className="w-full"
         onClick={handleJoin}
-        disabled={isPending || !csrfToken}
+        disabled={isPending || authLoading || (isAuthenticated && !csrfToken)}
       >
         {isPending ? 'Joining…' : `Join ${info.driveName ?? 'workspace'}`}
       </Button>
