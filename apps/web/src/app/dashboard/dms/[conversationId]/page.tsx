@@ -24,6 +24,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Check, X } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
@@ -59,6 +60,8 @@ interface Message {
   lastReplyAt?: string | null;
   quotedMessageId?: string | null;
   quotedMessage?: QuotedMessageSnapshot | null;
+  mirroredFromId?: string | null;
+  mirroredFrom?: { parentId: string | null } | null;
 }
 
 interface DmConversation {
@@ -665,6 +668,13 @@ export default function InboxDMPage() {
                       </div>
                     ) : (
                       <>
+                        {message.mirroredFromId && (
+                          <ThreadOriginBadge
+                            onOpenThread={message.mirroredFrom?.parentId
+                              ? () => openThread({ source: 'dm', contextId: conversationId, parentId: message.mirroredFrom!.parentId! })
+                              : undefined}
+                          />
+                        )}
                         {(message.quotedMessage || message.quotedMessageId) && (
                           <MessageQuoteBlock quoted={message.quotedMessage ?? null} />
                         )}
