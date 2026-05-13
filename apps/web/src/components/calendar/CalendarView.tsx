@@ -167,13 +167,16 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   );
 
   // When user context: derive the effective driveId/context for the event modal.
-  // Editing an existing event: prefer the event's own driveId so drive features are
-  // always available regardless of which sidebar calendar is selected.
+  // Editing an existing event: use the event's own driveId. A null driveId means
+  // the event is personal — convert null→undefined so it isn't confused with "no
+  // event selected". Never inherit the selected calendar key when editing.
   // Creating a new event: use the selected calendar key.
   const creationDriveId = isUserContext && selectedCalendarKey !== 'personal'
     ? selectedCalendarKey
     : (isUserContext ? undefined : driveId);
-  const effectiveModalDriveId = selectedEvent?.driveId ?? creationDriveId;
+  const effectiveModalDriveId = selectedEvent
+    ? (selectedEvent.driveId ?? undefined)
+    : creationDriveId;
   const effectiveModalContext: 'user' | 'drive' = effectiveModalDriveId ? 'drive' : 'user';
 
   const { data: googleCalendarStatus } = useSWR<GoogleCalendarStatusResponse>(

@@ -61,8 +61,8 @@ export function CalendarSidebar({
           key={cal.key}
           role="button"
           tabIndex={0}
-          onClick={() => onSelectCalendar?.(cal.key)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectCalendar?.(cal.key); } }}
+          onClick={() => onSelectCalendar ? onSelectCalendar(cal.key) : onToggle(cal.key)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectCalendar ? onSelectCalendar(cal.key) : onToggle(cal.key); } }}
           className={cn(
             'flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer transition-colors',
             'hover:bg-muted/50',
@@ -74,6 +74,7 @@ export function CalendarSidebar({
             role="checkbox"
             aria-checked={cal.visible}
             aria-label={`Toggle ${cal.name}`}
+            tabIndex={0}
             onClick={(e) => { e.stopPropagation(); onToggle(cal.key); }}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onToggle(cal.key); } }}
             className={cn(
