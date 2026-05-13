@@ -128,9 +128,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     });
 
     if (page?.driveId) {
-      await broadcastPageEvent(
+      broadcastPageEvent(
         createPageEventPayload(page.driveId, pageId, 'updated')
-      );
+      ).catch((err: Error) => {
+        loggers.api.error('Failed to broadcast page permission event:', err);
+      });
     }
 
     return NextResponse.json({

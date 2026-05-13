@@ -152,9 +152,13 @@ export async function POST(
         details: { targetUserId: existingUser.id, permissions, operation: 'share_invite_direct' },
       });
 
-      await broadcastPageEvent(
-        createPageEventPayload(page.driveId, pageId, 'updated')
-      );
+      if (page.driveId) {
+        broadcastPageEvent(
+          createPageEventPayload(page.driveId, pageId, 'updated')
+        ).catch((err: Error) => {
+          loggers.api.error('Failed to broadcast share-invite page event:', err);
+        });
+      }
 
       return NextResponse.json({
         kind: 'granted',
