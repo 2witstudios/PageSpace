@@ -422,6 +422,66 @@ Connect your calendar. Let your AI see your schedule.
     readTime: "5 min read",
     category: "Guide",
   },
+  "browser-style-tabs": {
+    slug: "browser-style-tabs",
+    title: "Tabs That Work Like Your Browser (Because They Should)",
+    description:
+      "PageSpace uses browser-style tabs — Alt+T to open, Ctrl/Cmd+1–9 to jump, Ctrl+Tab to cycle. Here's why we chose browser semantics over VS Code's, and how tabs become the escape hatch from the navigation tax of nested folders.",
+    image: "/blog/browser-style-tabs.png",
+    content: `
+## The Navigation Tax
+
+Every time you drill into a nested folder to find a page, you pay. It's a small tax: one click, two clicks, a hover, another click. But in an AI-assisted workflow, where you're jumping between a spec, a task list, an AI chat, and a meeting doc all within the same 20-minute stretch, those clicks compound.
+
+The usual fixes — better search, smarter folders, tags — treat the symptom. Tabs treat the cause.
+
+## Browser-Style, Not VS Code-Style
+
+There's a meaningful difference between how browsers and VS Code handle tabs, and it comes down to what you can predict.
+
+In your browser, Ctrl+1 always goes to the first tab. Ctrl+W always closes the current one. Ctrl+Tab cycles forward. You don't have to think about it — that pattern is already in your muscle memory.
+
+VS Code tabs work differently. The same key bindings behave differently depending on panel state, focus, and whether you're in an editor or terminal. That overhead is fine if you live in VS Code all day. It's not fine when you're switching between a browser, a notes app, and a knowledge base every few minutes.
+
+PageSpace chose browser semantics deliberately. The shortcuts you already know work exactly the way you already expect them to.
+
+## The Shortcuts
+
+**Alt+T** opens a new tab. (On macOS, this key combination normally produces a \`†\` character — PageSpace handles the translation under the hood.)
+
+**Ctrl/Cmd+1 through Ctrl/Cmd+9** jump directly to tabs one through nine. Hover over any of the first nine tabs and you'll see the number appear, so you always know which key to press. These shortcuts work even when your cursor is inside an input field.
+
+**Ctrl+Tab** and **Ctrl+Shift+Tab** cycle forward and backward through your open tabs.
+
+**Ctrl/Cmd+W** closes the current tab.
+
+Mouse users aren't left out: middle-click closes a tab, and right-clicking any tab gives you a context menu with close, close others, close to right, and pin.
+
+## Tabs as Persistent Context
+
+The most useful thing about tabs isn't navigation speed. It's persistence.
+
+Open a spec in Tab 1, an AI chat in Tab 2, and a task list in Tab 3. Now Ctrl+1, Ctrl+2, Ctrl+3 moves you between those three surfaces instantly, without re-navigating the folder tree each time. The views stay exactly where you left them.
+
+In an AI-heavy workflow, this matters more than it used to. You're not reading a document linearly and closing it. You're iterating — reading, asking a question, checking a task, going back, refining. Each surface is live context you return to repeatedly. Tabs keep that context open.
+
+## One More Thing: Pinning
+
+If a tab is always open — your daily notes page, a running AI chat, a project tracker — pin it. Pinned tabs sit at the left of the bar, don't have a close button, and persist across sessions.
+
+## The Escape Hatch
+
+Folders are good for organizing. They're not good for navigating under time pressure.
+
+When you're deep in a task, you shouldn't have to remember that your meeting notes are three levels under \`/Team/Engineering/2026/\`. They should be one keypress away. Tabs are that escape hatch. A flat, keyboard-native layer above the folder hierarchy that keeps your most active context instantly reachable.
+
+Press **Alt+T** to open one now.
+    `,
+    author: "Jono",
+    date: "2026-05-08",
+    readTime: "3 min read",
+    category: "Product",
+  },
   "ai-versioning-safety": {
     slug: "ai-versioning-safety",
     title:
