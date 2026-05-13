@@ -11,7 +11,6 @@ vi.mock('sonner', () => ({
 }));
 
 import { post, del } from '@/lib/auth/auth-fetch';
-import { toast } from 'sonner';
 import { usePageShareLink } from '../usePageShareLink';
 
 const PAGE_ID = 'page-abc';
