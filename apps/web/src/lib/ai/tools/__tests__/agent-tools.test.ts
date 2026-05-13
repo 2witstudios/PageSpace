@@ -126,6 +126,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        toolAccessScope: 'drive' as const,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -167,6 +168,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        toolAccessScope: 'drive' as const,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -210,6 +212,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        toolAccessScope: 'drive' as const,
         revision: 2,
       };
       const updatedMockAgent = {
@@ -285,6 +288,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        toolAccessScope: 'drive' as const,
         revision: 3,
       };
       const updatedMockAgent = {
@@ -353,6 +357,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        toolAccessScope: 'drive' as const,
         revision: 4,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -418,6 +423,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        toolAccessScope: 'drive' as const,
         revision: 1,
       };
       // First call returns the agent, second call (after mutation) returns null

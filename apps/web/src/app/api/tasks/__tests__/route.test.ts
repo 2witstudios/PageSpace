@@ -135,6 +135,7 @@ const createPageFixture = (overrides: Partial<{
   visibleToGlobalAssistant: true,
   includePageTree: false,
   pageTreeScope: 'children' as const,
+  toolAccessScope: 'drive' as const,
   fileSize: null,
   mimeType: null,
   originalFileName: null,

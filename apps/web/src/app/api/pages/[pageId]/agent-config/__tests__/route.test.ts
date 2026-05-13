@@ -155,6 +155,7 @@ const mockPage = {
   visibleToGlobalAssistant: true,
   includePageTree: false,
   pageTreeScope: 'children',
+  toolAccessScope: 'drive',
   revision: 5,
 };
 
@@ -279,6 +280,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.visibleToGlobalAssistant).toBe(true);
       expect(body.includePageTree).toBe(false);
       expect(body.pageTreeScope).toBe('children');
+      expect(body.toolAccessScope).toBe('drive');
     });
 
     it('returns available tools list', async () => {
@@ -651,11 +653,45 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       );
     });
 
-    it('ignores invalid pageTreeScope values', async () => {
-      await PATCH(createPatchRequest({ pageTreeScope: 'invalid' }), mockParams);
+    it('returns 400 for invalid pageTreeScope values', async () => {
+      const response = await PATCH(createPatchRequest({ pageTreeScope: 'invalid' }), mockParams);
+      const body = await response.json();
 
-      // pageTreeScope should not be in the updates since the value was invalid
-      // and no other fields were passed, so no mutation should occur
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/pageTreeScope/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('updates toolAccessScope with valid value "subtree"', async () => {
+      await PATCH(createPatchRequest({ toolAccessScope: 'subtree' }), mockParams);
+
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            toolAccessScope: 'subtree',
+          }),
+        })
+      );
+    });
+
+    it('updates toolAccessScope with valid value "drive"', async () => {
+      await PATCH(createPatchRequest({ toolAccessScope: 'drive' }), mockParams);
+
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            toolAccessScope: 'drive',
+          }),
+        })
+      );
+    });
+
+    it('returns 400 for invalid toolAccessScope values', async () => {
+      const response = await PATCH(createPatchRequest({ toolAccessScope: 'invalid' }), mockParams);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/toolAccessScope/i);
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
 

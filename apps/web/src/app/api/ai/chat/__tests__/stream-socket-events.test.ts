@@ -249,6 +249,7 @@ const mockDbRow = {
   includeDrivePrompt: false,
   includePageTree: false,
   pageTreeScope: null,
+  toolAccessScope: 'drive',
   revision: 0,
   name: 'Auth User',
   currentAiProvider: 'pagespace',

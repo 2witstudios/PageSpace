@@ -181,6 +181,7 @@ describe('page-write-tools', () => {
         trashedAt: null,
         revision: 1,
         stateHash: null,
+        toolAccessScope: 'drive' as const,
       });
 
       const context = {
@@ -215,6 +216,7 @@ describe('page-write-tools', () => {
         trashedAt: null,
         revision: 1,
         stateHash: null,
+        toolAccessScope: 'drive' as const,
       });
 
       const context = {
@@ -249,6 +251,7 @@ describe('page-write-tools', () => {
         trashedAt: null,
         revision: 1,
         stateHash: null,
+        toolAccessScope: 'drive' as const,
       });
       mockCanUserEditPage.mockResolvedValue(true);
       mockPageRepo.update.mockResolvedValue({
@@ -304,6 +307,7 @@ describe('page-write-tools', () => {
         trashedAt: null,
         revision: 1,
         stateHash: null,
+        toolAccessScope: 'drive' as const,
       });
       mockCanUserEditPage.mockResolvedValue(true);
 
@@ -448,6 +452,7 @@ describe('page-write-tools', () => {
         trashedAt: null,
         revision: 1,
         stateHash: null,
+        toolAccessScope: 'drive' as const,
       });
       mockCanUserEditPage.mockResolvedValue(true);
       mockPageRepo.update.mockResolvedValue({
@@ -585,6 +590,7 @@ describe('page-write-tools', () => {
         trashedAt: null,
         revision: 1,
         stateHash: null,
+        toolAccessScope: 'drive' as const,
       });
 
       const context = {

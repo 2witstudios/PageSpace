@@ -105,6 +105,7 @@ type PageLookupResult = {
   visibleToGlobalAssistant: boolean;
   includePageTree: boolean;
   pageTreeScope: PageTreeScope | null;
+  toolAccessScope: 'drive' | 'subtree';
   fileSize: number | null;
   mimeType: string | null;
   originalFileName: string | null;
@@ -145,6 +146,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   visibleToGlobalAssistant: true,
   includePageTree: false,
   pageTreeScope: 'children',
+  toolAccessScope: 'drive',
   fileSize: null,
   mimeType: null,
   originalFileName: null,

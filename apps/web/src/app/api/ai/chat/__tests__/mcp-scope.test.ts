@@ -65,6 +65,7 @@ vi.mock('@pagespace/db/db', () => ({
             includeDrivePrompt: false,
             includePageTree: false,
             pageTreeScope: null,
+            toolAccessScope: 'drive',
             revision: 0,
           },
         ]),
