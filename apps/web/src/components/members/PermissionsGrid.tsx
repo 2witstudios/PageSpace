@@ -25,6 +25,10 @@ interface PermissionsGridProps {
   userId?: string;
   permissions: Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
   onChange: (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => void;
+  /** When true, the drive root row is shown as informational only (checkboxes disabled).
+   *  Use in member management context where drive-level access is derived from membership role,
+   *  not from the permissions JSONB. */
+  readOnlyDriveRoot?: boolean;
 }
 
 export interface PermissionsGridRef {
@@ -32,7 +36,7 @@ export interface PermissionsGridRef {
 }
 
 export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridProps>(function PermissionsGrid(
-  { driveId, userId, permissions, onChange },
+  { driveId, userId, permissions, onChange, readOnlyDriveRoot = false },
   ref
 ) {
   const [pages, setPages] = useState<PageNode[]>([]);
@@ -210,25 +214,30 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
         <div className="flex-1 flex items-center space-x-2">
           <HardDrive className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
           <span className="font-semibold truncate">{page.title}</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">(drive root — controls root-level page creation)</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
+            {readOnlyDriveRoot
+              ? '(drive root — access derived from membership role)'
+              : '(drive root — controls root-level page creation)'}
+          </span>
         </div>
         <div className="w-[100px] flex justify-center">
           <Checkbox
             checked={perms.canView}
+            disabled={readOnlyDriveRoot}
             onCheckedChange={(checked) => handlePermissionChange(page.id, 'canView', !!checked)}
           />
         </div>
         <div className="w-[100px] flex justify-center">
           <Checkbox
             checked={perms.canEdit}
-            disabled={!perms.canView}
+            disabled={readOnlyDriveRoot || !perms.canView}
             onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)}
           />
         </div>
         <div className="w-[100px] flex justify-center">
           <Checkbox
             checked={perms.canShare}
-            disabled={!perms.canView}
+            disabled={readOnlyDriveRoot || !perms.canView}
             onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)}
           />
         </div>
