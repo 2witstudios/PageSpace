@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { format } from 'date-fns';
-import { AlertCircle, Bot, CalendarIcon, ChevronRight, Clock, MapPin, Trash2, Zap } from 'lucide-react';
+import { AlertCircle, Bot, CalendarIcon, Check, ChevronRight, CircleHelp, Clock, MapPin, Trash2, UserPlus, X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 import {
@@ -40,7 +40,18 @@ import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useEditingSession } from '@/stores/useEditingSession';
-import { CalendarEvent, EVENT_COLORS } from './calendar-types';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { AttendeeStatus, CalendarEvent, CalendarEventAttendee, ATTENDEE_STATUS_CONFIG, EVENT_COLORS } from './calendar-types';
 import { TriggerPagePicker } from '@/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
 import {
   AgentTriggerSection,
@@ -54,6 +65,62 @@ export type AgentTriggerSavePayload = {
   instructionPageId: string | null;
   contextPageIds: string[];
 };
+
+interface AssigneesResponse {
+  assignees: Array<{ id: string; type: 'user' | 'agent'; name: string | null; image: string | null }>;
+}
+
+const assigneesFetcher = async (url: string): Promise<AssigneesResponse> => {
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to load assignees');
+  return res.json();
+};
+
+interface AttendeeComboboxProps {
+  users: Array<{ id: string; name: string | null; image: string | null }>;
+  onAdd: (userId: string) => void;
+}
+
+function AttendeeCombobox({ users, onAdd }: AttendeeComboboxProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" size="sm" className="w-full justify-start text-muted-foreground">
+          <UserPlus className="h-4 w-4 mr-2" />
+          Add attendee
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search members…" />
+          <CommandList>
+            <CommandEmpty>No members found</CommandEmpty>
+            <CommandGroup>
+              {users.map((user) => (
+                <CommandItem
+                  key={user.id}
+                  value={user.name ?? user.id}
+                  onSelect={() => {
+                    onAdd(user.id);
+                    setOpen(false);
+                  }}
+                >
+                  <Avatar className="h-5 w-5 mr-2">
+                    {user.image && <AvatarImage src={user.image} />}
+                    <AvatarFallback className="text-xs">{(user.name ?? '?')[0].toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  {user.name ?? user.id}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 interface EventModalProps {
   isOpen: boolean;
@@ -77,6 +144,9 @@ interface EventModalProps {
     agentTrigger?: AgentTriggerSavePayload | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
+  onRsvp?: (status: AttendeeStatus) => Promise<void>;
+  onAddAttendee?: (userId: string) => Promise<void>;
+  onRemoveAttendee?: (userId: string) => Promise<void>;
   driveId?: string;
   context: 'user' | 'drive';
 }
@@ -138,12 +208,14 @@ export function EventModal({
   defaultValues,
   onSave,
   onDelete,
+  onRsvp,
+  onAddAttendee,
+  onRemoveAttendee,
   driveId,
   context,
 }: EventModalProps) {
   const isEditing = !!event;
   const isDriveContext = context === 'drive' && !!driveId;
-  const isRecurring = !!event?.recurrenceRule;
   // Agent triggers attach to drive events only — the executor needs a drive
   // context to resolve agent / instruction / context pages.
   const showAgentSection = isDriveContext;
@@ -160,6 +232,29 @@ export function EventModal({
   const [allDay, setAllDay] = useState(false);
   const [color, setColor] = useState<keyof typeof EVENT_COLORS>('default');
   const [isSaving, setIsSaving] = useState(false);
+  const [rsvpLoading, setRsvpLoading] = useState(false);
+
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  const myAttendee = useMemo(
+    () => event?.attendees.find((a) => a.userId === currentUserId && !a.isOrganizer) ?? null,
+    [event, currentUserId],
+  );
+
+  const handleRsvp = async (status: AttendeeStatus) => {
+    if (!onRsvp) return;
+    setRsvpLoading(true);
+    try {
+      await onRsvp(status);
+      toast.success('RSVP updated');
+    } catch {
+      toast.error('Failed to update RSVP');
+    } finally {
+      setRsvpLoading(false);
+    }
+  };
+
+  // Attendee state (pending list for new events)
+  const [pendingAttendees, setPendingAttendees] = useState<CalendarEventAttendee[]>([]);
 
   // Agent trigger state
   const [agentEnabled, setAgentEnabled] = useState(false);
@@ -212,6 +307,20 @@ export function EventModal({
 
   const agents = useMemo(() => agentsData?.agents ?? [], [agentsData]);
   const noAgents = !agentsLoading && agents.length === 0;
+
+  // Attendees make sense whenever the event has a drive association. Derive from the event
+  // itself when editing so the section works even in user-context CalendarView.
+  const effectiveDriveId = event?.driveId ?? driveId;
+  const showAttendeesSection = !!effectiveDriveId;
+
+  const assigneesKey = isOpen && showAttendeesSection ? `/api/drives/${effectiveDriveId}/assignees` : null;
+  const { data: assigneesData } = useSWR<AssigneesResponse>(assigneesKey, assigneesFetcher, {
+    revalidateOnFocus: false,
+  });
+  const driveUsers = useMemo(
+    () => (assigneesData?.assignees ?? []).filter((a) => a.type === 'user'),
+    [assigneesData]
+  );
   const existingTrigger = triggerData?.trigger ?? null;
   const existingStatus: LastRunStatus | null = existingTrigger
     ? lastRunStatusFor(existingTrigger)
@@ -266,6 +375,7 @@ export function EventModal({
       }
       setAdvancedExpanded(false);
       setAgentExpanded(false);
+      setPendingAttendees([]);
     } else {
       triggerLoadedRef.current = false;
       agentsLoadedRef.current = false;
@@ -278,7 +388,7 @@ export function EventModal({
   // means save sends agentTrigger=null and removes any defensive stale row.
   useEffect(() => {
     if (!isOpen) return;
-    if (existingTrigger && !isRecurring) {
+    if (existingTrigger) {
       setAgentEnabled(true);
       setAgentValue({
         agentPageId: existingTrigger.agentPageId,
@@ -287,18 +397,66 @@ export function EventModal({
         contextPageIds: existingTrigger.contextPageIds ?? [],
       });
     } else if (!triggerKey || (!triggerLoading && triggerData)) {
-      // No fetch (new event) OR fetch landed with no trigger row (or with one
-      // we're ignoring on a recurring event) → reset to empty.
+      // No fetch (new event) OR fetch landed with no trigger row → reset to empty.
       setAgentEnabled(false);
       setAgentValue(EMPTY_AGENT_VALUE);
     }
-  }, [isOpen, existingTrigger, isRecurring, triggerKey, triggerLoading, triggerData]);
+  }, [isOpen, existingTrigger, triggerKey, triggerLoading, triggerData]);
 
   const selectedAgentName = useMemo(() => {
     if (!agentEnabled) return null;
     const found = agents.find((a) => a.id === agentValue.agentPageId);
     return found?.title ?? null;
   }, [agentEnabled, agents, agentValue.agentPageId]);
+
+  const isCreator = !event || event.createdById === currentUserId;
+  const shownAttendees = (event?.attendees ?? pendingAttendees).filter((a) => !a.isOrganizer);
+  const existingAttendeeUserIds = event
+    ? event.attendees.map((a) => a.userId)
+    : pendingAttendees.map((a) => a.userId);
+  const availableUsers = driveUsers.filter((u) => !existingAttendeeUserIds.includes(u.id));
+
+  const handleAddAttendee = async (userId: string) => {
+    if (event) {
+      try {
+        await onAddAttendee?.(userId);
+      } catch {
+        toast.error('Failed to add attendee');
+      }
+    } else {
+      const member = driveUsers.find((u) => u.id === userId);
+      setPendingAttendees((prev) => {
+        if (prev.some((a) => a.userId === userId)) return prev;
+        return [
+          ...prev,
+          {
+            id: userId,
+            eventId: '',
+            userId,
+            status: 'PENDING' as const,
+            responseNote: null,
+            isOrganizer: false,
+            isOptional: false,
+            invitedAt: new Date().toISOString(),
+            respondedAt: null,
+            user: { id: userId, name: member?.name ?? null, image: member?.image ?? null },
+          },
+        ];
+      });
+    }
+  };
+
+  const handleRemoveAttendee = async (userId: string) => {
+    if (event) {
+      try {
+        await onRemoveAttendee?.(userId);
+      } catch {
+        toast.error('Failed to remove attendee');
+      }
+    } else {
+      setPendingAttendees((prev) => prev.filter((a) => a.userId !== userId));
+    }
+  };
 
   const buildDateTime = (date: Date, time: string): Date => {
     const [hours, minutes] = time.split(':').map(Number);
@@ -328,10 +486,6 @@ export function EventModal({
     let agentTrigger: AgentTriggerSavePayload | null | undefined;
     if (showAgentSection) {
       if (agentEnabled) {
-        if (isRecurring) {
-          toast.error('Recurring events can’t have agent triggers');
-          return;
-        }
         if (!agentValue.agentPageId) {
           toast.error('Pick an agent for the trigger');
           return;
@@ -346,11 +500,8 @@ export function EventModal({
           instructionPageId: agentValue.instructionPageId,
           contextPageIds: agentValue.contextPageIds,
         };
-      } else if (existingTrigger && !isRecurring) {
-        // Was enabled, user turned it off → remove. Skip on recurring events:
-        // the trigger row shouldn't exist there anyway, but if a stale one is
-        // present we leave it alone rather than silently deleting it on every
-        // edit. The user never saw an Off→On affordance for it.
+      } else if (existingTrigger) {
+        // Was enabled, user turned it off → remove.
         agentTrigger = null;
       }
       // else: undefined → no-op (no trigger before, none now)
@@ -368,6 +519,9 @@ export function EventModal({
         color,
         pageId: isDriveContext ? linkedPageId : undefined,
         agentTrigger,
+        attendeeIds: !event && pendingAttendees.length > 0
+          ? pendingAttendees.map((a) => a.userId)
+          : undefined,
       });
       toast.success(isEditing ? 'Event updated' : 'Event created');
       onClose();
@@ -412,7 +566,7 @@ export function EventModal({
           </DialogDescription>
         </DialogHeader>
 
-        <fieldset disabled={isSaving}>
+        <fieldset disabled={isSaving || rsvpLoading}>
           <div className="space-y-4 py-4">
             {/* Title */}
             <div className="space-y-2">
@@ -425,6 +579,41 @@ export function EventModal({
                 autoFocus
               />
             </div>
+
+            {myAttendee && onRsvp && (
+              <div className="space-y-2 rounded-md border p-3">
+                <Label className="text-sm font-medium">Your RSVP</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={myAttendee.status === 'ACCEPTED' ? 'default' : 'outline'}
+                    onClick={() => handleRsvp('ACCEPTED')}
+                  >
+                    <Check className="h-3.5 w-3.5 mr-1.5" />
+                    Accept
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={myAttendee.status === 'TENTATIVE' ? 'secondary' : 'outline'}
+                    onClick={() => handleRsvp('TENTATIVE')}
+                  >
+                    <CircleHelp className="h-3.5 w-3.5 mr-1.5" />
+                    Maybe
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={myAttendee.status === 'DECLINED' ? 'destructive' : 'outline'}
+                    onClick={() => handleRsvp('DECLINED')}
+                  >
+                    <X className="h-3.5 w-3.5 mr-1.5" />
+                    Decline
+                  </Button>
+                </div>
+              </div>
+            )}
 
           {/* All-day toggle */}
           <div className="flex items-center justify-between">
@@ -577,6 +766,56 @@ export function EventModal({
             />
           </div>
 
+          {/* Attendees — drive events only (gate on actual driveId, not view context) */}
+          {showAttendeesSection && (
+            <div className="space-y-2 rounded-md border p-3">
+              <Label className="text-sm font-medium">Attendees</Label>
+              {shownAttendees.length > 0 && (
+                <div className="space-y-1">
+                  {shownAttendees.map((a) => (
+                    <div key={a.userId} className="flex items-center justify-between gap-2 text-sm">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Avatar className="h-5 w-5 shrink-0">
+                          {a.user.image && <AvatarImage src={a.user.image} />}
+                          <AvatarFallback className="text-xs">
+                            {(a.user.name ?? '?')[0].toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="truncate">{a.user.name ?? a.userId}</span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Badge
+                          variant="outline"
+                          className={cn('text-xs', ATTENDEE_STATUS_CONFIG[a.status].color)}
+                        >
+                          {ATTENDEE_STATUS_CONFIG[a.status].label}
+                        </Badge>
+                        {isCreator && (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-5 w-5"
+                            aria-label={`Remove ${a.user.name ?? a.userId}`}
+                            onClick={() => handleRemoveAttendee(a.userId)}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {isCreator && (
+                <AttendeeCombobox
+                  users={availableUsers}
+                  onAdd={handleAddAttendee}
+                />
+              )}
+            </div>
+          )}
+
           {/* Agent trigger — collapsed by default; only meaningful for drive events.
               Status text reflects whether a trigger is configured so the modal
               reads as a normal calendar by default. */}
@@ -599,12 +838,7 @@ export function EventModal({
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-3 pt-2">
-                {isRecurring ? (
-                  <p className="text-xs text-muted-foreground rounded-md border border-dashed p-3">
-                    Recurring events can&apos;t have agent triggers. The cron poller fires one-shot occurrences only.
-                  </p>
-                ) : (
-                  <div className="space-y-3 rounded-md border p-3">
+                <div className="space-y-3 rounded-md border p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -654,7 +888,6 @@ export function EventModal({
                       </>
                     )}
                   </div>
-                )}
               </CollapsibleContent>
             </Collapsible>
           )}

@@ -10,13 +10,8 @@ import { activityTools } from '../tools/activity-tools';
 import { calendarReadTools } from '../tools/calendar-read-tools';
 import { calendarWriteTools } from '../tools/calendar-write-tools';
 import { channelTools } from '../tools/channel-tools';
-import { buildStubbedTools } from './stub-tools';
+import { CORE_TOOL_NAMES } from './stub-tools';
 
-/**
- * PageSpace AI Tools - Internal AI SDK tool implementations
- * These tools provide the AI with the ability to interact with PageSpace documents,
- * drives, pages, and AI agents directly through the database with proper permission checking.
- */
 export const pageSpaceTools = {
   ...driveTools,
   ...pageReadTools,
@@ -34,4 +29,6 @@ export const pageSpaceTools = {
 
 export type PageSpaceTools = typeof pageSpaceTools;
 
-export const pageSpaceToolsStubbed = buildStubbedTools(pageSpaceTools);
+export const corePageSpaceTools = Object.fromEntries(
+  Object.entries(pageSpaceTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
+);

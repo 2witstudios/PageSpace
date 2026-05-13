@@ -35,7 +35,6 @@ import {
   type ProviderRequest,
   buildProviderAvailabilityMap,
   pageSpaceTools,
-  pageSpaceToolsStubbed,
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
@@ -47,7 +46,7 @@ import {
   buildTimestampSystemPrompt,
   buildSystemPrompt,
   buildPersonalizationPrompt,
-  buildPageAITools,
+  filterToolsForReadOnly,
   getPageTreeContext,
   getModelCapabilities,
   convertMCPToolsToAISDKSchemas,
@@ -68,7 +67,6 @@ import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
-import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import {
   createStreamAbortController,
@@ -277,10 +275,10 @@ export async function POST(request: Request) {
     }
 
     // Extract custom agent configuration from page.
-    // Note: page.enabledTools is intentionally NOT consulted here. It seeds the
-    // composer's tool toggles on the client; the toggles in the request body
-    // are the source of truth at runtime so the UI doesn't lie about what the
-    // model can actually do.
+    // page.enabledTools seeds the composer's tool toggles on the client and is
+    // enforced server-side (see agentEnabledTools filter below).
+    // Request-body toggles (isReadOnly, webSearchEnabled) are applied independently:
+    // isReadOnly filters the baseline; webSearchEnabled overrides the allowlist.
     const customSystemPrompt = page.systemPrompt;
 
     // Fetch drive prompt if page has includeDrivePrompt enabled
@@ -509,32 +507,39 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Build tools: non-core tools use passthrough stub schemas to reduce context window usage.
-    // The AI calls tool_search to get full parameter schemas before using non-core tools.
-    // See stub-tools.ts for the core tool set definition.
-    let filteredTools: ToolSet = buildPageAITools(pageSpaceToolsStubbed, {
-      isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode,
-    });
+    // Step 1: Apply isReadOnly filter to PageSpace baseline tools.
+    const baseTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
 
-    // Inject tool_search scoped to the enabled tool set (with full schemas).
-    // Using the filtered key set prevents tool_search from advertising tools that are
-    // unavailable in this request (e.g. write tools in read-only, web_search when disabled).
-    const enabledFullSchemaTools = Object.fromEntries(
-      Object.keys(filteredTools)
-        .filter((name) => name in pageSpaceTools)
-        .map((name) => [name, pageSpaceTools[name as keyof typeof pageSpaceTools]])
-    ) as ToolSet;
-    filteredTools = {
-      ...filteredTools,
-      tool_search: createToolSearchTool(enabledFullSchemaTools),
-    } as ToolSet;
+    // Step 2: Extract web_search so it can be handled as a runtime-toggle override
+    // independently of the per-agent allowlist.
+    const { web_search: webSearchToolDef, ...baseToolsWithoutWebSearch } = baseTools as Record<string, ToolSet[string]>;
+
+    // Step 3: Apply per-agent PageSpace tool allowlist.
+    // null/undefined = unconfigured page — no restriction (backwards compat).
+    // []            = zero tools selected — block all PageSpace tools.
+    // ['tool1', …]  = only those tools.
+    const agentEnabledTools = page.enabledTools as string[] | null;
+    let filteredTools: ToolSet;
+    if (agentEnabledTools != null) {
+      filteredTools = Object.fromEntries(
+        Object.entries(baseToolsWithoutWebSearch).filter(([name]) => agentEnabledTools.includes(name))
+      ) as ToolSet;
+    } else {
+      filteredTools = baseToolsWithoutWebSearch as ToolSet;
+    }
+
+    // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
+    // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
+    if (webSearchMode && webSearchToolDef) {
+      filteredTools = { ...filteredTools, web_search: webSearchToolDef };
+    }
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
-      totalTools: Object.keys(pageSpaceToolsStubbed).length,
+      totalTools: Object.keys(pageSpaceTools).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode
+      webSearchEnabled: webSearchMode,
+      enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent

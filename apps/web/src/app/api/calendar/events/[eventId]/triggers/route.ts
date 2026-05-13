@@ -172,16 +172,6 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     );
   }
 
-  // Reject recurring events. The cron poller fires one-shot occurrences, so
-  // attaching one trigger to a recurring event would silently misfire on
-  // every occurrence past the first. Mirrors the POST /events guard.
-  if (event.recurrenceRule) {
-    return NextResponse.json(
-      { error: 'Agent triggers are not supported for recurring events' },
-      { status: 400 }
-    );
-  }
-
   const canManage = await canManageEventTrigger(userId, event);
   if (!canManage) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -195,6 +185,8 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
       triggerAt: event.startAt,
       timezone: event.timezone ?? 'UTC',
       agentTrigger: parsed.data,
+      recurrenceRule: event.recurrenceRule,
+      recurrenceExceptions: event.recurrenceExceptions ?? [],
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to save trigger';

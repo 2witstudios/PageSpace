@@ -39,6 +39,9 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ op: 'eq', field, value })),
   and: vi.fn((...conds) => ({ op: 'and', conds })),
   inArray: vi.fn((field, values) => ({ op: 'inArray', field, values })),
+  ne: vi.fn((field, value) => ({ op: 'ne', field, value })),
+  gt: vi.fn((field, value) => ({ op: 'gt', field, value })),
+  sql: vi.fn(() => ({})),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', type: 'type', isTrashed: 'isTrashed', driveId: 'driveId' },
@@ -47,7 +50,10 @@ vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
-  calendarTriggers: { id: 'id', workflowId: 'workflowId', calendarEventId: 'calendarEventId' },
+  calendarTriggers: { id: 'id', workflowId: 'workflowId', calendarEventId: 'calendarEventId', driveId: 'driveId', scheduledById: 'scheduledById' },
+}));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({
+  workflowRuns: { sourceTable: 'sourceTable', sourceId: 'sourceId' },
 }));
 
 import {
@@ -314,6 +320,7 @@ describe('upsertCalendarTriggerWorkflow', () => {
       select: mockSelect,
       update: mockUpdate,
       insert: vi.fn(),
+      delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
     }));
   });
 
@@ -334,8 +341,10 @@ describe('upsertCalendarTriggerWorkflow', () => {
   it('updates the existing workflow row when a trigger already exists for the event', async () => {
     // Validation calls
     mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' });
-    // Existing trigger lookup inside the tx
-    mockSelectWhere.mockResolvedValueOnce([{ workflowId: 'wf-existing' }]);
+    // 1st select: existing trigger lookup (for workflowId)
+    mockSelectWhere.mockResolvedValueOnce([{ id: 'trg-existing', workflowId: 'wf-existing' }]);
+    // 2nd select: pending (unfired) trigger lookup
+    mockSelectWhere.mockResolvedValueOnce([{ id: 'trg-existing' }]);
 
     await upsertCalendarTriggerWorkflow(db, baseParams);
 

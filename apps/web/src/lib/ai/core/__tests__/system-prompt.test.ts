@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildSystemPrompt,
   buildPersonalizationPrompt,
+  buildNonCoreToolNamesPrompt,
   getWelcomeMessage,
   getErrorMessage,
   estimateSystemPromptTokens,
@@ -138,5 +139,28 @@ describe('estimateSystemPromptTokens', () => {
 
   it('rounds up fractional tokens', () => {
     expect(estimateSystemPromptTokens('abc')).toBe(1);
+  });
+});
+
+describe('buildNonCoreToolNamesPrompt', () => {
+  it('returns empty string for empty tool list', () => {
+    expect(buildNonCoreToolNamesPrompt([])).toBe('');
+  });
+
+  it('groups known tools into their category', () => {
+    const result = buildNonCoreToolNamesPrompt(['list_calendar_events', 'create_calendar_event', 'send_channel_message']);
+    expect(result).toContain('calendar: list_calendar_events, create_calendar_event');
+    expect(result).toContain('channels: send_channel_message');
+  });
+
+  it('places unknown tool names in the "other" category', () => {
+    const result = buildNonCoreToolNamesPrompt(['some_unknown_tool']);
+    expect(result).toContain('other: some_unknown_tool');
+  });
+
+  it('includes the execute_tool usage instruction', () => {
+    const result = buildNonCoreToolNamesPrompt(['get_activity']);
+    expect(result).toContain('execute_tool');
+    expect(result).toContain('tool_search');
   });
 });

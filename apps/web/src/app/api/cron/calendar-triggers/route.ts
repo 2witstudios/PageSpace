@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, lte, inArray, asc, sql } from '@pagespace/db/operators'
+import { eq, and, lte, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
 import { calendarEvents } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeCalendarTrigger } from '@/lib/workflows/calendar-trigger-executor';
+import { bulkCreateOccurrenceTriggerRows } from '@/lib/workflows/calendar-trigger-helpers';
+import { expandOccurrences } from '@/lib/workflows/recurrence-utils';
 import type { WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
@@ -13,6 +15,9 @@ import { audit } from '@pagespace/lib/audit/audit-log';
 const STUCK_RUN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_CONCURRENT_TRIGGERS = 5;
 const MAX_DUE_TRIGGERS = 50;
+const REFILL_MAX_EVENTS = 20;
+const REFILL_LOOKAHEAD_DAYS = 30;
+const REFILL_HORIZON_DAYS = 180;
 
 const logger = loggers.api.child({ module: 'cron-calendar-triggers' });
 
@@ -76,6 +81,7 @@ export async function POST(req: Request) {
       .limit(MAX_DUE_TRIGGERS);
 
     if (dueTriggers.length === 0) {
+      await refillRecurringTriggers(now);
       audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed: 0, failed: 0 } });
       return NextResponse.json({ message: 'No calendar triggers due', executed: 0 });
     }
@@ -151,6 +157,12 @@ export async function POST(req: Request) {
 
     logger.info(`Calendar trigger cron: Complete. Executed ${executed}/${totalAttempted}`);
 
+    // 4. Look-ahead refill: recurring events whose future trigger queue is running
+    //    dry get a fresh batch of occurrence rows. Uses the same pure expansion
+    //    function as the upsert path — ON CONFLICT DO NOTHING makes it safe to
+    //    call every tick without duplicates.
+    await refillRecurringTriggers(now);
+
     audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'calendar_triggers', details: { executed, failed: errors.length } });
 
     return NextResponse.json({
@@ -163,4 +175,66 @@ export async function POST(req: Request) {
     logger.error('Calendar trigger cron error:', error as Error);
     return NextResponse.json({ error: 'Calendar trigger cron failed' }, { status: 500 });
   }
+}
+
+async function refillRecurringTriggers(now: Date): Promise<void> {
+  const lookaheadCutoff = new Date(now.getTime() + REFILL_LOOKAHEAD_DAYS * 86_400_000);
+
+  // Find recurring events whose trigger queue has no rows beyond the lookahead
+  // window — these need a fresh batch of future occurrence rows. Driving from
+  // calendarEvents (not calendarTriggers) means events whose all trigger rows
+  // were fired and none remain are still found correctly.
+  const needsRefill = await db
+    .selectDistinct({
+      calendarEventId: calendarEvents.id,
+      workflowId: calendarTriggers.workflowId,
+      driveId: calendarTriggers.driveId,
+      scheduledById: calendarTriggers.scheduledById,
+    })
+    .from(calendarEvents)
+    .innerJoin(calendarTriggers, eq(calendarTriggers.calendarEventId, calendarEvents.id))
+    .where(and(
+      isNotNull(calendarEvents.recurrenceRule),
+      eq(calendarEvents.isTrashed, false),
+      sql`NOT EXISTS (
+        SELECT 1 FROM ${calendarTriggers} ct2
+        WHERE ct2."calendarEventId" = ${calendarEvents.id}
+          AND ct2."triggerAt" > ${lookaheadCutoff}
+      )`,
+    ))
+    .limit(REFILL_MAX_EVENTS);
+
+  if (needsRefill.length === 0) return;
+
+  const eventIds = needsRefill.map((r) => r.calendarEventId);
+  const events = await db
+    .select()
+    .from(calendarEvents)
+    .where(inArray(calendarEvents.id, eventIds));
+
+  const eventMap = new Map(events.map((e) => [e.id, e]));
+  const horizon = new Date(now.getTime() + REFILL_HORIZON_DAYS * 86_400_000);
+
+  await Promise.allSettled(
+    needsRefill.map(async (row) => {
+      const event = eventMap.get(row.calendarEventId);
+      if (!event?.recurrenceRule) return;
+
+      const occurrences = expandOccurrences(
+        event.recurrenceRule,
+        event.startAt,
+        now,
+        horizon,
+        event.recurrenceExceptions ?? [],
+      );
+
+      await bulkCreateOccurrenceTriggerRows(db, {
+        workflowId: row.workflowId,
+        calendarEventId: row.calendarEventId,
+        driveId: row.driveId,
+        scheduledById: row.scheduledById,
+        occurrences,
+      });
+    }),
+  );
 }

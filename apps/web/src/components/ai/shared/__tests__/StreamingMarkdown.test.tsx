@@ -28,7 +28,7 @@ vi.mock('streamdown', () => ({
 }));
 
 // Import after mocking
-import { StreamingMarkdown } from '../chat/StreamingMarkdown';
+import { StreamingMarkdown, addHardLineBreaks } from '../chat/StreamingMarkdown';
 
 interface MarkdownNode {
   type: string;
@@ -261,6 +261,40 @@ describe('raw HTML rendering', () => {
       { type: 'text', value: ' ' },
       { type: 'text', value: '<style>' },
     ]);
+  });
+});
+
+describe('addHardLineBreaks', () => {
+  it('converts a single newline to a CommonMark hard line break', () => {
+    expect(addHardLineBreaks('line1\nline2')).toBe('line1  \nline2');
+  });
+
+  it('leaves paragraph breaks (double newline) untouched', () => {
+    expect(addHardLineBreaks('para1\n\npara2')).toBe('para1\n\npara2');
+  });
+
+  it('converts multiple single newlines independently', () => {
+    expect(addHardLineBreaks('a\nb\nc')).toBe('a  \nb  \nc');
+  });
+
+  it('handles mixed single and double newlines', () => {
+    expect(addHardLineBreaks('a\nb\n\nc')).toBe('a  \nb\n\nc');
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(addHardLineBreaks('')).toBe('');
+  });
+
+  it('returns a single-line string unchanged', () => {
+    expect(addHardLineBreaks('no newlines here')).toBe('no newlines here');
+  });
+
+  it('does not modify a leading newline', () => {
+    expect(addHardLineBreaks('\ntext')).toBe('\ntext');
+  });
+
+  it('does not modify a trailing newline', () => {
+    expect(addHardLineBreaks('text\n')).toBe('text\n');
   });
 });
 

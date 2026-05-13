@@ -70,7 +70,9 @@ vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id', sourceTable: 'sourceTable', sourceId: 'sourceId' } }));
 
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
-  createCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  // POST route uses upsertCalendarTriggerWorkflowInTx (not createCalendarTriggerWorkflow)
+  // since recurring and one-shot events share the same upsert path in this branch.
+  upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
 }));
 
@@ -124,7 +126,7 @@ import { POST } from '../route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import {
-  createCalendarTriggerWorkflow,
+  upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
 
@@ -177,7 +179,7 @@ describe('POST /api/calendar/events — agent trigger context', () => {
     });
   });
 
-  it('forwards agentTrigger.instructionPageId and contextPageIds to createCalendarTriggerWorkflow', async () => {
+  it('forwards agentTrigger.instructionPageId and contextPageIds to upsertCalendarTriggerWorkflowInTx', async () => {
     const res = await POST(makeRequest({
       driveId: DRIVE_ID,
       title: 'Standup with prep',
@@ -206,7 +208,8 @@ describe('POST /api/calendar/events — agent trigger context', () => {
       }),
     );
 
-    expect(createCalendarTriggerWorkflow).toHaveBeenCalledWith(
+    expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         driveId: DRIVE_ID,
         agentTrigger: expect.objectContaining({

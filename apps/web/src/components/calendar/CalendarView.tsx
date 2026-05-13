@@ -27,12 +27,14 @@ import { MobileCalendarView } from './MobileCalendarView';
 import { EventModal } from './EventModal';
 import { CalendarSidebar } from './CalendarSidebar';
 import {
+  AttendeeStatus,
   CalendarViewMode,
   CalendarEvent,
   CalendarHandlers,
   EventColorConfig,
   getDriveCalendarColor,
 } from './calendar-types';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface CalendarViewProps {
   context: 'user' | 'drive';
@@ -70,6 +72,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     allDay: boolean;
   } | null>(null);
 
+  const currentUserId = useAuthStore((s) => s.user?.id);
+
   const {
     events,
     tasks,
@@ -78,6 +82,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     createEvent,
     updateEvent,
     deleteEvent,
+    updateRsvp,
+    addAttendees,
+    removeAttendee,
     refresh: _refresh,
   } = useCalendarData({
     context,
@@ -266,6 +273,82 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     setIsEventModalOpen(false);
   };
 
+  const handleRsvp = useCallback(async (status: AttendeeStatus) => {
+    if (!selectedEvent) return;
+    const previousEvent = selectedEvent;
+    setSelectedEvent((prev) =>
+      prev
+        ? {
+            ...prev,
+            attendees: prev.attendees.map((a) =>
+              a.userId === currentUserId
+                ? { ...a, status, respondedAt: new Date().toISOString() }
+                : a,
+            ),
+          }
+        : null,
+    );
+    try {
+      await updateRsvp(selectedEvent.id, status);
+    } catch {
+      setSelectedEvent(previousEvent);
+      throw new Error('Failed to update RSVP');
+    }
+  }, [selectedEvent, updateRsvp, currentUserId]);
+
+  const handleAddAttendee = useCallback(
+    async (userId: string) => {
+      if (!selectedEvent) return;
+      const prevEvent = selectedEvent;
+      setSelectedEvent((prev) =>
+        prev
+          ? {
+              ...prev,
+              attendees: [
+                ...prev.attendees,
+                {
+                  id: userId,
+                  eventId: prev.id,
+                  userId,
+                  status: 'PENDING' as const,
+                  responseNote: null,
+                  isOrganizer: false,
+                  isOptional: false,
+                  invitedAt: new Date().toISOString(),
+                  respondedAt: null,
+                  user: { id: userId, name: null, image: null },
+                },
+              ],
+            }
+          : null
+      );
+      try {
+        await addAttendees(selectedEvent.id, [userId]);
+      } catch {
+        setSelectedEvent(prevEvent);
+        throw new Error('Failed to add attendee');
+      }
+    },
+    [selectedEvent, addAttendees]
+  );
+
+  const handleRemoveAttendee = useCallback(
+    async (userId: string) => {
+      if (!selectedEvent) return;
+      const prevEvent = selectedEvent;
+      setSelectedEvent((prev) =>
+        prev ? { ...prev, attendees: prev.attendees.filter((a) => a.userId !== userId) } : null
+      );
+      try {
+        await removeAttendee(selectedEvent.id, userId);
+      } catch {
+        setSelectedEvent(prevEvent);
+        throw new Error('Failed to remove attendee');
+      }
+    },
+    [selectedEvent, removeAttendee]
+  );
+
   // Get header title based on view mode
   const getHeaderTitle = () => {
     switch (viewMode) {
@@ -316,6 +399,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           defaultValues={newEventDefaults}
           onSave={handleEventSave}
           onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
+          onRsvp={handleRsvp}
+          onAddAttendee={handleAddAttendee}
+          onRemoveAttendee={handleRemoveAttendee}
           driveId={driveId}
           context={context}
         />
@@ -576,6 +662,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         defaultValues={newEventDefaults}
         onSave={handleEventSave}
         onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
+        onRsvp={handleRsvp}
+        onAddAttendee={handleAddAttendee}
+        onRemoveAttendee={handleRemoveAttendee}
         driveId={driveId}
         context={context}
       />
