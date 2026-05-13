@@ -119,20 +119,18 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const handleMembershipRoleChange = useCallback(async (value: string) => {
     setMembershipSaving(true);
     try {
-      let body: { role?: 'MEMBER' | 'ADMIN'; customRoleId?: string | null };
-      if (value === 'ADMIN') {
-        body = { role: 'ADMIN', customRoleId: null };
-      } else if (value === 'MEMBER') {
-        body = { role: 'MEMBER', customRoleId: null };
-      } else {
-        body = { role: 'MEMBER', customRoleId: value };
-      }
+      const body: { role: 'MEMBER' | 'ADMIN'; customRoleId: string | null } =
+        value === 'ADMIN'
+          ? { role: 'ADMIN', customRoleId: null }
+          : value === 'MEMBER'
+          ? { role: 'MEMBER', customRoleId: null }
+          : { role: 'MEMBER', customRoleId: value };
       await patch(`/api/drives/${driveId}/agents/${pageId}`, body);
-      const customRole = value !== 'ADMIN' && value !== 'MEMBER'
-        ? (driveRoles.find((r) => r.id === value) ?? null)
+      const customRole = body.customRoleId
+        ? (driveRoles.find((r) => r.id === body.customRoleId) ?? null)
         : null;
       setMembership({
-        role: body.role ?? membership?.role ?? 'MEMBER',
+        role: body.role,
         customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
       });
       toast.success('Role updated');
@@ -141,7 +139,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     } finally {
       setMembershipSaving(false);
     }
-  }, [driveId, pageId, driveRoles, membership]);
+  }, [driveId, pageId, driveRoles]);
 
   // Dynamic Ollama models state
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);

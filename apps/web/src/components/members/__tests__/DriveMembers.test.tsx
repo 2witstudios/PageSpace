@@ -67,6 +67,32 @@ const okMembers = (
     json: () => Promise.resolve({ currentUserRole, members, pendingInvites }),
   });
 
+const okAgentMembers = (currentUserRole = 'OWNER') =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({ agentMembers: [], currentUserRole }),
+  });
+
+const okRoles = () =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({ roles: [] }),
+  });
+
+// fetchMembers() now fires 3 parallel requests per invocation
+const FETCHES_PER_CALL = 3;
+
+const urlAwareMock = (
+  members: ReturnType<typeof member>[],
+  currentUserRole = 'OWNER',
+  pendingInvites: PendingInviteFixture[] = [],
+) =>
+  (url: string) => {
+    if (url.endsWith('/agents/members')) return okAgentMembers(currentUserRole);
+    if (url.endsWith('/roles')) return okRoles();
+    return okMembers(members, currentUserRole, pendingInvites);
+  };
+
 const EVENTS = ['drive:member_added', 'drive:member_removed', 'drive:member_role_changed'] as const;
 
 describe('DriveMembers', () => {
@@ -93,8 +119,8 @@ describe('DriveMembers', () => {
   });
 
   it('Given accepted members and pending invites, renders both sections with correct counts', async () => {
-    mockFetchWithAuth.mockImplementation(() =>
-      okMembers(
+    mockFetchWithAuth.mockImplementation(
+      urlAwareMock(
         [member({ userId: 'a1' }), member({ userId: 'a2' })],
         'OWNER',
         [samplePending(), samplePending({ id: 'inv_2', email: 'b@example.com' })],
@@ -107,42 +133,42 @@ describe('DriveMembers', () => {
   });
 
   it('Renders no pending section when API returns an empty pendingInvites array', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([member({ userId: 'm1' })]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([member({ userId: 'm1' })]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText(/members \(/i);
     expect(screen.queryByText(/pending invitations/i)).not.toBeInTheDocument();
   });
 
   it('Given the component mounts, subscribes to all three drive member events', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
     EVENTS.forEach((e) => expect(socket.__count(e)).toBe(1));
   });
 
   it.each(EVENTS)('Given %s fires for current driveId, refetches the member list', async (event) => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
 
     socket.__emit(event, { driveId: 'drive-1' });
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL * 2));
   });
 
   it('Does NOT refetch when the event is for a different driveId', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
 
     socket.__emit('drive:member_added', { driveId: 'other' });
     await new Promise((r) => setTimeout(r, 20));
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
   });
 
   it('Given the component unmounts, unsubscribes from all three events', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     const { unmount } = render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
     EVENTS.forEach((e) => expect(socket.__count(e)).toBe(1));

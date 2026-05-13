@@ -77,14 +77,12 @@ export function AgentMemberRow({
   const handleRoleSelect = async (value: string) => {
     setSaving(true);
     try {
-      let body: { role?: 'MEMBER' | 'ADMIN'; customRoleId?: string | null };
-      if (value === 'ADMIN') {
-        body = { role: 'ADMIN', customRoleId: null };
-      } else if (value === 'MEMBER') {
-        body = { role: 'MEMBER', customRoleId: null };
-      } else {
-        body = { role: 'MEMBER', customRoleId: value };
-      }
+      const body: { role: 'MEMBER' | 'ADMIN'; customRoleId: string | null } =
+        value === 'ADMIN'
+          ? { role: 'ADMIN', customRoleId: null }
+          : value === 'MEMBER'
+          ? { role: 'MEMBER', customRoleId: null }
+          : { role: 'MEMBER', customRoleId: value };
 
       await patch(`/api/drives/${driveId}/agents/${agent.agentPageId}`, body);
 
@@ -93,7 +91,7 @@ export function AgentMemberRow({
         : null;
 
       onRoleChange(agent.agentPageId, {
-        role: body.role ?? agent.role,
+        role: body.role,
         customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
       });
     } catch {
@@ -146,15 +144,7 @@ export function AgentMemberRow({
                   <SelectSeparator />
                   {driveRoles.map((role) => (
                     <SelectItem key={role.id} value={role.id}>
-                      <span className="flex items-center gap-2">
-                        {role.color && (
-                          <span
-                            className="inline-block h-2 w-2 rounded-full"
-                            style={{ backgroundColor: role.color.startsWith('#') ? role.color : undefined }}
-                          />
-                        )}
-                        {role.name}
-                      </span>
+                      {role.name}
                     </SelectItem>
                   ))}
                 </>
