@@ -6,6 +6,7 @@ import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 
 interface PageNode {
   id: string;
@@ -132,30 +133,16 @@ export async function GET(
     // root-level page creation) using the same code path as page nodes.
     let driveRootPermissions: { canView: boolean; canEdit: boolean; canShare: boolean } | undefined;
     if (targetUserId) {
-      if (targetUserId === drive[0].ownerId) {
-        driveRootPermissions = { canView: true, canEdit: true, canShare: true };
+      // Explicit drive-level entry in the permissions map takes precedence
+      // (used by agent custom roles which store the driveId as a key).
+      const explicit = existingPermissions.get(driveId);
+      if (explicit) {
+        driveRootPermissions = explicit;
       } else {
-        // Check for an explicit drive-level entry in the permissions map
-        // (used by agent custom roles which store the driveId as a key)
-        const explicit = existingPermissions.get(driveId);
-        if (explicit) {
-          driveRootPermissions = explicit;
-        } else {
-          // Check drive membership role to determine default access
-          const membership = await db.select({ role: driveMembers.role })
-            .from(driveMembers)
-            .where(and(
-              eq(driveMembers.driveId, driveId),
-              eq(driveMembers.userId, targetUserId),
-              isNotNull(driveMembers.acceptedAt)
-            ))
-            .limit(1);
-          if (membership.length > 0) {
-            driveRootPermissions = { canView: true, canEdit: true, canShare: true };
-          } else {
-            driveRootPermissions = { canView: false, canEdit: false, canShare: false };
-          }
-        }
+        const access = await getUserAccessLevel(targetUserId, driveId);
+        driveRootPermissions = access
+          ? { canView: access.canView, canEdit: access.canEdit, canShare: access.canShare }
+          : { canView: false, canEdit: false, canShare: false };
       }
     }
 

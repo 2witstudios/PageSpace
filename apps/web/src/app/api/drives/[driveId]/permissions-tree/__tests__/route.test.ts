@@ -85,12 +85,16 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserAccessLevel: vi.fn(),
+}));
 
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 
 // ---------- helpers ----------
 
@@ -146,6 +150,9 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
     // Default: no permissions
     mockPermResults.value = [];
+
+    // Default: getUserAccessLevel returns null (overridden in specific tests)
+    vi.mocked(getUserAccessLevel).mockResolvedValue(null);
   });
 
   // ---------- Authentication ----------
@@ -403,13 +410,16 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
     });
 
     it('drive root node has currentPermissions when userId query param provided (owner case)', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue({
+        canView: true, canEdit: true, canShare: true, canDelete: true,
+      });
+
       const response = await GET(
         createRequest(mockDriveId, `?userId=${mockUserId}`),
         createContext(mockDriveId)
       );
       const body = await response.json();
 
-      // Drive owner gets full edit access on the drive root node
       expect(body.pages[0].currentPermissions).toEqual({
         canView: true,
         canEdit: true,

@@ -75,10 +75,15 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
 }
 
 /**
- * Get user access level for a page.
+ * Get user access level for a page or drive (drive-as-root-node).
+ *
+ * If `pageId` does not resolve to a page, it is treated as a drive ID.
+ * Drive owners and ADMIN members get full access; non-admin members get
+ * canView/canEdit with canDelete=false. canShare follows the same owner/admin
+ * gate as drive-level sharing (non-admin members cannot share the drive root).
  *
  * @param userId - User ID to check permissions for (validated as CUID2)
- * @param pageId - Page ID to check permissions on (validated as CUID2)
+ * @param pageId - Page or drive ID to check permissions on (validated as CUID2)
  * @param options.silent - If false, log debug messages (default: true)
  * @returns Permission object or null if no access / invalid input
  */
@@ -155,7 +160,7 @@ export async function getUserAccessLevel(
         return {
           canView: true,
           canEdit: true,
-          canShare: true,
+          canShare: isAdmin,
           canDelete: isAdmin,
         };
       }

@@ -536,7 +536,7 @@ describe('getUserAccessLevel', () => {
       } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
-    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: false });
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
   it('returns null when nodeId is a drive and user has no membership', async () => {

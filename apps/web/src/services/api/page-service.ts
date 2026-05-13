@@ -605,8 +605,8 @@ export const pageService = {
       return { success: false, error: 'Drive not found', status: 404 };
     }
 
-    // Check authorization — mirror the AI tool's split: nested pages require
-    // edit permission on the parent; root-level pages require drive membership.
+    // Check authorization — nested pages require edit permission on the parent;
+    // root-level pages treat the drive as the root parent and require canEdit on the drive.
     if (params.parentId) {
       const parentPage = await db.query.pages.findFirst({
         where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
