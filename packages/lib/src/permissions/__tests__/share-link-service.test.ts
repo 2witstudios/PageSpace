@@ -45,14 +45,12 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 vi.mock('@pagespace/db/schema/share-links', () => ({
   driveShareLinks: {
-    id: 'dsl.id', driveId: 'dsl.driveId', tokenHash: 'dsl.tokenHash',
-    token: 'dsl.token',
+    id: 'dsl.id', driveId: 'dsl.driveId', token: 'dsl.token',
     role: 'dsl.role', createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
     expiresAt: 'dsl.expiresAt', isActive: 'dsl.isActive', useCount: 'dsl.useCount',
   },
   pageShareLinks: {
-    id: 'psl.id', pageId: 'psl.pageId', tokenHash: 'psl.tokenHash',
-    token: 'psl.token',
+    id: 'psl.id', pageId: 'psl.pageId', token: 'psl.token',
     permissions: 'psl.permissions', createdBy: 'psl.createdBy', createdAt: 'psl.createdAt',
     expiresAt: 'psl.expiresAt', isActive: 'psl.isActive', useCount: 'psl.useCount',
   },
@@ -63,9 +61,10 @@ vi.mock('../permissions', () => ({
   isUserDriveMember: vi.fn(),
 }));
 vi.mock('../../auth/token-utils', () => ({
-  generateToken: vi.fn(() => ({ token: 'ps_share_testtoken', hash: 'hashed123', tokenPrefix: 'ps_share_te' })),
+  generateToken: vi.fn(() => ({ token: 'ps_share_testtoken', tokenPrefix: 'ps_share_te' })),
   hashToken: vi.fn((t: string) => `hash:${t}`),
 }));
+// hashToken is mocked but must never be called by share-link-service — tests assert this.
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-link-id'),
 }));
@@ -87,6 +86,7 @@ import {
 } from '../share-link-service';
 import { EnforcedAuthContext } from '../enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from '../permissions';
+import { hashToken } from '../../auth/token-utils';
 import type { SessionClaims } from '../../auth/session-service';
 
 // ---------------------------------------------------------------------------
@@ -242,6 +242,14 @@ describe('listDriveShareLinks', () => {
 });
 
 describe('redeemDriveShareLink', () => {
+  it('does not hash the token — looks up by plaintext token directly', async () => {
+    makeSelectChain([]);
+
+    await redeemDriveShareLink(makeCtx(), 'some-token');
+
+    expect(vi.mocked(hashToken)).not.toHaveBeenCalled();
+  });
+
   it('returns NOT_FOUND for unknown token', async () => {
     makeSelectChain([]);
 
@@ -305,6 +313,33 @@ describe('redeemDriveShareLink', () => {
     }
     expect(mockDb.insert).toHaveBeenCalled();
     expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it('ADMIN role preservation: onConflictDoUpdate is called with role-preserving SQL when upserting membership', async () => {
+    mockDb.select.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue([{
+        id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
+        isActive: true, expiresAt: null, driveName: 'Admin Drive',
+        createdBy: 'creator-id',
+      }]),
+    }));
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+    const insertChain = makeInsertChain([{ id: 'existing-admin-member-id' }]);
+    makeUpdateChain();
+
+    await redeemDriveShareLink(makeCtx(), 'member-share-token');
+
+    expect(insertChain.onConflictDoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.arrayContaining([expect.anything(), expect.anything()]),
+        set: expect.objectContaining({
+          role: expect.anything(),
+        }),
+      })
+    );
   });
 });
 
@@ -409,6 +444,14 @@ describe('listPageShareLinks', () => {
 });
 
 describe('redeemPageShareLink', () => {
+  it('does not hash the token — looks up by plaintext token directly', async () => {
+    makeSelectChain([]);
+
+    await redeemPageShareLink(makeCtx(), 'bad-token');
+
+    expect(vi.mocked(hashToken)).not.toHaveBeenCalled();
+  });
+
   it('returns NOT_FOUND for invalid/revoked/expired token', async () => {
     makeSelectChain([]);
 
@@ -421,6 +464,7 @@ describe('redeemPageShareLink', () => {
     let callCount = 0;
     mockDb.select.mockImplementation(() => ({
       from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
       leftJoin: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
       orderBy: vi.fn().mockReturnThis(),
@@ -457,6 +501,7 @@ describe('redeemPageShareLink', () => {
     let callCount = 0;
     mockDb.select.mockImplementation(() => ({
       from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
       leftJoin: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
       orderBy: vi.fn().mockReturnThis(),
@@ -489,6 +534,14 @@ describe('redeemPageShareLink', () => {
 });
 
 describe('resolveShareToken', () => {
+  it('does not hash the token — looks up by plaintext token directly', async () => {
+    makeSelectChain([]);
+
+    await resolveShareToken('any-token');
+
+    expect(vi.mocked(hashToken)).not.toHaveBeenCalled();
+  });
+
   it('returns null for not-found token (no throw)', async () => {
     makeSelectChain([]);
 

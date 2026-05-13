@@ -10,8 +10,7 @@ export type ShareLinkPermission = 'VIEW' | 'EDIT';
 export const driveShareLinks = pgTable('drive_share_links', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
-  tokenHash: text('token_hash').unique().notNull(),
-  token: text('token').notNull().default(''),
+  token: text('token').unique().notNull(),
   role: memberRole('role').notNull().default('MEMBER'),
   createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
@@ -35,8 +34,7 @@ export type NewDriveShareLink = typeof driveShareLinks.$inferInsert;
 export const pageShareLinks = pgTable('page_share_links', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   pageId: text('page_id').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  tokenHash: text('token_hash').unique().notNull(),
-  token: text('token').notNull().default(''),
+  token: text('token').unique().notNull(),
   permissions: jsonb('permissions').notNull().$type<ShareLinkPermission[]>(),
   createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
