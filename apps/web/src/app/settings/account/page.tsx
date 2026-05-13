@@ -716,12 +716,14 @@ export default function AccountPage() {
       </Card>
 
       {/* Drive Ownership Dialog */}
-      <DriveOwnershipDialog
-        isOpen={isOwnershipDialogOpen}
-        onClose={() => setIsOwnershipDialogOpen(false)}
-        onAllDrivesHandled={handleAllDrivesHandled}
-        multiMemberDrives={multiMemberDrives}
-      />
+      {isOwnershipDialogOpen && (
+        <DriveOwnershipDialog
+          isOpen={isOwnershipDialogOpen}
+          onClose={() => setIsOwnershipDialogOpen(false)}
+          onAllDrivesHandled={handleAllDrivesHandled}
+          multiMemberDrives={multiMemberDrives}
+        />
+      )}
 
       {/* Delete Account Dialog */}
       <DeleteAccountDialog
