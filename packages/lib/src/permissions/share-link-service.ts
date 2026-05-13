@@ -40,6 +40,15 @@ export interface PageShareLinkView {
   createdAt: Date;
 }
 
+export interface DriveShareLinkRedemption {
+  driveId: string;
+  linkId: string;
+  memberId: string;
+  driveName: string;
+  role: DriveShareLink['role'];
+  createdBy: string;
+}
+
 export interface ShareTokenInfo {
   type: 'drive' | 'page';
   linkId: string;
@@ -151,7 +160,7 @@ export async function redeemDriveShareLink(
   ctx: EnforcedAuthContext,
   rawToken: string
 ): Promise<
-  | { ok: true; data: { driveId: string; linkId: string; memberId: string; driveName: string; role: DriveShareLink['role']; createdBy: string } }
+  | { ok: true; data: DriveShareLinkRedemption }
   | { ok: false; error: 'ALREADY_MEMBER'; driveId: string }
   | { ok: false; error: 'NOT_FOUND' }
 > {
