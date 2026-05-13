@@ -24,6 +24,12 @@ export function isImageAttachment(m: MessageWithAttachment): boolean {
   return false;
 }
 
+export function isVideoAttachment(m: MessageWithAttachment): boolean {
+  if (m.attachmentMeta?.mimeType?.startsWith('video/')) return true;
+  if (m.file?.mimeType?.startsWith('video/')) return true;
+  return false;
+}
+
 export function getFileId(m: MessageWithAttachment): string | null {
   return m.fileId || m.file?.id || null;
 }
