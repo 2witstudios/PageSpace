@@ -167,6 +167,18 @@ describe('POST /api/cron/calendar-triggers', () => {
     mockSelectWhere.mockReturnValue({ orderBy: mockSelectOrderBy });
     mockSelectOrderBy.mockReturnValue({ limit: mockSelectLimit });
     mockSelectLimit.mockResolvedValue([]);
+
+    // Default: refillRecurringTriggers (selectDistinct chain) finds nothing to refill.
+    // Must be re-set after vi.resetAllMocks() clears the vi.hoisted factory.
+    mockSelectDistinct.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        innerJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    });
   });
 
   it('returns auth error when cron request is invalid', async () => {
