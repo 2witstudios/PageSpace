@@ -94,7 +94,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
           </p>
         </div>
 
-        <Button className="w-full" onClick={() => router.push(`/auth/signin?next=/s/${token}`)}>
+        <Button className="w-full" onClick={() => router.push(`/auth/signin?next=${encodeURIComponent(`/s/${token}`)}`)}>
           Sign in to join
         </Button>
 
