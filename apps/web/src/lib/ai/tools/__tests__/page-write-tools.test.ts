@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
     canUserDeletePage: vi.fn(),
+    isUserDriveMember: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
     logPageActivity: vi.fn(),
@@ -111,13 +112,14 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
@@ -368,12 +370,14 @@ describe('page-write-tools', () => {
       expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('non-existent');
     });
 
-    it('creates page successfully at root level', async () => {
-      // Arrange
+    it('creates page successfully at root level for non-owner member', async () => {
+      // Arrange — actor is a member, NOT the drive owner, to verify the new
+      // membership check (not the old owner-only guard) is what grants access.
       mockDriveRepo.findByIdBasic.mockResolvedValue({
         id: 'drive-1',
-        ownerId: 'user-123',
+        ownerId: 'owner-999',
       });
+      mockIsUserDriveMember.mockResolvedValue(true);
       mockPageRepo.getNextPosition.mockResolvedValue(1);
       mockPageRepo.create.mockResolvedValue({
         id: 'new-page-1',
@@ -399,6 +403,9 @@ describe('page-write-tools', () => {
       expect(success.id).toBe('new-page-1');
       expect(success.title).toBe('New Page');
 
+      // Verify membership check was used, not the old owner-only guard
+      expect(mockIsUserDriveMember).toHaveBeenCalledWith('user-123', 'drive-1');
+
       // Verify repository was called with correct payload
       expect(mockPageRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -411,8 +418,6 @@ describe('page-write-tools', () => {
           isTrashed: false,
         })
       );
-
-      // Activity logging is handled by mutation logging.
     });
   });
 

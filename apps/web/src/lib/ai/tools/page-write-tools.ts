@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, canUserDeletePage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -559,9 +559,10 @@ export const pageWriteTools = {
             throw new Error('Insufficient permissions to create pages in this folder');
           }
         } else {
-          // Creating at root level - check if user owns the drive
-          if (drive.ownerId !== userId) {
-            throw new Error('Only drive owners can create pages at the root level');
+          // Creating at root level - any drive member can create
+          const isMember = await isUserDriveMember(userId, driveId);
+          if (!isMember) {
+            throw new Error('You must be a drive member to create pages at the root level');
           }
         }
 

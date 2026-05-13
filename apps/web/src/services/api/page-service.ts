@@ -11,7 +11,7 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import { validatePageCreation, validateAIChatTools } from '@pagespace/lib/content/page-type-validators'
 import { getDefaultContent, isAIChatPage } from '@pagespace/lib/content/page-types.config'
 import { PageType as PageTypeEnum } from '@pagespace/lib/utils/enums'
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { isDriveOwnerOrAdmin, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
@@ -605,10 +605,25 @@ export const pageService = {
       return { success: false, error: 'Drive not found', status: 404 };
     }
 
-    // Check authorization
-    const hasPermission = await isDriveOwnerOrAdmin(userId, params.driveId);
-    if (!hasPermission) {
-      return { success: false, error: 'Only drive owners and admins can create pages', status: 403 };
+    // Check authorization — mirror the AI tool's split: nested pages require
+    // edit permission on the parent; root-level pages require drive membership.
+    if (params.parentId) {
+      const parentPage = await db.query.pages.findFirst({
+        where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
+        columns: { id: true },
+      });
+      if (!parentPage) {
+        return { success: false, error: 'Parent page not found in this drive', status: 400 };
+      }
+      const canEdit = await canUserEditPage(userId, params.parentId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };
+      }
+    } else {
+      const isMember = await isUserDriveMember(userId, params.driveId);
+      if (!isMember) {
+        return { success: false, error: 'You must be a drive member to create pages', status: 403 };
+      }
     }
 
     // Calculate position - use isNull when parentId is null/undefined
