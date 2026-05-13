@@ -20,12 +20,6 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      router.push(`/auth/signin?next=/s/${token}`);
-    }
-  }, [authLoading, isAuthenticated, router, token]);
-
-  useEffect(() => {
     if (!isAuthenticated || !csrfToken) return;
 
     const controller = new AbortController();
@@ -56,6 +50,28 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
     accept();
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
+
+  if (!authLoading && !isAuthenticated) {
+    return (
+      <div className="space-y-6 text-center">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+            You&apos;re invited
+          </h1>
+          <p className="mt-3 text-sm text-muted-foreground">
+            Sign in to open{' '}
+            <span className="font-medium text-gray-900 dark:text-gray-100">
+              {info.pageTitle ?? 'this page'}
+            </span>
+            .
+          </p>
+        </div>
+        <Button className="w-full" onClick={() => router.push(`/auth/signin?next=/s/${token}`)}>
+          Sign in to continue
+        </Button>
+      </div>
+    );
+  }
 
   if (error) {
     return (
