@@ -408,15 +408,14 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     }
 
     if (toolName === 'list_conversations' && parsedOutput.conversations) {
-      // Display conversations as a simple list
-      const conversations = parsedOutput.conversations as Array<{ id: string; title?: string; messageCount?: number }>;
+      const conversations = parsedOutput.conversations as Array<{ conversationId: string; title?: string; firstMessagePreview?: string; messageCount?: number }>;
       return (
         <PageTreeRenderer
           tree={conversations.map(c => ({
-            path: c.id,
-            title: c.title || `Conversation ${c.id.slice(0, 8)}`,
+            path: c.conversationId,
+            title: c.title || c.firstMessagePreview?.slice(0, 40) || `Conversation ${c.conversationId?.slice(0, 8) ?? ''}`,
             type: 'AI_CHAT',
-            pageId: c.id,
+            pageId: c.conversationId,
             children: []
           }))}
           title="Conversations"
