@@ -269,7 +269,6 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     });
     return {
       worldview: [],
-      projects: [],
       communication: [],
       preferences: [],
     };

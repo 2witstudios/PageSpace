@@ -47,7 +47,8 @@ QUALITY GATES (apply in order — fail any gate = skip):
 1. Portability: Would this still apply if the person was working on a completely different project? If no, skip.
 2. Personhood: Does this describe the person, or just a decision they made in a specific context? Project-scoped decisions don't belong here.
 3. Novelty: Is this already captured in the existing profile (even if worded differently)? If yes, skip.
-4. Signal: Is this a clear, repeatable pattern — not a single mention or one-off? If no, skip.
+4. Consistency: Does this contradict something already in the profile? If yes, skip — do not append conflicting statements.
+5. Signal: Is this a clear, repeatable pattern — not a single mention or one-off? If no, skip.
 
 For each field, decide:
 - "append" - Add new content to the end of this field
