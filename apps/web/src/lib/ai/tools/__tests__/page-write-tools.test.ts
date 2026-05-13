@@ -370,11 +370,12 @@ describe('page-write-tools', () => {
       expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('non-existent');
     });
 
-    it('creates page successfully at root level', async () => {
-      // Arrange
+    it('creates page successfully at root level for non-owner member', async () => {
+      // Arrange — actor is a member, NOT the drive owner, to verify the new
+      // membership check (not the old owner-only guard) is what grants access.
       mockDriveRepo.findByIdBasic.mockResolvedValue({
         id: 'drive-1',
-        ownerId: 'user-123',
+        ownerId: 'owner-999',
       });
       mockIsUserDriveMember.mockResolvedValue(true);
       mockPageRepo.getNextPosition.mockResolvedValue(1);
@@ -402,6 +403,9 @@ describe('page-write-tools', () => {
       expect(success.id).toBe('new-page-1');
       expect(success.title).toBe('New Page');
 
+      // Verify membership check was used, not the old owner-only guard
+      expect(mockIsUserDriveMember).toHaveBeenCalledWith('user-123', 'drive-1');
+
       // Verify repository was called with correct payload
       expect(mockPageRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -414,8 +418,6 @@ describe('page-write-tools', () => {
           isTrashed: false,
         })
       );
-
-      // Activity logging is handled by mutation logging.
     });
   });
 
