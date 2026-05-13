@@ -13,6 +13,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -150,6 +151,10 @@ export async function POST(
         resourceId: pageId,
         details: { targetUserId: existingUser.id, permissions, operation: 'share_invite_direct' },
       });
+
+      await broadcastPageEvent(
+        createPageEventPayload(page.driveId, pageId, 'updated')
+      );
 
       return NextResponse.json({
         kind: 'granted',
