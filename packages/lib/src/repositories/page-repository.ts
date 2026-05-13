@@ -36,6 +36,7 @@ export interface PageRecord {
   includeDrivePrompt?: boolean;
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
+  toolAccessScope?: 'drive' | 'subtree';
 }
 
 export interface CreatePageInput {
@@ -73,6 +74,7 @@ export interface UpdatePageInput {
   includeDrivePrompt?: boolean;
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
+  toolAccessScope?: 'drive' | 'subtree';
 }
 
 export const pageRepository = {
