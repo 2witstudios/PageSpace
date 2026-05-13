@@ -21,6 +21,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Check, X } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -59,6 +60,8 @@ interface MessageWithReactions extends MessageWithUser {
   quotedMessage?: QuotedMessageSnapshot | null;
   replyCount?: number;
   lastReplyAt?: string | null;
+  mirroredFromId?: string | null;
+  mirroredFrom?: { parentId: string | null } | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -675,6 +678,13 @@ function ChannelView({ page }: ChannelViewProps) {
                                   </div>
                                 ) : (
                                   <>
+                                    {m.mirroredFromId && (
+                                      <ThreadOriginBadge
+                                        onOpenThread={m.mirroredFrom?.parentId
+                                          ? () => openThread({ source: 'channel', contextId: page.id, parentId: m.mirroredFrom!.parentId! })
+                                          : undefined}
+                                      />
+                                    )}
                                     {(m.quotedMessage || m.quotedMessageId) && (
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}

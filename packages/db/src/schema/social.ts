@@ -188,6 +188,11 @@ export const directMessagesRelations = relations(directMessages, ({ one, many })
     references: [files.id],
   }),
   reactions: many(dmMessageReactions),
+  mirroredFrom: one(directMessages, {
+    fields: [directMessages.mirroredFromId],
+    references: [directMessages.id],
+    relationName: 'mirroredFrom',
+  }),
 }));
 
 export const dmMessageReactionsRelations = relations(dmMessageReactions, ({ one }) => ({

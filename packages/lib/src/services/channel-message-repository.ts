@@ -47,6 +47,9 @@ const messageWith = {
       },
     },
   },
+  mirroredFrom: {
+    columns: { parentId: true },
+  },
 } as const;
 
 export interface ListChannelMessagesInput {

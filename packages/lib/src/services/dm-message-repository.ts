@@ -41,6 +41,9 @@ const dmMessageWith = {
       },
     },
   },
+  mirroredFrom: {
+    columns: { parentId: true },
+  },
 } as const;
 
 export interface DmConversationParticipants {
