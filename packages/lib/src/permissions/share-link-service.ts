@@ -151,7 +151,7 @@ export async function redeemDriveShareLink(
   ctx: EnforcedAuthContext,
   rawToken: string
 ): Promise<
-  | { ok: true; data: { driveId: string; linkId: string } }
+  | { ok: true; data: { driveId: string; linkId: string; memberId: string; driveName: string; role: DriveShareLink['role'] } }
   | { ok: false; error: 'ALREADY_MEMBER'; driveId: string }
   | { ok: false; error: 'NOT_FOUND' }
 > {
@@ -165,8 +165,10 @@ export async function redeemDriveShareLink(
       isActive: driveShareLinks.isActive,
       expiresAt: driveShareLinks.expiresAt,
       useCount: driveShareLinks.useCount,
+      driveName: drives.name,
     })
     .from(driveShareLinks)
+    .leftJoin(drives, eq(driveShareLinks.driveId, drives.id))
     .where(eq(driveShareLinks.tokenHash, tokenHash))
     .limit(1);
 
@@ -179,7 +181,7 @@ export async function redeemDriveShareLink(
   const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
-  await db.insert(driveMembers).values({
+  const [inserted] = await db.insert(driveMembers).values({
     id: createId(),
     driveId: link.driveId,
     userId: ctx.userId,
@@ -192,14 +194,23 @@ export async function redeemDriveShareLink(
       // Preserve ADMIN role — never downgrade an existing ADMIN via a MEMBER share link
       role: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN ${driveMembers.role} ELSE EXCLUDED.role END`,
     },
-  });
+  }).returning({ id: driveMembers.id });
 
   await db
     .update(driveShareLinks)
     .set({ useCount: sql`${driveShareLinks.useCount} + 1` })
     .where(eq(driveShareLinks.id, link.id));
 
-  return { ok: true, data: { driveId: link.driveId, linkId: link.id } };
+  return {
+    ok: true,
+    data: {
+      driveId: link.driveId,
+      linkId: link.id,
+      memberId: inserted.id,
+      driveName: link.driveName ?? '',
+      role: link.role,
+    },
+  };
 }
 
 // ============================================================================

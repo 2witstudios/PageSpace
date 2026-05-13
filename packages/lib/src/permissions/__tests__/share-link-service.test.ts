@@ -128,8 +128,8 @@ function makeInsertChain(result: unknown[] = []) {
   const chain = {
     values: vi.fn().mockReturnThis(),
     returning: vi.fn().mockResolvedValue(result),
-    onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
-    onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    onConflictDoNothing: vi.fn().mockReturnThis(),
+    onConflictDoUpdate: vi.fn().mockReturnThis(),
   };
   mockDb.insert.mockReturnValue(chain);
   return chain;
@@ -274,21 +274,17 @@ describe('redeemDriveShareLink', () => {
   });
 
   it('creates drive membership and increments useCount for valid token', async () => {
-    let callCount = 0;
     mockDb.select.mockImplementation(() => ({
       from: vi.fn().mockReturnThis(),
       leftJoin: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) {
-          return Promise.resolve([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, expiresAt: null }]);
-        }
-        return Promise.resolve([]);
-      }),
+      limit: vi.fn().mockResolvedValue([{
+        id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
+        isActive: true, expiresAt: null, driveName: 'Test Drive',
+      }]),
     }));
     vi.mocked(isUserDriveMember).mockResolvedValue(false);
-    makeInsertChain([]);
+    makeInsertChain([{ id: 'new-member-id' }]);
     makeUpdateChain();
 
     const result = await redeemDriveShareLink(makeCtx(), 'valid-token');
@@ -297,6 +293,9 @@ describe('redeemDriveShareLink', () => {
     if (result.ok) {
       expect(result.data.driveId).toBe(DRIVE_ID);
       expect(result.data.linkId).toBe(LINK_ID);
+      expect(result.data.memberId).toBe('new-member-id');
+      expect(result.data.driveName).toBe('Test Drive');
+      expect(result.data.role).toBe('MEMBER');
     }
     expect(mockDb.insert).toHaveBeenCalled();
     expect(mockDb.update).toHaveBeenCalled();
