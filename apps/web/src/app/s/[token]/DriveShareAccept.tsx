@@ -79,7 +79,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
       <Button
         className="w-full"
         onClick={handleJoin}
-        disabled={isPending || (isAuthenticated && !csrfToken)}
+        disabled={isPending || authLoading || (isAuthenticated && !csrfToken)}
       >
         {isPending ? 'Joining…' : `Join ${info.driveName ?? 'workspace'}`}
       </Button>
