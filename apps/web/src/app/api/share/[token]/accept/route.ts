@@ -28,7 +28,7 @@ export async function POST(
       action: 'share_link_redeem',
       linkId: driveResult.data.linkId,
       ipAddress: clientIP,
-    }).catch(() => undefined);
+    }).catch((err) => console.error('[share/accept] audit log error', err));
     const ports = buildAcceptancePorts(request);
     const acceptData: AcceptedInviteData = {
       memberId: driveResult.data.memberId,
@@ -38,7 +38,7 @@ export async function POST(
       invitedUserId: auth.ctx.userId,
       inviterUserId: driveResult.data.createdBy,
     };
-    await emitAcceptanceSideEffects(ports, acceptData, 0).catch(() => undefined);
+    await emitAcceptanceSideEffects(ports, acceptData, 0).catch((err) => console.error('[share/accept] side effect error', err));
     return NextResponse.json({ type: 'drive', driveId: driveResult.data.driveId });
   }
 
@@ -57,7 +57,7 @@ export async function POST(
       action: 'share_link_redeem',
       linkId: pageResult.data.linkId,
       ipAddress: clientIP,
-    }).catch(() => undefined);
+    }).catch((err) => console.error('[share/accept] audit log error', err));
     return NextResponse.json({
       type: 'page',
       pageId: pageResult.data.pageId,
