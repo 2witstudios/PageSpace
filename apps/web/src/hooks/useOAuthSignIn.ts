@@ -14,6 +14,7 @@ export interface OAuthSigninBodyInput {
   deviceId: string;
   deviceName: string;
   inviteToken?: string;
+  returnUrl?: string;
 }
 
 export const buildOAuthSigninBody = ({
@@ -21,30 +22,35 @@ export const buildOAuthSigninBody = ({
   deviceId,
   deviceName,
   inviteToken,
+  returnUrl,
 }: OAuthSigninBodyInput): Record<string, string> => ({
   platform,
   deviceId,
   deviceName,
   ...(inviteToken && { inviteToken }),
+  ...(returnUrl && { returnUrl }),
 });
 
 export interface PostNativeAuthRedirectInput {
   isNewUser?: boolean;
   invitedDriveId?: string | null;
+  returnUrl?: string;
 }
 
 /**
  * Decide where to land a user after a successful native (iOS) OAuth flow.
  *
- * Precedence: invite-consumed drive > new-user welcome > /dashboard.
+ * Precedence: invite-consumed drive > returnUrl > new-user welcome > /dashboard.
  * Pure function — extracted so the redirect logic can be tested without
  * rendering the hook.
  */
 export const buildPostNativeAuthRedirect = ({
   isNewUser,
   invitedDriveId,
+  returnUrl,
 }: PostNativeAuthRedirectInput): string => {
   if (invitedDriveId) return `/dashboard/${invitedDriveId}?invited=1`;
+  if (returnUrl) return returnUrl;
   if (isNewUser) return '/dashboard?welcome=true';
   return '/dashboard';
 };
@@ -53,9 +59,10 @@ interface UseOAuthSignInOptions {
   onStart?: () => void;
   onError?: (message: string) => void;
   inviteToken?: string;
+  returnUrl?: string;
 }
 
-export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignInOptions = {}) {
+export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: UseOAuthSignInOptions = {}) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [waitingProvider, setWaitingProvider] = useState<OAuthProvider | null>(null);
@@ -90,6 +97,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
   const handleNativeSuccess = async (result: {
     isNewUser?: boolean;
     invitedDriveId?: string | null;
+    returnUrl?: string;
     user?: { id: string; name: string | null; email: string | null; image?: string | null };
   }) => {
     const { useAuthStore } = await import('@/stores/useAuthStore');
@@ -100,6 +108,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
     router.replace(buildPostNativeAuthRedirect({
       isNewUser: result.isNewUser,
       invitedDriveId: result.invitedDriveId,
+      returnUrl: result.returnUrl,
     }));
   };
 
@@ -120,6 +129,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
       deviceId,
       deviceName,
       inviteToken,
+      returnUrl,
     });
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -174,7 +184,10 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
         await import('@/lib/ios-google-auth');
 
       if (isNativeGoogleAuthAvailable()) {
-        const result = await nativeSignIn(inviteToken ? { inviteToken } : {});
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {
@@ -202,7 +215,10 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
         await import('@/lib/ios-apple-auth');
 
       if (isNativeAppleAuthAvailable()) {
-        const result = await nativeSignIn(inviteToken ? { inviteToken } : {});
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {

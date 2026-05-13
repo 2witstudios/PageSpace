@@ -21,9 +21,10 @@ import type { InviteContextData } from '@/lib/auth/invite-resolver';
 interface SignUpClientProps {
   inviteToken?: string;
   inviteContext?: InviteContextData;
+  returnUrl?: string;
 }
 
-export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) {
+export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
   const router = useRouter();
@@ -41,6 +42,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
     onStart: () => setError(null),
     onError: (msg) => setError(msg),
     ...(inviteToken && { inviteToken }),
+    ...(returnUrl && { returnUrl }),
   });
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
@@ -115,12 +117,13 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
             csrfToken={csrfToken}
             refreshToken={refreshToken}
             onEmailExists={() => {
-              router.push('/auth/signin');
+              router.push(returnUrl ? `/auth/signin?next=${encodeURIComponent(returnUrl)}` : '/auth/signin');
             }}
             onLoadingChange={setPasskeyLoading}
             disabled={isAnyLoading}
             inviteToken={inviteToken}
             lockedEmail={inviteContext?.email}
+            {...(returnUrl && { nextPath: returnUrl })}
           />
         </motion.div>
       )}
@@ -153,7 +156,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
       >
         {showMagicLink ? (
           <div id="magic-link-form" className="mt-2">
-            <MagicLinkForm {...(inviteToken && { inviteToken })} />
+            <MagicLinkForm {...(inviteToken && { inviteToken })} {...(returnUrl && { nextPath: returnUrl })} />
           </div>
         ) : (
           <button
@@ -178,7 +181,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
         <p className="text-sm text-muted-foreground">
           Already have an account?{' '}
           <Link
-            href="/auth/signin"
+            href={returnUrl ? `/auth/signin?next=${encodeURIComponent(returnUrl)}` : '/auth/signin'}
             className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
           >
             Log in

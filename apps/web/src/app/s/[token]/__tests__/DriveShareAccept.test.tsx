@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, act, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, act, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const pushMock = vi.fn();
 
@@ -32,15 +32,24 @@ describe('DriveShareAccept', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(useCSRFToken).mockReturnValue(csrfBase);
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ type: 'drive', driveId: 'drive-fallback' }),
+    } as Response);
   });
 
-  it('Given auth is loading, should not redirect and disable the button', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('Given auth is loading, should show spinner and not redirect', () => {
     vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: true } as ReturnType<typeof useAuth>);
 
     render(<DriveShareAccept token="tok" info={INFO} />);
 
     expect(pushMock).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /join/i })).toBeDisabled();
+    expect(screen.getByText(/joining/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
   });
 
   it('Given unauthenticated user after auth loads, should show invite landing page without redirecting', async () => {
@@ -61,15 +70,59 @@ describe('DriveShareAccept', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /join/i }));
 
-    expect(pushMock).toHaveBeenCalledWith('/auth/signin?next=/s/tok-abc');
+    expect(pushMock).toHaveBeenCalledWith('/auth/signin?next=%2Fs%2Ftok-abc');
   });
 
-  it('Given authenticated user, should not redirect even if csrfToken is null', () => {
+  it('Given authenticated user, when CSRF fails to load, should show error state not an infinite spinner', () => {
     vi.mocked(useAuth).mockReturnValue({ isAuthenticated: true, isLoading: false } as ReturnType<typeof useAuth>);
-    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, error: 'csrf error' });
+    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, isLoading: false, error: 'Failed to fetch CSRF token' });
 
     render(<DriveShareAccept token="tok" info={INFO} />);
 
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/joining/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /go to dashboard/i })).toBeInTheDocument();
+  });
+
+  it('Given authenticated user with CSRF token, should auto-POST accept and redirect to dashboard', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: true, isLoading: false } as ReturnType<typeof useAuth>);
+    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, csrfToken: 'csrf-tok' });
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ type: 'drive', driveId: 'drive-123' }),
+    } as Response);
+
+    render(<DriveShareAccept token="tok-abc" info={INFO} />);
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/dashboard/drive-123'));
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/share/tok-abc/accept',
+      expect.objectContaining({ method: 'POST', headers: { 'x-csrf-token': 'csrf-tok' } })
+    );
+  });
+
+  it('Given authenticated user with CSRF token, when accept returns non-ok, should show server error', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: true, isLoading: false } as ReturnType<typeof useAuth>);
+    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, csrfToken: 'csrf-tok' });
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'Invite link has expired' }),
+    } as Response);
+
+    render(<DriveShareAccept token="tok-abc" info={INFO} />);
+
+    await waitFor(() => expect(screen.getByText(/invite link has expired/i)).toBeInTheDocument());
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('Given authenticated user with CSRF token, when accept throws, should show generic error', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: true, isLoading: false } as ReturnType<typeof useAuth>);
+    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, csrfToken: 'csrf-tok' });
+    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Network error'));
+
+    render(<DriveShareAccept token="tok-abc" info={INFO} />);
+
+    await waitFor(() => expect(screen.getByRole('link', { name: /go to dashboard/i })).toBeInTheDocument());
     expect(pushMock).not.toHaveBeenCalled();
   });
 });
