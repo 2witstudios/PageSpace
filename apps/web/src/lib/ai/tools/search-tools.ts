@@ -78,24 +78,10 @@ export const searchTools = {
           );
         }
 
-        // Build final query
-        const query = db
-          .select({
-            id: pages.id,
-            title: pages.title,
-            type: pages.type,
-            parentId: pages.parentId,
-            content: pages.content,
-          })
-          .from(pages)
-          .where(whereConditions);
-
-        const matchingPages = await query.limit(maxResults);
-
-        // Get all accessible pages upfront to avoid N+1 queries
+        // Get all accessible pages and apply subtree scope BEFORE querying so the
+        // SQL limit is applied only to in-scope pages, not drive-wide matches.
         let accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
 
-        // Enforce agent tool access scope if restricted to subtree
         const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
         if (pageAccessScope?.type === 'subtree') {
           const allDrivePages = await db
@@ -110,6 +96,21 @@ export const searchTools = {
 
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
         const pageMap = new Map(accessiblePages.map(p => [p.id, p]));
+
+        // Build final query scoped to accessible pages so limit(maxResults) is applied
+        // after permission filtering, not before.
+        const accessibleIds = [...accessiblePageIds];
+        const matchingPages = await db
+          .select({
+            id: pages.id,
+            title: pages.title,
+            type: pages.type,
+            parentId: pages.parentId,
+            content: pages.content,
+          })
+          .from(pages)
+          .where(and(whereConditions, accessibleIds.length > 0 ? inArray(pages.id, accessibleIds) : sql`false`))
+          .limit(maxResults);
 
         const results: Array<{
           pageId: string;
@@ -387,20 +388,10 @@ export const searchTools = {
           .from(drives)
           .where(eq(drives.id, driveId));
 
-        // Build where conditions
-        const whereConditions = includeTypes && includeTypes.length > 0
-          ? and(
-              eq(pages.driveId, driveId),
-              eq(pages.isTrashed, false),
-              inArray(pages.type, includeTypes)
-            )
-          : and(
-              eq(pages.driveId, driveId),
-              eq(pages.isTrashed, false)
-            );
-
-        // Get all pages in drive
-        const query = db
+        // Fetch all non-trashed pages in the drive (without type filter) for correct
+        // path building and subtree computation. Type filtering happens in memory so
+        // ancestor folders are always available for semantic path traversal.
+        const allDrivePages = await db
           .select({
             id: pages.id,
             title: pages.title,
@@ -409,30 +400,35 @@ export const searchTools = {
             position: pages.position,
           })
           .from(pages)
-          .where(whereConditions);
+          .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
 
-        const allPages = await query;
+        const allPages = includeTypes && includeTypes.length > 0
+          ? allDrivePages.filter(p => includeTypes.includes(p.type as typeof includeTypes[number]))
+          : allDrivePages;
 
         // Get all accessible pages upfront to avoid N+1 queries
         let accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
 
-        // Enforce agent tool access scope if restricted to subtree
+        // Enforce agent tool access scope if restricted to subtree.
+        // Use allDrivePages (not type-filtered) so filterToSubtree correctly
+        // traverses the full parent-child tree and doesn't drop nodes of excluded types.
         const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
         if (pageAccessScope?.type === 'subtree') {
           const subtreeIds = new Set(
-            filterToSubtree(allPages, pageAccessScope.agentPageId).map(p => p.id)
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
           );
           accessiblePages = accessiblePages.filter(p => subtreeIds.has(p.id));
         }
 
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
 
-        // Build page hierarchy with paths
+        // Build page hierarchy with paths — use allDrivePages so ancestor folders
+        // of any type are included in path traversal regardless of includeTypes filter.
         const pageMap = new Map();
         const results = [];
 
-        // First pass: build page map
-        for (const page of allPages) {
+        // First pass: build page map from all drive pages
+        for (const page of allDrivePages) {
           pageMap.set(page.id, page);
         }
 
