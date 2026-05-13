@@ -33,34 +33,42 @@ export function PageShareLinkSection({ pageId }: { pageId: string }) {
       ) : activeLink ? (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
+            <input
+              type="text"
+              readOnly
+              value={shareUrl ?? ''}
+              aria-label="Share link URL"
+              className="flex-1 h-8 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 shrink-0"
+              onClick={handleCopy}
+              disabled={!shareUrl}
+              aria-label="Copy share link"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 shrink-0 text-destructive hover:text-destructive"
+              onClick={handleRevoke}
+              disabled={isRevoking}
+              aria-label="Revoke share link"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-xs">
               {activeLink.permissions.includes('EDIT') ? 'View + Edit' : 'View only'}
             </Badge>
             <span className="text-xs text-muted-foreground">
               Used {activeLink.useCount} {activeLink.useCount === 1 ? 'time' : 'times'}
             </span>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              onClick={handleCopy}
-              disabled={!shareUrl}
-            >
-              <Copy className="mr-1.5 h-3.5 w-3.5" />
-              Copy link
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleRevoke}
-              disabled={isRevoking}
-              className="text-destructive hover:text-destructive"
-              aria-label="Revoke share link"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
           </div>
         </div>
       ) : (
