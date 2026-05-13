@@ -247,9 +247,7 @@ export async function PATCH(
       });
 
       await broadcastPageEvent(
-        createPageEventPayload(page.driveId, pageId, 'updated', {
-          updatedFields: Object.keys(updateData),
-        }),
+        createPageEventPayload(page.driveId, pageId, 'updated'),
       );
     }
 
