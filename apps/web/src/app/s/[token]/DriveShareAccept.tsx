@@ -56,7 +56,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
 
-  if (authLoading || (isAuthenticated && isPending && !error)) {
+  if (authLoading || (isAuthenticated && (!csrfToken || isPending) && !error)) {
     return (
       <div className="text-center space-y-4">
         <p className="text-sm text-muted-foreground">
