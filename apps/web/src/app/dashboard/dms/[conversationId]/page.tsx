@@ -233,16 +233,32 @@ export default function InboxDMPage() {
       );
     };
 
+    const handleMessageEdited = (data: { messageId: string; content: string; editedAt: string }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.messageId ? { ...m, content: data.content, isEdited: true, editedAt: data.editedAt } : m
+        )
+      );
+    };
+
+    const handleMessageDeleted = (data: { messageId: string }) => {
+      setMessages((prev) => prev.filter((m) => m.id !== data.messageId));
+    };
+
     socket.on('new_dm_message', handleNewMessage);
     socket.on('reaction_added', handleReactionAdded);
     socket.on('reaction_removed', handleReactionRemoved);
     socket.on('thread_reply_count_updated', handleThreadCountUpdated);
+    socket.on('message_edited', handleMessageEdited);
+    socket.on('message_deleted', handleMessageDeleted);
 
     return () => {
       socket.off('new_dm_message', handleNewMessage);
       socket.off('reaction_added', handleReactionAdded);
       socket.off('reaction_removed', handleReactionRemoved);
       socket.off('thread_reply_count_updated', handleThreadCountUpdated);
+      socket.off('message_edited', handleMessageEdited);
+      socket.off('message_deleted', handleMessageDeleted);
       socket.emit('leave_dm_conversation', conversationId);
     };
   }, [conversationId, user, socket]);
