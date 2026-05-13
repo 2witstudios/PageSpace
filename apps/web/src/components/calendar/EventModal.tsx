@@ -216,7 +216,6 @@ export function EventModal({
 }: EventModalProps) {
   const isEditing = !!event;
   const isDriveContext = context === 'drive' && !!driveId;
-  const isRecurring = !!event?.recurrenceRule;
   // Agent triggers attach to drive events only — the executor needs a drive
   // context to resolve agent / instruction / context pages.
   const showAgentSection = isDriveContext;
@@ -389,7 +388,7 @@ export function EventModal({
   // means save sends agentTrigger=null and removes any defensive stale row.
   useEffect(() => {
     if (!isOpen) return;
-    if (existingTrigger && !isRecurring) {
+    if (existingTrigger) {
       setAgentEnabled(true);
       setAgentValue({
         agentPageId: existingTrigger.agentPageId,
@@ -398,12 +397,11 @@ export function EventModal({
         contextPageIds: existingTrigger.contextPageIds ?? [],
       });
     } else if (!triggerKey || (!triggerLoading && triggerData)) {
-      // No fetch (new event) OR fetch landed with no trigger row (or with one
-      // we're ignoring on a recurring event) → reset to empty.
+      // No fetch (new event) OR fetch landed with no trigger row → reset to empty.
       setAgentEnabled(false);
       setAgentValue(EMPTY_AGENT_VALUE);
     }
-  }, [isOpen, existingTrigger, isRecurring, triggerKey, triggerLoading, triggerData]);
+  }, [isOpen, existingTrigger, triggerKey, triggerLoading, triggerData]);
 
   const selectedAgentName = useMemo(() => {
     if (!agentEnabled) return null;
@@ -488,10 +486,6 @@ export function EventModal({
     let agentTrigger: AgentTriggerSavePayload | null | undefined;
     if (showAgentSection) {
       if (agentEnabled) {
-        if (isRecurring) {
-          toast.error('Recurring events can’t have agent triggers');
-          return;
-        }
         if (!agentValue.agentPageId) {
           toast.error('Pick an agent for the trigger');
           return;
@@ -506,11 +500,8 @@ export function EventModal({
           instructionPageId: agentValue.instructionPageId,
           contextPageIds: agentValue.contextPageIds,
         };
-      } else if (existingTrigger && !isRecurring) {
-        // Was enabled, user turned it off → remove. Skip on recurring events:
-        // the trigger row shouldn't exist there anyway, but if a stale one is
-        // present we leave it alone rather than silently deleting it on every
-        // edit. The user never saw an Off→On affordance for it.
+      } else if (existingTrigger) {
+        // Was enabled, user turned it off → remove.
         agentTrigger = null;
       }
       // else: undefined → no-op (no trigger before, none now)
@@ -847,12 +838,7 @@ export function EventModal({
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-3 pt-2">
-                {isRecurring ? (
-                  <p className="text-xs text-muted-foreground rounded-md border border-dashed p-3">
-                    Recurring events can&apos;t have agent triggers. The cron poller fires one-shot occurrences only.
-                  </p>
-                ) : (
-                  <div className="space-y-3 rounded-md border p-3">
+                <div className="space-y-3 rounded-md border p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -902,7 +888,6 @@ export function EventModal({
                       </>
                     )}
                   </div>
-                )}
               </CollapsibleContent>
             </Collapsible>
           )}

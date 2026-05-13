@@ -181,7 +181,7 @@ describe('EventModal — agent trigger disclosure', () => {
     });
   });
 
-  test('shows recurring-event note instead of the form when event is recurring', async () => {
+  test('shows the agent form (not a disabled note) when event is recurring', async () => {
     cannedFetch({ trigger: null });
 
     renderModal({
@@ -193,14 +193,17 @@ describe('EventModal — agent trigger disclosure', () => {
     const triggerHeader = await screen.findByRole('button', { name: /Agent trigger/i });
     await userEvent.click(triggerHeader);
 
-    await waitFor(() => {
-      screen.getByText(/Recurring events can.+t have agent triggers/i);
+    assert({
+      given: 'a recurring drive event with the Agent trigger disclosure expanded',
+      should: 'show the "Run agent at event start" toggle (not a disabled note)',
+      actual: !!screen.queryByText(/Run agent at event start/i),
+      expected: true,
     });
 
     assert({
       given: 'a recurring drive event with the Agent trigger disclosure expanded',
-      should: 'show the "can\'t have agent triggers" note instead of the form',
-      actual: screen.queryByText(/Run agent at event start/i),
+      should: 'not show the old "can\'t have agent triggers" disabled message',
+      actual: screen.queryByText(/Recurring events can.+t have agent triggers/i),
       expected: null,
     });
   });
@@ -277,12 +280,10 @@ describe('EventModal — agent trigger disclosure', () => {
     });
   });
 
-  test('a recurring event with a stale trigger row leaves it alone on save (agentTrigger=undefined)', async () => {
-    // Defensive case: the API rejects upserting triggers on recurring events,
-    // so a recurring row with a trigger should never exist. If one does, the
-    // modal must not surface it as enabled (would trap the user behind a
-    // recurring-validation error) and must not silently send agentTrigger=null
-    // either (that would delete the row without user intent).
+  test('a recurring event with an existing trigger row hydrates and saves the trigger', async () => {
+    // Recurring events now fully support agent triggers. When the modal opens
+    // for a recurring event that has a trigger, it should hydrate the form and
+    // allow saving the trigger payload unchanged (idempotent upsert).
     const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
 
     renderModal({
@@ -292,19 +293,23 @@ describe('EventModal — agent trigger disclosure', () => {
       onSave,
     });
 
-    // Disclosure header should read 'Off' even though a trigger row exists,
-    // because hydration skips recurring events.
-    await screen.findByRole('button', { name: /Agent trigger\s*Off/i });
+    // Disclosure header should read the agent name (trigger is hydrated from the canned fetch).
+    await screen.findByRole('button', { name: /Triage Bot at start/i });
 
     await userEvent.click(screen.getByRole('button', { name: /^Update$/i }));
 
     const payload = await firstSavePayload(onSave);
 
     assert({
-      given: 'a recurring event with a stale trigger row',
-      should: 'send agentTrigger=undefined (no-op) so the broken row is left alone, not deleted',
+      given: 'a recurring event with an existing trigger row',
+      should: 'hydrate and forward the trigger payload to onSave (not undefined/null)',
       actual: payload.agentTrigger,
-      expected: undefined,
+      expected: {
+        agentPageId: 'agent-1',
+        prompt: 'remote-prompt',
+        instructionPageId: null,
+        contextPageIds: [],
+      },
     });
   });
 

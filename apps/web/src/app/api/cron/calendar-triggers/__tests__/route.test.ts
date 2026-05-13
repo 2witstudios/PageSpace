@@ -18,6 +18,7 @@ const {
   mockInsert,
   mockInsertValues,
   mockOnConflictDoNothing,
+  mockSelectDistinct,
 } = vi.hoisted(() => ({
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -31,6 +32,16 @@ const {
   mockInsert: vi.fn(),
   mockInsertValues: vi.fn(),
   mockOnConflictDoNothing: vi.fn(),
+  // selectDistinct is used by refillRecurringTriggers — resolves to [] so refill is a no-op in tests
+  mockSelectDistinct: vi.fn(() => ({
+    from: vi.fn(() => ({
+      innerJoin: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([]),
+        })),
+      })),
+    })),
+  })),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -60,6 +71,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
+    selectDistinct: mockSelectDistinct,
     update: mockUpdate,
     insert: mockInsert,
   },
@@ -71,10 +83,17 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn(),
   asc: vi.fn(),
   sql: vi.fn(),
+  isNotNull: vi.fn(),
+  gt: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'id',
+    isTrashed: 'isTrashed',
+    recurrenceRule: 'recurrenceRule',
+    driveId: 'driveId',
+    startAt: 'startAt',
+    recurrenceExceptions: 'recurrenceExceptions',
   },
 }));
 vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
@@ -82,6 +101,9 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
     id: 'id',
     triggerAt: 'triggerAt',
     calendarEventId: 'calendarEventId',
+    workflowId: 'workflowId',
+    scheduledById: 'scheduledById',
+    driveId: 'driveId',
   },
 }));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({
@@ -145,6 +167,18 @@ describe('POST /api/cron/calendar-triggers', () => {
     mockSelectWhere.mockReturnValue({ orderBy: mockSelectOrderBy });
     mockSelectOrderBy.mockReturnValue({ limit: mockSelectLimit });
     mockSelectLimit.mockResolvedValue([]);
+
+    // Default: refillRecurringTriggers (selectDistinct chain) finds nothing to refill.
+    // Must be re-set after vi.resetAllMocks() clears the vi.hoisted factory.
+    mockSelectDistinct.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        innerJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    });
   });
 
   it('returns auth error when cron request is invalid', async () => {
