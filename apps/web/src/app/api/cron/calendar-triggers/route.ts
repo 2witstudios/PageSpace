@@ -188,7 +188,7 @@ async function refillRecurringTriggers(now: Date): Promise<void> {
     .selectDistinct({
       calendarEventId: calendarEvents.id,
       workflowId: calendarTriggers.workflowId,
-      driveId: calendarEvents.driveId,
+      driveId: calendarTriggers.driveId,
       scheduledById: calendarTriggers.scheduledById,
     })
     .from(calendarEvents)
