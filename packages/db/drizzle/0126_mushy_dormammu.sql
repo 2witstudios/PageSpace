@@ -1,27 +1,27 @@
 CREATE TABLE IF NOT EXISTS "drive_share_links" (
 	"id" text PRIMARY KEY NOT NULL,
 	"drive_id" text NOT NULL,
-	"token_hash" text NOT NULL,
+	"token" text NOT NULL,
 	"role" "MemberRole" DEFAULT 'MEMBER' NOT NULL,
 	"created_by" text NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"expires_at" timestamp,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"use_count" integer DEFAULT 0 NOT NULL,
-	CONSTRAINT "drive_share_links_token_hash_unique" UNIQUE("token_hash")
+	CONSTRAINT "drive_share_links_token_unique" UNIQUE("token")
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "page_share_links" (
 	"id" text PRIMARY KEY NOT NULL,
 	"page_id" text NOT NULL,
-	"token_hash" text NOT NULL,
+	"token" text NOT NULL,
 	"permissions" jsonb NOT NULL,
 	"created_by" text NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"expires_at" timestamp,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"use_count" integer DEFAULT 0 NOT NULL,
-	CONSTRAINT "page_share_links_token_hash_unique" UNIQUE("token_hash")
+	CONSTRAINT "page_share_links_token_unique" UNIQUE("token")
 );
 --> statement-breakpoint
 DO $$ BEGIN

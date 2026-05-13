@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
 
@@ -15,15 +16,16 @@ interface DriveShareAcceptProps {
 
 export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
   const router = useRouter();
-  const { csrfToken, isLoading: csrfLoading, error: csrfError } = useCSRFToken();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { csrfToken } = useCSRFToken();
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!csrfLoading && csrfError && !csrfToken) {
+    if (!authLoading && !isAuthenticated) {
       router.push(`/auth/signin?next=/s/${token}`);
     }
-  }, [csrfLoading, csrfError, csrfToken, router, token]);
+  }, [authLoading, isAuthenticated, router, token]);
 
   async function handleJoin() {
     if (!csrfToken) return;

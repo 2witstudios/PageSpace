@@ -82,7 +82,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drives/[driveId]/share-links/[linkId]', 'Share link revoke — covered by parent drive auth, follow-up'],
   ['pages/[pageId]/share-links', 'Page share link CRUD — covered by page canShare check, follow-up'],
   ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
-  ['share/[token]', 'Public token info — unauthenticated info display, no user data written'],
+  ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
 
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR

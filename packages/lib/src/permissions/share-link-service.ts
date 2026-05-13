@@ -6,7 +6,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { DriveShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
 import { createId } from '@paralleldrive/cuid2';
-import { generateToken, hashToken } from '../auth/token-utils';
+import { generateToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
 
@@ -30,6 +30,7 @@ export interface DriveShareLinkView {
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
+  token: string;
 }
 
 export interface PageShareLinkView {
@@ -38,6 +39,7 @@ export interface PageShareLinkView {
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
+  token: string;
 }
 
 export interface DriveShareLinkRedemption {
@@ -88,7 +90,7 @@ export async function createDriveShareLink(
   const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
-  const { token, hash } = generateToken('ps_share');
+  const { token } = generateToken('ps_share');
   const role = opts.role ?? 'MEMBER';
 
   const [inserted] = await db
@@ -96,7 +98,7 @@ export async function createDriveShareLink(
     .values({
       id: createId(),
       driveId,
-      tokenHash: hash,
+      token,
       role,
       createdBy: ctx.userId,
       expiresAt: opts.expiresAt ?? null,
@@ -144,6 +146,7 @@ export async function listDriveShareLinks(
       useCount: driveShareLinks.useCount,
       expiresAt: driveShareLinks.expiresAt,
       createdAt: driveShareLinks.createdAt,
+      token: driveShareLinks.token,
     })
     .from(driveShareLinks)
     .where(
@@ -164,8 +167,6 @@ export async function redeemDriveShareLink(
   | { ok: false; error: 'ALREADY_MEMBER'; driveId: string }
   | { ok: false; error: 'NOT_FOUND' }
 > {
-  const tokenHash = hashToken(rawToken);
-
   const rows = await db
     .select({
       id: driveShareLinks.id,
@@ -179,7 +180,7 @@ export async function redeemDriveShareLink(
     })
     .from(driveShareLinks)
     .innerJoin(drives, eq(driveShareLinks.driveId, drives.id))
-    .where(eq(driveShareLinks.tokenHash, tokenHash))
+    .where(eq(driveShareLinks.token, rawToken))
     .limit(1);
 
   if (rows.length === 0 || !isValidShareLink(rows[0])) {
@@ -242,14 +243,14 @@ export async function createPageShareLink(
   const isAuthorized = await canUserSharePage(ctx.userId, pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
-  const { token, hash } = generateToken('ps_share');
+  const { token } = generateToken('ps_share');
 
   const [inserted] = await db
     .insert(pageShareLinks)
     .values({
       id: createId(),
       pageId,
-      tokenHash: hash,
+      token,
       permissions: perms,
       createdBy: ctx.userId,
       expiresAt: opts.expiresAt ?? null,
@@ -297,6 +298,7 @@ export async function listPageShareLinks(
       useCount: pageShareLinks.useCount,
       expiresAt: pageShareLinks.expiresAt,
       createdAt: pageShareLinks.createdAt,
+      token: pageShareLinks.token,
     })
     .from(pageShareLinks)
     .where(
@@ -313,8 +315,6 @@ export async function redeemPageShareLink(
   ctx: EnforcedAuthContext,
   rawToken: string
 ): Promise<ShareLinkResult<{ pageId: string; driveId: string; linkId: string }>> {
-  const tokenHash = hashToken(rawToken);
-
   const rows = await db
     .select({
       id: pageShareLinks.id,
@@ -326,16 +326,16 @@ export async function redeemPageShareLink(
       useCount: pageShareLinks.useCount,
     })
     .from(pageShareLinks)
-    .leftJoin(pages, eq(pageShareLinks.pageId, pages.id))
-    .where(eq(pageShareLinks.tokenHash, tokenHash))
+    .innerJoin(pages, eq(pageShareLinks.pageId, pages.id))
+    .where(eq(pageShareLinks.token, rawToken))
     .limit(1);
 
   const row = rows[0];
-  if (!row || !row.driveId || !isValidShareLink(row)) {
+  if (!row || !isValidShareLink(row)) {
     return { ok: false, error: 'NOT_FOUND' };
   }
 
-  const link = { ...row, driveId: row.driveId as string };
+  const link = row;
 
   const existingPerms = await db
     .select({ canView: pagePermissions.canView })
@@ -395,8 +395,6 @@ export async function redeemPageShareLink(
 // ============================================================================
 
 export async function resolveShareToken(rawToken: string): Promise<ShareTokenInfo | null> {
-  const tokenHash = hashToken(rawToken);
-
   const driveRows = await db
     .select({
       id: driveShareLinks.id,
@@ -411,7 +409,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
     .from(driveShareLinks)
     .leftJoin(drives, eq(driveShareLinks.driveId, drives.id))
     .leftJoin(users, eq(driveShareLinks.createdBy, users.id))
-    .where(eq(driveShareLinks.tokenHash, tokenHash))
+    .where(eq(driveShareLinks.token, rawToken))
     .limit(1);
 
   if (driveRows.length > 0) {
@@ -446,13 +444,13 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
     .leftJoin(pages, eq(pageShareLinks.pageId, pages.id))
     .leftJoin(drives, eq(pages.driveId, drives.id))
     .leftJoin(users, eq(pageShareLinks.createdBy, users.id))
-    .where(eq(pageShareLinks.tokenHash, tokenHash))
+    .where(eq(pageShareLinks.token, rawToken))
     .limit(1);
 
   if (pageRows.length > 0) {
     const row = pageRows[0];
     if (!isValidShareLink(row) || !row.driveId) return null;
-    const pageDriveId = row.driveId as string;
+    const pageDriveId = row.driveId;
     return {
       type: 'page',
       linkId: row.id,

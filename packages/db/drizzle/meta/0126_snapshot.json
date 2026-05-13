@@ -1,5 +1,5 @@
 {
-  "id": "00a6dda1-2ecc-44fe-9b4d-37dd58080aa2",
+  "id": "be4b3e7d-62f8-4b98-bde5-b95d1388874a",
   "prevId": "e824a52a-6c82-4b06-9f9f-b62531128529",
   "version": "7",
   "dialect": "postgresql",
@@ -13732,7 +13732,7 @@
           "name": "expires_at",
           "type": "timestamp",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "consumed_at": {
           "name": "consumed_at",
@@ -13900,7 +13900,7 @@
           "name": "expires_at",
           "type": "timestamp",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "consumed_at": {
           "name": "consumed_at",
@@ -14279,8 +14279,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "token_hash": {
-          "name": "token_hash",
+        "token": {
+          "name": "token",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -14404,11 +14404,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "drive_share_links_token_hash_unique": {
-          "name": "drive_share_links_token_hash_unique",
+        "drive_share_links_token_unique": {
+          "name": "drive_share_links_token_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "token_hash"
+            "token"
           ]
         }
       }
@@ -14429,8 +14429,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "token_hash": {
-          "name": "token_hash",
+        "token": {
+          "name": "token",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -14552,11 +14552,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "page_share_links_token_hash_unique": {
-          "name": "page_share_links_token_hash_unique",
+        "page_share_links_token_unique": {
+          "name": "page_share_links_token_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "token_hash"
+            "token"
           ]
         }
       }

@@ -180,6 +180,10 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         )}
       </div>
 
+      {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        <DriveShareLinkSection driveId={driveId} />
+      )}
+
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
         {members.length === 0 ? (
           <div className="p-8 text-center text-gray-500 dark:text-gray-400">
@@ -203,10 +207,6 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         currentUserRole={currentUserRole}
         onRevoke={handleRevokeInvite}
       />
-
-      {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-        <DriveShareLinkSection driveId={driveId} />
-      )}
     </div>
   );
 }

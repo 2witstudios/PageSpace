@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
 
@@ -14,19 +15,20 @@ interface PageShareAcceptProps {
 
 export function PageShareAccept({ token, info }: PageShareAcceptProps) {
   const router = useRouter();
-  const { csrfToken, isLoading: csrfLoading, error: csrfError } = useCSRFToken();
-  const accepted = useRef(false);
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { csrfToken } = useCSRFToken();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!csrfLoading && csrfError && !csrfToken) {
+    if (!authLoading && !isAuthenticated) {
       router.push(`/auth/signin?next=/s/${token}`);
     }
-  }, [csrfLoading, csrfError, csrfToken, router, token]);
+  }, [authLoading, isAuthenticated, router, token]);
 
   useEffect(() => {
-    if (!csrfToken || accepted.current) return;
-    accepted.current = true;
+    if (!isAuthenticated || !csrfToken) return;
+
+    const controller = new AbortController();
 
     async function accept() {
       try {
@@ -34,6 +36,7 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
           method: 'POST',
           headers: { 'x-csrf-token': csrfToken! },
           credentials: 'include',
+          signal: controller.signal,
         });
 
         if (!res.ok) {
@@ -44,13 +47,15 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
 
         const data = (await res.json()) as { type: string; pageId: string; driveId: string };
         router.push(`/dashboard/${data.driveId}/${data.pageId}`);
-      } catch {
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
         setError('Something went wrong. Please try again.');
       }
     }
 
     accept();
-  }, [csrfToken, token, router]);
+    return () => controller.abort();
+  }, [isAuthenticated, csrfToken, token, router]);
 
   if (error) {
     return (
