@@ -103,8 +103,8 @@ export async function PATCH(
       drivePrompt: validatedBody.drivePrompt,
     });
 
-    // Broadcast drive update event if name changed
-    if (validatedBody.name && updatedDrive) {
+    // Broadcast drive update event if name or drivePrompt changed
+    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined)) {
       const recipientUserIds = await getDriveRecipientUserIds(driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {

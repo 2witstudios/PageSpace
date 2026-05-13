@@ -528,11 +528,12 @@ describe('PATCH /api/drives/[driveId]', () => {
       );
     });
 
-    it('should NOT broadcast event when only drivePrompt changes', async () => {
+    it('should broadcast drive updated event when only drivePrompt changes', async () => {
       const drive = createRawDriveFixture({ id: mockDriveId, name: 'Test' });
+      const updatedDrive = { ...drive, drivePrompt: 'New prompt' };
       vi.mocked(getDriveById).mockResolvedValue(drive);
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(updateDrive).mockResolvedValue({ ...drive, drivePrompt: 'New prompt' });
+      vi.mocked(updateDrive).mockResolvedValue(updatedDrive);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -540,7 +541,15 @@ describe('PATCH /api/drives/[driveId]', () => {
       });
       await PATCH(request, createContext(mockDriveId));
 
-      expect(broadcastDriveEvent).not.toHaveBeenCalled();
+      expect(createDriveEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        'updated',
+        { name: 'Test', slug: 'test' }
+      );
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        { driveId: mockDriveId, event: 'updated', data: { name: 'Test', slug: 'test' } },
+        ['user-123', 'user-456']
+      );
     });
   });
 

@@ -63,6 +63,11 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   DISTRIBUTED_RATE_LIMITS: { PAGE_SHARE_INVITE: { maxAttempts: 3, windowMs: 900000 } },
 }));
 
+vi.mock('@/lib/websocket', () => ({
+  broadcastPageEvent: vi.fn().mockResolvedValue(undefined),
+  createPageEventPayload: vi.fn((driveId, pageId, operation) => ({ driveId, pageId, operation })),
+}));
+
 import { POST } from '../route';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
