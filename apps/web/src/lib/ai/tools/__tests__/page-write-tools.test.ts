@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
     canUserDeletePage: vi.fn(),
+    isUserDriveMember: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
     logPageActivity: vi.fn(),
@@ -111,13 +112,14 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
@@ -374,6 +376,7 @@ describe('page-write-tools', () => {
         id: 'drive-1',
         ownerId: 'user-123',
       });
+      mockIsUserDriveMember.mockResolvedValue(true);
       mockPageRepo.getNextPosition.mockResolvedValue(1);
       mockPageRepo.create.mockResolvedValue({
         id: 'new-page-1',

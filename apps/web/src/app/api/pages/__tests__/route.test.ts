@@ -254,10 +254,10 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns 403 when user is not owner or admin', async () => {
+    it('returns 403 when user is not a drive member', async () => {
       vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
-        error: 'Only drive owners and admins can create pages',
+        error: 'You must be a drive member to create pages',
         status: 403,
       });
 
@@ -269,7 +269,7 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toMatch(/owner|admin/i);
+      expect(body.error).toMatch(/member/i);
     });
   });
 
