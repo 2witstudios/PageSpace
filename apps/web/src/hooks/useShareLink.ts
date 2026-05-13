@@ -48,14 +48,16 @@ export function useShareLink<TLink extends { id: string; useCount: number }>({
 
   useEffect(() => {
     let cancelled = false;
+    setIsLoading(true);
+    setActiveLink(null);
+    setRawToken(null);
     async function loadExisting() {
       try {
         const res = await fetch(apiBase, { credentials: 'include' });
         if (!res.ok || cancelled) return;
         const data = await res.json() as { links: Array<Record<string, unknown>> };
-        if (!cancelled && data.links.length > 0) {
-          setActiveLink(extractLinkRef.current(data.links[0]));
-        }
+        if (cancelled) return;
+        setActiveLink(data.links.length > 0 ? extractLinkRef.current(data.links[0]) : null);
       } catch {
         // silently fail — user can still generate a new link
       } finally {
@@ -68,13 +70,17 @@ export function useShareLink<TLink extends { id: string; useCount: number }>({
 
   async function handleGenerate() {
     setIsGenerating(true);
+    // Snapshot callbacks before the await so UI changes mid-flight don't corrupt
+    // the activeLink that gets set — the server received `body`, not the new state.
+    const body = getGenerateBodyRef.current();
+    const buildLink = buildNewLinkRef.current;
     try {
       const data = await post<{ id: string; rawToken: string; shareUrl: string }>(
         apiBase,
-        getGenerateBodyRef.current()
+        body
       );
       setRawToken(data.rawToken);
-      setActiveLink(buildNewLinkRef.current(data.id));
+      setActiveLink(buildLink(data.id));
       const copied = await navigator.clipboard.writeText(data.shareUrl).then(() => true).catch(() => false);
       toast.success(copied ? messagesRef.current.createdAndCopied : messagesRef.current.created);
     } catch {
