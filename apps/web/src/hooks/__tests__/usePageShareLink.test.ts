@@ -95,7 +95,7 @@ describe('usePageShareLink', () => {
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       await act(async () => {
-        await result.current.handleGenerate({ canEdit: false, canShare: false, canDelete: false });
+        await result.current.handleGenerate({ canView: true, canEdit: false, canShare: false, canDelete: false });
       });
 
       expect(result.current.shareUrl).toBe(SHARE_URL);
@@ -115,7 +115,7 @@ describe('usePageShareLink', () => {
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       await act(async () => {
-        await result.current.handleGenerate({ canEdit: true, canShare: false, canDelete: false });
+        await result.current.handleGenerate({ canView: true, canEdit: true, canShare: false, canDelete: false });
       });
 
       expect(vi.mocked(post)).toHaveBeenCalledWith(
@@ -133,7 +133,7 @@ describe('usePageShareLink', () => {
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       await act(async () => {
-        await result.current.handleGenerate({ canEdit: false, canShare: true, canDelete: true });
+        await result.current.handleGenerate({ canView: true, canEdit: false, canShare: true, canDelete: true });
       });
 
       expect(vi.mocked(post)).toHaveBeenCalledWith(
@@ -151,7 +151,7 @@ describe('usePageShareLink', () => {
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       await act(async () => {
-        await result.current.handleGenerate({ canEdit: true, canShare: true, canDelete: true });
+        await result.current.handleGenerate({ canView: true, canEdit: true, canShare: true, canDelete: true });
       });
 
       expect(vi.mocked(post)).toHaveBeenCalledWith(

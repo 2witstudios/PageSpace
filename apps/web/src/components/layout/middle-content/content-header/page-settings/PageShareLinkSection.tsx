@@ -88,7 +88,8 @@ export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSecti
           size="sm"
           className="w-full"
           onClick={() => handleGenerate(permissions)}
-          disabled={isGenerating}
+          disabled={isGenerating || !permissions.canView}
+          title={!permissions.canView ? 'Select at least View permission to generate a link' : undefined}
         >
           <Link2 className="mr-1.5 h-3.5 w-3.5" />
           {isGenerating ? 'Generating…' : 'Generate link'}

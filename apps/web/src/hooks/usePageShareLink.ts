@@ -19,6 +19,7 @@ const PageListResponseSchema = z.object({
 type PageLink = z.infer<typeof PageLinkSchema>;
 
 export interface ShareLinkPermissions {
+  canView: boolean;
   canEdit: boolean;
   canShare: boolean;
   canDelete: boolean;

@@ -375,7 +375,12 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
               <div className="border-t pt-4">
                 <PageShareLinkSection
                   pageId={page.id}
-                  permissions={{ canEdit: permissions.canEdit, canShare: permissions.canShare, canDelete: permissions.canDelete }}
+                  permissions={{
+                    canView: permissions.canView,
+                    canEdit: permissions.canEdit,
+                    canShare: permissions.canShare,
+                    canDelete: offPlatformEmail ? false : permissions.canDelete,
+                  }}
                 />
               </div>
             </TabsContent>
