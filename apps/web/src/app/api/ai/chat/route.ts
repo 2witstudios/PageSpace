@@ -854,6 +854,7 @@ export async function POST(request: Request) {
                 agentPageId: chatId,
                 agentTitle: page.title,
               },
+              enabledTools: agentEnabledTools ?? null,
               pageAccessScope: {
                 type: page.toolAccessScope === 'subtree' ? 'subtree' : 'drive',
                 agentPageId: chatId,

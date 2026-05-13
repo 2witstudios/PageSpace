@@ -37,6 +37,9 @@ export interface ToolExecutionContext {
   requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
   agentCallDepth?: number;          // Depth of agent call chain (0 = direct user request)
 
+  // Allowlist of tool names this agent is permitted to execute (null = unrestricted)
+  enabledTools?: string[] | null;
+
   // Tool access scope — restricts which pages AI tools can see/read
   pageAccessScope?: {
     type: 'drive' | 'subtree';

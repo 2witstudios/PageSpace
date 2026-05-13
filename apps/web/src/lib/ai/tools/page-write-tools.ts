@@ -16,6 +16,7 @@ import { applyPageMutation, type PageMutationContext } from '@/services/api/page
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
+import { assertPageInScope, assertParentInScope } from '../core/scope-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 
@@ -216,6 +217,8 @@ async function trashPage(
     }
   }
 
+  await assertPageInScope(page.id, page.driveId, context.pageAccessScope);
+
   let childrenCount = 0;
 
   const changeGroupId = createChangeGroupId();
@@ -314,6 +317,13 @@ async function restorePage(
   const canEdit = await canUserEditPage(userId, trashedPage.id);
   if (!canEdit) {
     throw new Error('Insufficient permissions to restore this page');
+  }
+
+  // Scope check: the page's intended home after restore must be in scope
+  if (trashedPage.parentId) {
+    await assertPageInScope(trashedPage.parentId, trashedPage.driveId, context.pageAccessScope);
+  } else if (context.pageAccessScope?.type === 'subtree') {
+    throw new Error("Restoring pages to the drive root is outside the agent's configured access scope");
   }
 
   const mutationContext = await buildAiMutationContext(context, {
@@ -430,6 +440,8 @@ export const pageWriteTools = {
         if (!canEdit) {
           throw new Error('Insufficient permissions to edit this document');
         }
+
+        await assertPageInScope(page.id, page.driveId, (context as ToolExecutionContext).pageAccessScope);
 
         // Format content for AI line-based editing, then split into lines.
         // CODE and markdown pages have natural line structure (and CODE may contain
@@ -564,6 +576,8 @@ export const pageWriteTools = {
             throw new Error('Only drive owners can create pages at the root level');
           }
         }
+
+        await assertParentInScope(parentId ?? null, drive.id, (context as ToolExecutionContext).pageAccessScope);
 
         // Get next position via repository seam
         const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
@@ -706,6 +720,8 @@ export const pageWriteTools = {
         if (!canEdit) {
           throw new Error('Insufficient permissions to rename this page');
         }
+
+        await assertPageInScope(page.id, page.driveId, (context as ToolExecutionContext).pageAccessScope);
 
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext);
         await applyPageMutation({
@@ -930,6 +946,10 @@ export const pageWriteTools = {
           }
         }
 
+        const pageAccessScope = (context as ToolExecutionContext).pageAccessScope;
+        await assertPageInScope(page.id, page.driveId, pageAccessScope);
+        await assertParentInScope(newParentId ?? null, page.driveId, pageAccessScope);
+
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
           metadata: { newParentId, position },
         });
@@ -1022,6 +1042,8 @@ export const pageWriteTools = {
         if (!canEdit) {
           throw new Error('Insufficient permissions to edit this sheet');
         }
+
+        await assertPageInScope(page.id, page.driveId, (context as ToolExecutionContext).pageAccessScope);
 
         // Validate all cell addresses upfront
         const invalidAddresses = cells.filter(cell => !isValidCellAddress(cell.address));

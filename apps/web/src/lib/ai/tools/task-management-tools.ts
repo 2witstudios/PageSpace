@@ -5,6 +5,7 @@ import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
+import { assertPageInScope } from '../core/scope-utils';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -195,6 +196,17 @@ Agent Triggers:
             }
           } else if (taskList.userId !== userId) {
             throw new Error('You do not have permission to update this task');
+          }
+
+          // Scope enforcement for task list page
+          if (taskList.pageId) {
+            const taskListPage = await db.query.pages.findFirst({
+              where: eq(pages.id, taskList.pageId),
+              columns: { driveId: true },
+            });
+            if (taskListPage) {
+              await assertPageInScope(taskList.pageId, taskListPage.driveId, (context as ToolExecutionContext).pageAccessScope);
+            }
           }
 
           // DELETE branch — short-circuits all field updates
@@ -651,6 +663,8 @@ Agent Triggers:
           if (!hasAccess) {
             throw new Error('You do not have permission to add tasks to this page');
           }
+
+          await assertPageInScope(taskListPage.id, taskListPage.driveId, (context as ToolExecutionContext).pageAccessScope);
 
           // Find or create task_list record for this page
           taskList = await db.query.taskLists.findFirst({

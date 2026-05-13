@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
+import type { ToolExecutionContext } from '../core';
 
 export function createExecuteTool(allowedTools: ToolSet): Tool {
   return {
@@ -13,6 +14,13 @@ export function createExecuteTool(allowedTools: ToolSet): Tool {
       { tool_name, parameters }: { tool_name: string; parameters: Record<string, unknown> },
       options: unknown
     ) => {
+      // Execution-time allowlist enforcement (defense-in-depth beyond context filtering)
+      const enabledTools = (options as { experimental_context?: ToolExecutionContext })
+        ?.experimental_context?.enabledTools;
+      if (enabledTools != null && !enabledTools.includes(tool_name)) {
+        return { error: `Tool "${tool_name}" is not permitted for this agent.` };
+      }
+
       const t = allowedTools[tool_name];
       if (!t) {
         return {

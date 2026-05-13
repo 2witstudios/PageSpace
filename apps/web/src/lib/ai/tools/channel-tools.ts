@@ -11,6 +11,7 @@ import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { type ToolExecutionContext } from '../core';
+import { assertPageInScope } from '../core/scope-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const channelLogger = loggers.ai.child({ module: 'channel-tools' });
@@ -92,6 +93,8 @@ export const channelTools = {
         if (!canEdit) {
           throw new Error('Insufficient permissions to send messages in this channel');
         }
+
+        await assertPageInScope(channel.id, channel.driveId, (context as ToolExecutionContext).pageAccessScope);
 
         // Determine sender identity
         const senderIdentity = await resolveSenderIdentity(context as ToolExecutionContext);

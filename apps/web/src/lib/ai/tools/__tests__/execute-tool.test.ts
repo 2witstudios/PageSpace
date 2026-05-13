@@ -88,4 +88,49 @@ describe('createExecuteTool', () => {
       expected: 'string',
     });
   });
+
+  it('enabledTools allowlist blocks a tool not in the list', async () => {
+    const t = createExecuteTool(registry);
+    const opts = { experimental_context: { enabledTools: ['list_calendar_events'] } };
+    const result = await t.execute!(
+      { tool_name: 'no_execute_tool', parameters: { id: '1' } },
+      opts as never
+    ) as { error: string };
+    assert({
+      given: 'a context with enabledTools that does not include the called tool',
+      should: 'return a not-permitted error before execution',
+      actual: result.error.includes('not permitted'),
+      expected: true,
+    });
+  });
+
+  it('enabledTools allowlist allows a tool in the list', async () => {
+    const t = createExecuteTool(registry);
+    const opts = { experimental_context: { enabledTools: ['list_calendar_events'] } };
+    const result = await t.execute!(
+      { tool_name: 'list_calendar_events', parameters: { startDate: '2024-01-01', endDate: '2024-01-31' } },
+      opts as never
+    ) as { startDate: string };
+    assert({
+      given: 'a context with enabledTools that includes the called tool',
+      should: 'dispatch to the tool execute function',
+      actual: result.startDate,
+      expected: '2024-01-01',
+    });
+  });
+
+  it('null enabledTools allows all tools', async () => {
+    const t = createExecuteTool(registry);
+    const opts = { experimental_context: { enabledTools: null } };
+    const result = await t.execute!(
+      { tool_name: 'list_calendar_events', parameters: { startDate: '2024-01-01', endDate: '2024-01-31' } },
+      opts as never
+    ) as { startDate: string };
+    assert({
+      given: 'a context with enabledTools: null (unrestricted)',
+      should: 'allow all tool calls',
+      actual: result.startDate,
+      expected: '2024-01-01',
+    });
+  });
 });
