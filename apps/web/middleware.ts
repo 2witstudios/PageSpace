@@ -136,11 +136,7 @@ export async function middleware(req: NextRequest) {
         return createSecureErrorResponse('Authentication required', 401, isProduction);
       }
 
-      const signinUrl = new URL('/auth/signin', req.url);
-      if (pathname.startsWith('/s/')) {
-        signinUrl.searchParams.set('next', pathname);
-      }
-      return NextResponse.redirect(signinUrl);
+      return NextResponse.redirect(new URL('/auth/signin', req.url));
     }
 
     // Session cookie exists - let request through
