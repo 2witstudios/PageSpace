@@ -33,6 +33,7 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
                     className="h-7 px-2"
                     onClick={() => handleCopy(link)}
                     disabled={!link.shareUrl}
+                    aria-label={`Copy ${link.role.toLowerCase()} invite link`}
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </Button>

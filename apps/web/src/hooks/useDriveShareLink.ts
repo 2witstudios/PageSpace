@@ -84,7 +84,7 @@ export function useDriveShareLink(driveId: string) {
     } catch {
       toast.error('Failed to revoke invite link');
     } finally {
-      setRevokingId(null);
+      setRevokingId(prev => (prev === linkId ? null : prev));
     }
   }
 
