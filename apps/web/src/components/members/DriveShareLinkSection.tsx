@@ -24,29 +24,37 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
           {links.length > 0 && (
             <div className="space-y-2">
               {links.map((link: DriveLink) => (
-                <div key={link.id} className="flex items-center gap-2">
-                  <Badge variant="secondary" className="text-xs capitalize shrink-0">{link.role.toLowerCase()}</Badge>
-                  <span className="text-xs text-muted-foreground flex-1">{link.useCount} {link.useCount === 1 ? 'use' : 'uses'}</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2"
-                    onClick={() => handleCopy(link)}
-                    disabled={!link.shareUrl}
-                    aria-label={`Copy ${link.role.toLowerCase()} invite link`}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-destructive hover:text-destructive"
-                    onClick={() => handleRevoke(link.id)}
-                    disabled={revokingId === link.id}
-                    aria-label="Revoke invite link"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                <div key={link.id} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" className="text-xs capitalize shrink-0">{link.role.toLowerCase()}</Badge>
+                    <input
+                      readOnly
+                      value={link.shareUrl ?? ''}
+                      className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:outline-none cursor-text"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 shrink-0"
+                      onClick={() => handleCopy(link)}
+                      disabled={!link.shareUrl}
+                      aria-label={`Copy ${link.role.toLowerCase()} invite link`}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 shrink-0 text-destructive hover:text-destructive"
+                      onClick={() => handleRevoke(link.id)}
+                      disabled={revokingId === link.id}
+                      aria-label="Revoke invite link"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground pl-1">{link.useCount} {link.useCount === 1 ? 'use' : 'uses'}</p>
                 </div>
               ))}
             </div>
