@@ -36,9 +36,9 @@ export async function POST(
       driveName: driveResult.data.driveName,
       role: driveResult.data.role,
       invitedUserId: auth.ctx.userId,
-      inviterUserId: auth.ctx.userId,
+      inviterUserId: driveResult.data.createdBy,
     };
-    await emitAcceptanceSideEffects(ports, acceptData, 0);
+    await emitAcceptanceSideEffects(ports, acceptData, 0).catch(() => undefined);
     return NextResponse.json({ type: 'drive', driveId: driveResult.data.driveId });
   }
 

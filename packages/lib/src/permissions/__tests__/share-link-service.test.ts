@@ -116,6 +116,7 @@ function makeSelectChain(result: unknown[]) {
   const chain = {
     from: vi.fn().mockReturnThis(),
     leftJoin: vi.fn().mockReturnThis(),
+    innerJoin: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnValue(terminal),
     limit: vi.fn().mockResolvedValue(result),
     orderBy: vi.fn().mockReturnThis(),
@@ -276,11 +277,12 @@ describe('redeemDriveShareLink', () => {
   it('creates drive membership and increments useCount for valid token', async () => {
     mockDb.select.mockImplementation(() => ({
       from: vi.fn().mockReturnThis(),
-      leftJoin: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue([{
         id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER',
         isActive: true, expiresAt: null, driveName: 'Test Drive',
+        createdBy: 'creator-user-id',
       }]),
     }));
     vi.mocked(isUserDriveMember).mockResolvedValue(false);
@@ -296,6 +298,7 @@ describe('redeemDriveShareLink', () => {
       expect(result.data.memberId).toBe('new-member-id');
       expect(result.data.driveName).toBe('Test Drive');
       expect(result.data.role).toBe('MEMBER');
+      expect(result.data.createdBy).toBe('creator-user-id');
     }
     expect(mockDb.insert).toHaveBeenCalled();
     expect(mockDb.update).toHaveBeenCalled();

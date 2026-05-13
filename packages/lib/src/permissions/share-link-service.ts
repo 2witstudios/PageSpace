@@ -151,7 +151,7 @@ export async function redeemDriveShareLink(
   ctx: EnforcedAuthContext,
   rawToken: string
 ): Promise<
-  | { ok: true; data: { driveId: string; linkId: string; memberId: string; driveName: string; role: DriveShareLink['role'] } }
+  | { ok: true; data: { driveId: string; linkId: string; memberId: string; driveName: string; role: DriveShareLink['role']; createdBy: string } }
   | { ok: false; error: 'ALREADY_MEMBER'; driveId: string }
   | { ok: false; error: 'NOT_FOUND' }
 > {
@@ -165,10 +165,11 @@ export async function redeemDriveShareLink(
       isActive: driveShareLinks.isActive,
       expiresAt: driveShareLinks.expiresAt,
       useCount: driveShareLinks.useCount,
+      createdBy: driveShareLinks.createdBy,
       driveName: drives.name,
     })
     .from(driveShareLinks)
-    .leftJoin(drives, eq(driveShareLinks.driveId, drives.id))
+    .innerJoin(drives, eq(driveShareLinks.driveId, drives.id))
     .where(eq(driveShareLinks.tokenHash, tokenHash))
     .limit(1);
 
@@ -207,8 +208,9 @@ export async function redeemDriveShareLink(
       driveId: link.driveId,
       linkId: link.id,
       memberId: inserted.id,
-      driveName: link.driveName ?? '',
+      driveName: link.driveName,
       role: link.role,
+      createdBy: link.createdBy,
     },
   };
 }
