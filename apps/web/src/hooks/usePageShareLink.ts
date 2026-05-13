@@ -16,7 +16,7 @@ const PageListResponseSchema = z.object({
   links: z.array(PageLinkSchema),
 });
 
-type PageLink = z.infer<typeof PageLinkSchema>;
+export type PageLink = z.infer<typeof PageLinkSchema>;
 
 export interface ShareLinkPermissions {
   canView: boolean;
@@ -26,17 +26,15 @@ export interface ShareLinkPermissions {
 }
 
 export function usePageShareLink(pageId: string) {
-  const [activeLink, setActiveLink] = useState<PageLink | null>(null);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [links, setLinks] = useState<PageLink[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isRevoking, setIsRevoking] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    setActiveLink(null);
-    setShareUrl(null);
+    setLinks([]);
 
     async function loadExisting() {
       try {
@@ -44,10 +42,8 @@ export function usePageShareLink(pageId: string) {
         if (!res.ok || cancelled) return;
         const raw = await res.json();
         const parsed = PageListResponseSchema.safeParse(raw);
-        if (cancelled || !parsed.success || parsed.data.links.length === 0) return;
-        const link = parsed.data.links[0];
-        setActiveLink(link);
-        setShareUrl(link.shareUrl);
+        if (cancelled || !parsed.success) return;
+        setLinks(parsed.data.links);
       } catch {
         // silently fail — user can still generate a new link
       } finally {
@@ -70,8 +66,8 @@ export function usePageShareLink(pageId: string) {
         `/api/pages/${pageId}/share-links`,
         { permissions }
       );
-      setShareUrl(data.shareUrl);
-      setActiveLink({ id: data.id, permissions, useCount: 0, shareUrl: data.shareUrl });
+      const newLink: PageLink = { id: data.id, permissions, useCount: 0, shareUrl: data.shareUrl };
+      setLinks(prev => [...prev, newLink]);
       const copied = await navigator.clipboard.writeText(data.shareUrl).then(() => true).catch(() => false);
       toast.success(copied ? 'Link created and copied to clipboard' : 'Link created');
     } catch {
@@ -81,27 +77,25 @@ export function usePageShareLink(pageId: string) {
     }
   }
 
-  async function handleCopy() {
-    if (!shareUrl) return;
-    const copied = await navigator.clipboard.writeText(shareUrl).then(() => true).catch(() => false);
+  async function handleCopy(link: PageLink) {
+    if (!link.shareUrl) return;
+    const copied = await navigator.clipboard.writeText(link.shareUrl).then(() => true).catch(() => false);
     if (copied) toast.success('Link copied to clipboard');
     else toast.error('Could not copy link to clipboard');
   }
 
-  async function handleRevoke() {
-    if (!activeLink) return;
-    setIsRevoking(true);
+  async function handleRevoke(linkId: string) {
+    setRevokingId(linkId);
     try {
-      await del(`/api/pages/${pageId}/share-links/${activeLink.id}`);
-      setActiveLink(null);
-      setShareUrl(null);
+      await del(`/api/pages/${pageId}/share-links/${linkId}`);
+      setLinks(prev => prev.filter(l => l.id !== linkId));
       toast.success('Link revoked');
     } catch {
       toast.error('Failed to revoke link');
     } finally {
-      setIsRevoking(false);
+      setRevokingId(prev => (prev === linkId ? null : prev));
     }
   }
 
-  return { activeLink, shareUrl, isLoading, isGenerating, isRevoking, handleGenerate, handleCopy, handleRevoke };
+  return { links, isLoading, isGenerating, revokingId, handleGenerate, handleCopy, handleRevoke };
 }
