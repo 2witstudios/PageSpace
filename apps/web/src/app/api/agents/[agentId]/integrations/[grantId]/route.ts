@@ -6,6 +6,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getGrantById, updateGrant, deleteGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
+import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -51,6 +52,9 @@ export async function PUT(
     }
 
     const updated = await updateGrant(db, grantId, validation.data);
+
+    void broadcastAgentGrantChanged({ agentId, triggeredBy: { userId: auth.userId } });
+
     return NextResponse.json({ grant: updated });
   } catch (error) {
     loggers.api.error('Error updating agent integration grant:', error as Error);
@@ -84,6 +88,8 @@ export async function DELETE(
     await deleteGrant(db, grantId);
 
     auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'agent_grant', resourceId: grantId });
+
+    void broadcastAgentGrantChanged({ agentId, triggeredBy: { userId: auth.userId } });
 
     return NextResponse.json({ success: true });
   } catch (error) {
