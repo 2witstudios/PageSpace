@@ -331,7 +331,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           );
         }
       } catch {
-        setSelectedEvent(prevEvent);
+        setSelectedEvent((prev) =>
+          prev && prev.id === targetEventId ? prevEvent : prev
+        );
         throw new Error('Failed to add attendee');
       }
     },
