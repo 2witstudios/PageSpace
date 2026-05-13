@@ -30,7 +30,9 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
     .where(logConditions.length > 0 ? and(...logConditions) : undefined)
     .groupBy(systemLogs.level);
 
-  const errorConditions: SQL[] = [...logConditions];
+  const errorConditions: SQL[] = [];
+  if (startDate) errorConditions.push(gte(errorLogs.timestamp, startDate));
+  if (endDate) errorConditions.push(lte(errorLogs.timestamp, endDate));
 
   const recentErrors = await db
     .select({

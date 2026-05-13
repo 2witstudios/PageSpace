@@ -582,6 +582,23 @@ describe('activity-logger', () => {
       mockInsertValues.mockRejectedValue(fkError);
       await expect(logActivity({ ...baseInput, pageId: 'page-1' })).resolves.toBeUndefined();
     });
+
+    it('should retry via detail fallback when .constraint is absent but detail includes pageId', async () => {
+      const fkError = Object.assign(new Error('FK violation'), {
+        code: '23503',
+        detail: 'Key (pageId)=(page-1) is not present in table "pages".',
+      });
+      let callCount = 0;
+      mockInsertValues.mockImplementation((values: Record<string, unknown>) => {
+        callCount++;
+        if (callCount === 1) return Promise.reject(fkError);
+        capturedState.insertValues = values;
+        return Promise.resolve(undefined);
+      });
+      await logActivity({ ...baseInput, pageId: 'page-1' });
+      expect(callCount).toBe(2);
+      expect(capturedState.insertValues?.pageId).toBeUndefined();
+    });
   });
 
   // ── logActivityWithTx ─────────────────────────────────────────────────────

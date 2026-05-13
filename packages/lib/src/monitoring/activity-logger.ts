@@ -537,12 +537,14 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
     await insertActivityLog(input.pageId);
   } catch (error) {
     // Check for FK constraint violation on pageId (page was deleted during async logging)
+    const pgError = error as { code?: string; constraint?: string; detail?: string };
     const isPageIdFkError =
       error instanceof Error &&
-      'code' in error &&
-      (error as { code: string }).code === '23503' &&
-      'constraint' in error &&
-      (error as { constraint: string }).constraint === 'activity_logs_pageId_pages_id_fk';
+      pgError.code === '23503' &&
+      (
+        pgError.constraint === 'activity_logs_pageId_pages_id_fk' ||
+        (typeof pgError.detail === 'string' && pgError.detail.includes('pageId'))
+      );
 
     if (isPageIdFkError && input.pageId) {
       // Retry without pageId - the page was deleted but we still want to log the activity
