@@ -196,7 +196,9 @@ export async function GET(req: Request) {
       const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
         isNewlyProvisioned = true;
-        returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        if (!returnUrl.startsWith('/s/')) {
+          returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        }
       }
     } catch (error) {
       loggers.auth.error('Failed to provision Getting Started drive', error as Error, {

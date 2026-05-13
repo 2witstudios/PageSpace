@@ -14,6 +14,7 @@ export interface OAuthSigninBodyInput {
   deviceId: string;
   deviceName: string;
   inviteToken?: string;
+  returnUrl?: string;
 }
 
 export const buildOAuthSigninBody = ({
@@ -21,11 +22,13 @@ export const buildOAuthSigninBody = ({
   deviceId,
   deviceName,
   inviteToken,
+  returnUrl,
 }: OAuthSigninBodyInput): Record<string, string> => ({
   platform,
   deviceId,
   deviceName,
   ...(inviteToken && { inviteToken }),
+  ...(returnUrl && { returnUrl }),
 });
 
 export interface PostNativeAuthRedirectInput {
@@ -53,9 +56,10 @@ interface UseOAuthSignInOptions {
   onStart?: () => void;
   onError?: (message: string) => void;
   inviteToken?: string;
+  returnUrl?: string;
 }
 
-export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignInOptions = {}) {
+export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: UseOAuthSignInOptions = {}) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [waitingProvider, setWaitingProvider] = useState<OAuthProvider | null>(null);
@@ -120,6 +124,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
       deviceId,
       deviceName,
       inviteToken,
+      returnUrl,
     });
     const response = await fetch(endpoint, {
       method: 'POST',

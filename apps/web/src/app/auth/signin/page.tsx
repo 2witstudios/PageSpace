@@ -38,7 +38,10 @@ function SignInForm() {
     isWaitingForExternalAuth,
     waitingProvider,
     cancelExternalAuth,
-  } = useOAuthSignIn(inviteToken ? { inviteToken } : {});
+  } = useOAuthSignIn({
+    ...(inviteToken && { inviteToken }),
+    ...(nextPath && { returnUrl: nextPath }),
+  });
   const onPrem = isOnPrem();
 
   useEffect(() => {
@@ -236,7 +239,7 @@ function SignInForm() {
         <p className="text-sm text-muted-foreground">
           Don&apos;t have an account?{" "}
           <Link
-            href="/auth/signup"
+            href={nextPath ? `/auth/signup?next=${encodeURIComponent(nextPath)}` : '/auth/signup'}
             className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
           >
             Sign up

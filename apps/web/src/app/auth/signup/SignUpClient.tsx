@@ -21,9 +21,10 @@ import type { InviteContextData } from '@/lib/auth/invite-resolver';
 interface SignUpClientProps {
   inviteToken?: string;
   inviteContext?: InviteContextData;
+  returnUrl?: string;
 }
 
-export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) {
+export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
   const router = useRouter();
@@ -41,6 +42,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
     onStart: () => setError(null),
     onError: (msg) => setError(msg),
     ...(inviteToken && { inviteToken }),
+    ...(returnUrl && { returnUrl }),
   });
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
@@ -153,7 +155,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
       >
         {showMagicLink ? (
           <div id="magic-link-form" className="mt-2">
-            <MagicLinkForm {...(inviteToken && { inviteToken })} />
+            <MagicLinkForm {...(inviteToken && { inviteToken })} {...(returnUrl && { nextPath: returnUrl })} />
           </div>
         ) : (
           <button

@@ -1,10 +1,11 @@
 import { redirect } from 'next/navigation';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { isOnPrem } from '@/lib/deployment-mode';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { SignUpClient } from './SignUpClient';
 
 interface SignUpPageProps {
-  searchParams: Promise<{ invite?: string }>;
+  searchParams: Promise<{ invite?: string; next?: string }>;
 }
 
 export default async function SignUp({ searchParams }: SignUpPageProps) {
@@ -13,10 +14,13 @@ export default async function SignUp({ searchParams }: SignUpPageProps) {
     redirect('/auth/signin?onprem=contact_admin');
   }
 
-  const { invite } = await searchParams;
+  const { invite, next } = await searchParams;
+  const safeNext = next && isSafeNextPath({ path: next, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })
+    ? next
+    : undefined;
 
   if (!invite) {
-    return <SignUpClient />;
+    return <SignUpClient {...(safeNext && { returnUrl: safeNext })} />;
   }
 
   const resolution = await resolveInviteContext({ token: invite, now: new Date() });
@@ -27,5 +31,5 @@ export default async function SignUp({ searchParams }: SignUpPageProps) {
     redirect(`/invite/${encodeURIComponent(invite)}`);
   }
 
-  return <SignUpClient inviteToken={invite} inviteContext={resolution.data} />;
+  return <SignUpClient inviteToken={invite} inviteContext={resolution.data} {...(safeNext && { returnUrl: safeNext })} />;
 }
