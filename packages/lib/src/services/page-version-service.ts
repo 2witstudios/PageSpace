@@ -41,6 +41,7 @@ export interface PageStateInput {
   visibleToGlobalAssistant?: boolean | null;
   includePageTree?: boolean | null;
   pageTreeScope?: string | null;
+  toolAccessScope?: string | null;
 }
 
 export interface CreatePageVersionInput {

@@ -201,9 +201,10 @@ export async function PATCH(
     }
 
     if (toolAccessScope !== undefined) {
-      if (toolAccessScope === 'drive' || toolAccessScope === 'subtree') {
-        updateData.toolAccessScope = toolAccessScope;
+      if (toolAccessScope !== 'drive' && toolAccessScope !== 'subtree') {
+        return NextResponse.json({ error: 'Invalid toolAccessScope value' }, { status: 400 });
       }
+      updateData.toolAccessScope = toolAccessScope;
     }
 
     // Only update if there are changes

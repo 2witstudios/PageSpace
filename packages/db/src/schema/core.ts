@@ -70,6 +70,7 @@ export const pages = pgTable('pages', {
         parentIdx: index('pages_parent_id_idx').on(table.parentId),
         parentPositionIdx: index('pages_parent_id_position_idx').on(table.parentId, table.position),
         driveTrashedTypeIdx: index('pages_drive_id_is_trashed_type_idx').on(table.driveId, table.isTrashed, table.type),
+        toolAccessScopeCheck: check('pages_toolAccessScope_check', sql`"toolAccessScope" IN ('drive', 'subtree')`),
     }
 });
 

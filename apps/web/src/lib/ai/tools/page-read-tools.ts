@@ -40,6 +40,7 @@ export const pageReadTools = {
 
         // Enforce agent tool access scope if restricted to subtree
         const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        let subtreeRootParentId: string | null = null;
         if (pageAccessScope?.type === 'subtree') {
           const allDrivePages = await db
             .select({ id: pages.id, parentId: pages.parentId })
@@ -49,6 +50,10 @@ export const pageReadTools = {
             filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
           );
           visiblePages = visiblePages.filter(p => allowedIds.has(p.id));
+          // Use the agent page's actual parentId as the traversal root so nested
+          // agents (parentId !== null) don't get an empty list from buildPageList(null)
+          const agentPage = allDrivePages.find(p => p.id === pageAccessScope.agentPageId);
+          subtreeRootParentId = agentPage?.parentId ?? null;
         }
 
         // Sort by position to maintain order
@@ -81,7 +86,7 @@ export const pageReadTools = {
           return pages;
         };
 
-        const paths = buildPageList();
+        const paths = buildPageList(subtreeRootParentId);
 
         return {
           success: true,
