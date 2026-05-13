@@ -220,10 +220,23 @@ export async function GET(request: Request) {
       return NextResponse.json([]);
     }
 
-    // Group mentions (@everyone, @role) — within-drive only, appear first
+    // For within-drive searches, pre-fetch member list once so both the group-mention
+    // gate and the user-suggestion block can reuse it without a double query.
+    let withinDriveMemberIds: string[] | null = null;
+    if (!crossDrive && driveId) {
+      const ids = await getDriveRecipientUserIds(driveId);
+      withinDriveMemberIds = ids;
+      if (ids.length === 0) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      }
+    }
+
+    // Group mentions (@everyone, @role) — within-drive only, visible to members/owners only.
+    // Users with only page-level access must not see role membership metadata.
     const wantsGroups =
       !crossDrive &&
       driveId &&
+      withinDriveMemberIds?.includes(userId) &&
       (requestedTypes.includes('user') ||
         requestedTypes.includes('everyone' as MentionType) ||
         requestedTypes.includes('role' as MentionType));
@@ -357,14 +370,9 @@ export async function GET(request: Request) {
           }
         }
       } else {
-        // Within-drive: surface members only to other drive members/owners
-        const memberIds = await getDriveRecipientUserIds(driveId!);
-        if (memberIds.length === 0) {
-          return NextResponse.json(
-            { error: 'Drive not found' },
-            { status: 404 }
-          );
-        }
+        // Within-drive: surface members only to other drive members/owners.
+        // Reuse the already-fetched withinDriveMemberIds to avoid a second DB query.
+        const memberIds = withinDriveMemberIds ?? [];
         if (memberIds.includes(userId)) {
           for (const id of memberIds) {
             authorizedUserIds.add(id);

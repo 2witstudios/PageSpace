@@ -364,17 +364,24 @@ export async function POST(request: Request) {
           conversationId,
         } });
 
-        // Fire mention notifications for @user, @everyone, @role mentions in AI chat pages
+        // Fire mention notifications for @user, @everyone, @role mentions in AI chat pages.
+        // Gate each recipient on view permission to prevent leaking page metadata.
         if (page?.driveId) {
           expandMentionsToUserIds(messageContent, page.driveId)
-            .then((notifyIds) => {
-              const filtered = notifyIds.filter((id) => id !== userId);
-              return Promise.allSettled(
-                filtered.map((id) =>
-                  createMentionNotification(id, chatId!, userId!).catch((err) =>
-                    loggers.ai.error('AI Chat: Failed to send mention notification', err as Error)
+            .then(async (notifyIds) => {
+              const candidates = notifyIds.filter((id) => id !== userId);
+              if (candidates.length === 0) return;
+              const viewChecks = await Promise.all(
+                candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, chatId!) }))
+              );
+              await Promise.allSettled(
+                viewChecks
+                  .filter((e) => e.canView)
+                  .map((e) =>
+                    createMentionNotification(e.id, chatId!, userId!).catch((err) =>
+                      loggers.ai.error('AI Chat: Failed to send mention notification', err as Error)
+                    )
                   )
-                )
               );
             })
             .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
