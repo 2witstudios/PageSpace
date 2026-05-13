@@ -231,7 +231,9 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
         slug: 'test-drive',
         ownerId: mockUserId,
       });
-      expect(body.pages).toEqual([]);
+      // pages[0] is always the drive root node; no page nodes beyond that
+      expect(body.pages).toHaveLength(1);
+      expect(body.pages[0].type).toBe('DRIVE');
       expect(body.totalPages).toBe(0);
     });
 
@@ -246,13 +248,14 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
       expect(response.status).toBe(200);
       expect(body.totalPages).toBe(2);
-      expect(body.pages).toHaveLength(1);
-      expect(body.pages[0].id).toBe('p1');
-      expect(body.pages[0].title).toBe('Root');
-      expect(body.pages[0].children).toHaveLength(1);
-      expect(body.pages[0].children[0].id).toBe('p2');
-      expect(body.pages[0].children[0].title).toBe('Child');
-      expect(body.pages[0].children[0].children).toEqual([]);
+      // pages[0] = drive root, pages[1] = p1 (with p2 as child)
+      expect(body.pages).toHaveLength(2);
+      expect(body.pages[1].id).toBe('p1');
+      expect(body.pages[1].title).toBe('Root');
+      expect(body.pages[1].children).toHaveLength(1);
+      expect(body.pages[1].children[0].id).toBe('p2');
+      expect(body.pages[1].children[0].title).toBe('Child');
+      expect(body.pages[1].children[0].children).toEqual([]);
     });
 
     it('should sort children by position', async () => {
@@ -265,8 +268,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.pages[0].children[0].title).toBe('First');
-      expect(body.pages[0].children[1].title).toBe('Second');
+      expect(body.pages[1].children[0].title).toBe('First');
+      expect(body.pages[1].children[1].title).toBe('Second');
     });
 
     it('should include type and position fields in page nodes', async () => {
@@ -277,8 +280,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.pages[0].type).toBe('document');
-      expect(body.pages[0].position).toBe(5);
+      expect(body.pages[1].type).toBe('document');
+      expect(body.pages[1].position).toBe(5);
     });
   });
 
@@ -300,7 +303,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.pages[0].currentPermissions).toEqual({
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: true,
         canEdit: true,
         canShare: false,
@@ -319,14 +322,14 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       );
       const body = await response.json();
 
-      expect(body.pages[0].currentPermissions).toEqual({
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: false,
         canEdit: false,
         canShare: false,
       });
     });
 
-    it('should return default permissions when no targetUserId is provided', async () => {
+    it('should return no currentPermissions on page nodes when no targetUserId is provided', async () => {
       mockPagesResults.value = [
         { id: 'p1', title: 'Root', type: 'page', parentId: null, position: 0, isTrashed: false },
       ];
@@ -334,7 +337,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.pages[0].currentPermissions).toEqual({
+      // Without userId the route still attaches default false permissions on page nodes
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: false,
         canEdit: false,
         canShare: false,
@@ -356,18 +360,68 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       );
       const body = await response.json();
 
+      // pages[0] = drive root, pages[1] = p1, pages[2] = p2
       // p1 has no permissions
-      expect(body.pages[0].currentPermissions).toEqual({
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: false,
         canEdit: false,
         canShare: false,
       });
       // p2 has specific permissions
-      expect(body.pages[1].currentPermissions).toEqual({
+      expect(body.pages[2].currentPermissions).toEqual({
         canView: true,
         canEdit: false,
         canShare: true,
       });
+    });
+  });
+
+  // ---------- Drive root node ----------
+
+  describe('drive root node', () => {
+    it('includes drive as first node in pages array with type DRIVE', async () => {
+      const response = await GET(createRequest(), createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages[0]).toMatchObject({
+        id: mockDriveId,
+        title: mockDrive.name,
+        type: 'DRIVE',
+      });
+    });
+
+    it('drive root node appears before page nodes', async () => {
+      mockPagesResults.value = [
+        { id: 'p1', title: 'Page 1', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+      ];
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages[0].type).toBe('DRIVE');
+      expect(body.pages[1].id).toBe('p1');
+    });
+
+    it('drive root node has currentPermissions when userId query param provided (owner case)', async () => {
+      const response = await GET(
+        createRequest(mockDriveId, `?userId=${mockUserId}`),
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      // Drive owner gets full edit access on the drive root node
+      expect(body.pages[0].currentPermissions).toEqual({
+        canView: true,
+        canEdit: true,
+        canShare: true,
+      });
+    });
+
+    it('drive root node has no currentPermissions when no userId param', async () => {
+      const response = await GET(createRequest(), createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages[0].currentPermissions).toBeUndefined();
     });
   });
 

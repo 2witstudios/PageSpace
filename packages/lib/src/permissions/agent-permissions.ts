@@ -14,8 +14,8 @@ export async function getAgentAccessLevel(
     .where(eq(pages.id, targetPageId))
     .limit(1);
 
-  if (page.length === 0) return null;
-  const { driveId } = page[0];
+  // When no page matches, treat targetPageId as a drive ID (drive-as-root-node)
+  const driveId = page.length > 0 ? page[0].driveId : targetPageId;
 
   const membership = await db
     .select()

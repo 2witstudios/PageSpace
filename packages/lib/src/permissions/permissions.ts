@@ -124,9 +124,42 @@ export async function getUserAccessLevel(
     .limit(1);
 
     if (page.length === 0) {
-      if (!silent) {
-        loggers.api.debug(`[PERMISSIONS] Page not found: ${validPageId}`);
+      // Fall back to treating the ID as a drive (drive-as-root-node model)
+      const drive = await db.select({ id: drives.id, ownerId: drives.ownerId })
+        .from(drives)
+        .where(eq(drives.id, validPageId))
+        .limit(1);
+
+      if (drive.length === 0) {
+        if (!silent) {
+          loggers.api.debug(`[PERMISSIONS] Page not found: ${validPageId}`);
+        }
+        return null;
       }
+
+      if (drive[0].ownerId === validUserId) {
+        return { canView: true, canEdit: true, canShare: true, canDelete: true };
+      }
+
+      const membership = await db.select({ role: driveMembers.role })
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.driveId, drive[0].id),
+          eq(driveMembers.userId, validUserId),
+          isNotNull(driveMembers.acceptedAt),
+        ))
+        .limit(1);
+
+      if (membership.length > 0) {
+        const isAdmin = membership[0].role === 'ADMIN';
+        return {
+          canView: true,
+          canEdit: true,
+          canShare: true,
+          canDelete: isAdmin,
+        };
+      }
+
       return null;
     }
 

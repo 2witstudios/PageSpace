@@ -11,7 +11,7 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import { validatePageCreation, validateAIChatTools } from '@pagespace/lib/content/page-type-validators'
 import { getDefaultContent, isAIChatPage } from '@pagespace/lib/content/page-types.config'
 import { PageType as PageTypeEnum } from '@pagespace/lib/utils/enums'
-import { isDriveOwnerOrAdmin, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
@@ -620,9 +620,9 @@ export const pageService = {
         return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };
       }
     } else {
-      const isMember = await isUserDriveMember(userId, params.driveId);
-      if (!isMember) {
-        return { success: false, error: 'You must be a drive member to create pages', status: 403 };
+      const canEdit = await canUserEditPage(userId, params.driveId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this drive', status: 403 };
       }
     }
 
