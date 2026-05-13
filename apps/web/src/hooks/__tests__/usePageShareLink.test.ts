@@ -37,47 +37,62 @@ describe('usePageShareLink', () => {
     vi.restoreAllMocks();
   });
 
-  describe('loading existing link', () => {
-    it('Given GET returns a link with shareUrl, should populate activeLink and shareUrl', async () => {
+  describe('loading existing links', () => {
+    it('Given GET returns a link with shareUrl, should populate links array', async () => {
       mockFetchResolve({
-        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 5, shareUrl: SHARE_URL, expiresAt: null, createdAt: new Date().toISOString() }],
+        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 5, shareUrl: SHARE_URL }],
       });
 
       const { result } = renderHook(() => usePageShareLink(PAGE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-      expect(result.current.activeLink?.id).toBe(LINK_ID);
-      expect(result.current.activeLink?.permissions).toEqual(['VIEW']);
-      expect(result.current.shareUrl).toBe(SHARE_URL);
+      expect(result.current.links).toHaveLength(1);
+      expect(result.current.links[0].id).toBe(LINK_ID);
+      expect(result.current.links[0].permissions).toEqual(['VIEW']);
+      expect(result.current.links[0].shareUrl).toBe(SHARE_URL);
+    });
+
+    it('Given GET returns multiple links, should populate all of them', async () => {
+      mockFetchResolve({
+        links: [
+          { id: 'link-1', permissions: ['VIEW'], useCount: 0, shareUrl: SHARE_URL },
+          { id: 'link-2', permissions: ['VIEW', 'EDIT'], useCount: 2, shareUrl: 'https://app.pagespace.ai/s/ps_share_def' },
+        ],
+      });
+
+      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      expect(result.current.links).toHaveLength(2);
     });
 
     it('Given GET returns a VIEW+EDIT link, should expose permissions correctly', async () => {
       mockFetchResolve({
-        links: [{ id: LINK_ID, permissions: ['VIEW', 'EDIT'], useCount: 0, shareUrl: SHARE_URL, expiresAt: null, createdAt: new Date().toISOString() }],
+        links: [{ id: LINK_ID, permissions: ['VIEW', 'EDIT'], useCount: 0, shareUrl: SHARE_URL }],
       });
 
       const { result } = renderHook(() => usePageShareLink(PAGE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-      expect(result.current.activeLink?.permissions).toEqual(['VIEW', 'EDIT']);
+      expect(result.current.links[0].permissions).toEqual(['VIEW', 'EDIT']);
     });
 
-    it('Given GET returns malformed data (permissions is not an array), should treat as no active link', async () => {
+    it('Given GET returns malformed data (permissions is not an array), should have empty links', async () => {
       mockFetchResolve({ links: [{ id: LINK_ID, permissions: 'VIEW', useCount: 0 }] });
 
       const { result } = renderHook(() => usePageShareLink(PAGE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-      expect(result.current.activeLink).toBeNull();
+      expect(result.current.links).toHaveLength(0);
     });
 
-    it('Given GET fails, should finish loading with no active link', async () => {
+    it('Given GET fails, should finish loading with empty links', async () => {
       mockFetchReject();
 
       const { result } = renderHook(() => usePageShareLink(PAGE_ID));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-      expect(result.current.activeLink).toBeNull();
+      expect(result.current.links).toHaveLength(0);
     });
   });
 
@@ -98,8 +113,8 @@ describe('usePageShareLink', () => {
         await result.current.handleGenerate({ canView: true, canEdit: false, canShare: false, canDelete: false });
       });
 
-      expect(result.current.shareUrl).toBe(SHARE_URL);
-      expect(result.current.activeLink?.permissions).toEqual(['VIEW']);
+      expect(result.current.links).toHaveLength(1);
+      expect(result.current.links[0].permissions).toEqual(['VIEW']);
       expect(vi.mocked(post)).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ permissions: ['VIEW'] })
@@ -159,12 +174,29 @@ describe('usePageShareLink', () => {
         expect.objectContaining({ permissions: ['VIEW', 'EDIT', 'SHARE', 'DELETE'] })
       );
     });
+
+    it('Given existing links, generating a new link should append to the list', async () => {
+      mockFetchResolve({
+        links: [{ id: 'link-1', permissions: ['VIEW'], useCount: 0, shareUrl: SHARE_URL }],
+      });
+      vi.mocked(post).mockResolvedValueOnce({ id: 'link-2', rawToken: 'tok2', shareUrl: 'https://app.pagespace.ai/s/tok2' });
+      Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+
+      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.handleGenerate({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      });
+
+      expect(result.current.links).toHaveLength(2);
+    });
   });
 
   describe('copying a link', () => {
-    it('Given shareUrl is set, handleCopy should write shareUrl to clipboard', async () => {
+    it('Given a link with shareUrl, handleCopy should write shareUrl to clipboard', async () => {
       mockFetchResolve({
-        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 0, shareUrl: SHARE_URL, expiresAt: null, createdAt: new Date().toISOString() }],
+        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 0, shareUrl: SHARE_URL }],
       });
       const writeText = vi.fn().mockResolvedValue(undefined);
       Object.assign(navigator, { clipboard: { writeText } });
@@ -173,7 +205,7 @@ describe('usePageShareLink', () => {
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       await act(async () => {
-        await result.current.handleCopy();
+        await result.current.handleCopy(result.current.links[0]);
       });
 
       expect(writeText).toHaveBeenCalledWith(SHARE_URL);
@@ -181,9 +213,9 @@ describe('usePageShareLink', () => {
   });
 
   describe('revoking a link', () => {
-    it('Given DELETE succeeds, should clear activeLink and shareUrl', async () => {
+    it('Given DELETE succeeds, should remove the link from the list', async () => {
       mockFetchResolve({
-        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 1, shareUrl: SHARE_URL, expiresAt: null, createdAt: new Date().toISOString() }],
+        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 1, shareUrl: SHARE_URL }],
       });
       vi.mocked(del).mockResolvedValueOnce(undefined);
 
@@ -191,11 +223,46 @@ describe('usePageShareLink', () => {
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 
       await act(async () => {
-        await result.current.handleRevoke();
+        await result.current.handleRevoke(LINK_ID);
       });
 
-      expect(result.current.activeLink).toBeNull();
-      expect(result.current.shareUrl).toBeNull();
+      expect(result.current.links).toHaveLength(0);
+    });
+
+    it('Given two links, revoking one should leave the other intact', async () => {
+      mockFetchResolve({
+        links: [
+          { id: 'link-1', permissions: ['VIEW'], useCount: 0, shareUrl: SHARE_URL },
+          { id: 'link-2', permissions: ['VIEW', 'EDIT'], useCount: 0, shareUrl: 'https://other.url' },
+        ],
+      });
+      vi.mocked(del).mockResolvedValueOnce(undefined);
+
+      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.handleRevoke('link-1');
+      });
+
+      expect(result.current.links).toHaveLength(1);
+      expect(result.current.links[0].id).toBe('link-2');
+    });
+
+    it('Given DELETE fails, should keep the link in the list', async () => {
+      mockFetchResolve({
+        links: [{ id: LINK_ID, permissions: ['VIEW'], useCount: 1, shareUrl: SHARE_URL }],
+      });
+      vi.mocked(del).mockRejectedValueOnce(new Error('server error'));
+
+      const { result } = renderHook(() => usePageShareLink(PAGE_ID));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.handleRevoke(LINK_ID);
+      });
+
+      expect(result.current.links).toHaveLength(1);
     });
   });
 });
