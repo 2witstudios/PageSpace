@@ -37,6 +37,12 @@ export interface ToolExecutionContext {
   requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
   agentCallDepth?: number;          // Depth of agent call chain (0 = direct user request)
 
+  // Tool access scope — restricts which pages AI tools can see/read
+  pageAccessScope?: {
+    type: 'drive' | 'subtree';
+    agentPageId: string;  // root of the allowed subtree
+  };
+
   // Chat source identification - determines sender identity for channel messages
   chatSource?: {
     type: 'global' | 'page';

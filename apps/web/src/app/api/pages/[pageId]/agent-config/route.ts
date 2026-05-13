@@ -84,6 +84,7 @@ export async function GET(
       visibleToGlobalAssistant: page.visibleToGlobalAssistant ?? true,
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
+      toolAccessScope: page.toolAccessScope ?? 'drive',
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -118,6 +119,7 @@ export async function PATCH(
       visibleToGlobalAssistant,
       includePageTree,
       pageTreeScope,
+      toolAccessScope,
       expectedRevision,
     } = body;
 
@@ -198,6 +200,12 @@ export async function PATCH(
       }
     }
 
+    if (toolAccessScope !== undefined) {
+      if (toolAccessScope === 'drive' || toolAccessScope === 'subtree') {
+        updateData.toolAccessScope = toolAccessScope;
+      }
+    }
+
     // Only update if there are changes
     let responsePage = page;
     if (Object.keys(updateData).length > 0) {
@@ -260,6 +268,7 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
+      toolAccessScope: responsePage.toolAccessScope ?? 'drive',
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

@@ -5,7 +5,7 @@ import { eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db
 import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { buildTree } from '@pagespace/lib/content/tree-utils';
+import { buildTree, filterToSubtree } from '@pagespace/lib/content/tree-utils';
 import { getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
 import { getPageTypeEmoji, isFolderPage, isCodePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -36,7 +36,20 @@ export const pageReadTools = {
         }
 
         // Get all pages user has access to in the drive (optimized single query)
-        const visiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        let visiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
+          const allDrivePages = await db
+            .select({ id: pages.id, parentId: pages.parentId })
+            .from(pages)
+            .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+          const allowedIds = new Set(
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
+          );
+          visiblePages = visiblePages.filter(p => allowedIds.has(p.id));
+        }
 
         // Sort by position to maintain order
         visiblePages.sort((a, b) => a.position - b.position);
@@ -128,6 +141,21 @@ export const pageReadTools = {
         const accessLevel = await getUserAccessLevel(userId, page.id, { silent: true });
         if (!accessLevel) {
           throw new Error('Insufficient permissions to read this document');
+        }
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScopeRead = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScopeRead?.type === 'subtree') {
+          const allDrivePages = await db
+            .select({ id: pages.id, parentId: pages.parentId })
+            .from(pages)
+            .where(and(eq(pages.driveId, page.driveId!), eq(pages.isTrashed, false)));
+          const allowedIds = new Set(
+            filterToSubtree(allDrivePages, pageAccessScopeRead.agentPageId).map(p => p.id)
+          );
+          if (!allowedIds.has(page.id)) {
+            throw new Error('This page is outside the agent\'s configured access scope');
+          }
         }
 
         // Check if this page is linked to a task

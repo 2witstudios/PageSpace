@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "toolAccessScope" text DEFAULT 'drive';

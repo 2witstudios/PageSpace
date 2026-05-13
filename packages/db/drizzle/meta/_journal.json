@@ -890,6 +890,13 @@
       "when": 1778542573095,
       "tag": "0126_past_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1778637428197,
+      "tag": "0127_nervous_living_tribunal",
+      "breakpoints": true
     }
   ]
 }
