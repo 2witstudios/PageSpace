@@ -42,7 +42,7 @@ vi.mock('@pagespace/db/schema/chat', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
-    canUserViewPage: vi.fn(),
+    canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../actor-permissions', () => ({
