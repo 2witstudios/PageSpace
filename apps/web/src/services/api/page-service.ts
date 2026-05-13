@@ -605,10 +605,18 @@ export const pageService = {
       return { success: false, error: 'Drive not found', status: 404 };
     }
 
-    // Check authorization
-    const hasPermission = await isUserDriveMember(userId, params.driveId);
-    if (!hasPermission) {
-      return { success: false, error: 'You must be a drive member to create pages', status: 403 };
+    // Check authorization — mirror the AI tool's split: nested pages require
+    // edit permission on the parent; root-level pages require drive membership.
+    if (params.parentId) {
+      const canEdit = await canUserEditPage(userId, params.parentId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };
+      }
+    } else {
+      const isMember = await isUserDriveMember(userId, params.driveId);
+      if (!isMember) {
+        return { success: false, error: 'You must be a drive member to create pages', status: 403 };
+      }
     }
 
     // Calculate position - use isNull when parentId is null/undefined
