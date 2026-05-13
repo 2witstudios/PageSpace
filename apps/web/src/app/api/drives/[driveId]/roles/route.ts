@@ -3,6 +3,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -86,6 +88,14 @@ export async function POST(
       isDefault,
       permissions,
     });
+
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role create event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
