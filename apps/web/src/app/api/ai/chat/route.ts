@@ -68,6 +68,8 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
   createStreamAbortController,
   removeStream,
@@ -361,6 +363,22 @@ export async function POST(request: Request) {
           action: 'chat_message',
           conversationId,
         } });
+
+        // Fire mention notifications for @user, @everyone, @role mentions in AI chat pages
+        if (page?.driveId) {
+          expandMentionsToUserIds(messageContent, page.driveId)
+            .then((notifyIds) => {
+              const filtered = notifyIds.filter((id) => id !== userId);
+              return Promise.allSettled(
+                filtered.map((id) =>
+                  createMentionNotification(id, chatId!, userId!).catch((err) =>
+                    loggers.ai.error('AI Chat: Failed to send mention notification', err as Error)
+                  )
+                )
+              );
+            })
+            .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
+        }
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({

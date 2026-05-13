@@ -3,38 +3,75 @@ import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
 import { mentions, userMentions } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import {
+  getDriveRecipientUserIds,
+  getDriveMemberUserIdsByStandardRole,
+  getDriveMemberUserIdsByCustomRole,
+} from '@pagespace/lib/services/drive-member-service';
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;
 
+interface GroupMention {
+  type: 'everyone' | 'role';
+  roleId?: string;
+  driveId?: string;
+}
+
 interface MentionIds {
   pageIds: string[];
   userIds: string[];
+  groupMentions: GroupMention[];
 }
+
+const STANDARD_ROLES = new Set(['OWNER', 'ADMIN', 'MEMBER']);
 
 function findMentionNodes(content: unknown): MentionIds {
   const pageIds: string[] = [];
   const userIds: string[] = [];
+  const groupMentions: GroupMention[] = [];
+  const seenGroups = new Set<string>();
   const contentStr = Array.isArray(content) ? content.join('\n') : String(content);
 
-  const shouldParseHtml = contentStr.includes('<') && contentStr.includes('data-page-id');
+  const shouldParseHtml = contentStr.includes('<') && (
+    contentStr.includes('data-page-id') ||
+    contentStr.includes('data-mention-type="everyone"') ||
+    contentStr.includes('data-mention-type="role"')
+  );
 
   let parseFailed = false;
   if (shouldParseHtml) {
     try {
       const $ = cheerio.load(contentStr);
-      // Parse page mentions from HTML
       $('a[data-page-id]').each((_, element) => {
         const pageId = $(element).attr('data-page-id');
-        if (pageId) {
-          pageIds.push(pageId);
-        }
+        if (pageId) pageIds.push(pageId);
       });
-      // Parse user mentions from HTML
       $('a[data-user-id]').each((_, element) => {
         const userId = $(element).attr('data-user-id');
-        if (userId) {
-          userIds.push(userId);
+        if (userId) userIds.push(userId);
+      });
+      $('span[data-mention-type="everyone"]').each((_, element) => {
+        const key = 'everyone';
+        if (!seenGroups.has(key)) {
+          seenGroups.add(key);
+          groupMentions.push({
+            type: 'everyone',
+            driveId: $(element).attr('data-drive-id'),
+          });
+        }
+      });
+      $('span[data-mention-type="role"]').each((_, element) => {
+        const roleId = $(element).attr('data-role-id');
+        if (!roleId) return;
+        const key = `role:${roleId}`;
+        if (!seenGroups.has(key)) {
+          seenGroups.add(key);
+          groupMentions.push({
+            type: 'role',
+            roleId,
+            driveId: $(element).attr('data-drive-id'),
+          });
         }
       });
     } catch (error) {
@@ -45,13 +82,25 @@ function findMentionNodes(content: unknown): MentionIds {
 
   if (!shouldParseHtml || parseFailed) {
     // Parse markdown-style mentions: @[Label](id:type)
-    const regex = /@\[([^\]]*)\]\(([^:)]+):?([^)]*)\)/g;
+    const regex = /@\[([^\]]{1,500})\]\(([^:)]{1,200}):?([^)]{0,200})\)/g;
     let match;
     while ((match = regex.exec(contentStr)) !== null) {
       const id = match[2];
-      const type = match[3] || 'page'; // Default to page if no type specified
+      const type = match[3] || 'page';
       if (type === 'user') {
         userIds.push(id);
+      } else if (type === 'everyone') {
+        const key = 'everyone';
+        if (!seenGroups.has(key)) {
+          seenGroups.add(key);
+          groupMentions.push({ type: 'everyone' });
+        }
+      } else if (type === 'role') {
+        const key = `role:${id}`;
+        if (!seenGroups.has(key)) {
+          seenGroups.add(key);
+          groupMentions.push({ type: 'role', roleId: id });
+        }
       } else {
         pageIds.push(id);
       }
@@ -61,11 +110,40 @@ function findMentionNodes(content: unknown): MentionIds {
   return {
     pageIds: Array.from(new Set(pageIds)),
     userIds: Array.from(new Set(userIds)),
+    groupMentions,
   };
+}
+
+async function expandGroupMentions(
+  groupMentions: GroupMention[],
+  driveId: string,
+): Promise<string[]> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  const addIds = (ids: string[]) => {
+    for (const id of ids) {
+      if (!seen.has(id)) { seen.add(id); out.push(id); }
+    }
+  };
+
+  for (const gm of groupMentions) {
+    if (gm.type === 'everyone') {
+      addIds(await getDriveRecipientUserIds(driveId));
+    } else if (gm.type === 'role' && gm.roleId) {
+      const ids = STANDARD_ROLES.has(gm.roleId)
+        ? await getDriveMemberUserIdsByStandardRole(driveId, gm.roleId as 'OWNER' | 'ADMIN' | 'MEMBER')
+        : await getDriveMemberUserIdsByCustomRole(driveId, gm.roleId);
+      addIds(ids);
+    }
+  }
+
+  return out;
 }
 
 export interface SyncMentionsOptions {
   mentionedByUserId?: string;
+  driveId?: string;
 }
 
 export interface SyncMentionsResult {
@@ -80,7 +158,17 @@ export async function syncMentions(
   tx: TransactionType | DatabaseType,
   options?: SyncMentionsOptions
 ): Promise<SyncMentionsResult> {
-  const { pageIds: mentionedPageIds, userIds: mentionedUserIds } = findMentionNodes(content);
+  const { pageIds: mentionedPageIds, userIds: directUserIds, groupMentions } = findMentionNodes(content);
+
+  // Expand group mentions (@everyone, @role) to individual user IDs
+  let expandedUserIds: string[] = [];
+  if (groupMentions.length > 0 && options?.driveId) {
+    expandedUserIds = await expandGroupMentions(groupMentions, options.driveId);
+  }
+
+  // Merge direct and group-expanded user IDs, preserving uniqueness
+  const allUserIdSet = new Set([...directUserIds, ...expandedUserIds]);
+  const mentionedUserIds = Array.from(allUserIdSet);
 
   // Sync page mentions
   await syncPageMentions(sourcePageId, mentionedPageIds, tx);

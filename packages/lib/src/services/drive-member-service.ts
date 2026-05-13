@@ -155,6 +155,53 @@ export async function getDriveRecipientUserIds(driveId: string): Promise<string[
 }
 
 /**
+ * Get user IDs of drive members with a specific standard role.
+ * OWNER is stored in drives.ownerId, not in the driveMembers table.
+ */
+export async function getDriveMemberUserIdsByStandardRole(
+  driveId: string,
+  role: 'OWNER' | 'ADMIN' | 'MEMBER',
+): Promise<string[]> {
+  if (role === 'OWNER') {
+    const drive = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
+      columns: { ownerId: true },
+    });
+    return drive ? [drive.ownerId] : [];
+  }
+
+  const members = await db
+    .select({ userId: driveMembers.userId })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.role, role),
+      isNotNull(driveMembers.acceptedAt),
+    ));
+
+  return members.map((m) => m.userId);
+}
+
+/**
+ * Get user IDs of drive members assigned a specific custom role.
+ */
+export async function getDriveMemberUserIdsByCustomRole(
+  driveId: string,
+  customRoleId: string,
+): Promise<string[]> {
+  const members = await db
+    .select({ userId: driveMembers.userId })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.customRoleId, customRoleId),
+      isNotNull(driveMembers.acceptedAt),
+    ));
+
+  return members.map((m) => m.userId);
+}
+
+/**
  * List all members of a drive with their details and permission counts
  */
 export async function listDriveMembers(driveId: string): Promise<MemberWithDetails[]> {

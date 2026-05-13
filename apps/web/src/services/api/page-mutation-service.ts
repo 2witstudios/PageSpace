@@ -213,7 +213,10 @@ export async function applyPageMutation({
     }
 
     if (updates.content !== undefined) {
-      mentionsResult = await syncMentions(pageId, nextContent, transaction, { mentionedByUserId: context.userId });
+      mentionsResult = await syncMentions(pageId, nextContent, transaction, {
+        mentionedByUserId: context.userId,
+        driveId: currentPage.driveId,
+      });
     }
 
     // Create page version BEFORE acquiring the activity chain lock,
