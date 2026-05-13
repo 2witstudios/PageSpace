@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
-import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
+import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import { type ToolExecutionContext } from '../core';
 
 export const searchTools = {
@@ -40,9 +40,7 @@ export const searchTools = {
           throw new Error(`Invalid regex pattern: ${(e as Error).message}`);
         }
 
-        // Check drive access
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error('You don\'t have access to this drive');
         }
 
@@ -92,7 +90,7 @@ export const searchTools = {
         const matchingPages = await query.limit(maxResults);
 
         // Get all accessible pages upfront to avoid N+1 queries
-        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const accessiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
         const pageMap = new Map(accessiblePages.map(p => [p.id, p]));
 
@@ -319,7 +317,7 @@ export const searchTools = {
             ? `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}" (truncated from ${totalBeforeTruncation})`
             : `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
-            pagesScanned: matchingPages.length,
+            pagesScanned: matchingPages.filter(p => accessiblePageIds.has(p.id)).length,
             documentsFound: truncatedResults.filter(r => r.type !== 'AI_CHAT').length,
             conversationsFound: truncatedResults.filter(r => r.type === 'AI_CHAT').length,
             documentTypes: [...new Set(truncatedResults.map(r => r.type))],
@@ -360,9 +358,7 @@ export const searchTools = {
       }
 
       try {
-        // Check drive access
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error('You don\'t have access to this drive');
         }
 
@@ -399,7 +395,7 @@ export const searchTools = {
         const allPages = await query;
 
         // Get all accessible pages upfront to avoid N+1 queries
-        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const accessiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
 
         // Build page hierarchy with paths
@@ -468,7 +464,7 @@ export const searchTools = {
           totalResults: results.length,
           summary: `Found ${results.length} page${results.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
-            totalPagesScanned: allPages.length,
+            totalPagesScanned: accessiblePageIds.size,
             matchingPages: results.length,
             documentTypes: [...new Set(results.map(r => r.type))],
             matchTypes: {
@@ -523,9 +519,7 @@ export const searchTools = {
         const results = [];
 
         for (const drive of userDrives) {
-          // Check drive access
-          const hasDriveAccess = await getUserDriveAccess(userId, drive.id);
-          if (!hasDriveAccess) continue;
+          if (!await canActorAccessDrive(context as ToolExecutionContext, drive.id)) continue;
 
           // Build search conditions
           let searchWhereConditions;
@@ -559,7 +553,7 @@ export const searchTools = {
           const drivePages = await driveQuery.limit(maxResultsPerDrive);
 
           // Get all accessible pages upfront to avoid N+1 queries
-          const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, drive.id);
+          const accessiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, drive.id);
           const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
 
           // Filter by permissions using O(1) Set lookup

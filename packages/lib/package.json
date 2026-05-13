@@ -661,6 +661,11 @@
       "import": "./dist/permissions/accessible-page-ids.js",
       "require": "./dist/permissions/accessible-page-ids.js"
     },
+    "./permissions/agent-permissions": {
+      "types": "./dist/permissions/agent-permissions.d.ts",
+      "import": "./dist/permissions/agent-permissions.js",
+      "require": "./dist/permissions/agent-permissions.js"
+    },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
       "import": "./dist/compliance/retention/retention-engine.js",
@@ -1059,6 +1064,9 @@
       ],
       "permissions/accessible-page-ids": [
         "./dist/permissions/accessible-page-ids.d.ts"
+      ],
+      "permissions/agent-permissions": [
+        "./dist/permissions/agent-permissions.d.ts"
       ],
       "compliance/retention/retention-engine": [
         "./dist/compliance/retention/retention-engine.d.ts"

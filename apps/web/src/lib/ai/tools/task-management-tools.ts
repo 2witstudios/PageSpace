@@ -6,7 +6,8 @@ import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage, canUserViewPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
+import { canActorEditPage } from './actor-permissions';
 import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -68,8 +69,8 @@ async function getAiContextWithActor(context: ToolExecutionContext) {
 /**
  * Helper to verify page access for page-linked task lists
  */
-async function verifyPageAccess(userId: string, pageId: string): Promise<boolean> {
-  return canUserEditPage(userId, pageId);
+async function verifyPageAccess(context: ToolExecutionContext, pageId: string): Promise<boolean> {
+  return canActorEditPage(context, pageId);
 }
 
 export const taskManagementTools = {
@@ -189,7 +190,7 @@ Agent Triggers:
 
           // Verify permissions
           if (taskList.pageId) {
-            const hasAccess = await verifyPageAccess(userId, taskList.pageId);
+            const hasAccess = await verifyPageAccess(context as ToolExecutionContext, taskList.pageId);
             if (!hasAccess) {
               throw new Error('You do not have permission to update tasks on this page');
             }
@@ -647,7 +648,7 @@ Agent Triggers:
             throw new Error('Page must be a TASK_LIST page to add tasks');
           }
 
-          const hasAccess = await verifyPageAccess(userId, pageId!);
+          const hasAccess = await verifyPageAccess(context as ToolExecutionContext, pageId!);
           if (!hasAccess) {
             throw new Error('You do not have permission to add tasks to this page');
           }
@@ -996,8 +997,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         throw new Error(`Agent with ID ${targetAgentId} not found`);
       }
 
-      const canView = await canUserViewPage(userId, targetAgentId);
-      if (!canView) {
+      if (!await canActorViewPage(context as ToolExecutionContext, targetAgentId)) {
         throw new Error('You do not have permission to view this agent\'s tasks');
       }
 
@@ -1046,7 +1046,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         const driveAccessResults = await Promise.all(
           taskDriveIds.map(async (taskDriveId) => ({
             driveId: taskDriveId,
-            hasAccess: await getUserDriveAccess(userId, taskDriveId),
+            hasAccess: await canActorAccessDrive(context as ToolExecutionContext, taskDriveId),
           }))
         );
 

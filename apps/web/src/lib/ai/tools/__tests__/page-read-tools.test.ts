@@ -68,9 +68,9 @@ vi.mock('@pagespace/db/schema/chat', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserDriveAccess: vi.fn(),
     getUserAccessLevel: vi.fn(),
     getUserAccessiblePagesInDriveWithDetails: vi.fn(),
+    getUserDriveAccess: vi.fn(),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
@@ -106,12 +106,12 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db/db';
-import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
-const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
+const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -155,17 +155,19 @@ describe('page-read-tools', () => {
       ).rejects.toThrow('User authentication required');
     });
 
-    it('throws error when drive not found', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(false);
+    it('returns error when actor has no accessible pages in drive', async () => {
+      mockGetUserAccessiblePagesInDrive.mockResolvedValue([]);
 
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      await expect(
-        pageReadTools.list_pages.execute!({ driveId: 'non-existent' }, context)
-      ).rejects.toThrow(); // Throws an error when drive access is denied
+      const result = await pageReadTools.list_pages.execute!(
+        { driveId: 'non-existent', driveSlug: 'test-drive' },
+        context
+      );
+      expect(result).toMatchObject({ success: false });
     });
 
   });

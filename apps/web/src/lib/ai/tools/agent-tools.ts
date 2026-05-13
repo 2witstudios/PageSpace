@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canActorEditPage } from './actor-permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
@@ -45,7 +45,7 @@ export const agentTools = {
         }
 
         // Check permissions
-        const canEdit = await canUserEditPage(userId, agent.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext, agent.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to update this AI agent');
         }

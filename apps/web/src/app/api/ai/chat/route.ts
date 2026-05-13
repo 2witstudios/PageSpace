@@ -879,6 +879,7 @@ export async function POST(request: Request) {
                 agentPageId: chatId,
                 agentTitle: page.title,
               },
+              enabledTools: agentEnabledTools ?? null,
             }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onChunk: ({ chunk }) => {
