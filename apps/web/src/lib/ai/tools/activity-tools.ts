@@ -314,8 +314,11 @@ When summarizing multiple changes, group them thematically and describe the over
       }
 
       try {
-        // Look up current user's email — actorEmail is the authoritative actor
-        // identifier (used by the UI), so isYou must compare against it, not userId.
+        // Fetch current user's email for isYou determination on AI-generated activities.
+        // For human activities we use userId (stable across email changes).
+        // For AI-generated activities we use actorEmail because the agent logs under
+        // a distinct email even when running in the user's session (userId would
+        // incorrectly match the session owner and say "you" for agent actions).
         const [currentUserRow] = await db
           .select({ email: users.email })
           .from(users)
@@ -480,7 +483,9 @@ When summarizing multiple changes, group them thematically and describe the over
             const actor: CompactActor = {
               email,
               name: activity.actorDisplayName || activity.user?.name || null,
-              isYou: currentUserEmail !== null && activity.actorEmail === currentUserEmail,
+              isYou: activity.isAiGenerated
+                ? currentUserEmail !== null && activity.actorEmail === currentUserEmail
+                : activity.userId === userId,
               count: 0,
             };
             entry = { idx: actorsList.length, actor };
