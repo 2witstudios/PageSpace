@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -15,9 +15,15 @@ interface DriveShareAcceptProps {
 
 export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
   const router = useRouter();
-  const { csrfToken } = useCSRFToken();
+  const { csrfToken, isLoading: csrfLoading, error: csrfError } = useCSRFToken();
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!csrfLoading && csrfError && !csrfToken) {
+      router.push(`/auth/signin?next=/s/${token}`);
+    }
+  }, [csrfLoading, csrfError, csrfToken, router, token]);
 
   async function handleJoin() {
     if (!csrfToken) return;

@@ -446,6 +446,40 @@ describe('redeemPageShareLink', () => {
     }
     expect(mockDb.insert).toHaveBeenCalledTimes(2);
   });
+
+  it('skips useCount increment when user already has canView access', async () => {
+    let callCount = 0;
+    mockDb.select.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve([{
+            id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID,
+            permissions: ['VIEW'], isActive: true, expiresAt: null,
+          }]);
+        }
+        // existingPerms query returns a row with canView=true
+        return Promise.resolve([{ canView: true }]);
+      }),
+    }));
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnThis(),
+      returning: vi.fn().mockResolvedValue([{ id: 'new-pp-id' }]),
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    });
+    makeUpdateChain();
+
+    const result = await redeemPageShareLink(makeCtx(), 'valid-token');
+
+    expect(result.ok).toBe(true);
+    // useCount update must NOT be called because user already had access
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('resolveShareToken', () => {

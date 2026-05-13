@@ -187,7 +187,11 @@ export async function redeemDriveShareLink(
     acceptedAt: new Date(),
   }).onConflictDoUpdate({
     target: [driveMembers.driveId, driveMembers.userId],
-    set: { acceptedAt: new Date(), role: link.role },
+    set: {
+      acceptedAt: new Date(),
+      // Preserve ADMIN role — never downgrade an existing ADMIN via a MEMBER share link
+      role: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN ${driveMembers.role} ELSE EXCLUDED.role END`,
+    },
   });
 
   await db
