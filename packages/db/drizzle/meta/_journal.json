@@ -890,6 +890,13 @@
       "when": 1778542573095,
       "tag": "0126_past_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1778688516412,
+      "tag": "0127_rich_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }

@@ -4,13 +4,6 @@ import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
 
-/**
- * Get agent access level for a specific page.
- *
- * Returns null if the agent has no drive_agent_members row for the page's drive
- * (caller should fall back to user permissions). Otherwise returns the effective
- * PermissionLevel based on the agent's role.
- */
 export async function getAgentAccessLevel(
   agentPageId: string,
   targetPageId: string,
@@ -52,47 +45,22 @@ export async function getAgentAccessLevel(
 
     if (driveRole.length > 0) {
       const perms = driveRole[0].permissions[targetPageId];
-      if (perms) {
-        return {
-          canView: perms.canView,
-          canEdit: perms.canEdit,
-          canShare: perms.canShare,
-          canDelete: false,
-        };
-      }
+      return {
+        canView: perms?.canView ?? false,
+        canEdit: perms?.canEdit ?? false,
+        canShare: perms?.canShare ?? false,
+        canDelete: false,
+      };
     }
   }
 
-  // MEMBER with no customRole — read-only access
   return { canView: true, canEdit: false, canShare: false, canDelete: false };
 }
 
-export async function canAgentViewPage(agentPageId: string, pageId: string): Promise<boolean> {
-  const perms = await getAgentAccessLevel(agentPageId, pageId);
-  return perms?.canView ?? false;
-}
-
-export async function canAgentEditPage(agentPageId: string, pageId: string): Promise<boolean> {
-  const perms = await getAgentAccessLevel(agentPageId, pageId);
-  return perms?.canEdit ?? false;
-}
-
-export async function canAgentDeletePage(agentPageId: string, pageId: string): Promise<boolean> {
-  const perms = await getAgentAccessLevel(agentPageId, pageId);
-  return perms?.canDelete ?? false;
-}
-
-/**
- * Get all pages an agent can access in a drive.
- *
- * Returns null if the agent has no drive_agent_members row (caller should fall
- * through to user permissions). Returns an empty array if the agent has a
- * MEMBER row with no customRole (membership exists but no enumerable pages).
- */
 export async function getAgentAccessiblePagesInDrive(
   agentPageId: string,
   driveId: string,
-): Promise<PageWithPermissions[] | null> {
+): Promise<PageWithPermissions[]> {
   const membership = await db
     .select()
     .from(driveAgentMembers)
@@ -104,7 +72,7 @@ export async function getAgentAccessiblePagesInDrive(
     )
     .limit(1);
 
-  if (membership.length === 0) return null;
+  if (membership.length === 0) return [];
 
   const { role, customRoleId } = membership[0];
 
@@ -152,7 +120,13 @@ export async function getAgentAccessiblePagesInDrive(
           isTrashed: pages.isTrashed,
         })
         .from(pages)
-        .where(and(inArray(pages.id, visiblePageIds), eq(pages.isTrashed, false)));
+        .where(
+          and(
+            inArray(pages.id, visiblePageIds),
+            eq(pages.driveId, driveId),
+            eq(pages.isTrashed, false),
+          ),
+        );
 
       return visiblePages.map((p) => ({
         ...p,
@@ -166,6 +140,5 @@ export async function getAgentAccessiblePagesInDrive(
     }
   }
 
-  // MEMBER with no customRole — has membership but no enumerable pages
   return [];
 }
