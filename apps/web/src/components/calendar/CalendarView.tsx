@@ -100,6 +100,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   const { hiddenCalendars, toggleCalendar, showAll, hideAll, hiddenEventTypes, toggleEventType, isEventTypeVisible } =
     useCalendarFilterStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [selectedCalendarKey, setSelectedCalendarKey] = useState('personal');
 
   // Force-refresh drives on mount so the sidebar reflects current memberships
   const isUserContext = context === 'user';
@@ -164,6 +165,19 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     () => calendarEntries.map((c) => c.key),
     [calendarEntries]
   );
+
+  // When user context: derive the effective driveId/context for the event modal.
+  // Editing an existing event: use the event's own driveId. A null driveId means
+  // the event is personal — convert null→undefined so it isn't confused with "no
+  // event selected". Never inherit the selected calendar key when editing.
+  // Creating a new event: use the selected calendar key.
+  const creationDriveId = isUserContext && selectedCalendarKey !== 'personal'
+    ? selectedCalendarKey
+    : (isUserContext ? undefined : driveId);
+  const effectiveModalDriveId = selectedEvent
+    ? (selectedEvent.driveId ?? undefined)
+    : creationDriveId;
+  const effectiveModalContext: 'user' | 'drive' = effectiveModalDriveId ? 'drive' : 'user';
 
   const { data: googleCalendarStatus } = useSWR<GoogleCalendarStatusResponse>(
     '/api/integrations/google-calendar/status',
@@ -265,10 +279,13 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     } else {
       // POST schema doesn't accept null (only undefined no-op or object upsert)
       const { agentTrigger, ...rest } = eventData;
+      const driveOverride = isUserContext && selectedCalendarKey !== 'personal'
+        ? selectedCalendarKey
+        : undefined;
       await createEvent({
         ...rest,
         agentTrigger: agentTrigger ?? undefined,
-      });
+      }, driveOverride);
     }
     setIsEventModalOpen(false);
   };
@@ -410,8 +427,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           onRsvp={handleRsvp}
           onAddAttendee={handleAddAttendee}
           onRemoveAttendee={handleRemoveAttendee}
-          driveId={driveId}
-          context={context}
+          driveId={effectiveModalDriveId}
+          context={effectiveModalContext}
         />
       </div>
     );
@@ -604,6 +621,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
               userEventsVisible={isEventTypeVisible('user')}
               onToggleAgentEvents={() => toggleEventType('agent')}
               onToggleUserEvents={() => toggleEventType('user')}
+              selectedKey={selectedCalendarKey}
+              onSelectCalendar={setSelectedCalendarKey}
             />
           </aside>
         )}
@@ -673,8 +692,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         onRsvp={handleRsvp}
         onAddAttendee={handleAddAttendee}
         onRemoveAttendee={handleRemoveAttendee}
-        driveId={driveId}
-        context={context}
+        driveId={effectiveModalDriveId}
+        context={effectiveModalContext}
       />
     </div>
   );
