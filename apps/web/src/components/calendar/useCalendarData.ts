@@ -130,9 +130,12 @@ export function useCalendarData({
         instructionPageId: string | null;
         contextPageIds: string[];
       };
-    }) => {
+    }, overrideDriveId?: string | null) => {
+      const targetDriveId = overrideDriveId !== undefined
+        ? overrideDriveId
+        : (context === 'drive' ? driveId : null);
       const result = await post<CalendarEvent>('/api/calendar/events', {
-        driveId: context === 'drive' ? driveId : null,
+        driveId: targetDriveId,
         ...eventData,
         startAt: eventData.startAt.toISOString(),
         endAt: eventData.endAt.toISOString(),
