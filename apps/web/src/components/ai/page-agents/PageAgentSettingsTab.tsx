@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { AI_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { getRoleColorClasses } from '@/lib/utils';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -26,8 +28,20 @@ interface AgentConfig {
   pageTreeScope?: 'children' | 'drive';
 }
 
+interface AgentMembership {
+  role: string;
+  customRole: { id: string; name: string; color: string | null } | null;
+}
+
+interface DriveRole {
+  id: string;
+  name: string;
+  color?: string | null;
+}
+
 interface PageAgentSettingsTabProps {
   pageId: string;
+  driveId: string;
   config: AgentConfig | null;
   onConfigUpdate: (config: AgentConfig) => void;
   selectedProvider: string;
@@ -57,6 +71,7 @@ interface FormData {
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
   pageId,
+  driveId,
   config,
   onConfigUpdate,
   selectedProvider,
@@ -67,6 +82,66 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   onSavingChange
 }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
+  const [membership, setMembership] = useState<AgentMembership | null | undefined>(undefined);
+  const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
+  const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
+  const [membershipSaving, setMembershipSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadMembership() {
+      try {
+        const [membersRes, rolesRes] = await Promise.all([
+          fetchWithAuth(`/api/drives/${driveId}/agents/members`),
+          fetchWithAuth(`/api/drives/${driveId}/roles`),
+        ]);
+        if (cancelled) return;
+        if (membersRes.ok) {
+          const data = await membersRes.json();
+          const entry = (data.agentMembers ?? []).find(
+            (m: { agentPageId: string }) => m.agentPageId === pageId,
+          );
+          setMembership(entry ? { role: entry.role, customRole: entry.customRole } : null);
+          setMembershipUserRole(data.currentUserRole ?? 'MEMBER');
+        }
+        if (rolesRes.ok) {
+          const data = await rolesRes.json();
+          setDriveRoles(data.roles ?? []);
+        }
+      } catch {
+        if (!cancelled) setMembership(null);
+      }
+    }
+    loadMembership();
+    return () => { cancelled = true; };
+  }, [pageId, driveId]);
+
+  const handleMembershipRoleChange = useCallback(async (value: string) => {
+    setMembershipSaving(true);
+    try {
+      let body: { role?: 'MEMBER' | 'ADMIN'; customRoleId?: string | null };
+      if (value === 'ADMIN') {
+        body = { role: 'ADMIN', customRoleId: null };
+      } else if (value === 'MEMBER') {
+        body = { role: 'MEMBER', customRoleId: null };
+      } else {
+        body = { role: 'MEMBER', customRoleId: value };
+      }
+      await patch(`/api/drives/${driveId}/agents/${pageId}`, body);
+      const customRole = value !== 'ADMIN' && value !== 'MEMBER'
+        ? (driveRoles.find((r) => r.id === value) ?? null)
+        : null;
+      setMembership({
+        role: body.role ?? membership?.role ?? 'MEMBER',
+        customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
+      });
+      toast.success('Role updated');
+    } catch {
+      toast.error('Failed to update role');
+    } finally {
+      setMembershipSaving(false);
+    }
+  }, [driveId, pageId, driveRoles, membership]);
 
   // Dynamic Ollama models state
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
@@ -473,6 +548,82 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               </p>
             </CardContent>
           )}
+        </Card>
+
+        {/* Drive Membership */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              <div>
+                <CardTitle className="text-lg">Drive Membership</CardTitle>
+                <CardDescription>
+                  This agent&apos;s role within the drive determines which pages it can read and write.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {membership === undefined ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading…
+              </div>
+            ) : membership === null ? (
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">Not a member</Badge>
+                <span className="text-xs text-muted-foreground">
+                  This agent has no explicit drive role. Add it via the Members page to grant access.
+                </span>
+              </div>
+            ) : (membershipUserRole === 'OWNER' || membershipUserRole === 'ADMIN') ? (
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium">Role</span>
+                <Select
+                  value={
+                    membership.role === 'ADMIN'
+                      ? 'ADMIN'
+                      : membership.customRole
+                      ? membership.customRole.id
+                      : 'MEMBER'
+                  }
+                  onValueChange={handleMembershipRoleChange}
+                  disabled={membershipSaving}
+                >
+                  <SelectTrigger className="w-40 h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ADMIN">Admin</SelectItem>
+                    <SelectItem value="MEMBER">Member</SelectItem>
+                    {driveRoles.length > 0 && (
+                      <>
+                        <SelectSeparator />
+                        {driveRoles.map((role) => (
+                          <SelectItem key={role.id} value={role.id}>
+                            {role.name}
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+                {membershipSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {membership.role === 'ADMIN' ? (
+                  <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">Admin</Badge>
+                ) : membership.customRole ? (
+                  <Badge className={getRoleColorClasses(membership.customRole.color ?? undefined)}>
+                    {membership.customRole.name}
+                  </Badge>
+                ) : (
+                  <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">Member</Badge>
+                )}
+              </div>
+            )}
+          </CardContent>
         </Card>
 
         {/* Tool Permissions */}
