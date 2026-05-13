@@ -4,34 +4,55 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Link2, Copy, Trash2 } from 'lucide-react';
-import { useDriveShareLink, type DriveRole } from '@/hooks/useDriveShareLink';
+import { useDriveShareLink, type DriveLink, type DriveRole } from '@/hooks/useDriveShareLink';
 
 export function DriveShareLinkSection({ driveId }: { driveId: string }) {
-  const { activeLink, shareUrl, role, setRole, isLoading, isGenerating, isRevoking, handleGenerate, handleCopy, handleRevoke } =
+  const { links, role, setRole, isLoading, isGenerating, revokingId, handleGenerate, handleCopy, handleRevoke } =
     useDriveShareLink(driveId);
+
   return (
     <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
       <div>
-        <h3 className="text-sm font-medium flex items-center gap-2"><Link2 className="h-4 w-4" />Invite link</h3>
-        <p className="text-xs text-muted-foreground mt-0.5">Anyone with this link can join the drive (must be signed in).</p>
+        <h3 className="text-sm font-medium flex items-center gap-2"><Link2 className="h-4 w-4" />Invite links</h3>
+        <p className="text-xs text-muted-foreground mt-0.5">Anyone with a link can join the drive (must be signed in).</p>
       </div>
+
       {isLoading ? (
         <div className="h-8 w-full animate-pulse rounded bg-muted" />
-      ) : activeLink ? (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary" className="text-xs capitalize">{activeLink.role.toLowerCase()}</Badge>
-            <span className="text-xs text-muted-foreground">Used {activeLink.useCount} {activeLink.useCount === 1 ? 'time' : 'times'}</span>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="flex-1" onClick={handleCopy} disabled={!shareUrl}><Copy className="mr-1.5 h-3.5 w-3.5" />Copy link</Button>
-            <Button variant="ghost" size="sm" onClick={handleRevoke} disabled={isRevoking} className="text-destructive hover:text-destructive" aria-label="Revoke invite link"><Trash2 className="h-3.5 w-3.5" /></Button>
-          </div>
-        </div>
       ) : (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <span className="text-sm">Role</span>
+        <>
+          {links.length > 0 && (
+            <div className="space-y-2">
+              {links.map((link: DriveLink) => (
+                <div key={link.id} className="flex items-center gap-2">
+                  <Badge variant="secondary" className="text-xs capitalize shrink-0">{link.role.toLowerCase()}</Badge>
+                  <span className="text-xs text-muted-foreground flex-1">{link.useCount} {link.useCount === 1 ? 'use' : 'uses'}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2"
+                    onClick={() => handleCopy(link)}
+                    disabled={!link.shareUrl}
+                    aria-label={`Copy ${link.role.toLowerCase()} invite link`}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-destructive hover:text-destructive"
+                    onClick={() => handleRevoke(link.id)}
+                    disabled={revokingId === link.id}
+                    aria-label="Revoke invite link"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className={links.length > 0 ? 'flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 pt-3' : 'flex items-center gap-2'}>
             <Select value={role} onValueChange={(v) => setRole(v as DriveRole)}>
               <SelectTrigger className="w-32 h-8"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -39,11 +60,11 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
                 <SelectItem value="ADMIN">Admin</SelectItem>
               </SelectContent>
             </Select>
+            <Button variant="outline" size="sm" onClick={handleGenerate} disabled={isGenerating} className="flex-1">
+              <Link2 className="mr-1.5 h-3.5 w-3.5" />{isGenerating ? 'Generating…' : 'New invite link'}
+            </Button>
           </div>
-          <Button variant="outline" size="sm" className="w-full" onClick={handleGenerate} disabled={isGenerating}>
-            <Link2 className="mr-1.5 h-3.5 w-3.5" />{isGenerating ? 'Generating…' : 'Generate invite link'}
-          </Button>
-        </div>
+        </>
       )}
     </div>
   );

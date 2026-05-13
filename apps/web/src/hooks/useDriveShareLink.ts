@@ -16,22 +16,20 @@ const DriveListResponseSchema = z.object({
   links: z.array(DriveLinkSchema),
 });
 
-type DriveLink = z.infer<typeof DriveLinkSchema>;
+export type DriveLink = z.infer<typeof DriveLinkSchema>;
 export type DriveRole = 'MEMBER' | 'ADMIN';
 
 export function useDriveShareLink(driveId: string) {
-  const [activeLink, setActiveLink] = useState<DriveLink | null>(null);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [links, setLinks] = useState<DriveLink[]>([]);
   const [role, setRole] = useState<DriveRole>('MEMBER');
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isRevoking, setIsRevoking] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    setActiveLink(null);
-    setShareUrl(null);
+    setLinks([]);
 
     async function loadExisting() {
       try {
@@ -39,10 +37,8 @@ export function useDriveShareLink(driveId: string) {
         if (!res.ok || cancelled) return;
         const raw = await res.json();
         const parsed = DriveListResponseSchema.safeParse(raw);
-        if (cancelled || !parsed.success || parsed.data.links.length === 0) return;
-        const link = parsed.data.links[0];
-        setActiveLink(link);
-        setShareUrl(link.shareUrl);
+        if (cancelled || !parsed.success) return;
+        setLinks(parsed.data.links);
       } catch {
         // silently fail — user can still generate a new link
       } finally {
@@ -61,8 +57,8 @@ export function useDriveShareLink(driveId: string) {
         `/api/drives/${driveId}/share-links`,
         { role }
       );
-      setShareUrl(data.shareUrl);
-      setActiveLink({ id: data.id, role, useCount: 0, shareUrl: data.shareUrl });
+      const newLink: DriveLink = { id: data.id, role, useCount: 0, shareUrl: data.shareUrl };
+      setLinks(prev => [...prev, newLink]);
       const copied = await navigator.clipboard.writeText(data.shareUrl).then(() => true).catch(() => false);
       toast.success(copied ? 'Invite link created and copied to clipboard' : 'Invite link created');
     } catch {
@@ -72,27 +68,25 @@ export function useDriveShareLink(driveId: string) {
     }
   }
 
-  async function handleCopy() {
-    if (!shareUrl) return;
-    const copied = await navigator.clipboard.writeText(shareUrl).then(() => true).catch(() => false);
+  async function handleCopy(link: DriveLink) {
+    if (!link.shareUrl) return;
+    const copied = await navigator.clipboard.writeText(link.shareUrl).then(() => true).catch(() => false);
     if (copied) toast.success('Invite link copied to clipboard');
     else toast.error('Could not copy link to clipboard');
   }
 
-  async function handleRevoke() {
-    if (!activeLink) return;
-    setIsRevoking(true);
+  async function handleRevoke(linkId: string) {
+    setRevokingId(linkId);
     try {
-      await del(`/api/drives/${driveId}/share-links/${activeLink.id}`);
-      setActiveLink(null);
-      setShareUrl(null);
+      await del(`/api/drives/${driveId}/share-links/${linkId}`);
+      setLinks(prev => prev.filter(l => l.id !== linkId));
       toast.success('Invite link revoked');
     } catch {
       toast.error('Failed to revoke invite link');
     } finally {
-      setIsRevoking(false);
+      setRevokingId(prev => (prev === linkId ? null : prev));
     }
   }
 
-  return { activeLink, shareUrl, role, setRole, isLoading, isGenerating, isRevoking, handleGenerate, handleCopy, handleRevoke };
+  return { links, role, setRole, isLoading, isGenerating, revokingId, handleGenerate, handleCopy, handleRevoke };
 }
