@@ -246,9 +246,13 @@ export async function PATCH(
         updatedFields: Object.keys(updateData),
       });
 
-      await broadcastPageEvent(
-        createPageEventPayload(responsePage.driveId, pageId, 'updated'),
-      );
+      try {
+        await broadcastPageEvent(
+          createPageEventPayload(responsePage.driveId, pageId, 'updated'),
+        );
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast agent config update', broadcastError as Error);
+      }
     }
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'update_agent_config', updatedFields: Object.keys(updateData) } });
