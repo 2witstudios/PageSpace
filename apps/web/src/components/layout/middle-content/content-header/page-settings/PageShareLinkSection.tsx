@@ -2,17 +2,28 @@
 
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
 import { Link2, Copy, Trash2 } from 'lucide-react';
-import { usePageShareLink } from '@/hooks/usePageShareLink';
+import { usePageShareLink, type ShareLinkPermissions } from '@/hooks/usePageShareLink';
 
-export function PageShareLinkSection({ pageId }: { pageId: string }) {
+function permissionLabel(permissions: string[]): string {
+  const labels: string[] = [];
+  if (permissions.includes('VIEW'))   labels.push('View');
+  if (permissions.includes('EDIT'))   labels.push('Edit');
+  if (permissions.includes('SHARE'))  labels.push('Share');
+  if (permissions.includes('DELETE')) labels.push('Delete');
+  if (labels.length === 1) return 'View only';
+  return labels.join(', ');
+}
+
+interface PageShareLinkSectionProps {
+  pageId: string;
+  permissions: ShareLinkPermissions;
+}
+
+export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSectionProps) {
   const {
     activeLink,
     shareUrl,
-    includeEdit,
-    setIncludeEdit,
     isLoading,
     isGenerating,
     isRevoking,
@@ -64,7 +75,7 @@ export function PageShareLinkSection({ pageId }: { pageId: string }) {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-xs">
-              {activeLink.permissions.includes('EDIT') ? 'View + Edit' : 'View only'}
+              {permissionLabel(activeLink.permissions)}
             </Badge>
             <span className="text-xs text-muted-foreground">
               Used {activeLink.useCount} {activeLink.useCount === 1 ? 'time' : 'times'}
@@ -72,28 +83,16 @@ export function PageShareLinkSection({ pageId }: { pageId: string }) {
           </div>
         </div>
       ) : (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <Switch
-              id="share-link-edit"
-              checked={includeEdit}
-              onCheckedChange={setIncludeEdit}
-            />
-            <Label htmlFor="share-link-edit" className="text-sm cursor-pointer">
-              Allow editing
-            </Label>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={handleGenerate}
-            disabled={isGenerating}
-          >
-            <Link2 className="mr-1.5 h-3.5 w-3.5" />
-            {isGenerating ? 'Generating…' : 'Generate link'}
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full"
+          onClick={() => handleGenerate(permissions)}
+          disabled={isGenerating}
+        >
+          <Link2 className="mr-1.5 h-3.5 w-3.5" />
+          {isGenerating ? 'Generating…' : 'Generate link'}
+        </Button>
       )}
     </div>
   );

@@ -11,7 +11,7 @@ import { z } from 'zod/v4';
 const AUTH_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
-const PermissionEnum = z.enum(['VIEW', 'EDIT']);
+const PermissionEnum = z.enum(['VIEW', 'EDIT', 'SHARE', 'DELETE']);
 
 const CreateBodySchema = z.object({
   permissions: z.array(PermissionEnum).optional(),

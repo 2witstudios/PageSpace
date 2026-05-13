@@ -355,8 +355,10 @@ export async function redeemPageShareLink(
     set: { acceptedAt: new Date() },
   });
 
-  const canView = link.permissions.includes('VIEW');
-  const canEdit = link.permissions.includes('EDIT');
+  const canView   = link.permissions.includes('VIEW');
+  const canEdit   = link.permissions.includes('EDIT');
+  const canShare  = link.permissions.includes('SHARE');
+  const canDelete = link.permissions.includes('DELETE');
 
   await db
     .insert(pagePermissions)
@@ -366,16 +368,18 @@ export async function redeemPageShareLink(
       userId: ctx.userId,
       canView,
       canEdit,
-      canShare: false,
-      canDelete: false,
+      canShare,
+      canDelete,
       grantedBy: null,
       grantedAt: new Date(),
     })
     .onConflictDoUpdate({
       target: [pagePermissions.pageId, pagePermissions.userId],
       set: {
-        canView: sql`${pagePermissions.canView} OR EXCLUDED."canView"`,
-        canEdit: sql`${pagePermissions.canEdit} OR EXCLUDED."canEdit"`,
+        canView:   sql`${pagePermissions.canView}   OR EXCLUDED."canView"`,
+        canEdit:   sql`${pagePermissions.canEdit}   OR EXCLUDED."canEdit"`,
+        canShare:  sql`${pagePermissions.canShare}  OR EXCLUDED."canShare"`,
+        canDelete: sql`${pagePermissions.canDelete} OR EXCLUDED."canDelete"`,
         grantedAt: new Date(),
       },
     });
