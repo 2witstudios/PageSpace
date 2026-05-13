@@ -322,10 +322,13 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
             }
           : null
       );
+      const targetEventId = selectedEvent.id;
       try {
-        const updatedAttendees = await addAttendees(selectedEvent.id, [userId]);
+        const updatedAttendees = await addAttendees(targetEventId, [userId]);
         if (updatedAttendees.length > 0) {
-          setSelectedEvent((prev) => prev ? { ...prev, attendees: updatedAttendees } : null);
+          setSelectedEvent((prev) =>
+            prev && prev.id === targetEventId ? { ...prev, attendees: updatedAttendees } : prev
+          );
         }
       } catch {
         setSelectedEvent(prevEvent);
