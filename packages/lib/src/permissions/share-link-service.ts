@@ -30,6 +30,7 @@ export interface DriveShareLinkView {
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
+  token: string;
 }
 
 export interface PageShareLinkView {
@@ -38,6 +39,7 @@ export interface PageShareLinkView {
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
+  token: string;
 }
 
 export interface DriveShareLinkRedemption {
@@ -97,6 +99,7 @@ export async function createDriveShareLink(
       id: createId(),
       driveId,
       tokenHash: hash,
+      token,
       role,
       createdBy: ctx.userId,
       expiresAt: opts.expiresAt ?? null,
@@ -144,6 +147,7 @@ export async function listDriveShareLinks(
       useCount: driveShareLinks.useCount,
       expiresAt: driveShareLinks.expiresAt,
       createdAt: driveShareLinks.createdAt,
+      token: driveShareLinks.token,
     })
     .from(driveShareLinks)
     .where(
@@ -250,6 +254,7 @@ export async function createPageShareLink(
       id: createId(),
       pageId,
       tokenHash: hash,
+      token,
       permissions: perms,
       createdBy: ctx.userId,
       expiresAt: opts.expiresAt ?? null,
@@ -297,6 +302,7 @@ export async function listPageShareLinks(
       useCount: pageShareLinks.useCount,
       expiresAt: pageShareLinks.expiresAt,
       createdAt: pageShareLinks.createdAt,
+      token: pageShareLinks.token,
     })
     .from(pageShareLinks)
     .where(

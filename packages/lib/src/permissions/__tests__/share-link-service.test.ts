@@ -46,11 +46,13 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/schema/share-links', () => ({
   driveShareLinks: {
     id: 'dsl.id', driveId: 'dsl.driveId', tokenHash: 'dsl.tokenHash',
+    token: 'dsl.token',
     role: 'dsl.role', createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
     expiresAt: 'dsl.expiresAt', isActive: 'dsl.isActive', useCount: 'dsl.useCount',
   },
   pageShareLinks: {
     id: 'psl.id', pageId: 'psl.pageId', tokenHash: 'psl.tokenHash',
+    token: 'psl.token',
     permissions: 'psl.permissions', createdBy: 'psl.createdBy', createdAt: 'psl.createdAt',
     expiresAt: 'psl.expiresAt', isActive: 'psl.isActive', useCount: 'psl.useCount',
   },
@@ -224,7 +226,7 @@ describe('listDriveShareLinks', () => {
   it('returns link list with expected view fields', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     makeSelectChain([
-      { id: LINK_ID, role: 'MEMBER', useCount: 3, expiresAt: null, createdAt: new Date() },
+      { id: LINK_ID, role: 'MEMBER', useCount: 3, expiresAt: null, createdAt: new Date(), token: 'ps_share_testtoken' },
     ]);
 
     const result = await listDriveShareLinks(makeCtx(), DRIVE_ID);
@@ -234,6 +236,7 @@ describe('listDriveShareLinks', () => {
       expect(result.data[0].id).toBe(LINK_ID);
       expect(result.data[0].useCount).toBe(3);
       expect(result.data[0].role).toBe('MEMBER');
+      expect(result.data[0].token).toBe('ps_share_testtoken');
     }
   });
 });
@@ -390,7 +393,7 @@ describe('listPageShareLinks', () => {
   it('returns link list with expected view fields', async () => {
     vi.mocked(canUserSharePage).mockResolvedValue(true);
     makeSelectChain([
-      { id: LINK_ID, permissions: ['VIEW'], useCount: 1, expiresAt: null, createdAt: new Date() },
+      { id: LINK_ID, permissions: ['VIEW'], useCount: 1, expiresAt: null, createdAt: new Date(), token: 'ps_share_testtoken' },
     ]);
 
     const result = await listPageShareLinks(makeCtx(), PAGE_ID);
@@ -400,6 +403,7 @@ describe('listPageShareLinks', () => {
       expect(result.data[0].id).toBe(LINK_ID);
       expect(result.data[0].permissions).toEqual(['VIEW']);
       expect(result.data[0].useCount).toBe(1);
+      expect(result.data[0].token).toBe('ps_share_testtoken');
     }
   });
 });

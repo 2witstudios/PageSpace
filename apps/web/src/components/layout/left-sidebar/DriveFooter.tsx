@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Settings,
   Trash2,
+  UserPlus,
   Users,
   Zap,
 } from "lucide-react";
@@ -74,6 +75,12 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
       label: "Activity",
       href: `/dashboard/${driveId}/activity`,
       show: true,
+    },
+    {
+      icon: UserPlus,
+      label: "Invite",
+      href: `/dashboard/${driveId}/members`,
+      show: canManage,
     },
     {
       icon: Users,

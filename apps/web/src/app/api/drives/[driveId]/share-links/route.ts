@@ -31,7 +31,13 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  return NextResponse.json({ links: result.data });
+  const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || '';
+  return NextResponse.json({
+    links: result.data.map((link) => ({
+      ...link,
+      shareUrl: link.token ? `${appUrl}/s/${link.token}` : null,
+    })),
+  });
 }
 
 export async function POST(
