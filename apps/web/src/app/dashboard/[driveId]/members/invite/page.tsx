@@ -451,6 +451,7 @@ export default function InviteMemberPage() {
                     driveId={driveId}
                     permissions={permissions}
                     onChange={handlePermissionChange}
+                    readOnlyDriveRoot
                   />
                 </CardContent>
               </Card>

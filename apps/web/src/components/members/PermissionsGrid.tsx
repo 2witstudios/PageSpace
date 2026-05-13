@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, HardDrive } from 'lucide-react';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -25,6 +25,10 @@ interface PermissionsGridProps {
   userId?: string;
   permissions: Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
   onChange: (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => void;
+  /** When true, the drive root row is shown as informational only (checkboxes disabled).
+   *  Use in member management context where drive-level access is derived from membership role,
+   *  not from the permissions JSONB. */
+  readOnlyDriveRoot?: boolean;
 }
 
 export interface PermissionsGridRef {
@@ -32,7 +36,7 @@ export interface PermissionsGridRef {
 }
 
 export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridProps>(function PermissionsGrid(
-  { driveId, userId, permissions, onChange },
+  { driveId, userId, permissions, onChange, readOnlyDriveRoot = false },
   ref
 ) {
   const [pages, setPages] = useState<PageNode[]>([]);
@@ -49,13 +53,14 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const applyPermissionsToTree = useCallback((rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>, nodes: PageNode[]) => {
     const applyRecursive = (permsMap: typeof rolePerms, nodeList: PageNode[]) => {
       nodeList.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         const perms = permsMap[node.id];
         onChange(node.id, perms || { canView: false, canEdit: false, canShare: false });
         if (node.children) applyRecursive(permsMap, node.children);
       });
     };
     applyRecursive(rolePerms, nodes);
-  }, [onChange]);
+  }, [onChange, readOnlyDriveRoot]);
 
   // Expose applyRolePermissions to parent via ref
   useImperativeHandle(ref, () => ({
@@ -176,6 +181,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const selectAll = () => {
     const applyToAll = (nodes: PageNode[]) => {
       nodes.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         onChange(node.id, { canView: true, canEdit: false, canShare: false });
         if (node.children) applyToAll(node.children);
       });
@@ -186,6 +192,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const selectAllPermissions = () => {
     const applyToAll = (nodes: PageNode[]) => {
       nodes.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         onChange(node.id, { canView: true, canEdit: true, canShare: true });
         if (node.children) applyToAll(node.children);
       });
@@ -196,6 +203,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const selectNone = () => {
     const clearAll = (nodes: PageNode[]) => {
       nodes.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         onChange(node.id, { canView: false, canEdit: false, canShare: false });
         if (node.children) clearAll(node.children);
       });
@@ -203,7 +211,49 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
     clearAll(pages);
   };
 
+  const renderDriveRootRow = (page: PageNode) => {
+    const perms = permissions.get(page.id) || { canView: false, canEdit: false, canShare: false };
+    return (
+      <div key={page.id} className="flex items-center p-2 bg-blue-50 dark:bg-blue-900/20 border-b-2 border-blue-200 dark:border-blue-700">
+        <div className="flex-1 flex items-center space-x-2">
+          <HardDrive className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+          <span className="font-semibold truncate">{page.title}</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
+            {readOnlyDriveRoot
+              ? '(drive root — access derived from membership role)'
+              : '(drive root — controls root-level page creation)'}
+          </span>
+        </div>
+        <div className="w-[100px] flex justify-center">
+          <Checkbox
+            checked={perms.canView}
+            disabled={readOnlyDriveRoot}
+            onCheckedChange={(checked) => handlePermissionChange(page.id, 'canView', !!checked)}
+          />
+        </div>
+        <div className="w-[100px] flex justify-center">
+          <Checkbox
+            checked={perms.canEdit}
+            disabled={readOnlyDriveRoot || !perms.canView}
+            onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)}
+          />
+        </div>
+        <div className="w-[100px] flex justify-center">
+          <Checkbox
+            checked={perms.canShare}
+            disabled={readOnlyDriveRoot || !perms.canView}
+            onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)}
+          />
+        </div>
+      </div>
+    );
+  };
+
   const renderPageRow = (page: PageNode, depth: number = 0) => {
+    if (page.type === 'DRIVE') {
+      return renderDriveRootRow(page);
+    }
+
     const perms = permissions.get(page.id) || { canView: false, canEdit: false, canShare: false };
     const hasChildren = page.children && page.children.length > 0;
     const isExpanded = expandedNodes.has(page.id);
@@ -212,7 +262,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
       <div key={page.id}>
         <div className="flex items-center p-2 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
           {/* Page Name with Indentation */}
-          <div 
+          <div
             className="flex-1 flex items-center cursor-pointer"
             style={{ paddingLeft: `${depth * 20}px` }}
             onClick={() => hasChildren && toggleExpanded(page.id)}
@@ -238,30 +288,30 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
               </button>
             )}
           </div>
-          
+
           {/* Permission Checkboxes */}
           <div className="w-[100px] flex justify-center">
-            <Checkbox 
+            <Checkbox
               checked={perms.canView}
               onCheckedChange={(checked) => handlePermissionChange(page.id, 'canView', !!checked)}
             />
           </div>
           <div className="w-[100px] flex justify-center">
-            <Checkbox 
+            <Checkbox
               checked={perms.canEdit}
               disabled={!perms.canView}
               onCheckedChange={(checked) => handlePermissionChange(page.id, 'canEdit', !!checked)}
             />
           </div>
           <div className="w-[100px] flex justify-center">
-            <Checkbox 
+            <Checkbox
               checked={perms.canShare}
               disabled={!perms.canView}
               onCheckedChange={(checked) => handlePermissionChange(page.id, 'canShare', !!checked)}
             />
           </div>
         </div>
-        
+
         {/* Render Children */}
         {hasChildren && isExpanded && (
           <div>

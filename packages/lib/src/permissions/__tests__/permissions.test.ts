@@ -206,25 +206,43 @@ describe('getUserAccessLevel', () => {
     expect(loggers.api.debug).toHaveBeenCalled();
   });
 
-  it('returns null when page not found', async () => {
+  it('returns null when page not found and not a drive id either', async () => {
     mockValidators(true, true);
-    const limitFn = vi.fn().mockResolvedValue([]);
-    const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
-    const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
-    const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.select)
+      // page lookup → not found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // drive fallback → not found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
   });
 
-  it('logs page not found debug when silent=false', async () => {
+  it('logs page not found debug when silent=false and id is not a drive', async () => {
     mockValidators(true, true);
-    const limitFn = vi.fn().mockResolvedValue([]);
-    const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
-    const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
-    const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
 
     await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
@@ -437,6 +455,116 @@ describe('getUserAccessLevel', () => {
 
     await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Drive-as-root-node: nodeId is a drive ID
+  // -------------------------------------------------------------------------
+
+  it('returns full access when nodeId is a drive and user is the drive owner', async () => {
+    mockValidators(true, true);
+    vi.mocked(db.select)
+      // page lookup → not found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // drive fallback → owner
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: VALID_USER }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('returns full access when nodeId is a drive and user is an ADMIN member', async () => {
+    mockValidators(true, true);
+    vi.mocked(db.select)
+      // page lookup → not found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // drive fallback → found, different owner
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-owner' }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // membership lookup → ADMIN
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'ADMIN' }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('returns member access (canEdit: true, canDelete: false) when nodeId is a drive and user is a MEMBER', async () => {
+    mockValidators(true, true);
+    vi.mocked(db.select)
+      // page lookup → not found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // drive fallback → found, different owner
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-owner' }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // membership lookup → MEMBER
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER' }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('returns null when nodeId is a drive and user has no membership', async () => {
+    mockValidators(true, true);
+    vi.mocked(db.select)
+      // page lookup → not found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // drive fallback → found
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-owner' }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // membership lookup → none
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    expect(result).toBeNull();
   });
 });
 

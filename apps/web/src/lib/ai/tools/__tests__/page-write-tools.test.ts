@@ -14,7 +14,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: vi.fn(),
     canUserDeletePage: vi.fn(),
-    isUserDriveMember: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+    getAgentAccessLevel: vi.fn(),
+    hasAgentDriveMembership: vi.fn(),
+    getAgentAccessiblePagesInDrive: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
     logPageActivity: vi.fn(),
@@ -112,14 +116,15 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
-const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
+const mockGetAgentAccessLevel = vi.mocked(getAgentAccessLevel);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
@@ -370,14 +375,9 @@ describe('page-write-tools', () => {
       expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('non-existent');
     });
 
-    it('creates page successfully at root level for non-owner member', async () => {
-      // Arrange — actor is a member, NOT the drive owner, to verify the new
-      // membership check (not the old owner-only guard) is what grants access.
-      mockDriveRepo.findByIdBasic.mockResolvedValue({
-        id: 'drive-1',
-        ownerId: 'owner-999',
-      });
-      mockIsUserDriveMember.mockResolvedValue(true);
+    it('creates page successfully at root level for a drive member (user)', async () => {
+      mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+      mockCanUserEditPage.mockResolvedValue(true);
       mockPageRepo.getNextPosition.mockResolvedValue(1);
       mockPageRepo.create.mockResolvedValue({
         id: 'new-page-1',
@@ -390,34 +390,83 @@ describe('page-write-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      // Act
       const result = await pageWriteTools.create_page.execute!(
         { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
         context
       );
 
-      // Assert: observable outcomes
-      if ('error' in result) throw new Error(`Expected success but got error`);
+      if ('error' in result) throw new Error('Expected success');
       const success = result as { success: boolean; id: string; title: string };
       expect(success.success).toBe(true);
       expect(success.id).toBe('new-page-1');
-      expect(success.title).toBe('New Page');
-
-      // Verify membership check was used, not the old owner-only guard
-      expect(mockIsUserDriveMember).toHaveBeenCalledWith('user-123', 'drive-1');
-
-      // Verify repository was called with correct payload
+      // drive treated as root parent: canUserEditPage called with driveId
+      expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'drive-1');
       expect(mockPageRepo.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          title: 'New Page',
-          type: 'DOCUMENT',
-          content: '',
-          position: 1,
-          driveId: 'drive-1',
-          parentId: null,
-          isTrashed: false,
-        })
+        expect.objectContaining({ title: 'New Page', type: 'DOCUMENT', driveId: 'drive-1', parentId: null })
       );
+    });
+
+    it('blocks root-level creation when user lacks drive edit access', async () => {
+      mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+      mockCanUserEditPage.mockResolvedValue(false);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+          context
+        )
+      ).rejects.toThrow('Insufficient permissions to create pages in this drive');
+    });
+
+    it('allows ADMIN agent to create root-level pages', async () => {
+      mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: true, canDelete: true });
+      mockPageRepo.getNextPosition.mockResolvedValue(1);
+      mockPageRepo.create.mockResolvedValue({ id: 'new-page-1', title: 'New Page', type: 'DOCUMENT' });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+        } as unknown as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.create_page.execute!(
+        { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+        context
+      );
+
+      if ('error' in result) throw new Error('Expected success');
+      const success = result as { success: boolean; id: string };
+      expect(success.success).toBe(true);
+      // agent permission checked with drive ID as the node
+      expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-page-1', 'drive-1');
+    });
+
+    it('blocks MEMBER agent (no custom role) from root-level page creation', async () => {
+      mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          chatSource: { type: 'page', agentPageId: 'agent-page-1' },
+        } as unknown as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+          context
+        )
+      ).rejects.toThrow('Insufficient permissions to create pages in this drive');
     });
   });
 

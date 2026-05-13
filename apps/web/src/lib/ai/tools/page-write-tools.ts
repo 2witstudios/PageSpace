@@ -1,6 +1,5 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canActorEditPage, canActorDeletePage } from './actor-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
@@ -552,18 +551,18 @@ export const pageWriteTools = {
           }
         }
 
-        // Check permissions for page creation
+        // Check permissions for page creation.
+        // The drive is the root parent node: creating a child anywhere requires
+        // canEdit on the parent. For root-level pages the drive is the parent.
         if (parentId) {
-          // Creating in a folder - check permissions on parent page
-          const canEdit = await canActorEditPage(context as ToolExecutionContext,parentId);
+          const canEdit = await canActorEditPage(context as ToolExecutionContext, parentId);
           if (!canEdit) {
             throw new Error('Insufficient permissions to create pages in this folder');
           }
         } else {
-          // Creating at root level - any drive member can create
-          const isMember = await isUserDriveMember(userId, driveId);
-          if (!isMember) {
-            throw new Error('You must be a drive member to create pages at the root level');
+          const canEdit = await canActorEditPage(context as ToolExecutionContext, driveId);
+          if (!canEdit) {
+            throw new Error('Insufficient permissions to create pages in this drive');
           }
         }
 
