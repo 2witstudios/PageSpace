@@ -34,20 +34,23 @@ export const buildOAuthSigninBody = ({
 export interface PostNativeAuthRedirectInput {
   isNewUser?: boolean;
   invitedDriveId?: string | null;
+  returnUrl?: string;
 }
 
 /**
  * Decide where to land a user after a successful native (iOS) OAuth flow.
  *
- * Precedence: invite-consumed drive > new-user welcome > /dashboard.
+ * Precedence: invite-consumed drive > returnUrl > new-user welcome > /dashboard.
  * Pure function — extracted so the redirect logic can be tested without
  * rendering the hook.
  */
 export const buildPostNativeAuthRedirect = ({
   isNewUser,
   invitedDriveId,
+  returnUrl,
 }: PostNativeAuthRedirectInput): string => {
   if (invitedDriveId) return `/dashboard/${invitedDriveId}?invited=1`;
+  if (returnUrl) return returnUrl;
   if (isNewUser) return '/dashboard?welcome=true';
   return '/dashboard';
 };
@@ -94,6 +97,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
   const handleNativeSuccess = async (result: {
     isNewUser?: boolean;
     invitedDriveId?: string | null;
+    returnUrl?: string;
     user?: { id: string; name: string | null; email: string | null; image?: string | null };
   }) => {
     const { useAuthStore } = await import('@/stores/useAuthStore');
@@ -104,6 +108,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
     router.replace(buildPostNativeAuthRedirect({
       isNewUser: result.isNewUser,
       invitedDriveId: result.invitedDriveId,
+      returnUrl: result.returnUrl,
     }));
   };
 
@@ -179,7 +184,10 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
         await import('@/lib/ios-google-auth');
 
       if (isNativeGoogleAuthAvailable()) {
-        const result = await nativeSignIn(inviteToken ? { inviteToken } : {});
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {
@@ -207,7 +215,10 @@ export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: Use
         await import('@/lib/ios-apple-auth');
 
       if (isNativeAppleAuthAvailable()) {
-        const result = await nativeSignIn(inviteToken ? { inviteToken } : {});
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {

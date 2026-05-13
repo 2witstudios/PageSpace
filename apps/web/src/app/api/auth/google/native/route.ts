@@ -33,6 +33,7 @@ const nativeAuthSchema = z.object({
   deviceId: z.string().min(1, 'Device ID is required'),
   deviceName: z.string().optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
+  returnUrl: z.string().max(2048).optional(),
 });
 
 /**
@@ -73,7 +74,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken, platform, deviceId, deviceName, inviteToken } = validation.data;
+    const { idToken, platform, deviceId, deviceName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
+    const { isSafeReturnUrl } = await import('@/lib/auth/auth-helpers');
+    const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
     // Validate required environment variables
     if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_IOS_CLIENT_ID) {
@@ -278,6 +281,7 @@ export async function POST(req: Request) {
       invitedPageId: inviteResult.invitedPageId,
       invitedConnectionId: inviteResult.connectionId,
       ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
+      ...(returnUrl && { returnUrl }),
       user: {
         id: user.id,
         name: user.name,

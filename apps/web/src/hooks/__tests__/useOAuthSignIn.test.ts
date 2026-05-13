@@ -43,6 +43,25 @@ describe('buildOAuthSigninBody', () => {
     });
     expect(body).not.toHaveProperty('inviteToken');
   });
+
+  it('includes returnUrl when provided', () => {
+    const body = buildOAuthSigninBody({
+      platform: 'web',
+      deviceId: 'dev-1',
+      deviceName: 'Browser',
+      returnUrl: '/s/tok-abc123',
+    });
+    expect(body.returnUrl).toBe('/s/tok-abc123');
+  });
+
+  it('omits returnUrl when undefined', () => {
+    const body = buildOAuthSigninBody({
+      platform: 'web',
+      deviceId: 'dev-1',
+      deviceName: 'Browser',
+    });
+    expect(body).not.toHaveProperty('returnUrl');
+  });
 });
 
 describe('buildPostNativeAuthRedirect', () => {
@@ -68,5 +87,18 @@ describe('buildPostNativeAuthRedirect', () => {
 
   it('treats null invitedDriveId as no-invite', () => {
     expect(buildPostNativeAuthRedirect({ invitedDriveId: null })).toBe('/dashboard');
+  });
+
+  it('uses returnUrl when no invite was consumed and user is not new', () => {
+    expect(buildPostNativeAuthRedirect({ returnUrl: '/s/tok-abc' })).toBe('/s/tok-abc');
+  });
+
+  it('uses returnUrl over welcome redirect when user is new but has no invite', () => {
+    expect(buildPostNativeAuthRedirect({ isNewUser: true, returnUrl: '/s/tok-abc' })).toBe('/s/tok-abc');
+  });
+
+  it('invite-consumed drive wins over returnUrl', () => {
+    expect(buildPostNativeAuthRedirect({ invitedDriveId: 'drive-123', returnUrl: '/s/tok-abc' }))
+      .toBe('/dashboard/drive-123?invited=1');
   });
 });

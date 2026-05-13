@@ -17,7 +17,7 @@ interface DriveShareAcceptProps {
 export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const { csrfToken } = useCSRFToken();
+  const { csrfToken, isLoading: csrfLoading, error: csrfError } = useCSRFToken();
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,7 +56,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
 
-  if (authLoading || (isAuthenticated && (!csrfToken || isPending) && !error)) {
+  if (authLoading || (isAuthenticated && (csrfLoading || isPending) && !error)) {
     return (
       <div className="text-center space-y-4">
         <p className="text-sm text-muted-foreground">
@@ -110,14 +110,16 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
     );
   }
 
-  if (error) {
+  if (csrfError || error) {
     return (
       <div className="text-center space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
             Something went wrong
           </h1>
-          <p className="mt-3 text-sm text-muted-foreground">{error}</p>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {error ?? 'Something went wrong. Please try again.'}
+          </p>
         </div>
         <Link href="/dashboard">
           <Button variant="outline" className="w-full">Go to dashboard</Button>
