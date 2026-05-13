@@ -194,10 +194,10 @@ export async function PATCH(
     }
 
     if (pageTreeScope !== undefined) {
-      // Validate scope value
-      if (pageTreeScope === 'children' || pageTreeScope === 'drive') {
-        updateData.pageTreeScope = pageTreeScope;
+      if (pageTreeScope !== 'children' && pageTreeScope !== 'drive') {
+        return NextResponse.json({ error: 'Invalid pageTreeScope value' }, { status: 400 });
       }
+      updateData.pageTreeScope = pageTreeScope;
     }
 
     if (toolAccessScope !== undefined) {
