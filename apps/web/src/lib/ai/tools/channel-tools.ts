@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canActorEditPage } from './actor-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db'
@@ -88,7 +89,7 @@ export const channelTools = {
         }
 
         // Check edit permissions
-        const canEdit = await canUserEditPage(userId, channel.id);
+        const canEdit = await canActorEditPage(context, channel.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to send messages in this channel');
         }

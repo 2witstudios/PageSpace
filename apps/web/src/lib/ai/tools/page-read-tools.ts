@@ -6,7 +6,8 @@ import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
-import { getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
+import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { getActorAccessiblePagesInDrive } from './actor-permissions';
 import { getPageTypeEmoji, isFolderPage, isCodePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
@@ -36,7 +37,7 @@ export const pageReadTools = {
         }
 
         // Get all pages user has access to in the drive (optimized single query)
-        const visiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
 
         // Sort by position to maintain order
         visiblePages.sort((a, b) => a.position - b.position);
