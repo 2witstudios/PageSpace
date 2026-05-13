@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, Trash2, GripVertical, Star, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { useSocket } from '@/hooks/useSocket';
-import { DriveEventPayload } from '@/lib/websocket';
+import type { DriveEventPayload } from '@/lib/websocket';
 import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { RoleEditor } from './RoleEditor';

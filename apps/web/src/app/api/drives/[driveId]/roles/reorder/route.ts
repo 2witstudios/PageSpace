@@ -51,9 +51,13 @@ export async function PATCH(
 
     await reorderDriveRoles(driveId, roleIds);
 
-    // Broadcast role change so other admins see it live
-    const recipientUserIds = await getDriveRecipientUserIds(driveId);
-    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role reorder event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);

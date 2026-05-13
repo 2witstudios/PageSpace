@@ -115,9 +115,13 @@ export async function PATCH(
       permissions,
     });
 
-    // Broadcast role change so other admins see it live
-    const recipientUserIds = await getDriveRecipientUserIds(driveId);
-    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role update event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
@@ -173,9 +177,13 @@ export async function DELETE(
 
     await deleteDriveRole(driveId, roleId);
 
-    // Broadcast role change so other admins see it live
-    const recipientUserIdsForDelete = await getDriveRecipientUserIds(driveId);
-    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIdsForDelete);
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIdsForDelete = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIdsForDelete);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role delete event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
