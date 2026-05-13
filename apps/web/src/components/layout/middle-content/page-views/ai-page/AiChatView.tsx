@@ -850,6 +850,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           <PageAgentSettingsTab
             ref={agentSettingsRef}
             pageId={page.id}
+            driveId={driveId}
             config={agentConfig}
             onConfigUpdate={setAgentConfig}
             selectedProvider={selectedProvider}

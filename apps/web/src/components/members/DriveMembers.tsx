@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
+import { AgentMemberRow, type AgentMember } from './AgentMemberRow';
 import { PendingInvitesSection } from './PendingInvitesSection';
 import { DriveShareLinkSection } from './DriveShareLinkSection';
 import type { PendingInvite } from './PendingInviteRow';
@@ -50,6 +51,12 @@ interface DriveMemberSocketEvent {
   operation?: string;
 }
 
+interface DriveRole {
+  id: string;
+  name: string;
+  color?: string | null;
+}
+
 const DRIVE_MEMBER_EVENTS = [
   'drive:member_added',
   'drive:member_removed',
@@ -58,6 +65,8 @@ const DRIVE_MEMBER_EVENTS = [
 
 export function DriveMembers({ driveId }: DriveMembersProps) {
   const [members, setMembers] = useState<DriveMember[]>([]);
+  const [agentMembers, setAgentMembers] = useState<AgentMember[]>([]);
+  const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
@@ -72,13 +81,26 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const fetchMembers = useCallback(async () => {
     const currentSeq = ++requestSeqRef.current;
     try {
-      const response = await fetchWithAuth(`/api/drives/${driveId}/members`);
-      if (!response.ok) throw new Error('Failed to fetch members');
-      const data = await response.json();
+      const [membersRes, agentMembersRes, rolesRes] = await Promise.all([
+        fetchWithAuth(`/api/drives/${driveId}/members`),
+        fetchWithAuth(`/api/drives/${driveId}/agents/members`),
+        fetchWithAuth(`/api/drives/${driveId}/roles`),
+      ]);
+      if (!membersRes.ok) throw new Error('Failed to fetch members');
+      const data = await membersRes.json();
       if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
       setPendingInvites(data.pendingInvites ?? []);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
+
+      if (agentMembersRes.ok) {
+        const agentData = await agentMembersRes.json();
+        setAgentMembers(agentData.agentMembers ?? []);
+      }
+      if (rolesRes.ok) {
+        const rolesData = await rolesRes.json();
+        setDriveRoles(rolesData.roles ?? []);
+      }
     } catch (error) {
       if (currentSeq !== requestSeqRef.current) return;
       console.error('Error fetching members:', error);
@@ -135,6 +157,17 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         variant: 'destructive',
       });
     }
+  };
+
+  const handleAgentRoleChange = (agentPageId: string, updated: Partial<AgentMember>) => {
+    setAgentMembers((prev) =>
+      prev.map((a) => (a.agentPageId === agentPageId ? { ...a, ...updated } : a)),
+    );
+  };
+
+  const handleRemoveAgent = (agentPageId: string) => {
+    setAgentMembers((prev) => prev.filter((a) => a.agentPageId !== agentPageId));
+    toast({ title: 'Agent removed', description: 'Agent member removed successfully' });
   };
 
   const handleRevokeInvite = async (inviteId: string) => {
@@ -200,6 +233,34 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
             />
           ))
         )}
+      </div>
+
+      <div>
+        <div className="mb-3">
+          <h2 className="text-lg font-semibold">Agents ({agentMembers.length})</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            AI agents with access to this drive
+          </p>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+          {agentMembers.length === 0 ? (
+            <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
+              No agents added. Agents can be given drive access to read and write pages.
+            </div>
+          ) : (
+            agentMembers.map((agent) => (
+              <AgentMemberRow
+                key={agent.id}
+                agent={agent}
+                driveId={driveId}
+                currentUserRole={currentUserRole}
+                driveRoles={driveRoles}
+                onRoleChange={handleAgentRoleChange}
+                onRemove={handleRemoveAgent}
+              />
+            ))
+          )}
+        </div>
       </div>
 
       <PendingInvitesSection
