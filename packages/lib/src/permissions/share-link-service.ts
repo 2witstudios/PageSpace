@@ -150,7 +150,11 @@ export async function listDriveShareLinks(
 export async function redeemDriveShareLink(
   ctx: EnforcedAuthContext,
   rawToken: string
-): Promise<ShareLinkResult<{ driveId: string }>> {
+): Promise<
+  | { ok: true; data: { driveId: string; linkId: string } }
+  | { ok: false; error: 'ALREADY_MEMBER'; driveId: string }
+  | { ok: false; error: 'NOT_FOUND' }
+> {
   const tokenHash = hashToken(rawToken);
 
   const rows = await db
@@ -173,7 +177,7 @@ export async function redeemDriveShareLink(
   const link = rows[0];
 
   const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
-  if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER' };
+  if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
   await db.insert(driveMembers).values({
     id: createId(),
@@ -181,14 +185,17 @@ export async function redeemDriveShareLink(
     userId: ctx.userId,
     role: link.role,
     acceptedAt: new Date(),
-  }).onConflictDoNothing();
+  }).onConflictDoUpdate({
+    target: [driveMembers.driveId, driveMembers.userId],
+    set: { acceptedAt: new Date(), role: link.role },
+  });
 
   await db
     .update(driveShareLinks)
     .set({ useCount: sql`${driveShareLinks.useCount} + 1` })
     .where(eq(driveShareLinks.id, link.id));
 
-  return { ok: true, data: { driveId: link.driveId } };
+  return { ok: true, data: { driveId: link.driveId, linkId: link.id } };
 }
 
 // ============================================================================
@@ -279,7 +286,7 @@ export async function listPageShareLinks(
 export async function redeemPageShareLink(
   ctx: EnforcedAuthContext,
   rawToken: string
-): Promise<ShareLinkResult<{ pageId: string; driveId: string }>> {
+): Promise<ShareLinkResult<{ pageId: string; driveId: string; linkId: string }>> {
   const tokenHash = hashToken(rawToken);
 
   const rows = await db
@@ -304,13 +311,23 @@ export async function redeemPageShareLink(
 
   const link = { ...row, driveId: row.driveId as string };
 
+  const existingPerms = await db
+    .select({ canView: pagePermissions.canView })
+    .from(pagePermissions)
+    .where(and(eq(pagePermissions.pageId, link.pageId), eq(pagePermissions.userId, ctx.userId)))
+    .limit(1);
+  const alreadyHasAccess = existingPerms.length > 0 && existingPerms[0].canView;
+
   await db.insert(driveMembers).values({
     id: createId(),
     driveId: link.driveId,
     userId: ctx.userId,
     role: 'MEMBER',
     acceptedAt: new Date(),
-  }).onConflictDoNothing();
+  }).onConflictDoUpdate({
+    target: [driveMembers.driveId, driveMembers.userId],
+    set: { acceptedAt: new Date() },
+  });
 
   const canView = link.permissions.includes('VIEW');
   const canEdit = link.permissions.includes('EDIT');
@@ -337,12 +354,14 @@ export async function redeemPageShareLink(
       },
     });
 
-  await db
-    .update(pageShareLinks)
-    .set({ useCount: sql`${pageShareLinks.useCount} + 1` })
-    .where(eq(pageShareLinks.id, link.id));
+  if (!alreadyHasAccess) {
+    await db
+      .update(pageShareLinks)
+      .set({ useCount: sql`${pageShareLinks.useCount} + 1` })
+      .where(eq(pageShareLinks.id, link.id));
+  }
 
-  return { ok: true, data: { pageId: link.pageId, driveId: link.driveId } };
+  return { ok: true, data: { pageId: link.pageId, driveId: link.driveId, linkId: link.id } };
 }
 
 // ============================================================================

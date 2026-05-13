@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -30,18 +30,43 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
   const [activeLink, setActiveLink] = useState<ActiveLink | null>(null);
   const [rawToken, setRawToken] = useState<string | null>(null);
   const [role, setRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
+  const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadExisting() {
+      try {
+        const res = await fetch(`/api/drives/${driveId}/share-links`, {
+          credentials: 'include',
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as {
+          links: Array<{ id: string; role: 'MEMBER' | 'ADMIN'; useCount: number }>;
+        };
+        if (!cancelled && data.links.length > 0) {
+          const first = data.links[0];
+          setActiveLink({ id: first.id, role: first.role, useCount: first.useCount });
+        }
+      } catch {
+        // silently fail — user can still generate a new link
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    loadExisting();
+    return () => { cancelled = true; };
+  }, [driveId]);
 
   async function handleGenerate() {
     setIsGenerating(true);
     try {
-      const data = await post<{ id: string; shareUrl: string }>(
+      const data = await post<{ id: string; rawToken: string; shareUrl: string }>(
         `/api/drives/${driveId}/share-links`,
         { role }
       );
-      const token = data.shareUrl.split('/s/')[1];
-      setRawToken(token);
+      setRawToken(data.rawToken);
       setActiveLink({ id: data.id, role, useCount: 0 });
       const copied = await navigator.clipboard.writeText(data.shareUrl).then(() => true).catch(() => false);
       toast.success(copied ? 'Invite link created and copied to clipboard' : 'Invite link created');
@@ -86,7 +111,9 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
         </p>
       </div>
 
-      {activeLink ? (
+      {isLoading ? (
+        <div className="h-8 w-full animate-pulse rounded bg-muted" />
+      ) : activeLink ? (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-xs capitalize">

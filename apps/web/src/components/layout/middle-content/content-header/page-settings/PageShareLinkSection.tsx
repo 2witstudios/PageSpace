@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -25,19 +25,44 @@ export function PageShareLinkSection({ pageId }: PageShareLinkSectionProps) {
   const [activeLink, setActiveLink] = useState<ActiveLink | null>(null);
   const [rawToken, setRawToken] = useState<string | null>(null);
   const [includeEdit, setIncludeEdit] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadExisting() {
+      try {
+        const res = await fetch(`/api/pages/${pageId}/share-links`, {
+          credentials: 'include',
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as {
+          links: Array<{ id: string; permissions: Array<'VIEW' | 'EDIT'>; useCount: number }>;
+        };
+        if (!cancelled && data.links.length > 0) {
+          const first = data.links[0];
+          setActiveLink({ id: first.id, permissions: first.permissions, useCount: first.useCount });
+        }
+      } catch {
+        // silently fail — user can still generate a new link
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    loadExisting();
+    return () => { cancelled = true; };
+  }, [pageId]);
 
   async function handleGenerate() {
     setIsGenerating(true);
     try {
       const permissions: Array<'VIEW' | 'EDIT'> = includeEdit ? ['VIEW', 'EDIT'] : ['VIEW'];
-      const data = await post<{ id: string; shareUrl: string }>(
+      const data = await post<{ id: string; rawToken: string; shareUrl: string }>(
         `/api/pages/${pageId}/share-links`,
         { permissions }
       );
-      const token = data.shareUrl.split('/s/')[1];
-      setRawToken(token);
+      setRawToken(data.rawToken);
       const link: ActiveLink = {
         id: data.id,
         permissions,
@@ -82,7 +107,9 @@ export function PageShareLinkSection({ pageId }: PageShareLinkSectionProps) {
         Share link
       </h4>
 
-      {activeLink ? (
+      {isLoading ? (
+        <div className="h-8 w-full animate-pulse rounded bg-muted" />
+      ) : activeLink ? (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-xs">

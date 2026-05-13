@@ -128,7 +128,8 @@ function makeInsertChain(result: unknown[] = []) {
   const chain = {
     values: vi.fn().mockReturnThis(),
     returning: vi.fn().mockResolvedValue(result),
-    onConflictDoNothing: vi.fn().mockReturnThis(),
+    onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+    onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
   };
   mockDb.insert.mockReturnValue(chain);
   return chain;
@@ -262,13 +263,13 @@ describe('redeemDriveShareLink', () => {
     expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
   });
 
-  it('returns ALREADY_MEMBER without mutation when user is already a member', async () => {
+  it('returns ALREADY_MEMBER with driveId without mutation when user is already a member', async () => {
     makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, role: 'MEMBER', isActive: true, expiresAt: null }]);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
     const result = await redeemDriveShareLink(makeCtx(), 'some-token');
 
-    expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER' });
+    expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER', driveId: DRIVE_ID });
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
@@ -293,7 +294,10 @@ describe('redeemDriveShareLink', () => {
     const result = await redeemDriveShareLink(makeCtx(), 'valid-token');
 
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.driveId).toBe(DRIVE_ID);
+    if (result.ok) {
+      expect(result.data.driveId).toBe(DRIVE_ID);
+      expect(result.data.linkId).toBe(LINK_ID);
+    }
     expect(mockDb.insert).toHaveBeenCalled();
     expect(mockDb.update).toHaveBeenCalled();
   });
@@ -438,6 +442,7 @@ describe('redeemPageShareLink', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.pageId).toBe(PAGE_ID);
+      expect(result.data.linkId).toBe(LINK_ID);
     }
     expect(mockDb.insert).toHaveBeenCalledTimes(2);
   });

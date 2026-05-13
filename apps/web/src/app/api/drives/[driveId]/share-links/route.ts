@@ -80,6 +80,7 @@ export async function POST(
   return NextResponse.json(
     {
       id: result.data.id,
+      rawToken: result.data.rawToken,
       shareUrl: `${appUrl}/s/${result.data.rawToken}`,
     },
     { status: 201 }

@@ -14,9 +14,15 @@ interface PageShareAcceptProps {
 
 export function PageShareAccept({ token, info }: PageShareAcceptProps) {
   const router = useRouter();
-  const { csrfToken } = useCSRFToken();
+  const { csrfToken, isLoading: csrfLoading, error: csrfError } = useCSRFToken();
   const accepted = useRef(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!csrfLoading && csrfError && !csrfToken) {
+      router.push(`/auth/signin?next=/s/${token}`);
+    }
+  }, [csrfLoading, csrfError, csrfToken, router, token]);
 
   useEffect(() => {
     if (!csrfToken || accepted.current) return;
