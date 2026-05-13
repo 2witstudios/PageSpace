@@ -79,7 +79,8 @@ export function DriveShareLinkSection({ driveId }: DriveShareLinkSectionProps) {
 
   async function handleCopy() {
     if (!rawToken) return;
-    const copied = await navigator.clipboard.writeText(`${APP_URL}/s/${rawToken}`).then(() => true).catch(() => false);
+    const inviteUrl = new URL(`/s/${rawToken}`, APP_URL || window.location.origin).toString();
+    const copied = await navigator.clipboard.writeText(inviteUrl).then(() => true).catch(() => false);
     if (copied) toast.success('Invite link copied to clipboard');
     else toast.error('Could not copy link to clipboard');
   }

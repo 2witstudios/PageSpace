@@ -21,7 +21,7 @@ export async function POST(
   const driveResult = await redeemDriveShareLink(auth.ctx, token);
 
   if (driveResult.ok) {
-    securityAudit.logDataAccess(auth.ctx.userId, 'write', 'drive', driveResult.data.driveId, {
+    await securityAudit.logDataAccess(auth.ctx.userId, 'write', 'drive', driveResult.data.driveId, {
       action: 'share_link_redeem',
       linkId: driveResult.data.linkId,
       ipAddress: clientIP,
@@ -40,7 +40,7 @@ export async function POST(
   const pageResult = await redeemPageShareLink(auth.ctx, token);
 
   if (pageResult.ok) {
-    securityAudit.logDataAccess(auth.ctx.userId, 'write', 'page', pageResult.data.pageId, {
+    await securityAudit.logDataAccess(auth.ctx.userId, 'write', 'page', pageResult.data.pageId, {
       action: 'share_link_redeem',
       linkId: pageResult.data.linkId,
       ipAddress: clientIP,
