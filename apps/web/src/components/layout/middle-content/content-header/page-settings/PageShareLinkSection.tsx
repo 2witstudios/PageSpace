@@ -34,9 +34,11 @@ export function PageShareLinkSection({ pageId }: { pageId: string }) {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <input
+              type="text"
               readOnly
               value={shareUrl ?? ''}
-              className="flex-1 h-8 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:outline-none cursor-text"
+              aria-label="Share link URL"
+              className="flex-1 h-8 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
               onClick={(e) => (e.target as HTMLInputElement).select()}
             />
             <Button

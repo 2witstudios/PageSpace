@@ -28,9 +28,11 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary" className="text-xs capitalize shrink-0">{link.role.toLowerCase()}</Badge>
                     <input
+                      type="text"
                       readOnly
                       value={link.shareUrl ?? ''}
-                      className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:outline-none cursor-text"
+                      aria-label={`${link.role.toLowerCase()} invite link URL`}
+                      className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
                       onClick={(e) => (e.target as HTMLInputElement).select()}
                     />
                     <Button
