@@ -88,6 +88,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // TODO: Add audit coverage in follow-up PR
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],
   ['drives/[driveId]/agents', 'Agent list for drive — follow-up'],
+  ['drives/[driveId]/agents/members', 'Agent member list — read-only, covered by parent drive audit, follow-up'],
   ['drives/[driveId]/assignees', 'Assignee list for drive — follow-up'],
   ['drives/[driveId]/history', 'Drive history view — follow-up'],
   ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],
