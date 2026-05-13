@@ -90,7 +90,6 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
             <video
               src={`/api/files/${fileId}/view`}
               controls
-              autoPlay
               className="max-w-full max-h-[85vh] mx-auto"
             />
           </DialogContent>
