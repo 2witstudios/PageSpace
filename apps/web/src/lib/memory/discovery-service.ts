@@ -18,7 +18,6 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface DiscoveryResult {
   worldview: string[];
-  projects: string[];
   communication: string[];
   preferences: string[];
 }
@@ -40,15 +39,6 @@ Only report clear patterns, not speculation. Return a JSON array of strings, eac
 
 Example output: ["Values test-driven development", "Expert in React and TypeScript", "Has background in finance"]`;
 
-const PROJECTS_PROMPT = `Analyze these conversations to discover:
-- What is this person actively working on?
-- What projects or goals do they mention?
-- What problems are they trying to solve?
-
-Focus on current/recent work, not historical. Return a JSON array of strings, each string being a distinct insight about their current work. If nothing clear emerges, return an empty array.
-
-Example output: ["Working on a memory system for AI personalization", "Building a collaborative workspace app"]`;
-
 const COMMUNICATION_PROMPT = `Analyze these conversations to discover:
 - How does this person like to communicate?
 - Do they prefer brief or detailed responses?
@@ -59,14 +49,24 @@ Look for patterns in how they interact. Return a JSON array of strings, each str
 
 Example output: ["Prefers concise responses", "Uses technical language comfortably"]`;
 
-const PREFERENCES_PROMPT = `Analyze these conversations to discover:
-- What has this person explicitly asked for or against?
-- What frustrates them about AI responses?
-- What specific instructions have they given?
+const PREFERENCES_PROMPT = `Analyze these conversations to identify persistent preferences for how this person wants AI to interact with them.
 
-Only include explicit preferences, not inferred ones. Return a JSON array of strings, each string being a distinct preference or rule. If none found, return an empty array.
+ONLY capture preferences that pass the portability test: "Would this still apply if the user was working on a completely different project in a different workspace?" If no, skip it.
 
-Example output: ["Don't use emojis", "Always include TypeScript types"]`;
+DO capture:
+- Response format and length preferences
+- Tone and communication style they expect from AI
+- Persistent do's and don'ts about AI output (e.g., "don't use emojis", "always show TypeScript types")
+
+DO NOT capture:
+- Technology or tool choices for a specific project
+- Scope or prioritization decisions ("we're not doing X for this release")
+- One-off decisions explained by their conversational context
+- Project-specific constraints or workflow choices
+
+Return a JSON array of strings. If no clearly portable preferences emerge, return an empty array.
+
+Example output: ["Prefers responses without preamble or sign-off", "Always wants TypeScript types in code examples"]`;
 
 /**
  * Gather recent messages from all conversation sources for a user
@@ -289,10 +289,8 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
 
   const fullContext = conversationContext + activityContext;
 
-  // Run all 4 passes in parallel
-  const [worldview, projects, communication, preferences] = await Promise.all([
+  const [worldview, communication, preferences] = await Promise.all([
     runDiscoveryPass(userId, 'worldview', WORLDVIEW_PROMPT, fullContext),
-    runDiscoveryPass(userId, 'projects', PROJECTS_PROMPT, fullContext),
     runDiscoveryPass(userId, 'communication', COMMUNICATION_PROMPT, fullContext),
     runDiscoveryPass(userId, 'preferences', PREFERENCES_PROMPT, fullContext),
   ]);
@@ -301,7 +299,6 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     userId,
     insightCounts: {
       worldview: worldview.length,
-      projects: projects.length,
       communication: communication.length,
       preferences: preferences.length,
     },
@@ -309,7 +306,6 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
 
   return {
     worldview,
-    projects,
     communication,
     preferences,
   };

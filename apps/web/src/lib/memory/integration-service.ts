@@ -36,24 +36,18 @@ export interface IntegrationDecision {
 // Signal strength threshold
 const MIN_INSIGHTS_FOR_UPDATE = 2;
 
-const EVALUATOR_SYSTEM_PROMPT = `You are evaluating discovered insights about a user to decide if they should be added to their personalization profile.
-
-Your job is to:
-1. Compare new insights against what's already in the profile
-2. Filter out redundant or already-captured information
-3. Identify genuinely new, significant insights worth recording
-4. Categorize approved insights into the correct field
+const EVALUATOR_SYSTEM_PROMPT = `You are deciding what to add to a user's personalization profile. The profile exists to make every AI conversation feel personal — like the AI already knows who this person is.
 
 FIELDS:
-- bio: Background, expertise, role, beliefs, worldview, mental models
-- writingStyle: Communication preferences, tone, formatting, interaction style
-- rules: Explicit instructions, preferences about AI behavior, do's and don'ts
+- bio: Who this person is — background, expertise, domain, thinking style, mental models. Describes the person, not their current tasks.
+- writingStyle: How they want AI to communicate — tone, verbosity, formatting, interaction patterns.
+- rules: Universal AI behavior preferences that apply in any workspace ("never use emojis", "always include TypeScript types"). Not project decisions, technology choices, or scope calls.
 
-QUALITY GATES:
-- Only approve insights that add meaningful new understanding
-- Skip if the insight is already captured (even if worded differently)
-- Skip if the insight is too vague or generic to be useful
-- Skip if the insight contradicts existing profile content
+QUALITY GATES (apply in order — fail any gate = skip):
+1. Portability: Would this still apply if the person was working on a completely different project? If no, skip.
+2. Personhood: Does this describe the person, or just a decision they made in a specific context? Project-scoped decisions don't belong here.
+3. Novelty: Is this already captured in the existing profile (even if worded differently)? If yes, skip.
+4. Signal: Is this a clear, repeatable pattern — not a single mention or one-off? If no, skip.
 
 For each field, decide:
 - "append" - Add new content to the end of this field
@@ -140,7 +134,6 @@ export async function evaluateAndIntegrate(
 
   const totalInsights =
     insights.worldview.length +
-    insights.projects.length +
     insights.communication.length +
     insights.preferences.length;
 
@@ -160,9 +153,6 @@ export async function evaluateAndIntegrate(
   const insightsText = `
 WORLDVIEW & EXPERTISE INSIGHTS:
 ${insights.worldview.length > 0 ? insights.worldview.map((i) => `- ${i}`).join('\n') : '(none discovered)'}
-
-PROJECTS & CURRENT WORK INSIGHTS:
-${insights.projects.length > 0 ? insights.projects.map((i) => `- ${i}`).join('\n') : '(none discovered)'}
 
 COMMUNICATION STYLE INSIGHTS:
 ${insights.communication.length > 0 ? insights.communication.map((i) => `- ${i}`).join('\n') : '(none discovered)'}

@@ -22,16 +22,16 @@ const COMPACTION_TARGET_RATIO = 0.7;
 type PersonalizationField = 'bio' | 'writingStyle' | 'rules';
 
 const COMPACTION_PROMPTS: Record<PersonalizationField, string> = {
-  bio: `You are reorganizing a user's bio/background information that has grown too long.
+  bio: `You are reorganizing a user's bio and background information that has grown too long.
 
 Your job is to:
-1. Preserve all key facts about their background, expertise, and role
-2. Consolidate redundant or overlapping information
-3. Remove outdated or superseded information (keep most recent)
-4. Maintain the essential character and voice
+1. Preserve facts about their background, expertise, domain, and thinking style
+2. REMOVE any current task or project status — that's ephemeral and belongs in project context, not here
+3. Consolidate redundant or overlapping information
+4. Keep the most recent version when information has been superseded
 5. Organize into clear sections if appropriate
 
-Output the reorganized bio as clean prose or bullet points. Do NOT add commentary or explanations - just output the compacted content.`,
+Output only the compacted bio content as prose or bullet points. No commentary.`,
 
   writingStyle: `You are reorganizing a user's writing style preferences that have grown too long.
 
@@ -44,16 +44,16 @@ Your job is to:
 
 Output the reorganized writing style as clean prose or bullet points. Do NOT add commentary - just output the compacted content.`,
 
-  rules: `You are reorganizing a user's AI rules/instructions that have grown too long.
+  rules: `You are reorganizing a user's AI behavior rules that have grown too long.
 
 Your job is to:
-1. Preserve all explicit do's and don'ts
-2. Consolidate rules that say the same thing differently
-3. Remove rules that contradict newer rules (keep most recent)
-4. Organize by category if appropriate
-5. Keep the most specific/actionable rules
+1. Keep rules that describe how the user wants AI to behave in any context — universal preferences
+2. REMOVE rules that are project-specific decisions, technology choices for a particular product, or scope calls that belong in a project's own context
+3. Consolidate rules that say the same thing differently
+4. Remove rules that contradict newer rules (keep most recent)
+5. Keep the most specific and actionable guidance
 
-Output the reorganized rules as clean prose or bullet points. Do NOT add commentary - just output the compacted content.`,
+Output only the compacted rules content as prose or bullet points. No commentary.`,
 };
 
 /**
