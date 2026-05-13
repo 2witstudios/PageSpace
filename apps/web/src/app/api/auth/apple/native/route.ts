@@ -10,7 +10,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   checkDistributedRateLimit,
@@ -76,7 +76,6 @@ export async function POST(req: Request) {
     }
 
     const { idToken, platform, deviceId, deviceName, givenName, familyName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
-    const { isSafeReturnUrl } = await import('@/lib/auth/auth-helpers');
     const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
     // Validate required environment variables
