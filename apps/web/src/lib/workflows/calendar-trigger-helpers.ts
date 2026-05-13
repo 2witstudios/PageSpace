@@ -285,24 +285,42 @@ export async function upsertCalendarTriggerWorkflowInTx(
 
   // One-shot path: clean up any leftover occurrence rows (from a previous
   // recurring configuration), then update or create the single trigger row.
+  // Query for an *unfired* trigger row separately — `existing` may include
+  // already-fired occurrence rows and we must not retarget historical data.
   if (existing.length > 0) {
-    // Delete all unfired rows for this event except the one we'll update.
-    // This removes stale occurrence rows when a recurring event becomes one-shot.
-    await tx.delete(calendarTriggers).where(
-      and(
-        eq(calendarTriggers.calendarEventId, params.calendarEventId),
-        ne(calendarTriggers.id, existing[0].id),
-        sql`NOT EXISTS (
-          SELECT 1 FROM ${workflowRuns}
-          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
-            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-        )`,
-      ),
-    );
-    await tx.update(calendarTriggers).set({
-      triggerAt: params.triggerAt,
-    }).where(eq(calendarTriggers.id, existing[0].id));
-    return { workflowId, triggerId: existing[0].id };
+    const [pendingTrigger] = await tx
+      .select({ id: calendarTriggers.id })
+      .from(calendarTriggers)
+      .where(
+        and(
+          eq(calendarTriggers.calendarEventId, params.calendarEventId),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${workflowRuns}
+            WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+              AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+          )`,
+        ),
+      );
+
+    if (pendingTrigger) {
+      // Delete every unfired row except the one we'll reuse.
+      await tx.delete(calendarTriggers).where(
+        and(
+          eq(calendarTriggers.calendarEventId, params.calendarEventId),
+          ne(calendarTriggers.id, pendingTrigger.id),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${workflowRuns}
+            WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+              AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+          )`,
+        ),
+      );
+      await tx.update(calendarTriggers).set({
+        triggerAt: params.triggerAt,
+      }).where(eq(calendarTriggers.id, pendingTrigger.id));
+      return { workflowId, triggerId: pendingTrigger.id };
+    }
+    // All trigger rows were already fired — fall through to insert a fresh row.
   }
 
   const [created] = await tx.insert(calendarTriggers).values({

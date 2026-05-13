@@ -341,8 +341,10 @@ describe('upsertCalendarTriggerWorkflow', () => {
   it('updates the existing workflow row when a trigger already exists for the event', async () => {
     // Validation calls
     mockQueryPages.findFirst.mockResolvedValueOnce({ id: 'agent-1', driveId: 'drive-1' });
-    // Existing trigger lookup inside the tx
+    // 1st select: existing trigger lookup (for workflowId)
     mockSelectWhere.mockResolvedValueOnce([{ id: 'trg-existing', workflowId: 'wf-existing' }]);
+    // 2nd select: pending (unfired) trigger lookup
+    mockSelectWhere.mockResolvedValueOnce([{ id: 'trg-existing' }]);
 
     await upsertCalendarTriggerWorkflow(db, baseParams);
 
