@@ -103,6 +103,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
           );
           setMembership(entry ? { role: entry.role, customRole: entry.customRole } : null);
           setMembershipUserRole(data.currentUserRole ?? 'MEMBER');
+        } else {
+          setMembership(null);
         }
         if (rolesRes.ok) {
           const data = await rolesRes.json();
