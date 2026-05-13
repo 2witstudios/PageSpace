@@ -158,8 +158,8 @@ export async function applyPageMutation({
     pageTreeScope: updates.pageTreeScope !== undefined
       ? (updates.pageTreeScope === null ? null : String(updates.pageTreeScope))
       : currentPage.pageTreeScope,
-    toolAccessScope: updates.toolAccessScope !== undefined
-      ? (updates.toolAccessScope === null ? null : String(updates.toolAccessScope))
+    toolAccessScope: (updates.toolAccessScope !== undefined && updates.toolAccessScope !== null)
+      ? String(updates.toolAccessScope)
       : currentPage.toolAccessScope,
   };
 
