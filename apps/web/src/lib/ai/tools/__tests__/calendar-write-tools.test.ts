@@ -462,14 +462,19 @@ describe('calendar-write-tools', () => {
       it('passes recurrenceRule to upsertCalendarTriggerWorkflowInTx when agentTrigger + recurrence are combined', async () => {
         mockIsUserDriveMember.mockResolvedValue(true);
 
-        // Return a valid AI_CHAT agent page for the agent-page lookup
-        (mockDb.where as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{
-          id: 'agent-1',
-          type: 'AI_CHAT',
-          title: 'Test Agent',
-          isTrashed: false,
-          driveId: 'drive-1',
-        }]);
+        // Return a valid AI_CHAT agent page for the agent-page lookup via
+        // db.select({...}).from(pages).where(...)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValueOnce([{
+              id: 'agent-1',
+              type: 'AI_CHAT',
+              title: 'Test Agent',
+              isTrashed: false,
+              driveId: 'drive-1',
+            }]),
+          }),
+        });
 
         const newEvent = createMockEvent({ recurrenceRule: { frequency: 'WEEKLY', interval: 1 } });
         (mockDb.insert as ReturnType<typeof vi.fn>).mockReturnValue({
