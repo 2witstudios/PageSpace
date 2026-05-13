@@ -178,7 +178,7 @@ export async function GET(
 const postBodySchema = z.object({
   agentPageId: z.string().min(1),
   role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
-  customRoleId: z.string().optional(),
+  customRoleId: z.string().min(1).optional(),
 });
 
 /**
@@ -207,7 +207,7 @@ export async function POST(
     const rawBody = await request.json();
     const parsed = postBodySchema.safeParse(rawBody);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
     const { agentPageId, role, customRoleId } = parsed.data;
@@ -241,29 +241,26 @@ export async function POST(
       }
     }
 
-    // Check for existing membership (unique constraint enforced at DB level too)
-    const existing = await db
-      .select({ id: driveAgentMembers.id })
-      .from(driveAgentMembers)
-      .where(and(eq(driveAgentMembers.driveId, driveId), eq(driveAgentMembers.agentPageId, agentPageId)))
-      .limit(1);
-
-    if (existing.length > 0) {
-      return NextResponse.json({ error: 'Agent is already a member of this drive' }, { status: 409 });
+    let newMember;
+    try {
+      [newMember] = await db
+        .insert(driveAgentMembers)
+        .values({
+          id: createId(),
+          driveId,
+          agentPageId,
+          role,
+          customRoleId: customRoleId ?? null,
+          addedBy: userId,
+          addedAt: new Date(),
+        })
+        .returning();
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        return NextResponse.json({ error: 'Agent is already a member of this drive' }, { status: 409 });
+      }
+      throw err;
     }
-
-    const [newMember] = await db
-      .insert(driveAgentMembers)
-      .values({
-        id: createId(),
-        driveId,
-        agentPageId,
-        role,
-        customRoleId: customRoleId ?? null,
-        addedBy: userId,
-        addedAt: new Date(),
-      })
-      .returning();
 
     auditRequest(request, {
       eventType: 'authz.permission.granted',

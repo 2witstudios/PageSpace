@@ -12,7 +12,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const patchBodySchema = z.object({
   role: z.enum(['MEMBER', 'ADMIN']).optional(),
-  customRoleId: z.string().nullable().optional(),
+  customRoleId: z.string().min(1).nullable().optional(),
 });
 
 /**
@@ -41,7 +41,7 @@ export async function PATCH(
     const rawBody = await request.json();
     const parsed = patchBodySchema.safeParse(rawBody);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
     const { role, customRoleId } = parsed.data;

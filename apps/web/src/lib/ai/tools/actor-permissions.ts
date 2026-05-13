@@ -1,6 +1,7 @@
 import type { ToolExecutionContext } from '../core';
 import {
   getUserAccessLevel,
+  getUserDriveAccess,
   canUserEditPage,
   canUserDeletePage,
   getUserAccessiblePagesInDriveWithDetails,
@@ -9,6 +10,7 @@ import {
 import {
   getAgentAccessLevel,
   getAgentAccessiblePagesInDrive,
+  hasAgentDriveMembership,
 } from '@pagespace/lib/permissions/agent-permissions';
 
 export function getAgentPageId(context: ToolExecutionContext): string | undefined {
@@ -50,6 +52,15 @@ export async function canActorViewPage(
   }
   const perms = await getUserAccessLevel(context.userId, pageId);
   return perms?.canView ?? false;
+}
+
+export async function canActorAccessDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  const agentPageId = getAgentPageId(context);
+  if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  return getUserDriveAccess(context.userId, driveId);
 }
 
 export async function getActorAccessiblePagesInDrive(

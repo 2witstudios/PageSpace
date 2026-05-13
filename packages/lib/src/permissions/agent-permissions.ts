@@ -57,6 +57,15 @@ export async function getAgentAccessLevel(
   return { canView: true, canEdit: false, canShare: false, canDelete: false };
 }
 
+export async function hasAgentDriveMembership(agentPageId: string, driveId: string): Promise<boolean> {
+  const row = await db
+    .select({ id: driveAgentMembers.id })
+    .from(driveAgentMembers)
+    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+    .limit(1);
+  return row.length > 0;
+}
+
 export async function getAgentAccessiblePagesInDrive(
   agentPageId: string,
   driveId: string,

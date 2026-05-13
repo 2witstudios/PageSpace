@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
-import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
-import { getActorAccessiblePagesInDrive } from './actor-permissions';
+import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import { type ToolExecutionContext } from '../core';
 
 export const searchTools = {
@@ -41,9 +40,7 @@ export const searchTools = {
           throw new Error(`Invalid regex pattern: ${(e as Error).message}`);
         }
 
-        // Check drive access
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error('You don\'t have access to this drive');
         }
 
@@ -361,9 +358,7 @@ export const searchTools = {
       }
 
       try {
-        // Check drive access
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error('You don\'t have access to this drive');
         }
 
@@ -524,9 +519,7 @@ export const searchTools = {
         const results = [];
 
         for (const drive of userDrives) {
-          // Check drive access
-          const hasDriveAccess = await getUserDriveAccess(userId, drive.id);
-          if (!hasDriveAccess) continue;
+          if (!await canActorAccessDrive(context as ToolExecutionContext, drive.id)) continue;
 
           // Build search conditions
           let searchWhereConditions;
