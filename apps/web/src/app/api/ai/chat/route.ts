@@ -68,6 +68,8 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
   createStreamAbortController,
   removeStream,
@@ -361,6 +363,29 @@ export async function POST(request: Request) {
           action: 'chat_message',
           conversationId,
         } });
+
+        // Fire mention notifications for @user, @everyone, @role mentions in AI chat pages.
+        // Gate each recipient on view permission to prevent leaking page metadata.
+        if (page?.driveId) {
+          expandMentionsToUserIds(messageContent, page.driveId)
+            .then(async (notifyIds) => {
+              const candidates = notifyIds.filter((id) => id !== userId);
+              if (candidates.length === 0) return;
+              const viewChecks = await Promise.all(
+                candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, chatId!) }))
+              );
+              await Promise.allSettled(
+                viewChecks
+                  .filter((e) => e.canView)
+                  .map((e) =>
+                    createMentionNotification(e.id, chatId!, userId!).catch((err) =>
+                      loggers.ai.error('AI Chat: Failed to send mention notification', err as Error)
+                    )
+                  )
+              );
+            })
+            .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
+        }
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({

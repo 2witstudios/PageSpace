@@ -494,6 +494,12 @@ svg.lucide {
   @apply dark:hover:bg-green-900/30 dark:hover:border-green-600;
 }
 
+/* Group mention styles (@everyone, @role) */
+.mention--group {
+  @apply inline-block font-semibold rounded px-1 py-0.5 cursor-default;
+  @apply bg-indigo-100 text-indigo-700 border border-indigo-200;
+  @apply dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700;
+}
 
 /* Loading state */
 .mention-pill.is-loading {
