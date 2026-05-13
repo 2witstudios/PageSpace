@@ -76,6 +76,14 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 
+  // --- Share link management routes ---
+  // TODO: Add audit coverage in follow-up PR
+  ['drives/[driveId]/share-links', 'Share link CRUD — invite link management, follow-up'],
+  ['drives/[driveId]/share-links/[linkId]', 'Share link revoke — covered by parent drive auth, follow-up'],
+  ['pages/[pageId]/share-links', 'Page share link CRUD — covered by page canShare check, follow-up'],
+  ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
+  ['share/[token]', 'Public token info — unauthenticated info display, no user data written'],
+
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],

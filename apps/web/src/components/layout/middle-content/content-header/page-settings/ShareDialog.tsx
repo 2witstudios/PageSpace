@@ -37,6 +37,7 @@ import { PermissionsList } from './PermissionsList';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { PageShareLinkSection } from './PageShareLinkSection';
 
 export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } = {}) {
   const storePageId = usePageStore((state) => state.pageId);
@@ -370,6 +371,10 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
                   {isSubmitting ? 'Granting Access...' : 'Grant Access'}
                 </Button>
               )}
+
+              <div className="border-t pt-4">
+                <PageShareLinkSection pageId={page.id} />
+              </div>
             </TabsContent>
             <TabsContent value="permissions" className="mt-4">
               <PermissionsList key={permissionsVersion} />
