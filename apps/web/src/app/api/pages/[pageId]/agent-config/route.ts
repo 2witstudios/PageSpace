@@ -247,7 +247,7 @@ export async function PATCH(
       });
 
       await broadcastPageEvent(
-        createPageEventPayload(page.driveId, pageId, 'updated'),
+        createPageEventPayload(responsePage.driveId, pageId, 'updated'),
       );
     }
 
