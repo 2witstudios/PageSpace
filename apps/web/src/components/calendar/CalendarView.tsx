@@ -323,7 +323,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           : null
       );
       try {
-        await addAttendees(selectedEvent.id, [userId]);
+        const updatedAttendees = await addAttendees(selectedEvent.id, [userId]);
+        if (updatedAttendees.length > 0) {
+          setSelectedEvent((prev) => prev ? { ...prev, attendees: updatedAttendees } : null);
+        }
       } catch {
         setSelectedEvent(prevEvent);
         throw new Error('Failed to add attendee');

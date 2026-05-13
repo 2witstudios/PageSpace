@@ -206,8 +206,10 @@ export function useCalendarData({
 
   const addAttendees = useCallback(
     async (eventId: string, userIds: string[], isOptional = false) => {
-      await post(`/api/calendar/events/${eventId}/attendees`, { userIds, isOptional });
+      const result = await post(`/api/calendar/events/${eventId}/attendees`, { userIds, isOptional });
+      const data = await result.json() as { attendees?: import('./calendar-types').CalendarEventAttendee[] };
       mutate(eventsUrl);
+      return data.attendees ?? [];
     },
     [eventsUrl]
   );
