@@ -117,12 +117,13 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
             csrfToken={csrfToken}
             refreshToken={refreshToken}
             onEmailExists={() => {
-              router.push('/auth/signin');
+              router.push(returnUrl ? `/auth/signin?next=${encodeURIComponent(returnUrl)}` : '/auth/signin');
             }}
             onLoadingChange={setPasskeyLoading}
             disabled={isAnyLoading}
             inviteToken={inviteToken}
             lockedEmail={inviteContext?.email}
+            {...(returnUrl && { nextPath: returnUrl })}
           />
         </motion.div>
       )}
