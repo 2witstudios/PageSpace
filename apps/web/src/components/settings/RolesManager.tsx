@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Pencil, Trash2, GripVertical, Star, Shield } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
+import { useSocket } from '@/hooks/useSocket';
+import { DriveEventPayload } from '@/lib/websocket';
 import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { RoleEditor } from './RoleEditor';
@@ -41,6 +43,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
   const [isCreating, setIsCreating] = useState(false);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
   const { toast } = useToast();
+  const socket = useSocket();
 
   const fetchRoles = async () => {
     try {
@@ -64,6 +67,21 @@ export function RolesManager({ driveId }: RolesManagerProps) {
     fetchRoles();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId]);
+
+  const handleDriveUpdated = useCallback((event: DriveEventPayload) => {
+    if (event.driveId === driveId) {
+      fetchRoles();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveId]);
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('drive:updated', handleDriveUpdated);
+    return () => {
+      socket.off('drive:updated', handleDriveUpdated);
+    };
+  }, [socket, handleDriveUpdated]);
 
   const handleDeleteRole = async (roleId: string) => {
     try {

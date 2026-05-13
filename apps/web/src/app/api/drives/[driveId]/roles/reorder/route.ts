@@ -6,6 +6,8 @@ import { db } from '@pagespace/db/db'
 import { eq, asc } from '@pagespace/db/operators'
 import { driveRoles } from '@pagespace/db/schema/members';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -48,6 +50,10 @@ export async function PATCH(
     const previousOrder = previousRoles.map(r => r.id);
 
     await reorderDriveRoles(driveId, roleIds);
+
+    // Broadcast role change so other admins see it live
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);

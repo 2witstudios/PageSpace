@@ -3,6 +3,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -113,6 +115,10 @@ export async function PATCH(
       permissions,
     });
 
+    // Broadcast role change so other admins see it live
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
     logRoleActivity(userId, 'update', {
@@ -166,6 +172,10 @@ export async function DELETE(
     }
 
     await deleteDriveRole(driveId, roleId);
+
+    // Broadcast role change so other admins see it live
+    const recipientUserIdsForDelete = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIdsForDelete);
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
