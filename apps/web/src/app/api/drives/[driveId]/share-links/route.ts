@@ -4,6 +4,7 @@ import {
   createDriveShareLink,
   listDriveShareLinks,
 } from '@pagespace/lib/permissions/share-link-service';
+import { getShareUrl } from '@/lib/share-url';
 import { z } from 'zod/v4';
 
 const AUTH_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -31,11 +32,10 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || '';
   return NextResponse.json({
     links: result.data.map((link) => ({
       ...link,
-      shareUrl: link.token ? `${appUrl}/s/${link.token}` : null,
+      shareUrl: getShareUrl(link.token),
     })),
   });
 }
@@ -82,12 +82,11 @@ export async function POST(
     return NextResponse.json({ error: 'Failed to create share link' }, { status: 500 });
   }
 
-  const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || '';
   return NextResponse.json(
     {
       id: result.data.id,
       rawToken: result.data.rawToken,
-      shareUrl: `${appUrl}/s/${result.data.rawToken}`,
+      shareUrl: getShareUrl(result.data.rawToken),
     },
     { status: 201 }
   );
