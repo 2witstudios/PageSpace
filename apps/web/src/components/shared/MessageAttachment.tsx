@@ -1,7 +1,16 @@
-import { FileIcon, FileText, Download } from 'lucide-react';
+'use client';
+
+import { useState } from 'react';
+import { FileIcon, FileText, Download, Video } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   type MessageWithAttachment,
   isImageAttachment,
+  isVideoAttachment,
   getFileId,
   getAttachmentName,
   getAttachmentMimeType,
@@ -15,6 +24,8 @@ interface MessageAttachmentProps {
 }
 
 export function MessageAttachment({ message }: MessageAttachmentProps) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+
   if (!hasAttachment(message)) return null;
 
   const fileId = getFileId(message);
@@ -25,11 +36,10 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
   if (isImageAttachment(message)) {
     return (
       <div className="mt-2">
-        <a
-          href={`/api/files/${fileId}/view?filename=${encodeURIComponent(name)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block max-w-sm"
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          className="block max-w-sm cursor-zoom-in"
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
           <img
@@ -37,7 +47,54 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
             alt={name}
             className="rounded-lg max-h-64 object-contain border border-border/50"
           />
-        </a>
+        </button>
+
+        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+          <DialogContent className="max-w-[90vw] max-h-[90vh] p-2">
+            <DialogTitle className="sr-only">Image preview</DialogTitle>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`/api/files/${fileId}/view`}
+              alt={name}
+              className="max-w-full max-h-[85vh] object-contain mx-auto"
+            />
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  if (isVideoAttachment(message)) {
+    return (
+      <div className="mt-2">
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors cursor-pointer"
+        >
+          <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
+            <Video className="h-5 w-5 text-muted-foreground" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">{name}</p>
+            {size != null && (
+              <p className="text-xs text-muted-foreground">{formatFileSize(size)}</p>
+            )}
+          </div>
+        </button>
+
+        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+          <DialogContent className="max-w-[90vw] max-h-[90vh] p-2">
+            <DialogTitle className="sr-only">Video preview</DialogTitle>
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video
+              src={`/api/files/${fileId}/view`}
+              controls
+              autoPlay
+              className="max-w-full max-h-[85vh] mx-auto"
+            />
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
