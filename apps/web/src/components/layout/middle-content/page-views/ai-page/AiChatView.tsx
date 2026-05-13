@@ -157,6 +157,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     createConversation,
     deleteConversation,
     prependConversationOptimistic,
+    refreshConversations,
   } = useConversations({
     agentId: page.id,
     currentConversationId,
@@ -379,6 +380,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onConversationAdded: (payload) => {
       if (!shouldPrependConversation(payload, getBrowserSessionId(), conversations)) return;
       prependConversationOptimistic(payload.conversation);
+    },
+    onConversationRenamed: () => {
+      refreshConversations();
+    },
+    onConversationDeleted: () => {
+      refreshConversations();
     },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);

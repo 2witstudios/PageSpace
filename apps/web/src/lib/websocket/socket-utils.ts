@@ -984,12 +984,15 @@ export async function broadcastAiConversationRenamed(payload: ChatConversationRe
       payload,
     });
 
-    await fetch(`${realtimeUrl}/api/broadcast`, {
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
       signal: AbortSignal.timeout(5000),
     });
+    if (!response.ok) {
+      throw new Error(`Broadcast HTTP ${response.status}`);
+    }
   } catch (error) {
     realtimeLogger.error(
       'Failed to broadcast chat conversation-renamed',
@@ -1018,12 +1021,15 @@ export async function broadcastAiConversationDeleted(payload: ChatConversationDe
       payload,
     });
 
-    await fetch(`${realtimeUrl}/api/broadcast`, {
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
       signal: AbortSignal.timeout(5000),
     });
+    if (!response.ok) {
+      throw new Error(`Broadcast HTTP ${response.status}`);
+    }
   } catch (error) {
     realtimeLogger.error(
       'Failed to broadcast chat conversation-deleted',
@@ -1052,12 +1058,15 @@ export async function broadcastAgentGrantChanged(payload: AgentGrantChangedPaylo
       payload,
     });
 
-    await fetch(`${realtimeUrl}/api/broadcast`, {
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
       signal: AbortSignal.timeout(5000),
     });
+    if (!response.ok) {
+      throw new Error(`Broadcast HTTP ${response.status}`);
+    }
   } catch (error) {
     realtimeLogger.error(
       'Failed to broadcast agent grant-changed',
