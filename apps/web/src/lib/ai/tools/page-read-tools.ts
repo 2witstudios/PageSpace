@@ -29,11 +29,10 @@ export const pageReadTools = {
       }
 
       try {
-        // Get all pages the actor has access to in the drive (empty if no access)
-        const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
-        if (visiblePages.length === 0) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           return { success: false, error: `You don't have access to the "${driveSlug}" workspace` };
         }
+        const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
 
         // Sort by position to maintain order
         visiblePages.sort((a, b) => a.position - b.position);

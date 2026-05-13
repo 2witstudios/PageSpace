@@ -5,7 +5,7 @@ import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
-import { canActorViewPage } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import {
   sanitizeMessagesForModel,
   saveMessageToDatabase,
@@ -142,7 +142,11 @@ export const agentCommunicationTools = {
         if (!drive) {
           throw new Error(`Drive with ID "${driveId}" not found`);
         }
-        
+
+        if (!await canActorAccessDrive(executionContext, driveId)) {
+          throw new Error(`You don't have access to the drive with ID "${driveId}"`);
+        }
+
         // Query all AI agents in the drive
         const agents = await db
           .select({
