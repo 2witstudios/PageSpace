@@ -5,7 +5,7 @@ import useSWR, { mutate } from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useCalendarSocket } from '@/hooks/useCalendarSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { CalendarEvent, TaskWithDueDate } from './calendar-types';
+import { CalendarEvent, CalendarEventAttendee, TaskWithDueDate } from './calendar-types';
 import {
   startOfMonth,
   endOfMonth,
@@ -206,8 +206,7 @@ export function useCalendarData({
 
   const addAttendees = useCallback(
     async (eventId: string, userIds: string[], isOptional = false) => {
-      const result = await post(`/api/calendar/events/${eventId}/attendees`, { userIds, isOptional });
-      const data = await result.json() as { attendees?: import('./calendar-types').CalendarEventAttendee[] };
+      const data = await post<{ attendees?: CalendarEventAttendee[] }>(`/api/calendar/events/${eventId}/attendees`, { userIds, isOptional });
       mutate(eventsUrl);
       return data.attendees ?? [];
     },
