@@ -6,7 +6,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserViewPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { canActorEditPage } from './actor-permissions';
 import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
@@ -997,8 +997,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         throw new Error(`Agent with ID ${targetAgentId} not found`);
       }
 
-      const canView = await canUserViewPage(userId, targetAgentId);
-      if (!canView) {
+      if (!await canActorViewPage(context as ToolExecutionContext, targetAgentId)) {
         throw new Error('You do not have permission to view this agent\'s tasks');
       }
 
@@ -1047,7 +1046,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         const driveAccessResults = await Promise.all(
           taskDriveIds.map(async (taskDriveId) => ({
             driveId: taskDriveId,
-            hasAccess: await getUserDriveAccess(userId, taskDriveId),
+            hasAccess: await canActorAccessDrive(context as ToolExecutionContext, taskDriveId),
           }))
         );
 

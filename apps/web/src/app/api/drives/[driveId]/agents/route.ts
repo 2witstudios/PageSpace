@@ -9,7 +9,6 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createId } from '@paralleldrive/cuid2';
 
 interface DriveAgentSummary {
   id: string;
@@ -246,13 +245,11 @@ export async function POST(
       [newMember] = await db
         .insert(driveAgentMembers)
         .values({
-          id: createId(),
           driveId,
           agentPageId,
           role,
           customRoleId: customRoleId ?? null,
           addedBy: userId,
-          addedAt: new Date(),
         })
         .returning();
     } catch (err) {

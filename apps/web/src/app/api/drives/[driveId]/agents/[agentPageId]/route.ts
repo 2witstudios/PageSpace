@@ -73,7 +73,7 @@ export async function PATCH(
       }
     }
 
-    const updateValues: Record<string, unknown> = {};
+    const updateValues: Partial<typeof driveAgentMembers.$inferInsert> = {};
     if (role !== undefined) updateValues.role = role;
     if (customRoleId !== undefined) updateValues.customRoleId = customRoleId;
 
