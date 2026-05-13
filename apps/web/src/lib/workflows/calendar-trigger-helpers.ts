@@ -216,8 +216,7 @@ export async function upsertCalendarTriggerWorkflowInTx(
   const existing = await tx
     .select({ id: calendarTriggers.id, workflowId: calendarTriggers.workflowId })
     .from(calendarTriggers)
-    .where(eq(calendarTriggers.calendarEventId, params.calendarEventId))
-    .limit(1);
+    .where(eq(calendarTriggers.calendarEventId, params.calendarEventId));
 
   let workflowId: string;
 
@@ -364,8 +363,7 @@ export async function resyncCalendarTriggerTimings(
         scheduledById: calendarTriggers.scheduledById,
       })
       .from(calendarTriggers)
-      .where(eq(calendarTriggers.calendarEventId, calendarEventId))
-      .limit(1);
+      .where(eq(calendarTriggers.calendarEventId, calendarEventId));
 
     if (existingTrigger.length === 0) return;
 
