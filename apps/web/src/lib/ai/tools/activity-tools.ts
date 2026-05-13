@@ -4,6 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, desc, gte, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { drives } from '@pagespace/db/schema/core'
+import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
@@ -313,6 +314,14 @@ When summarizing multiple changes, group them thematically and describe the over
       }
 
       try {
+        // Look up current user's email — actorEmail is the authoritative actor
+        // identifier (used by the UI), so isYou must compare against it, not userId.
+        const [currentUserRow] = await db
+          .select({ email: users.email })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        const currentUserEmail = currentUserRow?.email ?? null;
         // Get last visit time if needed
         let lastVisitTime: Date | undefined;
         if (since === 'last_visit') {
@@ -471,7 +480,7 @@ When summarizing multiple changes, group them thematically and describe the over
             const actor: CompactActor = {
               email,
               name: activity.actorDisplayName || activity.user?.name || null,
-              isYou: activity.userId === userId,
+              isYou: currentUserEmail !== null && activity.actorEmail === currentUserEmail,
               count: 0,
             };
             entry = { idx: actorsList.length, actor };
