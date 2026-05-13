@@ -855,7 +855,7 @@ export async function POST(request: Request) {
                 agentTitle: page.title,
               },
               pageAccessScope: {
-                type: (page.toolAccessScope ?? 'drive') === 'subtree' ? 'subtree' : 'drive',
+                type: page.toolAccessScope === 'subtree' ? 'subtree' : 'drive',
                 agentPageId: chatId,
               },
             }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools

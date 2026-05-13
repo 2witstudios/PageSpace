@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ALTER COLUMN "toolAccessScope" SET NOT NULL;

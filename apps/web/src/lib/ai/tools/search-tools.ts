@@ -4,6 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
+import { filterToSubtree } from '@pagespace/lib/content/tree-utils';
 import { type ToolExecutionContext } from '../core';
 
 export const searchTools = {
@@ -92,7 +93,21 @@ export const searchTools = {
         const matchingPages = await query.limit(maxResults);
 
         // Get all accessible pages upfront to avoid N+1 queries
-        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        let accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
+          const allDrivePages = await db
+            .select({ id: pages.id, parentId: pages.parentId })
+            .from(pages)
+            .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+          const allowedIds = new Set(
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
+          );
+          accessiblePages = accessiblePages.filter(p => allowedIds.has(p.id));
+        }
+
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
         const pageMap = new Map(accessiblePages.map(p => [p.id, p]));
 
@@ -399,7 +414,17 @@ export const searchTools = {
         const allPages = await query;
 
         // Get all accessible pages upfront to avoid N+1 queries
-        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        let accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
+          const subtreeIds = new Set(
+            filterToSubtree(allPages, pageAccessScope.agentPageId).map(p => p.id)
+          );
+          accessiblePages = accessiblePages.filter(p => subtreeIds.has(p.id));
+        }
+
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
 
         // Build page hierarchy with paths
@@ -507,6 +532,12 @@ export const searchTools = {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      // Cross-drive search is not available when agent is restricted to a page subtree
+      const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+      if (pageAccessScope?.type === 'subtree') {
+        throw new Error('Cross-drive search is not available in subtree access mode. Use regex_search or glob_search within the current drive instead.');
       }
 
       try {

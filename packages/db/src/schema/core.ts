@@ -41,7 +41,7 @@ export const pages = pgTable('pages', {
   visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').default(true).notNull(), // Whether this agent appears in global assistant's system prompt
   includePageTree: boolean('includePageTree').default(false).notNull(), // Whether to include page tree in AI context
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
-  toolAccessScope: text('toolAccessScope', { enum: ['drive', 'subtree'] }).default('drive'), // Scope of pages accessible to AI tools
+  toolAccessScope: text('toolAccessScope', { enum: ['drive', 'subtree'] }).default('drive').notNull(), // Scope of pages accessible to AI tools
   // File-specific fields
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),

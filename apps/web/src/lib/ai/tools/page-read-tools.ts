@@ -144,14 +144,14 @@ export const pageReadTools = {
         }
 
         // Enforce agent tool access scope if restricted to subtree
-        const pageAccessScopeRead = (context as ToolExecutionContext)?.pageAccessScope;
-        if (pageAccessScopeRead?.type === 'subtree') {
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
           const allDrivePages = await db
             .select({ id: pages.id, parentId: pages.parentId })
             .from(pages)
             .where(and(eq(pages.driveId, page.driveId!), eq(pages.isTrashed, false)));
           const allowedIds = new Set(
-            filterToSubtree(allDrivePages, pageAccessScopeRead.agentPageId).map(p => p.id)
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
           );
           if (!allowedIds.has(page.id)) {
             throw new Error('This page is outside the agent\'s configured access scope');
@@ -685,7 +685,7 @@ export const pageReadTools = {
         }
 
         // Get all trashed pages in the drive (flat list)
-        const trashedPages = await db
+        let trashedPages = await db
           .select()
           .from(pages)
           .where(and(
@@ -693,6 +693,19 @@ export const pageReadTools = {
             eq(pages.isTrashed, true)
           ))
           .orderBy(asc(pages.position));
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
+          const allDrivePages = await db
+            .select({ id: pages.id, parentId: pages.parentId })
+            .from(pages)
+            .where(eq(pages.driveId, driveId));
+          const allowedIds = new Set(
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
+          );
+          trashedPages = trashedPages.filter(p => allowedIds.has(p.id));
+        }
 
         // Build a tree from the flat list of trashed pages
         const tree = buildTree(trashedPages);
@@ -788,6 +801,24 @@ export const pageReadTools = {
             success: false,
             error: 'Insufficient permissions to access this agent',
           };
+        }
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
+          const allDrivePages = await db
+            .select({ id: pages.id, parentId: pages.parentId })
+            .from(pages)
+            .where(and(eq(pages.driveId, page.driveId!), eq(pages.isTrashed, false)));
+          const allowedIds = new Set(
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
+          );
+          if (!allowedIds.has(page.id)) {
+            return {
+              success: false,
+              error: 'This page is outside the agent\'s configured access scope',
+            };
+          }
         }
 
         // Query conversations grouped by conversationId
@@ -952,6 +983,24 @@ export const pageReadTools = {
             success: false,
             error: 'Insufficient permissions to access this conversation',
           };
+        }
+
+        // Enforce agent tool access scope if restricted to subtree
+        const pageAccessScope = (context as ToolExecutionContext)?.pageAccessScope;
+        if (pageAccessScope?.type === 'subtree') {
+          const allDrivePages = await db
+            .select({ id: pages.id, parentId: pages.parentId })
+            .from(pages)
+            .where(and(eq(pages.driveId, page.driveId!), eq(pages.isTrashed, false)));
+          const allowedIds = new Set(
+            filterToSubtree(allDrivePages, pageAccessScope.agentPageId).map(p => p.id)
+          );
+          if (!allowedIds.has(page.id)) {
+            return {
+              success: false,
+              error: 'This page is outside the agent\'s configured access scope',
+            };
+          }
         }
 
         // Get all messages for this conversation
