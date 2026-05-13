@@ -9,7 +9,7 @@ import { assert } from './riteway';
  *
  * Key behaviors to test:
  * 1. Returns empty results when insufficient conversation data
- * 2. Runs 4 focused passes (worldview, projects, communication, preferences)
+ * 2. Runs 3 focused passes (worldview, communication, preferences)
  * 3. Parses JSON array responses from LLM
  * 4. Handles LLM errors gracefully (returns empty arrays, doesn't throw)
  * 5. Gathers conversations from multiple sources
@@ -145,7 +145,7 @@ describe('discovery-service', () => {
       });
     });
 
-    it('should return DiscoveryResult with four arrays', async () => {
+    it('should return DiscoveryResult with three arrays', async () => {
       const { runDiscoveryPasses } = await import('../discovery-service');
 
       const result = await runDiscoveryPasses('user-123');
@@ -154,13 +154,6 @@ describe('discovery-service', () => {
         given: 'a userId',
         should: 'return result with worldview array',
         actual: Array.isArray(result.worldview),
-        expected: true,
-      });
-
-      assert({
-        given: 'a userId',
-        should: 'return result with projects array',
-        actual: Array.isArray(result.projects),
         expected: true,
       });
 
@@ -195,8 +188,8 @@ describe('discovery-service', () => {
 
       assert({
         given: 'a user with fewer than 3 conversations',
-        should: 'return empty projects array',
-        actual: result.projects,
+        should: 'return empty preferences array',
+        actual: result.preferences,
         expected: [],
       });
     });
@@ -204,13 +197,11 @@ describe('discovery-service', () => {
 
   describe('DiscoveryResult type', () => {
     it('should define DiscoveryResult interface', async () => {
-      // Type check - if this compiles, the type exists
       const { runDiscoveryPasses } = await import('../discovery-service');
       const result = await runDiscoveryPasses('test');
 
       // TypeScript will fail compilation if these properties don't exist
       const _worldview: string[] = result.worldview;
-      const _projects: string[] = result.projects;
       const _communication: string[] = result.communication;
       const _preferences: string[] = result.preferences;
 
@@ -228,11 +219,10 @@ describe('discovery-service', () => {
       vi.clearAllMocks();
     });
 
-    it('should run 4 LLM passes when sufficient conversations exist', async () => {
+    it('should run 3 LLM passes when sufficient conversations exist', async () => {
       setupDbWithMessages(10);
       setupAIProviderSuccess([
         '["Expert in TypeScript"]',
-        '["Working on memory system"]',
         '["Prefers concise responses"]',
         '["No emojis please"]',
       ]);
@@ -240,12 +230,11 @@ describe('discovery-service', () => {
       const { runDiscoveryPasses } = await import('../discovery-service');
       await runDiscoveryPasses('user-with-data');
 
-      // Should have called generateText 4 times (one per pass)
       assert({
         given: 'user with sufficient conversations',
-        should: 'call LLM 4 times for 4 discovery passes',
+        should: 'call LLM 3 times for worldview, communication, and preferences passes',
         actual: mockGenerateText.mock.calls.length,
-        expected: 4,
+        expected: 3,
       });
     });
 
@@ -253,7 +242,6 @@ describe('discovery-service', () => {
       setupDbWithMessages(10);
       setupAIProviderSuccess([
         '["Expert in TypeScript", "Values TDD"]',
-        '["Working on memory system"]',
         '["Prefers concise responses"]',
         '["No emojis please"]',
       ]);
@@ -273,7 +261,6 @@ describe('discovery-service', () => {
       setupDbWithMessages(10);
       setupAIProviderSuccess([
         '```json\n["Expert in TypeScript"]\n```',
-        '["Working on memory system"]',
         '["Prefers concise responses"]',
         '["No emojis"]',
       ]);
@@ -293,7 +280,6 @@ describe('discovery-service', () => {
       setupDbWithMessages(10);
       setupAIProviderSuccess([
         'I found some insights about this user',
-        '["Working on memory system"]',
         '["Prefers concise responses"]',
         '["No emojis"]',
       ]);

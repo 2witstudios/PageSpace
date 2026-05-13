@@ -155,7 +155,6 @@ async function processUserMemory(
 
   const totalInsights =
     insights.worldview.length +
-    insights.projects.length +
     insights.communication.length +
     insights.preferences.length;
 
@@ -188,7 +187,6 @@ async function processUserMemory(
     userId,
     insightCounts: {
       worldview: insights.worldview.length,
-      projects: insights.projects.length,
       communication: insights.communication.length,
       preferences: insights.preferences.length,
     },
