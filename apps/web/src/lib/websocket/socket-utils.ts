@@ -712,6 +712,24 @@ export interface ChatConversationAddedPayload {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
+export interface ChatConversationRenamedPayload {
+  agentId: string;
+  conversationId: string;
+  title: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface ChatConversationDeletedPayload {
+  agentId: string;
+  conversationId: string;
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
+export interface AgentGrantChangedPayload {
+  agentId: string;
+  triggeredBy: { userId: string };
+}
+
 export async function broadcastAiStreamStart(payload: AiStreamStartPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
@@ -944,6 +962,108 @@ export async function broadcastAiConversationAdded(payload: ChatConversationAdde
       error instanceof Error ? error : undefined,
       {
         event: 'chat:conversation_added',
+        channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationRenamed(payload: ChatConversationRenamedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-renamed broadcast', {
+      event: 'chat:conversation_renamed',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_renamed',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-renamed',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_renamed',
+        channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastAiConversationDeleted(payload: ChatConversationDeletedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping chat conversation-deleted broadcast', {
+      event: 'chat:conversation_deleted',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'chat:conversation_deleted',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast chat conversation-deleted',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:conversation_deleted',
+        channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastAgentGrantChanged(payload: AgentGrantChangedPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping agent grant-changed broadcast', {
+      event: 'agent:grant_changed',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: payload.agentId,
+      event: 'agent:grant_changed',
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast agent grant-changed',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'agent:grant_changed',
         channel: maskIdentifier(payload.agentId),
       }
     );
