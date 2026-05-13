@@ -45,6 +45,15 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn(),
 }));
 
+vi.mock('../actor-permissions', () => ({
+  canActorEditPage: vi.fn(),
+  canActorViewPage: vi.fn(),
+  canActorDeletePage: vi.fn(),
+  canActorAccessDrive: vi.fn(),
+  getActorAccessiblePagesInDrive: vi.fn(),
+  getAgentPageId: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
     getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
@@ -85,14 +94,13 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { channelTools } from '../channel-tools';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canActorEditPage } from '../actor-permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../../core';
 
-const mockCanUserEditPage = vi.mocked(canUserEditPage);
-const mockCanUserViewPage = vi.mocked(canUserViewPage);
+const mockCanActorEditPage = vi.mocked(canActorEditPage);
 const mockGetActorInfo = vi.mocked(getActorInfo);
 const mockBroadcastInboxEvent = vi.mocked(broadcastInboxEvent);
 const mockDbInsert = db.insert as unknown as Mock;
@@ -115,7 +123,7 @@ describe('channel-tools', () => {
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
     });
-    mockCanUserViewPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
     mockChannelMessagesFindFirst.mockResolvedValue({
       id: 'msg-1',
       createdAt: new Date('2026-02-10T12:00:00.000Z'),
@@ -205,7 +213,7 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(false);
+      mockCanActorEditPage.mockResolvedValue(false);
 
       const context = {
         toolCallId: '1', messages: [],
@@ -234,7 +242,7 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
       mockGetActorInfo.mockResolvedValue({
         actorEmail: 'alice@example.com',
         actorDisplayName: 'Alice',
@@ -273,7 +281,7 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
 
       const context = {
         toolCallId: '1', messages: [],
@@ -309,7 +317,7 @@ describe('channel-tools', () => {
         { userId: 'user-123' },
         { userId: 'user-456' },
       ]);
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
       mockGetActorInfo.mockResolvedValue({
         actorEmail: 'alice@example.com',
         actorDisplayName: 'Alice',
@@ -352,7 +360,7 @@ describe('channel-tools', () => {
         { userId: 'user-123' },
         { userId: 'user-456' },
       ]);
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
 
       const context = {
         toolCallId: '1', messages: [],
@@ -394,7 +402,7 @@ describe('channel-tools', () => {
         revision: 1,
         stateHash: null,
       });
-      mockCanUserEditPage.mockResolvedValue(true);
+      mockCanActorEditPage.mockResolvedValue(true);
       mockGetActorInfo.mockResolvedValue({
         actorEmail: 'bob@example.com',
         actorDisplayName: 'Bob',
