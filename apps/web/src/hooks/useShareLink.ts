@@ -70,8 +70,7 @@ export function useShareLink<TLink extends { id: string; useCount: number }>({
 
   async function handleGenerate() {
     setIsGenerating(true);
-    // Snapshot callbacks before the await so UI changes mid-flight don't corrupt
-    // the activeLink that gets set — the server received `body`, not the new state.
+    // Snapshot before await — role/permissions changed mid-flight must not corrupt the stored link.
     const body = getGenerateBodyRef.current();
     const buildLink = buildNewLinkRef.current;
     try {
