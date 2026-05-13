@@ -53,13 +53,14 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const applyPermissionsToTree = useCallback((rolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>, nodes: PageNode[]) => {
     const applyRecursive = (permsMap: typeof rolePerms, nodeList: PageNode[]) => {
       nodeList.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         const perms = permsMap[node.id];
         onChange(node.id, perms || { canView: false, canEdit: false, canShare: false });
         if (node.children) applyRecursive(permsMap, node.children);
       });
     };
     applyRecursive(rolePerms, nodes);
-  }, [onChange]);
+  }, [onChange, readOnlyDriveRoot]);
 
   // Expose applyRolePermissions to parent via ref
   useImperativeHandle(ref, () => ({
@@ -180,6 +181,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const selectAll = () => {
     const applyToAll = (nodes: PageNode[]) => {
       nodes.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         onChange(node.id, { canView: true, canEdit: false, canShare: false });
         if (node.children) applyToAll(node.children);
       });
@@ -190,6 +192,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const selectAllPermissions = () => {
     const applyToAll = (nodes: PageNode[]) => {
       nodes.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         onChange(node.id, { canView: true, canEdit: true, canShare: true });
         if (node.children) applyToAll(node.children);
       });
@@ -200,6 +203,7 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
   const selectNone = () => {
     const clearAll = (nodes: PageNode[]) => {
       nodes.forEach(node => {
+        if (node.type === 'DRIVE' && readOnlyDriveRoot) return;
         onChange(node.id, { canView: false, canEdit: false, canShare: false });
         if (node.children) clearAll(node.children);
       });
