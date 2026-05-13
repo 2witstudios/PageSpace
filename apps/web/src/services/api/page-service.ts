@@ -608,6 +608,13 @@ export const pageService = {
     // Check authorization — mirror the AI tool's split: nested pages require
     // edit permission on the parent; root-level pages require drive membership.
     if (params.parentId) {
+      const parentPage = await db.query.pages.findFirst({
+        where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
+        columns: { id: true },
+      });
+      if (!parentPage) {
+        return { success: false, error: 'Parent page not found in this drive', status: 400 };
+      }
       const canEdit = await canUserEditPage(userId, params.parentId);
       if (!canEdit) {
         return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };

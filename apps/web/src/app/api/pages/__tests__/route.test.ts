@@ -290,6 +290,25 @@ describe('POST /api/pages', () => {
       expect(response.status).toBe(403);
       expect(body.error).toMatch(/permission/i);
     });
+
+    it('returns 400 when parent page belongs to a different drive', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Parent page not found in this drive',
+        status: 400,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_other_drive',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not found/i);
+    });
   });
 
   describe('service delegation', () => {
