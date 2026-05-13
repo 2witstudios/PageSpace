@@ -61,7 +61,7 @@ export async function GET(
       agentMembers,
       currentUserRole: access.isOwner ? 'OWNER' : access.isAdmin ? 'ADMIN' : 'MEMBER',
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to fetch agent members' }, { status: 500 });
   }
 }
