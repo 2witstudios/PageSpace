@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -244,6 +245,12 @@ export async function PATCH(
         userId,
         updatedFields: Object.keys(updateData),
       });
+
+      await broadcastPageEvent(
+        createPageEventPayload(page.driveId, pageId, 'updated', {
+          updatedFields: Object.keys(updateData),
+        }),
+      );
     }
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'update_agent_config', updatedFields: Object.keys(updateData) } });
