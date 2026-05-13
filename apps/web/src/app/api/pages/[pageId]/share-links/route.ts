@@ -84,7 +84,7 @@ export async function POST(
     }
     if (result.error === 'INVALID_PERMISSIONS') {
       return NextResponse.json(
-        { error: 'EDIT permission requires VIEW permission' },
+        { error: 'VIEW permission is required' },
         { status: 400 }
       );
     }
