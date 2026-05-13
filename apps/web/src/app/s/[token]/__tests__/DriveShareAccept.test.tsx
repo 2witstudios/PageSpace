@@ -34,13 +34,14 @@ describe('DriveShareAccept', () => {
     vi.mocked(useCSRFToken).mockReturnValue(csrfBase);
   });
 
-  it('Given auth is loading, should not redirect and disable the button', () => {
+  it('Given auth is loading, should show spinner and not redirect', () => {
     vi.mocked(useAuth).mockReturnValue({ isAuthenticated: false, isLoading: true } as ReturnType<typeof useAuth>);
 
     render(<DriveShareAccept token="tok" info={INFO} />);
 
     expect(pushMock).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /join/i })).toBeDisabled();
+    expect(screen.getByText(/joining/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
   });
 
   it('Given unauthenticated user after auth loads, should show invite landing page without redirecting', async () => {
@@ -61,7 +62,7 @@ describe('DriveShareAccept', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /join/i }));
 
-    expect(pushMock).toHaveBeenCalledWith('/auth/signin?next=/s/tok-abc');
+    expect(pushMock).toHaveBeenCalledWith('/auth/signin?next=%2Fs%2Ftok-abc');
   });
 
   it('Given authenticated user, should not redirect even if csrfToken is null', () => {
