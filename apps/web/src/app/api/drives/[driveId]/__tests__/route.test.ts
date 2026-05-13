@@ -541,7 +541,15 @@ describe('PATCH /api/drives/[driveId]', () => {
       });
       await PATCH(request, createContext(mockDriveId));
 
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(createDriveEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        'updated',
+        { name: 'Test', slug: 'test' }
+      );
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        { driveId: mockDriveId, event: 'updated', data: { name: 'Test', slug: 'test' } },
+        ['user-123', 'user-456']
+      );
     });
   });
 
