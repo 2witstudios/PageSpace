@@ -224,6 +224,8 @@ function expandRecurringEvents<T extends { startAt: Date; endAt: Date; recurrenc
       result.push(event);
       continue;
     }
+    const parentStartISO = event.startAt.toISOString();
+    const parentEndISO = event.endAt.toISOString();
     const duration = event.endAt.getTime() - event.startAt.getTime();
     const occurrences = expandOccurrences(
       event.recurrenceRule,
@@ -233,11 +235,15 @@ function expandRecurringEvents<T extends { startAt: Date; endAt: Date; recurrenc
       event.recurrenceExceptions ?? [],
     );
     for (const occStart of occurrences) {
+      // Carry the parent's base start/end so the edit modal can restore them,
+      // preventing accidental anchor-shifting when saving a non-first occurrence.
       result.push({
         ...event,
         startAt: occStart,
         endAt: new Date(occStart.getTime() + duration),
-      });
+        recurringBaseStartAt: parentStartISO,
+        recurringBaseEndAt: parentEndISO,
+      } as T);
     }
   }
   return result;

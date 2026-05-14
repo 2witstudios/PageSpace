@@ -347,8 +347,12 @@ export function EventModal({
         setAllDay(event.allDay);
         setColor(event.color as keyof typeof EVENT_COLORS);
 
-        const start = new Date(event.startAt);
-        const end = new Date(event.endAt);
+        // For virtual recurring occurrences, use the parent's base start/end
+        // so saving doesn't accidentally shift the series anchor date.
+        const start = new Date(event.recurringBaseStartAt ?? event.startAt);
+        const end = event.recurringBaseStartAt
+          ? new Date(start.getTime() + (new Date(event.endAt).getTime() - new Date(event.startAt).getTime()))
+          : new Date(event.endAt);
         setStartDate(start);
         setEndDate(end);
         setStartTime(format(start, 'HH:mm'));
