@@ -562,7 +562,7 @@ export function EventModal({
             ...(recurrenceEndType === 'count'
               ? { count: recurrenceCount }
               : recurrenceEndType === 'until' && recurrenceUntil
-              ? { until: recurrenceUntil.toISOString().slice(0, 10) }
+              ? { until: `${recurrenceUntil.getFullYear()}-${String(recurrenceUntil.getMonth() + 1).padStart(2, '0')}-${String(recurrenceUntil.getDate()).padStart(2, '0')}` }
               : {}),
           };
 
