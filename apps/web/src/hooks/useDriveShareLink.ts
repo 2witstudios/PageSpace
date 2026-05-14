@@ -55,6 +55,7 @@ export function useDriveShareLink(driveId: string) {
     setIsLoading(true);
     setLinks([]);
     setCustomRoles([]);
+    setSelectedRole({ kind: 'member' });
 
     async function loadAll() {
       try {
@@ -75,9 +76,9 @@ export function useDriveShareLink(driveId: string) {
           if (parsed.success) {
             setCustomRoles(parsed.data.roles);
             const fallback = parsed.data.roles.find((r) => r.isDefault);
-            if (fallback) {
-              setSelectedRole({ kind: 'custom', customRoleId: fallback.id });
-            }
+            setSelectedRole(
+              fallback ? { kind: 'custom', customRoleId: fallback.id } : { kind: 'member' },
+            );
           }
         }
       } catch {

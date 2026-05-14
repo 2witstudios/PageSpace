@@ -234,12 +234,13 @@ export const consumeAllInvitesForEmail = async ({
 
     for (const inviteRow of driveInvites) {
       try {
+        const normalizedCustomRoleId = inviteRow.role === 'ADMIN' ? null : inviteRow.customRoleId;
         const consumed = await driveInviteRepository.consumeInviteAndCreateMembership({
           inviteId: inviteRow.id,
           driveId: inviteRow.driveId,
           userId: user.id,
           role: inviteRow.role,
-          customRoleId: inviteRow.role === 'ADMIN' ? null : inviteRow.customRoleId,
+          customRoleId: normalizedCustomRoleId,
           invitedBy: inviteRow.invitedBy,
           acceptedAt: now,
         });
@@ -252,7 +253,7 @@ export const consumeAllInvitesForEmail = async ({
           driveId: inviteRow.driveId,
           driveName: inviteRow.driveName,
           role: inviteRow.role,
-          customRoleId: inviteRow.role === 'ADMIN' ? null : inviteRow.customRoleId,
+          customRoleId: normalizedCustomRoleId,
           invitedUserId: user.id,
           inviterUserId: inviteRow.invitedBy,
         };
