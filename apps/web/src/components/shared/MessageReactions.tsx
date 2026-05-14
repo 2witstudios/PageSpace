@@ -83,15 +83,20 @@ function ReactionPill({
     }, 500);
   };
 
-  const cancelLongPress = () => {
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    if (suppressNextClick.current) {
+      // Prevent the synthetic click that mobile browsers fire after touchend
+      e.preventDefault();
+      suppressNextClick.current = false;
+    }
+  };
+
+  const onTouchMove = () => {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
   };
 
   const handleClick = () => {
-    if (suppressNextClick.current) {
-      suppressNextClick.current = false;
-      return;
-    }
     onReactionClick(group);
   };
 
@@ -103,8 +108,8 @@ function ReactionPill({
           onMouseEnter={scheduleOpen}
           onMouseLeave={scheduleClose}
           onTouchStart={onTouchStart}
-          onTouchEnd={cancelLongPress}
-          onTouchMove={cancelLongPress}
+          onTouchEnd={onTouchEnd}
+          onTouchMove={onTouchMove}
           disabled={!canReact}
           className={cn(
             'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs',
