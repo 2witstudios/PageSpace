@@ -26,7 +26,7 @@ export interface AcceptedInviteData {
   driveId: string;
   driveName: string;
   role: Role;
-  customRoleId?: string | null;
+  customRoleId: string | null;
   invitedUserId: string;
   inviterUserId: string;
 }

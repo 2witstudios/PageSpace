@@ -97,9 +97,7 @@ export async function createDriveShareLink(
   const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
-  // Admin overrides custom-role at the boundary — ADMIN is a permission ceiling
-  // that ignores the per-page grants on a custom role. Allowing both would let
-  // the redeem path silently store a customRoleId that never gets applied.
+  // ADMIN ceiling: customRoleId is meaningless for admins and must never be stored.
   const role = opts.role ?? 'MEMBER';
   const customRoleId = role === 'ADMIN' ? null : (opts.customRoleId ?? null);
 
@@ -219,10 +217,7 @@ export async function redeemDriveShareLink(
   const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
-  // ADMIN role overrides any customRoleId on the link — see createDriveShareLink
-  // for the symmetric gate at boundary write time. Defense in depth keeps an
-  // older link (created before that gate landed, with both fields populated)
-  // from quietly setting customRoleId on an ADMIN row.
+  // Defense-in-depth: older links may pre-date the ADMIN gate; keep ADMIN+null invariant.
   const customRoleId = link.role === 'ADMIN' ? null : link.customRoleId;
 
   const [inserted] = await db.insert(driveMembers).values({
@@ -236,12 +231,9 @@ export async function redeemDriveShareLink(
     target: [driveMembers.driveId, driveMembers.userId],
     set: {
       acceptedAt: new Date(),
-      // Preserve ADMIN role — never downgrade an existing ADMIN via a MEMBER share link
+      // Never downgrade an existing ADMIN via a MEMBER share link.
       role: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN ${driveMembers.role} ELSE EXCLUDED.role END`,
-      // For existing MEMBERs, applying the new link's customRoleId is the
-      // intended behavior (a re-redeem switches them to the link's role
-      // template). For existing ADMINs the SET above keeps role=ADMIN, so
-      // customRoleId must stay NULL to match the ADMIN+null invariant.
+      // Re-redeem applies the link's role template; existing ADMINs keep NULL to preserve ADMIN+null invariant.
       customRoleId: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN NULL ELSE EXCLUDED."customRoleId" END`,
     },
   }).returning({ id: driveMembers.id });

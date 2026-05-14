@@ -58,25 +58,22 @@ export function useDriveShareLink(driveId: string) {
 
     async function loadAll() {
       try {
-        const [linksRes, rolesRes] = await Promise.all([
+        const [linksResult, rolesResult] = await Promise.allSettled([
           fetch(`/api/drives/${driveId}/share-links`, { credentials: 'include' }),
           fetchWithAuth(`/api/drives/${driveId}/roles`),
         ]);
 
-        if (!cancelled && linksRes.ok) {
-          const raw = await linksRes.json();
+        if (!cancelled && linksResult.status === 'fulfilled' && linksResult.value.ok) {
+          const raw = await linksResult.value.json();
           const parsed = DriveListResponseSchema.safeParse(raw);
           if (parsed.success) setLinks(parsed.data.links);
         }
 
-        if (!cancelled && rolesRes.ok) {
-          const raw = await rolesRes.json();
+        if (!cancelled && rolesResult.status === 'fulfilled' && rolesResult.value.ok) {
+          const raw = await rolesResult.value.json();
           const parsed = RolesResponseSchema.safeParse(raw);
           if (parsed.success) {
             setCustomRoles(parsed.data.roles);
-            // Auto-select the role marked isDefault so a fresh share-link
-            // create matches the team's intended baseline, mirroring the
-            // email-invite page's behavior.
             const fallback = parsed.data.roles.find((r) => r.isDefault);
             if (fallback) {
               setSelectedRole({ kind: 'custom', customRoleId: fallback.id });
