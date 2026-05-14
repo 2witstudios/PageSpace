@@ -35,6 +35,19 @@ function preprocessMentions(content: string): string {
   });
 }
 
+/**
+ * Convert bare http(s):// URLs to markdown [url](url) links so Streamdown renders them
+ * as clickable anchors. Skips URLs already inside markdown link syntax `(url)`.
+ * Trailing punctuation is stripped from the URL and preserved as literal text.
+ */
+function autoLinkUrls(content: string): string {
+  return content.replace(/(?<!\()(https?:\/\/[^\s<>"')\]]+)/g, (rawUrl) => {
+    const url = rawUrl.replace(/[.,;:!?'")\]>]+$/, '');
+    const trailing = rawUrl.slice(url.length);
+    return `[${url}](${url})${trailing}`;
+  });
+}
+
 /** Converts single \n to CommonMark hard line breaks (two trailing spaces + \n).
  * Leaves \n\n paragraph breaks untouched. Use for user-typed content only —
  * not AI-generated markdown where \n has structural meaning (lists, code blocks). */
@@ -354,8 +367,8 @@ export const StreamingMarkdown = memo(
   ({ content, isStreaming = false, renderHtmlAsText = false, className }: StreamingMarkdownProps) => {
     const router = useRouter();
 
-    // Pre-process mentions before rendering
-    const processedContent = useMemo(() => preprocessMentions(content), [content]);
+    // Pre-process mentions and auto-link bare URLs before rendering
+    const processedContent = useMemo(() => autoLinkUrls(preprocessMentions(content)), [content]);
 
     // Create components with router for mobile-aware navigation
     // Memoize to avoid recreating on every render

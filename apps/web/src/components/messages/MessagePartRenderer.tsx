@@ -1,7 +1,9 @@
 'use client';
 
 import React, { MouseEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
+import { openExternalUrl, isInternalUrl } from '@/lib/navigation/app-navigation';
 
 // Define the structure for message parts
 export interface MessagePart {
@@ -20,116 +22,122 @@ interface MessagePartRendererProps {
   context?: 'message';
 }
 
+// Matches either a @mention or a bare http(s) URL, in document order
+const CONTENT_REGEX = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)|(https?:\/\/[^\s<>"')\]]+)/g;
+
+function parseTextIntoNodes(
+  text: string,
+  baseKey: string,
+  onMentionClick: (e: MouseEvent<HTMLAnchorElement>, pageId: string) => void,
+  onUrlClick: (e: MouseEvent<HTMLAnchorElement>, url: string) => void,
+): React.ReactNode[] {
+  const elements: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  // Reset stateful regex before use
+  CONTENT_REGEX.lastIndex = 0;
+
+  while ((match = CONTENT_REGEX.exec(text)) !== null) {
+    const preceding = text.slice(lastIndex, match.index);
+    if (preceding) {
+      elements.push(<span key={`${baseKey}-t-${lastIndex}`}>{preceding}</span>);
+    }
+
+    if (match[1] !== undefined) {
+      // @mention: groups 1=label, 2=id, 3=type
+      const [, label, id, type] = match;
+      if (type === 'page') {
+        elements.push(
+          <a
+            key={`${baseKey}-m-${match.index}`}
+            href={`/p/${id}`}
+            onClick={(e) => onMentionClick(e, id)}
+            className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
+          >
+            @{label}
+          </a>
+        );
+      } else {
+        elements.push(
+          <span
+            key={`${baseKey}-m-${match.index}`}
+            className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded"
+          >
+            @{label}
+          </span>
+        );
+      }
+      lastIndex = match.index + match[0].length;
+    } else {
+      // Bare URL: group 4
+      const rawUrl = match[4];
+      const url = rawUrl.replace(/[.,;:!?'")\]>]+$/, '');
+      const trailing = rawUrl.slice(url.length);
+      elements.push(
+        <a
+          key={`${baseKey}-u-${match.index}`}
+          href={url}
+          onClick={(e) => onUrlClick(e, url)}
+          className="text-primary underline break-all [overflow-wrap:anywhere]"
+        >
+          {url}
+        </a>
+      );
+      if (trailing) {
+        elements.push(<span key={`${baseKey}-u-trail-${match.index}`}>{trailing}</span>);
+      }
+      lastIndex = match.index + match[0].length;
+    }
+  }
+
+  const remaining = text.slice(lastIndex);
+  if (remaining) {
+    elements.push(<span key={`${baseKey}-t-${lastIndex}`}>{remaining}</span>);
+  }
+
+  return elements;
+}
+
 const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }) => {
+  const router = useRouter();
   const { navigateToPage } = usePageNavigation();
 
-  // Handle mention link clicks - use navigateToPage to stay in WebView on Capacitor/Electron
   const handleMentionClick = (e: MouseEvent<HTMLAnchorElement>, pageId: string) => {
     e.preventDefault();
     navigateToPage(pageId);
   };
 
+  const handleUrlClick = async (e: MouseEvent<HTMLAnchorElement>, url: string) => {
+    e.preventDefault();
+    if (isInternalUrl(url)) {
+      router.push(url);
+    } else {
+      await openExternalUrl(url);
+    }
+  };
+
   switch (part.type) {
-    case 'text':
-      // Check if text contains mentions in markdown-typed format
+    case 'text': {
       const text = part.text || '';
-      const textMentionRegex = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
-      const textElements = [];
-      let textLastIndex = 0;
-      let textMatch;
+      const nodes = parseTextIntoNodes(text, `${index}`, handleMentionClick, handleUrlClick);
 
-      while ((textMatch = textMentionRegex.exec(text)) !== null) {
-        const [fullMatch, label, id, type] = textMatch;
-        const precedingText = text.slice(textLastIndex, textMatch.index);
-        if (precedingText) {
-          textElements.push(<span key={`${index}-text-${textLastIndex}`}>{precedingText}</span>);
-        }
-        // Only page mentions should be clickable links
-        if (type === 'page') {
-          textElements.push(
-            <a
-              key={`${index}-mention-${textMatch.index}`}
-              href={`/p/${id}`}
-              onClick={(e) => handleMentionClick(e, id)}
-              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
-            >
-              @{label}
-            </a>
-          );
-        } else {
-          // Non-page mentions (user, agent, etc.) render as styled badges without links
-          textElements.push(
-            <span
-              key={`${index}-mention-${textMatch.index}`}
-              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded"
-            >
-              @{label}
-            </span>
-          );
-        }
-        textLastIndex = textMatch.index + fullMatch.length;
-      }
-
-      const remainingTextContent = text.slice(textLastIndex);
-      if (remainingTextContent) {
-        textElements.push(<span key={`${index}-text-${textLastIndex}`}>{remainingTextContent}</span>);
-      }
-
-      // If no mentions found, just return the plain text
-      if (textElements.length === 0) {
+      if (nodes.length === 0) {
         return <span key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{text}</span>;
       }
 
-      return <span key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{textElements}</span>;
+      return <span key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{nodes}</span>;
+    }
 
-    case 'rich-text':
+    case 'rich-text': {
       const textContent = typeof part.content === 'string'
         ? part.content
         : JSON.stringify(part.content, null, 2);
 
-      const mentionRegex = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
-      const elements = [];
-      let lastIndex = 0;
-      let match;
+      const nodes = parseTextIntoNodes(textContent, `${index}`, handleMentionClick, handleUrlClick);
 
-      while ((match = mentionRegex.exec(textContent)) !== null) {
-        const [fullMatch, label, id, mentionType] = match;
-        const precedingText = textContent.slice(lastIndex, match.index);
-        if (precedingText) {
-          elements.push(<span key={`${index}-text-${lastIndex}`}>{precedingText}</span>);
-        }
-        // Only page mentions should be clickable links
-        if (mentionType === 'page') {
-          elements.push(
-            <a
-              key={`${index}-mention-${id}`}
-              href={`/p/${id}`}
-              onClick={(e) => handleMentionClick(e, id)}
-              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
-            >
-              @{label}
-            </a>
-          );
-        } else {
-          // Non-page mentions (user, agent, etc.) render as styled badges without links
-          elements.push(
-            <span
-              key={`${index}-mention-${id}`}
-              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded"
-            >
-              @{label}
-            </span>
-          );
-        }
-        lastIndex = match.index + fullMatch.length;
-      }
-
-      const remainingText = textContent.slice(lastIndex);
-      if (remainingText) {
-        elements.push(<span key={`${index}-text-${lastIndex}`}>{remainingText}</span>);
-      }
-
-      return <div key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{elements}</div>;
+      return <div key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{nodes}</div>;
+    }
 
     case 'tool-invocation':
       return (
