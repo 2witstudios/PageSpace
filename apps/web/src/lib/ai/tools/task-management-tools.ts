@@ -1151,6 +1151,16 @@ Returns the created status config including its slug to use in update_task.`,
       const ctx = context as ToolExecutionContext;
       const userId = ctx.userId;
 
+      const page = await db.query.pages.findFirst({
+        where: and(eq(pages.id, pageId), eq(pages.isTrashed, false)),
+      });
+      if (!page) {
+        return { error: `Page ${pageId} not found or is trashed.` };
+      }
+      if (page.type !== PageType.TASK_LIST) {
+        return { error: `Page ${pageId} is not a TASK_LIST page (it is ${page.type}).` };
+      }
+
       const canEdit = await canActorEditPage(ctx, pageId);
       if (!canEdit) {
         return { error: 'You need edit permission to manage statuses on this task list.' };
