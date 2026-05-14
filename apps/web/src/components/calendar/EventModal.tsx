@@ -845,8 +845,8 @@ export function EventModal({
                     ? recurrenceInterval === 1 ? 'Every day' : `Every ${recurrenceInterval} days`
                     : recurrenceFrequency === 'WEEKLY'
                     ? (() => {
-                        const days = recurrenceByDay.length > 0 ? recurrenceByDay.join(', ') : 'week';
-                        return recurrenceInterval === 1 ? `Every week on ${days}` : `Every ${recurrenceInterval} weeks on ${days}`;
+                        const base = recurrenceInterval === 1 ? 'Every week' : `Every ${recurrenceInterval} weeks`;
+                        return recurrenceByDay.length > 0 ? `${base} on ${recurrenceByDay.join(', ')}` : base;
                       })()
                     : recurrenceFrequency === 'MONTHLY'
                     ? recurrenceInterval === 1 ? 'Every month' : `Every ${recurrenceInterval} months`
