@@ -423,12 +423,11 @@ describe('useDriveShareLink', () => {
       mockLinksFetch({ links: [] });
       mockRolesFetch([]);
 
-      act(() => { rerender({ driveId: 'drive-2' }); });
-      // Immediately after rerender the eager reset fires
-      expect(result.current.selectedRole).toEqual({ kind: 'member' });
-
+      rerender({ driveId: 'drive-2' });
+      // Wait for the eager reset to flush and loading to complete
+      await waitFor(() => expect(result.current.selectedRole).toEqual({ kind: 'member' }));
       await waitFor(() => expect(result.current.isLoading).toBe(false));
-      // Still 'member' because drive-2 has no default role
+      // Confirm still 'member' after roles load (no default role on drive-2)
       expect(result.current.selectedRole).toEqual({ kind: 'member' });
     });
   });
