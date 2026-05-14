@@ -58,13 +58,13 @@ export function expandOccurrences(
   // Parse UNTIL as end-of-day UTC so occurrences on the until date are included.
   // new Date("YYYY-MM-DD") parses as UTC midnight; without this adjustment any
   // event whose UTC time is after midnight on the until day would be excluded.
-  const untilMs = (() => {
-    if (!rule.until) return Infinity;
-    const d = new Date(rule.until);
-    d.setUTCHours(23, 59, 59, 999);
-    return d.getTime();
-  })();
-  const effectiveTo = new Date(Math.min(untilMs, to.getTime()));
+  let untilEndMs = Infinity;
+  if (rule.until) {
+    const untilDay = new Date(rule.until);
+    untilDay.setUTCHours(23, 59, 59, 999);
+    untilEndMs = untilDay.getTime();
+  }
+  const effectiveTo = new Date(Math.min(untilEndMs, to.getTime()));
 
   const excluded = new Set(exceptions.map((e) => e.slice(0, 10)));
   const limit = rule.count ?? Infinity;
