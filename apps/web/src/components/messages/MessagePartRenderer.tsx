@@ -22,9 +22,6 @@ interface MessagePartRendererProps {
   context?: 'message';
 }
 
-// Matches either a @mention or a bare http(s) URL, in document order
-const CONTENT_REGEX = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)|(https?:\/\/[^\s<>"')\]]+)/g;
-
 function parseTextIntoNodes(
   text: string,
   baseKey: string,
@@ -35,10 +32,11 @@ function parseTextIntoNodes(
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  // Reset stateful regex before use
-  CONTENT_REGEX.lastIndex = 0;
+  // Local regex instance — avoids shared lastIndex state across concurrent renders
+  // URL part allows ) in paths; unbalanced trailing ) handled in post-processing below
+  const contentRegex = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)|(https?:\/\/[^\s<>"'\]]+)/g;
 
-  while ((match = CONTENT_REGEX.exec(text)) !== null) {
+  while ((match = contentRegex.exec(text)) !== null) {
     const preceding = text.slice(lastIndex, match.index);
     if (preceding) {
       elements.push(<span key={`${baseKey}-t-${lastIndex}`}>{preceding}</span>);
@@ -72,8 +70,21 @@ function parseTextIntoNodes(
     } else {
       // Bare URL: group 4
       const rawUrl = match[4];
-      const url = rawUrl.replace(/[.,;:!?'")\]>]+$/, '');
-      const trailing = rawUrl.slice(url.length);
+      let url = rawUrl.replace(/[.,;:!?'">\]]+$/, '');
+      let trailing = rawUrl.slice(url.length);
+
+      // Strip unbalanced trailing ) — keeps balanced parens in paths (e.g. Wikipedia URLs)
+      while (url.endsWith(')')) {
+        const opens = (url.match(/\(/g) ?? []).length;
+        const closes = (url.match(/\)/g) ?? []).length;
+        if (closes > opens) {
+          trailing = ')' + trailing;
+          url = url.slice(0, -1);
+        } else {
+          break;
+        }
+      }
+
       elements.push(
         <a
           key={`${baseKey}-u-${match.index}`}

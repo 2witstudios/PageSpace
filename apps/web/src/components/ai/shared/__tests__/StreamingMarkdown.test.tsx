@@ -170,6 +170,68 @@ describe('preprocessMentions', () => {
   });
 });
 
+describe('autoLinkUrls', () => {
+  it('should convert bare URL to markdown link', () => {
+    render(<StreamingMarkdown content="check out https://example.com today" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'check out [https://example.com](https://example.com) today'
+    );
+  });
+
+  it('should strip trailing punctuation from URL', () => {
+    render(<StreamingMarkdown content="see https://example.com." />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'see [https://example.com](https://example.com).'
+    );
+  });
+
+  it('should not double-wrap URLs already inside markdown links', () => {
+    render(<StreamingMarkdown content="[click here](https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[click here](https://example.com)'
+    );
+  });
+
+  it('should not double-wrap URLs used as markdown link labels', () => {
+    render(<StreamingMarkdown content="[https://example.com](https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[https://example.com](https://example.com)'
+    );
+  });
+
+  it('should auto-link alongside mentions', () => {
+    render(
+      <StreamingMarkdown content="@[User](id:user) see https://example.com" />
+    );
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[mention:User](mention://id/user) see [https://example.com](https://example.com)'
+    );
+  });
+
+  it('should handle http:// URLs', () => {
+    render(<StreamingMarkdown content="visit http://example.com" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'visit [http://example.com](http://example.com)'
+    );
+  });
+
+  it('should preserve balanced parens in URL paths (Wikipedia-style)', () => {
+    render(
+      <StreamingMarkdown content="see https://en.wikipedia.org/wiki/Foo_(bar) for details" />
+    );
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'see [https://en.wikipedia.org/wiki/Foo_(bar)](https://en.wikipedia.org/wiki/Foo_(bar)) for details'
+    );
+  });
+
+  it('should strip unbalanced trailing ) from URL', () => {
+    render(<StreamingMarkdown content="(see https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '(see [https://example.com](https://example.com))'
+    );
+  });
+});
+
 describe('raw HTML rendering', () => {
   it('should keep raw user markdown source intact while installing an HTML-to-text remark plugin', () => {
     render(
