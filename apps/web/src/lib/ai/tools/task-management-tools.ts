@@ -21,6 +21,12 @@ import {
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 
+const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
+  todo: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  in_progress: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+  done: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+};
+
 function normalizeTaskAgentTriggerInput(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return value;
@@ -97,6 +103,7 @@ Status:
 - Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
 - Each status belongs to a group (todo, in_progress, done) that controls completion behavior
 - Use a status slug that exists in the task list's configuration (read_page on the TASK_LIST page returns availableStatuses)
+- To create a new custom status slug first, call create_task_status before this tool
 
 Assignment:
 - Use assigneeIds array to assign multiple users and/or agents
@@ -1153,6 +1160,7 @@ Returns the created status config including its slug to use in update_task.`,
 
       const page = await db.query.pages.findFirst({
         where: and(eq(pages.id, pageId), eq(pages.isTrashed, false)),
+        columns: { id: true, type: true, title: true },
       });
       if (!page) {
         return { error: `Page ${pageId} not found or is trashed.` };
@@ -1185,7 +1193,7 @@ Returns the created status config including its slug to use in update_task.`,
           const [created] = await tx.insert(taskLists).values({
             userId,
             pageId,
-            title: 'Task List',
+            title: page.title,
             status: 'pending',
           }).returning();
           await tx.insert(taskStatusConfigs).values(
@@ -1203,12 +1211,6 @@ Returns the created status config including its slug to use in update_task.`,
         return { error: `A status with slug "${slug}" already exists on this task list.` };
       }
 
-      const defaultColors: Record<string, string> = {
-        todo: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-        in_progress: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-        done: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-      };
-
       let newPosition = position;
       if (newPosition === undefined) {
         const last = await db.query.taskStatusConfigs.findFirst({
@@ -1222,7 +1224,7 @@ Returns the created status config including its slug to use in update_task.`,
         taskListId: taskList.id,
         name: name.trim(),
         slug,
-        color: color ?? defaultColors[group],
+        color: color ?? STATUS_GROUP_DEFAULT_COLORS[group],
         group,
         position: newPosition,
       }).returning();
