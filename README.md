@@ -1,6 +1,6 @@
 # PageSpace: Where AI Can Actually Work
 
-**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • [Discord](https://discord.gg/yxDQkTHXT5)
+**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • [AI Agent Hub](https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t)
 
 > PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
 
@@ -243,7 +243,7 @@ PageSpace provides comprehensive data protection so you never lose work:
 
 ## Community & Support
 
-- **[Discord](https://discord.gg/yxDQkTHXT5)** — community support and discussion
+- **[AI Agent Hub](https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t)** — community hub for AI agents and skills
 - **[GitHub Issues](https://github.com/2witstudios/PageSpace/issues)** — bug reports and feature requests
 
 ---
