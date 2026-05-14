@@ -1,12 +1,12 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '@/components/ui/tooltip';
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 
 export interface Reaction {
   id: string;
@@ -32,6 +32,96 @@ interface GroupedReaction {
   count: number;
   users: { id: string; name: string | null }[];
   hasReacted: boolean;
+}
+
+interface ReactionPillProps {
+  group: GroupedReaction;
+  currentUserId: string;
+  canReact: boolean;
+  onReactionClick: (group: GroupedReaction) => void;
+}
+
+function ReactionPill({
+  group,
+  currentUserId,
+  canReact,
+  onReactionClick,
+}: ReactionPillProps) {
+  const [open, setOpen] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onMouseEnter = () => {
+    hoverTimer.current = setTimeout(() => setOpen(true), 300);
+  };
+
+  const onMouseLeave = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setOpen(false);
+  };
+
+  const onTouchStart = () => {
+    longPressTimer.current = setTimeout(() => setOpen(true), 500);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          onClick={() => onReactionClick(group)}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+          onTouchStart={onTouchStart}
+          onTouchEnd={cancelLongPress}
+          onTouchMove={cancelLongPress}
+          disabled={!canReact}
+          className={cn(
+            'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs',
+            'transition-all duration-150',
+            'border',
+            group.hasReacted
+              ? 'bg-primary/10 border-primary/30 text-primary hover:bg-primary/20'
+              : 'bg-muted/50 border-border/50 text-muted-foreground hover:bg-muted',
+            !canReact && 'cursor-default opacity-80'
+          )}
+        >
+          <span className="text-sm">{group.emoji}</span>
+          <span className="font-medium">{group.count}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        className="w-auto min-w-[120px] max-w-[200px] p-3 space-y-2"
+        onMouseEnter={() => {
+          if (hoverTimer.current) clearTimeout(hoverTimer.current);
+        }}
+        onMouseLeave={onMouseLeave}
+      >
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="text-lg leading-none">{group.emoji}</span>
+          <span className="text-foreground">
+            {group.count} {group.count === 1 ? 'reaction' : 'reactions'}
+          </span>
+        </div>
+        <div className="border-t pt-2 space-y-1">
+          {group.users.slice(0, 10).map((u) => (
+            <div key={u.id} className="text-sm text-muted-foreground">
+              {u.id === currentUserId ? 'You' : (u.name ?? 'Unknown')}
+            </div>
+          ))}
+          {group.users.length > 10 && (
+            <div className="text-xs text-muted-foreground">
+              and {group.users.length - 10} more
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 export function MessageReactions({
@@ -82,44 +172,16 @@ export function MessageReactions({
     }
   };
 
-  const formatUserNames = (users: { id: string; name: string | null }[]) => {
-    const names = users
-      .map((u) => (u.id === currentUserId ? 'You' : u.name || 'Unknown'))
-      .slice(0, 10);
-
-    if (users.length > 10) {
-      names.push(`and ${users.length - 10} more`);
-    }
-
-    return names.join(', ');
-  };
-
   return (
     <div className={cn('flex flex-wrap items-center gap-1 mt-1', className)}>
       {groupedReactions.map((group) => (
-        <Tooltip key={group.emoji}>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => handleReactionClick(group)}
-              disabled={!canReact}
-              className={cn(
-                'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs',
-                'transition-all duration-150',
-                'border',
-                group.hasReacted
-                  ? 'bg-primary/10 border-primary/30 text-primary hover:bg-primary/20'
-                  : 'bg-muted/50 border-border/50 text-muted-foreground hover:bg-muted',
-                !canReact && 'cursor-default opacity-80'
-              )}
-            >
-              <span className="text-sm">{group.emoji}</span>
-              <span className="font-medium">{group.count}</span>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-xs">
-            <p className="text-sm">{formatUserNames(group.users)}</p>
-          </TooltipContent>
-        </Tooltip>
+        <ReactionPill
+          key={group.emoji}
+          group={group}
+          currentUserId={currentUserId}
+          canReact={canReact}
+          onReactionClick={handleReactionClick}
+        />
       ))}
     </div>
   );
