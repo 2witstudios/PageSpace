@@ -406,5 +406,30 @@ describe('useDriveShareLink', () => {
 
       expect(result.current.selectedRole).toEqual({ kind: 'admin' });
     });
+
+    it('should reset selectedRole to member when driveId changes', async () => {
+      // First drive has a default custom role → selectedRole becomes 'custom'
+      mockLinksFetch({ links: [] });
+      mockRolesFetch([{ id: 'role-drive-1', name: 'Editor', isDefault: true }]);
+
+      const { result, rerender } = renderHook(
+        ({ driveId }: { driveId: string }) => useDriveShareLink(driveId),
+        { initialProps: { driveId: 'drive-1' } },
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedRole).toEqual({ kind: 'custom', customRoleId: 'role-drive-1' });
+
+      // Switch to a drive with no roles → selectedRole must reset to 'member'
+      mockLinksFetch({ links: [] });
+      mockRolesFetch([]);
+
+      act(() => { rerender({ driveId: 'drive-2' }); });
+      // Immediately after rerender the eager reset fires
+      expect(result.current.selectedRole).toEqual({ kind: 'member' });
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      // Still 'member' because drive-2 has no default role
+      expect(result.current.selectedRole).toEqual({ kind: 'member' });
+    });
   });
 });
