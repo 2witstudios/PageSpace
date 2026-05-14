@@ -398,7 +398,10 @@ export function EventModal({
           setRecurrenceCount(rule.count);
         } else if (rule.until) {
           setRecurrenceEndType('until');
-          setRecurrenceUntil(new Date(rule.until));
+          // Parse YYYY-MM-DD as local midnight — new Date('YYYY-MM-DD') parses as
+          // UTC midnight and shows as the previous day in negative-offset timezones.
+          const [uy, um, ud] = rule.until.split('-').map(Number);
+          setRecurrenceUntil(new Date(uy, um - 1, ud));
         } else {
           setRecurrenceEndType('never');
         }
