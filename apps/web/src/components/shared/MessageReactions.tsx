@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import {
   Popover,
@@ -48,33 +48,60 @@ function ReactionPill({
   onReactionClick,
 }: ReactionPillProps) {
   const [open, setOpen] = useState(false);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Prevent synthetic click from firing after a long press on mobile
+  const suppressNextClick = useRef(false);
 
-  const onMouseEnter = () => {
-    hoverTimer.current = setTimeout(() => setOpen(true), 300);
+  useEffect(() => {
+    return () => {
+      if (openTimer.current) clearTimeout(openTimer.current);
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+      if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    };
+  }, []);
+
+  const scheduleOpen = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    openTimer.current = setTimeout(() => setOpen(true), 300);
   };
 
-  const onMouseLeave = () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    setOpen(false);
+  const scheduleClose = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  const cancelClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
   };
 
   const onTouchStart = () => {
-    longPressTimer.current = setTimeout(() => setOpen(true), 500);
+    longPressTimer.current = setTimeout(() => {
+      suppressNextClick.current = true;
+      setOpen(true);
+    }, 500);
   };
 
   const cancelLongPress = () => {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
   };
 
+  const handleClick = () => {
+    if (suppressNextClick.current) {
+      suppressNextClick.current = false;
+      return;
+    }
+    onReactionClick(group);
+  };
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          onClick={() => onReactionClick(group)}
-          onMouseEnter={onMouseEnter}
-          onMouseLeave={onMouseLeave}
+          onClick={handleClick}
+          onMouseEnter={scheduleOpen}
+          onMouseLeave={scheduleClose}
           onTouchStart={onTouchStart}
           onTouchEnd={cancelLongPress}
           onTouchMove={cancelLongPress}
@@ -96,10 +123,8 @@ function ReactionPill({
       <PopoverContent
         side="top"
         className="w-auto min-w-[120px] max-w-[200px] p-3 space-y-2"
-        onMouseEnter={() => {
-          if (hoverTimer.current) clearTimeout(hoverTimer.current);
-        }}
-        onMouseLeave={onMouseLeave}
+        onMouseEnter={cancelClose}
+        onMouseLeave={scheduleClose}
       >
         <div className="flex items-center gap-2 text-sm font-medium">
           <span className="text-lg leading-none">{group.emoji}</span>
