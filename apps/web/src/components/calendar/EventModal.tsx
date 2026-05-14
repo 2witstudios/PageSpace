@@ -51,7 +51,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { AttendeeStatus, CalendarEvent, CalendarEventAttendee, ATTENDEE_STATUS_CONFIG, EVENT_COLORS } from './calendar-types';
+import { AttendeeStatus, CalendarEvent, CalendarEventAttendee, RecurrenceRule, ATTENDEE_STATUS_CONFIG, EVENT_COLORS } from './calendar-types';
 import { TriggerPagePicker } from '@/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
 import {
   AgentTriggerSection,
@@ -142,6 +142,7 @@ interface EventModalProps {
     attendeeIds?: string[];
     pageId?: string | null;
     agentTrigger?: AgentTriggerSavePayload | null;
+    recurrenceRule?: RecurrenceRule | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
   onRsvp?: (status: AttendeeStatus) => Promise<void>;
@@ -256,6 +257,15 @@ export function EventModal({
   // Attendee state (pending list for new events)
   const [pendingAttendees, setPendingAttendees] = useState<CalendarEventAttendee[]>([]);
 
+  // Recurrence state
+  const [recurrenceFrequency, setRecurrenceFrequency] = useState<RecurrenceRule['frequency'] | 'NONE'>('NONE');
+  const [recurrenceInterval, setRecurrenceInterval] = useState(1);
+  const [recurrenceByDay, setRecurrenceByDay] = useState<NonNullable<RecurrenceRule['byDay']>>([]);
+  const [recurrenceEndType, setRecurrenceEndType] = useState<'never' | 'count' | 'until'>('never');
+  const [recurrenceCount, setRecurrenceCount] = useState(10);
+  const [recurrenceUntil, setRecurrenceUntil] = useState<Date | null>(null);
+  const [recurrenceExpanded, setRecurrenceExpanded] = useState(false);
+
   // Agent trigger state
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [agentValue, setAgentValue] = useState<AgentTriggerValue>(EMPTY_AGENT_VALUE);
@@ -337,8 +347,12 @@ export function EventModal({
         setAllDay(event.allDay);
         setColor(event.color as keyof typeof EVENT_COLORS);
 
-        const start = new Date(event.startAt);
-        const end = new Date(event.endAt);
+        // For virtual recurring occurrences, use the parent's base start/end
+        // so saving doesn't accidentally shift the series anchor date.
+        const start = new Date(event.recurringBaseStartAt ?? event.startAt);
+        const end = event.recurringBaseStartAt
+          ? new Date(start.getTime() + (new Date(event.endAt).getTime() - new Date(event.startAt).getTime()))
+          : new Date(event.endAt);
         setStartDate(start);
         setEndDate(end);
         setStartTime(format(start, 'HH:mm'));
@@ -373,8 +387,36 @@ export function EventModal({
         setStartTime(format(start, 'HH:mm'));
         setEndTime(format(end, 'HH:mm'));
       }
+      // Hydrate recurrence state
+      const rule = event?.recurrenceRule ?? null;
+      if (rule) {
+        setRecurrenceFrequency(rule.frequency);
+        setRecurrenceInterval(rule.interval ?? 1);
+        setRecurrenceByDay(rule.byDay ?? []);
+        if (rule.count) {
+          setRecurrenceEndType('count');
+          setRecurrenceCount(rule.count);
+        } else if (rule.until) {
+          setRecurrenceEndType('until');
+          // Parse YYYY-MM-DD as local midnight — new Date('YYYY-MM-DD') parses as
+          // UTC midnight and shows as the previous day in negative-offset timezones.
+          const [uy, um, ud] = rule.until.split('-').map(Number);
+          setRecurrenceUntil(new Date(uy, um - 1, ud));
+        } else {
+          setRecurrenceEndType('never');
+        }
+      } else {
+        setRecurrenceFrequency('NONE');
+        setRecurrenceInterval(1);
+        setRecurrenceByDay([]);
+        setRecurrenceEndType('never');
+        setRecurrenceCount(10);
+        setRecurrenceUntil(null);
+      }
+
       setAdvancedExpanded(false);
       setAgentExpanded(false);
+      setRecurrenceExpanded(false);
       setPendingAttendees([]);
     } else {
       triggerLoadedRef.current = false;
@@ -383,9 +425,7 @@ export function EventModal({
   }, [isOpen, event, defaultValues]);
 
   // Hydrate agent state once the trigger fetch lands (or reset if there's no
-  // trigger / no eventId yet). Recurring events skip hydration because the
-  // executor rejects triggers on recurring rows — keeping agentEnabled=false
-  // means save sends agentTrigger=null and removes any defensive stale row.
+  // trigger / no eventId yet).
   useEffect(() => {
     if (!isOpen) return;
     if (existingTrigger) {
@@ -507,6 +547,25 @@ export function EventModal({
       // else: undefined → no-op (no trigger before, none now)
     }
 
+    const recurrenceRule: RecurrenceRule | null =
+      recurrenceFrequency === 'NONE'
+        ? null
+        : {
+            frequency: recurrenceFrequency,
+            interval: recurrenceInterval,
+            ...(recurrenceFrequency === 'WEEKLY' && recurrenceByDay.length > 0
+              ? { byDay: recurrenceByDay }
+              : {}),
+            ...(recurrenceFrequency === 'MONTHLY'
+              ? { byMonthDay: [startAt.getDate()] }
+              : {}),
+            ...(recurrenceEndType === 'count'
+              ? { count: recurrenceCount }
+              : recurrenceEndType === 'until' && recurrenceUntil
+              ? { until: `${recurrenceUntil.getFullYear()}-${String(recurrenceUntil.getMonth() + 1).padStart(2, '0')}-${String(recurrenceUntil.getDate()).padStart(2, '0')}` }
+              : {}),
+          };
+
     setIsSaving(true);
     try {
       await onSave({
@@ -519,6 +578,7 @@ export function EventModal({
         color,
         pageId: isDriveContext ? linkedPageId : undefined,
         agentTrigger,
+        recurrenceRule,
         attendeeIds: !event && pendingAttendees.length > 0
           ? pendingAttendees.map((a) => a.userId)
           : undefined,
@@ -765,6 +825,158 @@ export function EventModal({
               rows={3}
             />
           </div>
+
+          {/* Repeat / recurrence */}
+          <Collapsible open={recurrenceExpanded} onOpenChange={setRecurrenceExpanded}>
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full justify-between px-2 -mx-2"
+              >
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <CalendarIcon className={cn('h-4 w-4', recurrenceFrequency !== 'NONE' ? 'text-primary' : 'text-muted-foreground')} />
+                  Repeat
+                </span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  {recurrenceFrequency === 'NONE'
+                    ? 'Never'
+                    : recurrenceFrequency === 'DAILY'
+                    ? recurrenceInterval === 1 ? 'Every day' : `Every ${recurrenceInterval} days`
+                    : recurrenceFrequency === 'WEEKLY'
+                    ? (() => {
+                        const base = recurrenceInterval === 1 ? 'Every week' : `Every ${recurrenceInterval} weeks`;
+                        return recurrenceByDay.length > 0 ? `${base} on ${recurrenceByDay.join(', ')}` : base;
+                      })()
+                    : recurrenceFrequency === 'MONTHLY'
+                    ? recurrenceInterval === 1 ? 'Every month' : `Every ${recurrenceInterval} months`
+                    : recurrenceInterval === 1 ? 'Every year' : `Every ${recurrenceInterval} years`}
+                  <ChevronRight className="h-3.5 w-3.5 transition-transform data-[state=open]:rotate-90" data-state={recurrenceExpanded ? 'open' : 'closed'} />
+                </span>
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 pt-2">
+              <div className="space-y-3 rounded-md border p-3">
+                {/* Frequency */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Frequency</Label>
+                  <Select value={recurrenceFrequency} onValueChange={(v) => setRecurrenceFrequency(v as typeof recurrenceFrequency)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NONE">Never</SelectItem>
+                      <SelectItem value="DAILY">Daily</SelectItem>
+                      <SelectItem value="WEEKLY">Weekly</SelectItem>
+                      <SelectItem value="MONTHLY">Monthly</SelectItem>
+                      <SelectItem value="YEARLY">Yearly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {recurrenceFrequency !== 'NONE' && (
+                  <>
+                    {/* Interval */}
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground shrink-0">Every</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={99}
+                        className="w-16 h-8 text-sm"
+                        value={recurrenceInterval}
+                        onChange={(e) => setRecurrenceInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        {recurrenceFrequency === 'DAILY' ? 'day(s)' :
+                         recurrenceFrequency === 'WEEKLY' ? 'week(s)' :
+                         recurrenceFrequency === 'MONTHLY' ? 'month(s)' : 'year(s)'}
+                      </span>
+                    </div>
+
+                    {/* Day-of-week picker for weekly */}
+                    {recurrenceFrequency === 'WEEKLY' && (
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">On days</Label>
+                        <div className="flex gap-1 flex-wrap">
+                          {(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const).map((day) => (
+                            <button
+                              key={day}
+                              type="button"
+                              onClick={() =>
+                                setRecurrenceByDay((prev) =>
+                                  prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+                                )
+                              }
+                              className={cn(
+                                'w-9 h-8 rounded text-xs font-medium transition-colors',
+                                recurrenceByDay.includes(day)
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-muted text-muted-foreground hover:bg-muted/80',
+                              )}
+                            >
+                              {day[0] + day[1].toLowerCase()}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* End type */}
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Ends</Label>
+                      <Select value={recurrenceEndType} onValueChange={(v) => setRecurrenceEndType(v as typeof recurrenceEndType)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="never">Never</SelectItem>
+                          <SelectItem value="count">After N occurrences</SelectItem>
+                          <SelectItem value="until">On date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {recurrenceEndType === 'count' && (
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs text-muted-foreground shrink-0">After</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={999}
+                          className="w-20 h-8 text-sm"
+                          value={recurrenceCount}
+                          onChange={(e) => setRecurrenceCount(Math.max(1, parseInt(e.target.value) || 1))}
+                        />
+                        <span className="text-sm text-muted-foreground">occurrences</span>
+                      </div>
+                    )}
+
+                    {recurrenceEndType === 'until' && (
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">Until</Label>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" className="w-full justify-start text-left font-normal h-8 text-sm">
+                              <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+                              {recurrenceUntil ? format(recurrenceUntil, 'MMM d, yyyy') : 'Pick a date'}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="start">
+                            <Calendar
+                              mode="single"
+                              selected={recurrenceUntil ?? undefined}
+                              onSelect={(date) => date && setRecurrenceUntil(date)}
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
 
           {/* Attendees — drive events only (gate on actual driveId, not view context) */}
           {showAttendeesSection && (

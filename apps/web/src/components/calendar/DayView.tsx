@@ -116,7 +116,7 @@ export function DayView({ currentDate, events, tasks, handlers, driveColorMap, c
             </div>
             {allDayEvents.map((event) => (
               <AllDayEventCard
-                key={event.id}
+                key={`${event.id}-${event.startAt}`}
                 event={event}
                 colors={resolveEventColor(event, context, driveColorMap ?? null)}
                 onClick={() => handlers.onEventClick(event)}
@@ -174,7 +174,7 @@ export function DayView({ currentDate, events, tasks, handlers, driveColorMap, c
 
               return (
                 <TimedEventCard
-                  key={event.id}
+                  key={`${event.id}-${event.startAt}`}
                   event={event}
                   colors={resolveEventColor(event, context, driveColorMap ?? null)}
                   style={{ top, height }}

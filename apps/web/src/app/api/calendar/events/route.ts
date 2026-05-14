@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
+import { eq, and, or, gte, lte, inArray, isNull, isNotNull, asc } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { workflows } from '@pagespace/db/schema/workflows';
@@ -16,6 +16,7 @@ import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespa
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { expandOccurrences, RecurrenceRule } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -207,6 +208,48 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
 }
 
 /**
+ * Expand recurring events in a fetched list into one synthetic entry per
+ * occurrence within [windowStart, windowEnd]. Non-recurring events pass
+ * through unchanged. The synthetic entries share all fields with the parent
+ * except startAt / endAt which are shifted to each occurrence.
+ */
+function expandRecurringEvents<T extends { startAt: Date; endAt: Date; recurrenceRule: RecurrenceRule | null; recurrenceExceptions: string[] | null }>(
+  events: T[],
+  windowStart: Date,
+  windowEnd: Date,
+): T[] {
+  const result: T[] = [];
+  for (const event of events) {
+    if (!event.recurrenceRule) {
+      result.push(event);
+      continue;
+    }
+    const parentStartISO = event.startAt.toISOString();
+    const parentEndISO = event.endAt.toISOString();
+    const duration = event.endAt.getTime() - event.startAt.getTime();
+    const occurrences = expandOccurrences(
+      event.recurrenceRule,
+      event.startAt,
+      windowStart,
+      windowEnd,
+      event.recurrenceExceptions ?? [],
+    );
+    for (const occStart of occurrences) {
+      // Carry the parent's base start/end so the edit modal can restore them,
+      // preventing accidental anchor-shifting when saving a non-first occurrence.
+      result.push({
+        ...event,
+        startAt: occStart,
+        endAt: new Date(occStart.getTime() + duration),
+        recurringBaseStartAt: parentStartISO,
+        recurringBaseEndAt: parentEndISO,
+      } as T);
+    }
+  }
+  return result;
+}
+
+/**
  * GET /api/calendar/events
  *
  * Fetch calendar events based on context:
@@ -281,8 +324,18 @@ export async function GET(request: Request) {
         where: and(
           eq(calendarEvents.driveId, params.driveId),
           eq(calendarEvents.isTrashed, false),
-          lte(calendarEvents.startAt, params.endDate),
-          gte(calendarEvents.endAt, params.startDate),
+          // Include recurring events that started before the window (they may
+          // have occurrences inside it); non-recurring must overlap normally.
+          or(
+            and(
+              lte(calendarEvents.startAt, params.endDate),
+              gte(calendarEvents.endAt, params.startDate),
+            ),
+            and(
+              isNotNull(calendarEvents.recurrenceRule),
+              lte(calendarEvents.startAt, params.endDate),
+            ),
+          ),
           or(
             // DRIVE visibility - visible to all drive members
             eq(calendarEvents.visibility, 'DRIVE'),
@@ -323,7 +376,11 @@ export async function GET(request: Request) {
 
       // Annotate events with agent trigger presence
       const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
-      const annotatedEvents = events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) }));
+      const annotatedEvents = expandRecurringEvents(
+        events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
+        params.startDate,
+        params.endDate,
+      );
 
       // Append workflow virtual events
       const workflowEvents = await getWorkflowVirtualEvents([params.driveId], params.startDate, params.endDate);
@@ -381,8 +438,18 @@ export async function GET(request: Request) {
       where: and(
         or(...conditions),
         eq(calendarEvents.isTrashed, false),
-        lte(calendarEvents.startAt, params.endDate),
-        gte(calendarEvents.endAt, params.startDate)
+        // Include recurring events that started before the window (they may
+        // have occurrences inside it); non-recurring must overlap normally.
+        or(
+          and(
+            lte(calendarEvents.startAt, params.endDate),
+            gte(calendarEvents.endAt, params.startDate),
+          ),
+          and(
+            isNotNull(calendarEvents.recurrenceRule),
+            lte(calendarEvents.startAt, params.endDate),
+          ),
+        ),
       ),
       with: {
         createdBy: {
@@ -407,7 +474,11 @@ export async function GET(request: Request) {
 
     // Annotate events with agent trigger presence
     const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
-    const annotatedEvents = events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) }));
+    const annotatedEvents = expandRecurringEvents(
+      events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
+      params.startDate,
+      params.endDate,
+    );
 
     // Append workflow virtual events
     const workflowEvents = await getWorkflowVirtualEvents(driveIds, params.startDate, params.endDate);
