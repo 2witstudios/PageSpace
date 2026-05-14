@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
+import { taskLists, taskItems, taskStatusConfigs, taskAssignees, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
@@ -20,6 +20,12 @@ import {
 } from '@/lib/workflows/task-trigger-helpers';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
+
+const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
+  todo: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  in_progress: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+  done: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+};
 
 function normalizeTaskAgentTriggerInput(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -97,6 +103,7 @@ Status:
 - Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
 - Each status belongs to a group (todo, in_progress, done) that controls completion behavior
 - Use a status slug that exists in the task list's configuration (read_page on the TASK_LIST page returns availableStatuses)
+- To create a new custom status slug first, call create_task_status before this tool
 
 Assignment:
 - Use assigneeIds array to assign multiple users and/or agents
@@ -1124,6 +1131,130 @@ This helps agents understand their responsibilities and coordinate work with oth
         console.error('Error in get_assigned_tasks:', error);
         throw new Error(`Failed to get assigned tasks: ${error instanceof Error ? error.message : String(error)}`);
       }
+    },
+  }),
+
+  create_task_status: tool({
+    description: `Create a custom status configuration on a TASK_LIST page.
+Use this before setting a task to a status slug that doesn't exist yet.
+
+Each status belongs to a semantic group that controls task completion behavior:
+- 'todo'        — not yet started
+- 'in_progress' — actively being worked on
+- 'done'        — finished (marks tasks as completed)
+
+The slug is auto-generated from the name (e.g. "In Review" → "in_review").
+Returns the created status config including its slug to use in update_task.`,
+
+    inputSchema: z.object({
+      pageId: z.string().describe('TASK_LIST page ID'),
+      name: z.string().describe('Status display name (e.g. "In Review")'),
+      group: z.enum(['todo', 'in_progress', 'done']).describe('Semantic group'),
+      color: z.string().optional().describe('Tailwind color classes. Auto-assigned from group if omitted.'),
+      position: z.number().optional().describe('Display order. Appended to end if omitted.'),
+    }),
+
+    execute: async ({ pageId, name, group, color, position }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx.userId;
+
+      const page = await db.query.pages.findFirst({
+        where: and(eq(pages.id, pageId), eq(pages.isTrashed, false)),
+        columns: { id: true, type: true, title: true },
+      });
+      if (!page) {
+        return { error: `Page ${pageId} not found or is trashed.` };
+      }
+      if (page.type !== PageType.TASK_LIST) {
+        return { error: `Page ${pageId} is not a TASK_LIST page (it is ${page.type}).` };
+      }
+
+      const canEdit = await canActorEditPage(ctx, pageId);
+      if (!canEdit) {
+        return { error: 'You need edit permission to manage statuses on this task list.' };
+      }
+
+      const slug = name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+      if (!slug) {
+        return { error: 'Name must contain alphanumeric characters.' };
+      }
+
+      let taskList = await db.query.taskLists.findFirst({
+        where: eq(taskLists.pageId, pageId),
+      });
+
+      if (!taskList) {
+        taskList = await db.transaction(async (tx) => {
+          const [created] = await tx.insert(taskLists).values({
+            userId,
+            pageId,
+            title: page.title,
+            status: 'pending',
+          }).returning();
+          await tx.insert(taskStatusConfigs).values(
+            DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
+          );
+          return created;
+        });
+      }
+
+      const existing = await db.query.taskStatusConfigs.findFirst({
+        where: and(eq(taskStatusConfigs.taskListId, taskList.id), eq(taskStatusConfigs.slug, slug)),
+      });
+
+      if (existing) {
+        return { error: `A status with slug "${slug}" already exists on this task list.` };
+      }
+
+      let newPosition = position;
+      if (newPosition === undefined) {
+        const last = await db.query.taskStatusConfigs.findFirst({
+          where: eq(taskStatusConfigs.taskListId, taskList.id),
+          orderBy: [desc(taskStatusConfigs.position)],
+        });
+        newPosition = (last?.position ?? -1) + 1;
+      }
+
+      let newConfig;
+      try {
+        [newConfig] = await db.insert(taskStatusConfigs).values({
+          taskListId: taskList.id,
+          name: name.trim(),
+          slug,
+          color: color ?? STATUS_GROUP_DEFAULT_COLORS[group],
+          group,
+          position: newPosition,
+        }).returning();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('unique') || msg.includes('duplicate')) {
+          return { error: `A status with slug "${slug}" already exists on this task list.` };
+        }
+        throw err;
+      }
+
+      await broadcastTaskEvent({
+        type: 'task_updated',
+        taskListId: taskList.id,
+        userId,
+        pageId,
+        data: { statusConfigAdded: newConfig },
+      });
+
+      return {
+        id: newConfig.id,
+        slug: newConfig.slug,
+        name: newConfig.name,
+        group: newConfig.group,
+        color: newConfig.color,
+        position: newConfig.position,
+        message: `Created status "${newConfig.name}" (slug: "${newConfig.slug}") on task list.`,
+      };
     },
   }),
 };
