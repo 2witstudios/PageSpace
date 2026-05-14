@@ -1220,14 +1220,23 @@ Returns the created status config including its slug to use in update_task.`,
         newPosition = (last?.position ?? -1) + 1;
       }
 
-      const [newConfig] = await db.insert(taskStatusConfigs).values({
-        taskListId: taskList.id,
-        name: name.trim(),
-        slug,
-        color: color ?? STATUS_GROUP_DEFAULT_COLORS[group],
-        group,
-        position: newPosition,
-      }).returning();
+      let newConfig;
+      try {
+        [newConfig] = await db.insert(taskStatusConfigs).values({
+          taskListId: taskList.id,
+          name: name.trim(),
+          slug,
+          color: color ?? STATUS_GROUP_DEFAULT_COLORS[group],
+          group,
+          position: newPosition,
+        }).returning();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('unique') || msg.includes('duplicate')) {
+          return { error: `A status with slug "${slug}" already exists on this task list.` };
+        }
+        throw err;
+      }
 
       await broadcastTaskEvent({
         type: 'task_updated',
