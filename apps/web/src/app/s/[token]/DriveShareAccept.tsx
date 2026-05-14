@@ -38,7 +38,9 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          setError((body as { error?: string }).error ?? 'Failed to join. Please try again.');
+          if (!controller.signal.aborted) {
+            setError((body as { error?: string }).error ?? 'Failed to join. Please try again.');
+          }
           return;
         }
 
@@ -46,9 +48,11 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
         router.push(`/dashboard/${data.driveId}`);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
-        setError('Something went wrong. Please try again.');
+        if (!controller.signal.aborted) {
+          setError('Something went wrong. Please try again.');
+        }
       } finally {
-        setIsPending(false);
+        if (!controller.signal.aborted) setIsPending(false);
       }
     }
 

@@ -79,8 +79,10 @@ const okRoles = () =>
     json: () => Promise.resolve({ roles: [] }),
   });
 
-// fetchMembers() now fires 3 parallel requests per invocation
-const FETCHES_PER_CALL = 3;
+// fetchMembers() fires 3 parallel requests on each invocation.
+// On initial mount, DriveShareLinkSection adds 1 more for /roles (keyed on driveId, not socket events).
+const MEMBER_FETCHES = 3;
+const FETCHES_PER_CALL = MEMBER_FETCHES + 1;
 
 const urlAwareMock = (
   members: ReturnType<typeof member>[],
@@ -153,7 +155,8 @@ describe('DriveMembers', () => {
     expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
 
     socket.__emit(event, { driveId: 'drive-1' });
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL * 2));
+    // Socket event only re-triggers fetchMembers() (3 requests); /roles is keyed on driveId, not socket events.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL + MEMBER_FETCHES));
   });
 
   it('Does NOT refetch when the event is for a different driveId', async () => {

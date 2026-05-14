@@ -334,10 +334,13 @@ describe('GET /api/drives/[driveId]/members', () => {
       id: 'inv_1',
       email: 'invitee@example.com',
       role: 'MEMBER' as const,
+      customRoleId: null,
+      customRoleName: null,
+      customRoleColor: null,
       driveId: 'drive_abc',
       invitedByName: 'Alice',
       createdAt: new Date('2024-02-01'),
-      expiresAt: new Date('2024-02-03'),
+      expiresAt: new Date('2024-02-03') as Date | null,
     }];
 
     it('returns populated pendingInvites for OWNER', async () => {

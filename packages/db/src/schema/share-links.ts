@@ -3,7 +3,7 @@ import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
-import { memberRole } from './members';
+import { driveRoles, memberRole } from './members';
 
 export type ShareLinkPermission = 'VIEW' | 'EDIT' | 'SHARE' | 'DELETE';
 
@@ -12,6 +12,7 @@ export const driveShareLinks = pgTable('drive_share_links', {
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   token: text('token').unique().notNull(),
   role: memberRole('role').notNull().default('MEMBER'),
+  customRoleId: text('custom_role_id').references(() => driveRoles.id, { onDelete: 'set null' }),
   createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   expiresAt: timestamp('expires_at', { mode: 'date' }),
@@ -21,11 +22,13 @@ export const driveShareLinks = pgTable('drive_share_links', {
   driveIdx: index('drive_share_links_drive_id_idx').on(table.driveId),
   expiresAtIdx: index('drive_share_links_expires_at_idx').on(table.expiresAt),
   activeIdx: index('drive_share_links_is_active_idx').on(table.isActive),
+  customRoleIdx: index('drive_share_links_custom_role_id_idx').on(table.customRoleId),
 }));
 
 export const driveShareLinksRelations = relations(driveShareLinks, ({ one }) => ({
   drive: one(drives, { fields: [driveShareLinks.driveId], references: [drives.id] }),
   creator: one(users, { fields: [driveShareLinks.createdBy], references: [users.id] }),
+  customRole: one(driveRoles, { fields: [driveShareLinks.customRoleId], references: [driveRoles.id] }),
 }));
 
 export type DriveShareLink = typeof driveShareLinks.$inferSelect;

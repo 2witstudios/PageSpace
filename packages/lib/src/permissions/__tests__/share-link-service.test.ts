@@ -31,8 +31,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: {
     id: 'dm.id', driveId: 'dm.driveId', userId: 'dm.userId',
-    role: 'dm.role', acceptedAt: 'dm.acceptedAt', invitedBy: 'dm.invitedBy',
+    role: 'dm.role', customRoleId: 'dm.customRoleId',
+    acceptedAt: 'dm.acceptedAt', invitedBy: 'dm.invitedBy',
     invitedAt: 'dm.invitedAt',
+  },
+  driveRoles: {
+    id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', color: 'dr.color',
   },
   pagePermissions: {
     id: 'pp.id', pageId: 'pp.pageId', userId: 'pp.userId',
@@ -46,7 +50,8 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/schema/share-links', () => ({
   driveShareLinks: {
     id: 'dsl.id', driveId: 'dsl.driveId', token: 'dsl.token',
-    role: 'dsl.role', createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
+    role: 'dsl.role', customRoleId: 'dsl.customRoleId',
+    createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
     expiresAt: 'dsl.expiresAt', isActive: 'dsl.isActive', useCount: 'dsl.useCount',
   },
   pageShareLinks: {
@@ -177,6 +182,51 @@ describe('createDriveShareLink', () => {
       expect(result.data.id).toBe(LINK_ID);
       expect(result.data.rawToken).toBe('ps_share_testtoken');
     }
+  });
+
+  it('returns NOT_FOUND when customRoleId does not belong to the drive', async () => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    makeSelectChain([]); // role lookup returns empty — role is from a different drive
+    const ctx = makeCtx();
+
+    const result = await createDriveShareLink(ctx, DRIVE_ID, {
+      role: 'MEMBER',
+      customRoleId: 'role-from-other-drive',
+    });
+
+    expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
+  });
+
+  it('creates link with customRoleId when role belongs to the drive', async () => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    makeSelectChain([{ id: 'role-custom-1' }]); // role exists in this drive
+    makeInsertChain([{ id: LINK_ID }]);
+    const ctx = makeCtx();
+
+    const result = await createDriveShareLink(ctx, DRIVE_ID, {
+      role: 'MEMBER',
+      customRoleId: 'role-custom-1',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.id).toBe(LINK_ID);
+    }
+  });
+
+  it('ignores customRoleId when role is ADMIN', async () => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    makeInsertChain([{ id: LINK_ID }]);
+    const ctx = makeCtx();
+
+    // customRoleId is provided but role=ADMIN — it should be nulled out, no DB lookup
+    const result = await createDriveShareLink(ctx, DRIVE_ID, {
+      role: 'ADMIN',
+      customRoleId: 'role-custom-1',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockDb.select).not.toHaveBeenCalled();
   });
 });
 

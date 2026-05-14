@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { DriveShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
@@ -27,6 +27,9 @@ export type ShareLinkResult<T> =
 export interface DriveShareLinkView {
   id: string;
   role: DriveShareLink['role'];
+  customRoleId: string | null;
+  customRoleName: string | null;
+  customRoleColor: string | null;
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
@@ -48,6 +51,7 @@ export interface DriveShareLinkRedemption {
   memberId: string;
   driveName: string;
   role: DriveShareLink['role'];
+  customRoleId: string | null;
   createdBy: string;
 }
 
@@ -59,6 +63,9 @@ export interface ShareTokenInfo {
   pageId?: string;
   pageTitle?: string;
   role?: DriveShareLink['role'];
+  customRoleId?: string | null;
+  customRoleName?: string | null;
+  customRoleColor?: string | null;
   permissions?: ShareLinkPermission[];
   creatorName: string;
   expiresAt: Date | null;
@@ -85,13 +92,25 @@ function isValidShareLink(link: {
 export async function createDriveShareLink(
   ctx: EnforcedAuthContext,
   driveId: string,
-  opts: { role?: 'MEMBER' | 'ADMIN'; expiresAt?: Date }
+  opts: { role?: 'MEMBER' | 'ADMIN'; customRoleId?: string | null; expiresAt?: Date }
 ): Promise<ShareLinkResult<{ id: string; rawToken: string }>> {
   const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
 
-  const { token } = generateToken('ps_share');
+  // ADMIN ceiling: customRoleId is meaningless for admins and must never be stored.
   const role = opts.role ?? 'MEMBER';
+  const customRoleId = role === 'ADMIN' ? null : (opts.customRoleId ?? null);
+
+  if (customRoleId) {
+    const roleRow = await db
+      .select({ id: driveRoles.id })
+      .from(driveRoles)
+      .where(and(eq(driveRoles.id, customRoleId), eq(driveRoles.driveId, driveId)))
+      .limit(1);
+    if (roleRow.length === 0) return { ok: false, error: 'NOT_FOUND' };
+  }
+
+  const { token } = generateToken('ps_share');
 
   const [inserted] = await db
     .insert(driveShareLinks)
@@ -100,6 +119,7 @@ export async function createDriveShareLink(
       driveId,
       token,
       role,
+      customRoleId,
       createdBy: ctx.userId,
       expiresAt: opts.expiresAt ?? null,
     })
@@ -143,12 +163,16 @@ export async function listDriveShareLinks(
     .select({
       id: driveShareLinks.id,
       role: driveShareLinks.role,
+      customRoleId: driveShareLinks.customRoleId,
+      customRoleName: driveRoles.name,
+      customRoleColor: driveRoles.color,
       useCount: driveShareLinks.useCount,
       expiresAt: driveShareLinks.expiresAt,
       createdAt: driveShareLinks.createdAt,
       token: driveShareLinks.token,
     })
     .from(driveShareLinks)
+    .leftJoin(driveRoles, eq(driveRoles.id, driveShareLinks.customRoleId))
     .where(
       and(
         eq(driveShareLinks.driveId, driveId),
@@ -172,6 +196,7 @@ export async function redeemDriveShareLink(
       id: driveShareLinks.id,
       driveId: driveShareLinks.driveId,
       role: driveShareLinks.role,
+      customRoleId: driveShareLinks.customRoleId,
       isActive: driveShareLinks.isActive,
       expiresAt: driveShareLinks.expiresAt,
       useCount: driveShareLinks.useCount,
@@ -192,18 +217,24 @@ export async function redeemDriveShareLink(
   const alreadyMember = await isUserDriveMember(ctx.userId, link.driveId);
   if (alreadyMember) return { ok: false, error: 'ALREADY_MEMBER', driveId: link.driveId };
 
+  // Defense-in-depth: older links may pre-date the ADMIN gate; keep ADMIN+null invariant.
+  const customRoleId = link.role === 'ADMIN' ? null : link.customRoleId;
+
   const [inserted] = await db.insert(driveMembers).values({
     id: createId(),
     driveId: link.driveId,
     userId: ctx.userId,
     role: link.role,
+    customRoleId,
     acceptedAt: new Date(),
   }).onConflictDoUpdate({
     target: [driveMembers.driveId, driveMembers.userId],
     set: {
       acceptedAt: new Date(),
-      // Preserve ADMIN role — never downgrade an existing ADMIN via a MEMBER share link
+      // Never downgrade an existing ADMIN via a MEMBER share link.
       role: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN ${driveMembers.role} ELSE EXCLUDED.role END`,
+      // Re-redeem applies the link's role template; existing ADMINs keep NULL to preserve ADMIN+null invariant.
+      customRoleId: sql`CASE WHEN ${driveMembers.role} = 'ADMIN' THEN NULL ELSE EXCLUDED."customRoleId" END`,
     },
   }).returning({ id: driveMembers.id });
 
@@ -220,6 +251,7 @@ export async function redeemDriveShareLink(
       memberId: inserted.id,
       driveName: link.driveName,
       role: link.role,
+      customRoleId,
       createdBy: link.createdBy,
     },
   };
@@ -404,6 +436,9 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
       id: driveShareLinks.id,
       driveId: driveShareLinks.driveId,
       role: driveShareLinks.role,
+      customRoleId: driveShareLinks.customRoleId,
+      customRoleName: driveRoles.name,
+      customRoleColor: driveRoles.color,
       isActive: driveShareLinks.isActive,
       expiresAt: driveShareLinks.expiresAt,
       useCount: driveShareLinks.useCount,
@@ -413,6 +448,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
     .from(driveShareLinks)
     .leftJoin(drives, eq(driveShareLinks.driveId, drives.id))
     .leftJoin(users, eq(driveShareLinks.createdBy, users.id))
+    .leftJoin(driveRoles, eq(driveRoles.id, driveShareLinks.customRoleId))
     .where(eq(driveShareLinks.token, rawToken))
     .limit(1);
 
@@ -425,6 +461,9 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
       driveId: row.driveId,
       driveName: row.driveName ?? undefined,
       role: row.role,
+      customRoleId: row.customRoleId,
+      customRoleName: row.customRoleName,
+      customRoleColor: row.customRoleColor,
       creatorName: row.creatorName ?? 'Unknown',
       expiresAt: row.expiresAt ?? null,
       useCount: row.useCount,

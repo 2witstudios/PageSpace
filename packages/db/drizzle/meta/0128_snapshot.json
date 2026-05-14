@@ -1,6 +1,6 @@
 {
-  "id": "72033ae9-c0b0-4989-ae00-08b4f133d1c5",
-  "prevId": "00a6dda1-2ecc-44fe-9b4d-37dd58080aa2",
+  "id": "730bb2e3-301f-45e4-8063-61039bef8e49",
+  "prevId": "72033ae9-c0b0-4989-ae00-08b4f133d1c5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -13870,6 +13870,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "custom_role_id": {
+          "name": "custom_role_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "invited_by": {
           "name": "invited_by",
           "type": "text",
@@ -13942,6 +13948,21 @@
           "method": "btree",
           "with": {}
         },
+        "pending_invites_custom_role_id_idx": {
+          "name": "pending_invites_custom_role_id_idx",
+          "columns": [
+            {
+              "expression": "custom_role_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "pending_invites_active_drive_email_idx": {
           "name": "pending_invites_active_drive_email_idx",
           "columns": [
@@ -13977,6 +13998,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "pending_invites_custom_role_id_drive_roles_id_fk": {
+          "name": "pending_invites_custom_role_id_drive_roles_id_fk",
+          "tableFrom": "pending_invites",
+          "tableTo": "drive_roles",
+          "columnsFrom": [
+            "custom_role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "pending_invites_invited_by_users_id_fk": {
@@ -14427,6 +14461,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "role": {
           "name": "role",
           "type": "MemberRole",
@@ -14434,6 +14474,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'MEMBER'"
+        },
+        "custom_role_id": {
+          "name": "custom_role_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_by": {
           "name": "created_by",
@@ -14467,12 +14513,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
         }
       },
       "indexes": {
@@ -14520,6 +14560,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "drive_share_links_custom_role_id_idx": {
+          "name": "drive_share_links_custom_role_id_idx",
+          "columns": [
+            {
+              "expression": "custom_role_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -14534,6 +14589,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_share_links_custom_role_id_drive_roles_id_fk": {
+          "name": "drive_share_links_custom_role_id_drive_roles_id_fk",
+          "tableFrom": "drive_share_links",
+          "tableTo": "drive_roles",
+          "columnsFrom": [
+            "custom_role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "drive_share_links_created_by_users_id_fk": {
@@ -14577,6 +14645,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "permissions": {
           "name": "permissions",
           "type": "jsonb",
@@ -14615,12 +14689,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
         }
       },
       "indexes": {

@@ -3,7 +3,7 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives } from './core';
-import { memberRole } from './members';
+import { driveRoles, memberRole } from './members';
 
 export const pendingInvites = pgTable('pending_invites', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -11,6 +11,7 @@ export const pendingInvites = pgTable('pending_invites', {
   email: text('email').notNull(),
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   role: memberRole('role').notNull(),
+  customRoleId: text('custom_role_id').references(() => driveRoles.id, { onDelete: 'set null' }),
   invitedBy: text('invited_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   expiresAt: timestamp('expires_at', { mode: 'date' }),
   consumedAt: timestamp('consumed_at', { mode: 'date' }),
@@ -21,6 +22,7 @@ export const pendingInvites = pgTable('pending_invites', {
   driveIdx: index('pending_invites_drive_id_idx').on(table.driveId),
   emailIdx: index('pending_invites_email_idx').on(table.email),
   expiresAtIdx: index('pending_invites_expires_at_idx').on(table.expiresAt),
+  customRoleIdx: index('pending_invites_custom_role_id_idx').on(table.customRoleId),
   activeDriveEmailIdx: uniqueIndex('pending_invites_active_drive_email_idx')
     .on(table.driveId, table.email)
     .where(sql`${table.consumedAt} IS NULL`),
@@ -29,6 +31,7 @@ export const pendingInvites = pgTable('pending_invites', {
 export const pendingInvitesRelations = relations(pendingInvites, ({ one }) => ({
   drive: one(drives, { fields: [pendingInvites.driveId], references: [drives.id] }),
   inviter: one(users, { fields: [pendingInvites.invitedBy], references: [users.id] }),
+  customRole: one(driveRoles, { fields: [pendingInvites.customRoleId], references: [driveRoles.id] }),
 }));
 
 export type PendingInvite = typeof pendingInvites.$inferSelect;

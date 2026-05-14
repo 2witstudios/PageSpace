@@ -35,6 +35,7 @@ export async function POST(
       driveId: driveResult.data.driveId,
       driveName: driveResult.data.driveName,
       role: driveResult.data.role,
+      customRoleId: driveResult.data.customRoleId,
       invitedUserId: auth.ctx.userId,
       inviterUserId: driveResult.data.createdBy,
     };

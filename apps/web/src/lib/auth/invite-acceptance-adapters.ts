@@ -31,6 +31,7 @@ export const buildAcceptancePorts = (request: Request): AcceptancePorts => ({
       driveId: row.driveId,
       driveName: row.driveName,
       role: row.role,
+      customRoleId: row.customRoleId,
       invitedBy: row.invitedBy,
       expiresAt: row.expiresAt,
       consumedAt: row.consumedAt,
@@ -46,6 +47,7 @@ export const buildAcceptancePorts = (request: Request): AcceptancePorts => ({
       driveId: invite.driveId,
       userId,
       role: invite.role,
+      customRoleId: invite.role === 'ADMIN' ? null : invite.customRoleId,
       invitedBy: invite.invitedBy,
       acceptedAt: now,
     });
