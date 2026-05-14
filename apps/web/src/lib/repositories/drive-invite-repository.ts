@@ -8,7 +8,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, gt, lte, isNotNull, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
 
 export const driveInviteRepository = {
@@ -244,11 +244,12 @@ export const driveInviteRepository = {
     email: string;
     driveId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
     expiresAt: Date | null;
     now: Date;
   }) {
-    const { tokenHash, email, driveId, role, invitedBy, expiresAt, now } = input;
+    const { tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
       // Sweep any already-expired unconsumed row for this (driveId, email) pair
       // so the partial unique index does not block a legitimate re-invite.
@@ -264,7 +265,7 @@ export const driveInviteRepository = {
       );
       const [row] = await tx
         .insert(pendingInvites)
-        .values({ tokenHash, email, driveId, role, invitedBy, expiresAt })
+        .values({ tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt })
         .returning();
       return row;
     });
@@ -275,6 +276,7 @@ export const driveInviteRepository = {
     email: string;
     driveId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
     expiresAt: Date | null;
     consumedAt: Date | null;
@@ -287,6 +289,7 @@ export const driveInviteRepository = {
         email: pendingInvites.email,
         driveId: pendingInvites.driveId,
         role: pendingInvites.role,
+        customRoleId: pendingInvites.customRoleId,
         invitedBy: pendingInvites.invitedBy,
         expiresAt: pendingInvites.expiresAt,
         consumedAt: pendingInvites.consumedAt,
@@ -369,6 +372,7 @@ export const driveInviteRepository = {
     driveId: string;
     driveName: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
   }>> {
     return db
@@ -377,6 +381,7 @@ export const driveInviteRepository = {
         driveId: pendingInvites.driveId,
         driveName: drives.name,
         role: pendingInvites.role,
+        customRoleId: pendingInvites.customRoleId,
         invitedBy: pendingInvites.invitedBy,
       })
       .from(pendingInvites)
@@ -394,6 +399,9 @@ export const driveInviteRepository = {
     id: string;
     email: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
+    customRoleName: string | null;
+    customRoleColor: string | null;
     driveId: string;
     invitedByName: string;
     createdAt: Date;
@@ -404,6 +412,9 @@ export const driveInviteRepository = {
         id: pendingInvites.id,
         email: pendingInvites.email,
         role: pendingInvites.role,
+        customRoleId: pendingInvites.customRoleId,
+        customRoleName: driveRoles.name,
+        customRoleColor: driveRoles.color,
         driveId: pendingInvites.driveId,
         invitedByName: users.name,
         createdAt: pendingInvites.createdAt,
@@ -411,6 +422,7 @@ export const driveInviteRepository = {
       })
       .from(pendingInvites)
       .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
+      .leftJoin(driveRoles, eq(driveRoles.id, pendingInvites.customRoleId))
       .where(
         and(
           eq(pendingInvites.driveId, driveId),
@@ -462,13 +474,14 @@ export const driveInviteRepository = {
     driveId: string;
     userId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
     acceptedAt: Date;
   }): Promise<
     | { ok: true; memberId: string }
     | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' }
   > {
-    const { inviteId, driveId, userId, role, invitedBy, acceptedAt } = input;
+    const { inviteId, driveId, userId, role, customRoleId, invitedBy, acceptedAt } = input;
     // The ALREADY_MEMBER signal must roll back the consume — if the user is
     // already a member there is no reason to burn the invite token. We throw
     // a sentinel inside the transaction so Drizzle rolls back, then translate
@@ -496,7 +509,7 @@ export const driveInviteRepository = {
         try {
           const [member] = await tx
             .insert(driveMembers)
-            .values({ driveId, userId, role, invitedBy, acceptedAt })
+            .values({ driveId, userId, role, customRoleId, invitedBy, acceptedAt })
             .returning({ id: driveMembers.id });
           return member.id;
         } catch (error) {

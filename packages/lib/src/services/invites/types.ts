@@ -10,6 +10,7 @@ export interface Invite {
   driveId: string;
   driveName: string;
   role: Role;
+  customRoleId: string | null;
   invitedBy: string;
   expiresAt: Date | null;
   consumedAt: Date | null;
@@ -25,6 +26,7 @@ export interface AcceptedInviteData {
   driveId: string;
   driveName: string;
   role: Role;
+  customRoleId?: string | null;
   invitedUserId: string;
   inviterUserId: string;
 }

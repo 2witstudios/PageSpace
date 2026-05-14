@@ -12,6 +12,7 @@ const baseInvite = (overrides: Partial<Invite> = {}): Invite => ({
   driveId: 'drive_1',
   driveName: 'Acme',
   role: 'MEMBER',
+  customRoleId: null,
   invitedBy: 'user_inviter',
   expiresAt: new Date('2099-01-01T00:00:00.000Z'),
   consumedAt: null,

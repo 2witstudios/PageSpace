@@ -458,6 +458,7 @@ describe('driveInviteRepository.createPendingInvite', () => {
       email: 'a@b.com',
       driveId: 'drive_1',
       role: 'MEMBER',
+      customRoleId: null,
       invitedBy: 'inviter_1',
       expiresAt,
       now,
@@ -523,6 +524,7 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     driveId: 'drive_1',
     userId: 'user_new',
     role: 'MEMBER' as const,
+    customRoleId: null,
     invitedBy: 'inviter_1',
     acceptedAt: new Date('2026-05-06T12:00:00.000Z'),
   };

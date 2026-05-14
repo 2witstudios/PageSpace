@@ -417,6 +417,10 @@ async function handleEmailPath(args: {
       email,
       driveId,
       role,
+      // ADMIN ignores customRoleId (admins bypass per-page grants). Forcing
+      // null here keeps the consumption write consistent with the boundary
+      // gate already applied for the direct-add path.
+      customRoleId: role === 'ADMIN' ? null : (customRoleId ?? null),
       invitedBy: inviterUserId,
       expiresAt,
       now,

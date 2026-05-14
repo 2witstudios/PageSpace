@@ -12,6 +12,7 @@ const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const CreateBodySchema = z.object({
   role: z.enum(['MEMBER', 'ADMIN']).optional(),
+  customRoleId: z.string().min(1).nullable().optional(),
   expiresAt: z.string().datetime().optional(),
 });
 
@@ -50,6 +51,7 @@ export async function POST(
   const { driveId } = await context.params;
 
   let role: 'MEMBER' | 'ADMIN' | undefined;
+  let customRoleId: string | null | undefined;
   let expiresAt: Date | undefined;
   const rawText = await request.text();
   if (rawText.trim().length > 0) {
@@ -64,6 +66,7 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     }
     role = parsed.data.role;
+    customRoleId = parsed.data.customRoleId;
     if (parsed.data.expiresAt) {
       const d = new Date(parsed.data.expiresAt);
       if (isNaN(d.getTime()) || d <= new Date()) {
@@ -73,11 +76,21 @@ export async function POST(
     }
   }
 
-  const result = await createDriveShareLink(auth.ctx, driveId, { role, expiresAt });
+  const result = await createDriveShareLink(auth.ctx, driveId, {
+    role,
+    customRoleId,
+    expiresAt,
+  });
 
   if (!result.ok) {
     if (result.error === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    if (result.error === 'NOT_FOUND') {
+      return NextResponse.json(
+        { error: 'Custom role not found for this drive' },
+        { status: 400 }
+      );
     }
     return NextResponse.json({ error: 'Failed to create share link' }, { status: 500 });
   }

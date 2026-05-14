@@ -119,6 +119,7 @@ export const consumeAnyInviteIfPresent = async ({
           driveId: driveRow.driveId,
           driveName: driveRow.driveName,
           role: driveRow.role,
+          customRoleId: driveRow.customRoleId,
           invitedBy: driveRow.invitedBy,
           expiresAt: driveRow.expiresAt,
           consumedAt: driveRow.consumedAt,
@@ -238,6 +239,7 @@ export const consumeAllInvitesForEmail = async ({
           driveId: inviteRow.driveId,
           userId: user.id,
           role: inviteRow.role,
+          customRoleId: inviteRow.role === 'ADMIN' ? null : inviteRow.customRoleId,
           invitedBy: inviteRow.invitedBy,
           acceptedAt: now,
         });
@@ -250,6 +252,7 @@ export const consumeAllInvitesForEmail = async ({
           driveId: inviteRow.driveId,
           driveName: inviteRow.driveName,
           role: inviteRow.role,
+          customRoleId: inviteRow.role === 'ADMIN' ? null : inviteRow.customRoleId,
           invitedUserId: user.id,
           inviterUserId: inviteRow.invitedBy,
         };

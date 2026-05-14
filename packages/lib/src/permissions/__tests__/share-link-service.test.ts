@@ -31,8 +31,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: {
     id: 'dm.id', driveId: 'dm.driveId', userId: 'dm.userId',
-    role: 'dm.role', acceptedAt: 'dm.acceptedAt', invitedBy: 'dm.invitedBy',
+    role: 'dm.role', customRoleId: 'dm.customRoleId',
+    acceptedAt: 'dm.acceptedAt', invitedBy: 'dm.invitedBy',
     invitedAt: 'dm.invitedAt',
+  },
+  driveRoles: {
+    id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', color: 'dr.color',
   },
   pagePermissions: {
     id: 'pp.id', pageId: 'pp.pageId', userId: 'pp.userId',
@@ -46,7 +50,8 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/schema/share-links', () => ({
   driveShareLinks: {
     id: 'dsl.id', driveId: 'dsl.driveId', token: 'dsl.token',
-    role: 'dsl.role', createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
+    role: 'dsl.role', customRoleId: 'dsl.customRoleId',
+    createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
     expiresAt: 'dsl.expiresAt', isActive: 'dsl.isActive', useCount: 'dsl.useCount',
   },
   pageShareLinks: {
