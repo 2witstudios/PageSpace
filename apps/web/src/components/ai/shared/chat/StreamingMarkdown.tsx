@@ -35,6 +35,37 @@ function preprocessMentions(content: string): string {
   });
 }
 
+/**
+ * Convert bare http(s):// URLs to markdown [url](url) links so Streamdown renders them
+ * as clickable anchors. Skips URLs already inside markdown link syntax `[...](...)`
+ * via negative lookbehinds. Trailing punctuation is stripped and preserved as literal
+ * text; unbalanced closing parens are also stripped (balanced parens in paths are kept,
+ * so Wikipedia-style URLs like .../Foo_(bar) work correctly).
+ */
+function autoLinkUrls(content: string): string {
+  // Allow ) in URL body — handled via post-match paren balancing below
+  return content.replace(/(?<!\[)(?<!\()(https?:\/\/[^\s<>"'\]]+)/g, (rawUrl) => {
+    // Strip trailing plain punctuation
+    let url = rawUrl.replace(/[.,;:!?'">\]]+$/, '');
+    let trailing = rawUrl.slice(url.length);
+
+    // Strip unbalanced trailing ) so "https://example.com)" doesn't include the )
+    // but "https://en.wikipedia.org/wiki/Foo_(bar)" keeps its balanced )
+    while (url.endsWith(')')) {
+      const opens = (url.match(/\(/g) ?? []).length;
+      const closes = (url.match(/\)/g) ?? []).length;
+      if (closes > opens) {
+        trailing = ')' + trailing;
+        url = url.slice(0, -1);
+      } else {
+        break;
+      }
+    }
+
+    return `[${url}](${url})${trailing}`;
+  });
+}
+
 /** Converts single \n to CommonMark hard line breaks (two trailing spaces + \n).
  * Leaves \n\n paragraph breaks untouched. Use for user-typed content only —
  * not AI-generated markdown where \n has structural meaning (lists, code blocks). */
@@ -354,8 +385,8 @@ export const StreamingMarkdown = memo(
   ({ content, isStreaming = false, renderHtmlAsText = false, className }: StreamingMarkdownProps) => {
     const router = useRouter();
 
-    // Pre-process mentions before rendering
-    const processedContent = useMemo(() => preprocessMentions(content), [content]);
+    // Pre-process mentions and auto-link bare URLs before rendering
+    const processedContent = useMemo(() => autoLinkUrls(preprocessMentions(content)), [content]);
 
     // Create components with router for mobile-aware navigation
     // Memoize to avoid recreating on every render
