@@ -79,8 +79,8 @@ const okRoles = () =>
     json: () => Promise.resolve({ roles: [] }),
   });
 
-// fetchMembers() now fires 3 parallel requests per invocation
-const FETCHES_PER_CALL = 3;
+// fetchMembers() fires 3 parallel requests; DriveShareLinkSection adds 1 more for /roles
+const FETCHES_PER_CALL = 4;
 
 const urlAwareMock = (
   members: ReturnType<typeof member>[],
