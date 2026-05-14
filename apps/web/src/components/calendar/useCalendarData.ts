@@ -5,7 +5,7 @@ import useSWR, { mutate } from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useCalendarSocket } from '@/hooks/useCalendarSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { CalendarEvent, CalendarEventAttendee, TaskWithDueDate } from './calendar-types';
+import { CalendarEvent, CalendarEventAttendee, RecurrenceRule, TaskWithDueDate } from './calendar-types';
 import {
   startOfMonth,
   endOfMonth,
@@ -124,6 +124,7 @@ export function useCalendarData({
       color?: string;
       attendeeIds?: string[];
       pageId?: string | null;
+      recurrenceRule?: RecurrenceRule | null;
       agentTrigger?: {
         agentPageId: string;
         prompt?: string;

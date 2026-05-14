@@ -32,6 +32,7 @@ import {
   CalendarEvent,
   CalendarHandlers,
   EventColorConfig,
+  RecurrenceRule,
   getDriveCalendarColor,
 } from './calendar-types';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -267,6 +268,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     color?: string;
     attendeeIds?: string[];
     pageId?: string | null;
+    recurrenceRule?: RecurrenceRule | null;
     agentTrigger?: {
       agentPageId: string;
       prompt?: string;
