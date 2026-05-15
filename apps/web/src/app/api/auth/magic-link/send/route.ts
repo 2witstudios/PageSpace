@@ -14,6 +14,10 @@ import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { eq } from '@pagespace/db/operators';
+import { isAtUserLimit } from '@/lib/user-limit';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
@@ -212,6 +216,22 @@ export async function POST(req: Request) {
         loggers.auth.warn('Invite resolution threw during magic link send', {
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+    }
+
+    // Gate new signups when user limit is active. Existing users (re-signing in)
+    // always bypass. Invite holders also bypass via safeInviteToken.
+    if (!safeInviteToken) {
+      const [existingUser] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, normalizedEmail))
+        .limit(1);
+      if (!existingUser && await isAtUserLimit()) {
+        return Response.json(
+          { code: 'user_limit_reached', error: 'Registration is currently at capacity.' },
+          { status: 403 },
+        );
       }
     }
 

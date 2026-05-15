@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { isOnPrem } from '@/lib/deployment-mode';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { isAtUserLimit } from '@/lib/user-limit';
 import { SignUpClient } from './SignUpClient';
 
 interface SignUpPageProps {
@@ -20,7 +21,8 @@ export default async function SignUp({ searchParams }: SignUpPageProps) {
     : undefined;
 
   if (!invite) {
-    return <SignUpClient {...(safeNext && { returnUrl: safeNext })} />;
+    const atLimit = await isAtUserLimit();
+    return <SignUpClient atLimit={atLimit} {...(safeNext && { returnUrl: safeNext })} />;
   }
 
   const resolution = await resolveInviteContext({ token: invite, now: new Date() });

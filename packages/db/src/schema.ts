@@ -36,6 +36,7 @@ export * from './schema/pending-page-invites';
 export * from './schema/pending-connection-invites';
 export * from './schema/ai-streams';
 export * from './schema/share-links';
+export * from './schema/waitlist';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -75,6 +76,7 @@ import * as pendingPageInvites from './schema/pending-page-invites';
 import * as pendingConnectionInvites from './schema/pending-connection-invites';
 import * as aiStreams from './schema/ai-streams';
 import * as shareLinks from './schema/share-links';
+import * as waitlist from './schema/waitlist';
 
 export const schema = {
   ...auth,
@@ -115,4 +117,5 @@ export const schema = {
   ...pendingConnectionInvites,
   ...aiStreams,
   ...shareLinks,
+  ...waitlist,
 };
