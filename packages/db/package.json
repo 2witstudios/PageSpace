@@ -159,6 +159,10 @@
       "types": "./dist/schema/versioning.d.ts",
       "default": "./dist/schema/versioning.js"
     },
+    "./schema/waitlist": {
+      "types": "./dist/schema/waitlist.d.ts",
+      "default": "./dist/schema/waitlist.js"
+    },
     "./schema/workflows": {
       "types": "./dist/schema/workflows.d.ts",
       "default": "./dist/schema/workflows.js"
