@@ -595,6 +595,8 @@ export function useVoiceMode({
         const pieces = splitOversizedForTts(chunkToSpeak, TTS_MAX_CHARS);
         chunkToSpeak = pieces[0];
         speechQueueRef.current.unshift(...pieces.slice(1));
+        // unshift changed queue[0] — any pre-fetch is now for the wrong text
+        prefetchedAudioRef.current = null;
       }
 
       try {
