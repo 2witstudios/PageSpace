@@ -518,6 +518,14 @@ export function useVoiceMode({
       // this, TTS audio bleeds through the mic on the first frames after
       // getUserMedia returns (especially after a tool-call response starts).
       await new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+
+      // If a newer call to startBargeInMonitoring() ran during the warmup it
+      // will have replaced (or nulled) bargeInRefs.current.analyser via
+      // stopBargeInMonitoring().  This invocation is stale — exit without
+      // starting a second rAF loop.  The stream tracks were already stopped
+      // by the newer call, so no cleanup is needed here.
+      if (bargeInRefs.current.analyser !== analyser) return;
+
       if (voiceStateRef.current !== 'speaking') {
         stopBargeInMonitoring();
         return;
