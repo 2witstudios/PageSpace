@@ -56,7 +56,7 @@ export interface UseVoiceModeOptions {
   onSpeakComplete?: () => void;
   /** Callback when an error occurs */
   onError?: (error: string) => void;
-  /** Callback to abort the in-flight LLM stream on barge-in */
+  /** Callback to abort the in-flight LLM stream when user interrupts playback */
   onStopStream?: () => void;
   /** Language for transcription (default: 'en') */
   language?: string;
@@ -125,8 +125,7 @@ interface BargeInRefs {
  * - Audio recording via MediaRecorder API
  * - Speech-to-text via OpenAI Whisper
  * - Text-to-speech via OpenAI TTS
- * - Barge-in support (interrupt TTS when user speaks)
- * - Two interaction modes: tap-to-speak and barge-in
+ * - Two interaction modes: tap-to-speak and conversation (auto-listen after TTS)
  */
 export function useVoiceMode({
   onTranscript,
@@ -726,7 +725,6 @@ export function useVoiceMode({
         if (speechQueueRef.current.length > 0 && !prefetchedAudioRef.current) {
           prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
         }
-
       } catch (err) {
         const message = getSynthesisErrorMessage(err);
         setError(message);

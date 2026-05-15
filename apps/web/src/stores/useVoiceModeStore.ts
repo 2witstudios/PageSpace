@@ -205,13 +205,9 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
 
     // Note: We intentionally don't restore isEnabled - user should explicitly enable voice mode each session
     const rawMode = localStorage.getItem(VOICE_INTERACTION_MODE_KEY);
-    // Migrate legacy 'barge-in' value to 'conversation'
+    // 'barge-in' was the previous name for 'conversation' — migrate it
     const interactionMode: VoiceInteractionMode =
-      rawMode === 'barge-in' || rawMode === 'conversation'
-        ? 'conversation'
-        : rawMode === 'tap-to-speak'
-          ? 'tap-to-speak'
-          : 'conversation';
+      rawMode === 'tap-to-speak' ? 'tap-to-speak' : 'conversation';
     const ttsVoice = localStorage.getItem(VOICE_TTS_VOICE_KEY) as TTSVoice | null;
     const autoSend = localStorage.getItem(VOICE_AUTO_SEND_KEY);
 
