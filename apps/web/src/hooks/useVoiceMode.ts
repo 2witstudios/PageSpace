@@ -591,12 +591,15 @@ export function useVoiceMode({
       // Safety net: if a chunk somehow exceeds the OpenAI TTS 4096-char limit,
       // hard-split on word boundary and queue the remainder so nothing is dropped.
       let chunkToSpeak = text;
+      let effectivePreloaded = preloadedBuffer ?? null;
       if (chunkToSpeak.length > TTS_MAX_CHARS) {
         const pieces = splitOversizedForTts(chunkToSpeak, TTS_MAX_CHARS);
         chunkToSpeak = pieces[0];
         speechQueueRef.current.unshift(...pieces.slice(1));
-        // unshift changed queue[0] — any pre-fetch is now for the wrong text
+        // unshift changed queue[0] — any pre-fetch is now for the wrong text;
+        // also discard the passed-in buffer since it covers the full text, not the piece
         prefetchedAudioRef.current = null;
+        effectivePreloaded = null;
       }
 
       try {
@@ -607,8 +610,8 @@ export function useVoiceMode({
         const audioContext = getAudioContext();
         let audioBuffer: AudioBuffer;
 
-        if (preloadedBuffer) {
-          audioBuffer = preloadedBuffer;
+        if (effectivePreloaded) {
+          audioBuffer = effectivePreloaded;
           if (audioContext.state === 'suspended') {
             await audioContext.resume();
           }
