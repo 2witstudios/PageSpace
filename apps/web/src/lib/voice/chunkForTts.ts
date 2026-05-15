@@ -23,6 +23,7 @@ const BARE_URL = /\bhttps?:\/\/\S+/g;
 
 const SENTENCE_BOUNDARY = /(?<!\d)[.!?]+(?=\s|$)/g;
 const PARAGRAPH_BREAK = /\n{2,}/g;
+const HEADING_LINE = /^[ \t]*#{1,6}[ \t]+[^\n]*\n/gm;
 
 const DEFAULT_MAX_CHARS = 1500;
 
@@ -96,6 +97,12 @@ function findLastSafeBoundary(buffer: string): number {
     last = m.index + m[0].length;
   }
   for (const m of searchable.matchAll(PARAGRAPH_BREAK)) {
+    const end = m.index + m[0].length;
+    if (end > last) last = end;
+  }
+  // Treat a complete ATX heading line as a flush point so headings don't
+  // accumulate in pending waiting for the section's first sentence.
+  for (const m of searchable.matchAll(HEADING_LINE)) {
     const end = m.index + m[0].length;
     if (end > last) last = end;
   }

@@ -450,7 +450,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return;
     const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+    const text = textParts.map((p) => (p as { text: string }).text).join('');
     if (!text.trim()) return;
     if (lastAssistantMsg.id === voiceBaselineRef.current) return;
 
