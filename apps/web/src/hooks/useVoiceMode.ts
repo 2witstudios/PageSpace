@@ -198,6 +198,8 @@ export function useVoiceMode({
 
   // Sentence queue for chained TTS playback
   const speechQueueRef = useRef<string[]>([]);
+  // Pre-fetched audio for the next queued chunk (eliminates inter-chunk silence)
+  const prefetchedAudioRef = useRef<Promise<AudioBuffer | null> | null>(null);
 
   // Derived state
   const isListening = voiceState === 'listening';
@@ -562,9 +564,28 @@ export function useVoiceMode({
     startListening,
   ]);
 
+  const prefetchAudio = useCallback(
+    async (text: string): Promise<AudioBuffer | null> => {
+      try {
+        const response = await fetchWithAuth('/api/voice/synthesize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: ttsVoice, speed: ttsSpeed }),
+        });
+        if (!response.ok) return null;
+        const audioData = await response.arrayBuffer();
+        const audioContext = getAudioContext();
+        return await audioContext.decodeAudioData(audioData);
+      } catch {
+        return null;
+      }
+    },
+    [ttsVoice, ttsSpeed, getAudioContext]
+  );
+
   // Speak text using TTS
   const speak = useCallback(
-    async (text: string) => {
+    async (text: string, preloadedBuffer?: AudioBuffer | null) => {
       if (!text.trim()) return;
 
       // Safety net: if a chunk somehow exceeds the OpenAI TTS 4096-char limit,
@@ -581,32 +602,35 @@ export function useVoiceMode({
         const audioId = createId();
         startSpeakingStore(audioId);
 
-        const response = await fetchWithAuth('/api/voice/synthesize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: chunkToSpeak,
-            voice: ttsVoice,
-            speed: ttsSpeed,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || errorData.error || 'Speech synthesis failed');
-        }
-
-        const audioData = await response.arrayBuffer();
         const audioContext = getAudioContext();
+        let audioBuffer: AudioBuffer;
 
-        // Resume audio context if suspended (browser autoplay policy)
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
+        if (preloadedBuffer) {
+          audioBuffer = preloadedBuffer;
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+        } else {
+          const response = await fetchWithAuth('/api/voice/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: chunkToSpeak, voice: ttsVoice, speed: ttsSpeed }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.message || errorData.error || 'Speech synthesis failed');
+          }
+
+          const audioData = await response.arrayBuffer();
+
+          // Resume audio context if suspended (browser autoplay policy)
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+
+          audioBuffer = await audioContext.decodeAudioData(audioData);
         }
-
-        const audioBuffer = await audioContext.decodeAudioData(audioData);
 
         // Guard: if barge-in cleared the audio ID during the fetch, discard this synthesis
         const { currentAudioId: liveAudioId } = useVoiceModeStore.getState();
@@ -627,7 +651,20 @@ export function useVoiceMode({
             playbackRefs.current.audioSource = null;
 
             if (speechQueueRef.current.length > 0) {
-              void speak(speechQueueRef.current.shift()!);
+              const nextText = speechQueueRef.current.shift()!;
+              const preloaded = prefetchedAudioRef.current;
+              // Advance the pre-fetch pointer to the new queue head
+              prefetchedAudioRef.current =
+                speechQueueRef.current.length > 0
+                  ? prefetchAudio(speechQueueRef.current[0])
+                  : null;
+              if (preloaded) {
+                preloaded
+                  .then((buf: AudioBuffer | null) => void speak(nextText, buf))
+                  .catch(() => void speak(nextText));
+              } else {
+                void speak(nextText);
+              }
               return;
             }
 
@@ -647,6 +684,11 @@ export function useVoiceMode({
         };
 
         source.start();
+
+        // Kick off pre-fetch for the next queued chunk while this one plays
+        if (speechQueueRef.current.length > 0 && !prefetchedAudioRef.current) {
+          prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
+        }
 
         if (interactionMode === 'barge-in' && isEnabled) {
           void startBargeInMonitoring();
@@ -671,6 +713,7 @@ export function useVoiceMode({
       ttsVoice,
       ttsSpeed,
       getAudioContext,
+      prefetchAudio,
       stopAudioPlayback,
       stopBargeInMonitoring,
       startSpeakingStore,
@@ -685,6 +728,7 @@ export function useVoiceMode({
 
   const clearSpeechQueue = useCallback(() => {
     speechQueueRef.current = [];
+    prefetchedAudioRef.current = null;
   }, []);
 
   const queueSentence = useCallback(
@@ -696,17 +740,21 @@ export function useVoiceMode({
       if (currentState === 'listening' || currentState === 'processing') return;
       if (currentState === 'speaking') {
         speechQueueRef.current.push(text);
+        if (!prefetchedAudioRef.current) {
+          prefetchedAudioRef.current = prefetchAudio(text);
+        }
       } else {
         speechQueueRef.current = [];
         void speak(text);
       }
     },
-    [speak]
+    [speak, prefetchAudio]
   );
 
   // Barge-in: interrupt TTS and start listening
   const bargeIn = useCallback(() => {
     speechQueueRef.current = [];
+    prefetchedAudioRef.current = null;
     callbacksRef.current.onStopStream?.();
     bargeInStore();
     stopAudioPlayback();
