@@ -832,7 +832,10 @@ function TaskListView({ page }: TaskListViewProps) {
               onClick={() => {
                 const mobileInput = document.getElementById('new-task-input-mobile');
                 const desktopInput = document.getElementById('new-task-input');
-                (mobileInput ?? desktopInput)?.focus();
+                // offsetParent is null for CSS-hidden elements; pick the visible input
+                const input = desktopInput?.offsetParent ? desktopInput : mobileInput;
+                input?.scrollIntoView({ block: 'nearest' });
+                input?.focus();
               }}
             >
               <Plus className="h-4 w-4 mr-1" />
