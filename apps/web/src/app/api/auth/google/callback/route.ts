@@ -28,6 +28,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { isAtUserLimit } from '@/lib/user-limit';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -162,6 +163,9 @@ export async function GET(req: Request) {
         loggers.auth.info('User updated via Google OAuth', { userId: user.id });
       }
     } else {
+      if (!verifiedState.inviteToken && await isAtUserLimit()) {
+        return NextResponse.redirect(new URL('/auth/signin?error=user_limit_reached', baseUrl));
+      }
       loggers.auth.info('Creating new user via Google OAuth', { email: maskEmail(email) });
       user = await authRepository.createUser({
         id: createId(),

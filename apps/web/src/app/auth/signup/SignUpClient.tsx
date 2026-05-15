@@ -149,11 +149,7 @@ function WaitlistForm() {
   );
 }
 
-export function SignUpClient({ inviteToken, inviteContext, returnUrl, atLimit }: SignUpClientProps) {
-  if (atLimit) {
-    return <WaitlistForm />;
-  }
-
+function SignUpForm({ inviteToken, inviteContext, returnUrl }: Omit<SignUpClientProps, 'atLimit'>) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
   const router = useRouter();
@@ -319,4 +315,11 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl, atLimit }:
       </motion.div>
     </AuthShell>
   );
+}
+
+export function SignUpClient({ inviteToken, inviteContext, returnUrl, atLimit }: SignUpClientProps) {
+  if (atLimit) {
+    return <WaitlistForm />;
+  }
+  return <SignUpForm inviteToken={inviteToken} inviteContext={inviteContext} returnUrl={returnUrl} />;
 }

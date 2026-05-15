@@ -25,6 +25,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { isAtUserLimit } from '@/lib/user-limit';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -163,6 +164,12 @@ export async function POST(req: Request) {
         });
       }
     } else {
+      if (!inviteToken && await isAtUserLimit()) {
+        return NextResponse.json(
+          { code: 'user_limit_reached', error: 'Registration is currently at capacity.' },
+          { status: 403 },
+        );
+      }
       // Create new user
       isNewUser = true;
       loggers.auth.info('Creating new user via Google One Tap', { email: maskEmail(email) });

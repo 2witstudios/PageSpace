@@ -27,6 +27,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { isAtUserLimit } from '@/lib/user-limit';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -158,6 +159,9 @@ export async function POST(req: Request) {
         loggers.auth.info('User updated via Apple OAuth', { userId: user.id });
       }
     } else {
+      if (!verifiedState.inviteToken && await isAtUserLimit()) {
+        return NextResponse.redirect(new URL('/auth/signin?error=user_limit_reached', baseUrl));
+      }
       // Create new user
       loggers.auth.info('Creating new user via Apple OAuth', { email: maskEmail(email) });
       user = await authRepository.createUser({

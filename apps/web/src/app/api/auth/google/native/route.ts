@@ -24,6 +24,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { isAtUserLimit } from '@/lib/user-limit';
 
 const client = new OAuth2Client();
 
@@ -139,6 +140,12 @@ export async function POST(req: Request) {
         user = await authRepository.findUserById(user.id) || user;
       }
     } else {
+      if (!inviteToken && await isAtUserLimit()) {
+        return Response.json(
+          { code: 'user_limit_reached', error: 'Registration is currently at capacity.' },
+          { status: 403 },
+        );
+      }
       isNewUser = true;
       loggers.auth.info('Creating new user via native Google OAuth', { email: maskEmail(email), platform });
       user = await authRepository.createUser({
