@@ -208,7 +208,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     // 'barge-in' was the previous name for 'conversation' — migrate it
     const interactionMode: VoiceInteractionMode =
       rawMode === 'tap-to-speak' ? 'tap-to-speak' : 'conversation';
-    if (rawMode !== interactionMode) {
+    if (rawMode === 'barge-in') {
       localStorage.setItem(VOICE_INTERACTION_MODE_KEY, interactionMode);
     }
     const ttsVoice = localStorage.getItem(VOICE_TTS_VOICE_KEY) as TTSVoice | null;
