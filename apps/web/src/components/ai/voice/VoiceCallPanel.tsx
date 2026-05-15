@@ -100,15 +100,27 @@ export function VoiceCallPanel({
     pendingTextRef.current = '';
   }, [isAIStreaming]);
 
-  // When stream ends, flush any buffered tail. queueSentence drops chunks
-  // while the user is listening/processing, so this is safe.
+  // When stream ends, flush any buffered tail. Also pick up tokens that arrived
+  // in the same React render as the isAIStreaming=false transition — those are
+  // missed by the streaming effect (which bails on !streamingText) but become
+  // visible once latestAssistantMessage is set a render later.
   useEffect(() => {
     if (isAIStreaming) return;
-    const tail = pendingTextRef.current;
+    let tail = pendingTextRef.current;
     pendingTextRef.current = '';
+
+    if (
+      latestAssistantMessage?.text &&
+      streamingSpokenRef.current > 0 &&
+      streamingSpokenRef.current < latestAssistantMessage.text.length
+    ) {
+      tail += latestAssistantMessage.text.slice(streamingSpokenRef.current);
+      streamingSpokenRef.current = latestAssistantMessage.text.length;
+    }
+
     if (!tail.trim()) return;
     for (const chunk of flushForTts(tail)) queueSentence(chunk);
-  }, [isAIStreaming, queueSentence]);
+  }, [isAIStreaming, queueSentence, latestAssistantMessage]);
 
   // Fallback: speak full message when voice mode was activated after streaming ended
   useEffect(() => {

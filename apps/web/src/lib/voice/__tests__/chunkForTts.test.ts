@@ -224,6 +224,32 @@ describe('chunkStreamingForTts', () => {
     const all = result.ready.join(' ');
     expect(all).not.toContain('..');
   });
+
+  it('treats a complete ATX heading line as a flush point (no sentence needed)', () => {
+    // A heading with only a single trailing newline must not wait for the
+    // section's first sentence — it should flush immediately so the TTS queue
+    // stays primed and the prefetch window can fill.
+    const result = chunkStreamingForTts('## Section Title\n');
+    expect(result.ready.length).toBeGreaterThan(0);
+    expect(result.ready.join(' ')).toContain('Section Title');
+    expect(result.pending).toBe('');
+  });
+
+  it('flushes a heading before accumulating the section body', () => {
+    // Buffer has heading + partial first sentence; the heading should be in
+    // ready and the partial sentence should stay in pending.
+    const result = chunkStreamingForTts('## Overview\nThis is the first');
+    expect(result.ready.join(' ')).toContain('Overview');
+    expect(result.pending).toContain('first');
+  });
+
+  it('handles all heading levels (h1–h6) as flush points', () => {
+    for (let level = 1; level <= 6; level++) {
+      const hashes = '#'.repeat(level);
+      const result = chunkStreamingForTts(`${hashes} Heading ${level}\n`);
+      expect(result.ready.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('flushForTts', () => {
