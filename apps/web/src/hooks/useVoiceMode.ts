@@ -85,8 +85,8 @@ export interface UseVoiceModeReturn {
   bargeIn: () => void;
 
   // Settings
-  interactionMode: 'barge-in' | 'tap-to-speak';
-  setInteractionMode: (mode: 'barge-in' | 'tap-to-speak') => void;
+  interactionMode: 'conversation' | 'tap-to-speak';
+  setInteractionMode: (mode: 'conversation' | 'tap-to-speak') => void;
   ttsVoice: TTSVoice;
   setTTSVoice: (voice: TTSVoice) => void;
   autoSend: boolean;
@@ -482,7 +482,7 @@ export function useVoiceMode({
 
   // Voice Activity Detection while TTS is speaking (real barge-in).
   const startBargeInMonitoring = useCallback(async () => {
-    if (!isEnabled || interactionMode !== 'barge-in') return;
+    if (!isEnabled) return;
 
     stopBargeInMonitoring();
 
@@ -711,7 +711,7 @@ export function useVoiceMode({
             // Read live store state to avoid stale closure — always auto-listen after TTS
             const { isEnabled: liveEnabled, interactionMode: liveMode } =
               useVoiceModeStore.getState();
-            if (liveEnabled && liveMode === 'barge-in') {
+            if (liveEnabled && liveMode === 'conversation') {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
                 void startListening();
@@ -727,9 +727,6 @@ export function useVoiceMode({
           prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
         }
 
-        if (interactionMode === 'barge-in' && isEnabled) {
-          void startBargeInMonitoring();
-        }
       } catch (err) {
         const message = getSynthesisErrorMessage(err);
         setError(message);

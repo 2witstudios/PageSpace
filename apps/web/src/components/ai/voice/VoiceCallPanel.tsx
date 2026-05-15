@@ -161,12 +161,10 @@ export function VoiceCallPanel({
           ? 'Waiting for response...'
           : voiceState === 'speaking'
             ? isSpeaking
-              ? interactionMode === 'barge-in'
-                ? 'Speaking — interrupt anytime'
-                : 'Speaking...'
+              ? 'Speaking...'
               : 'Preparing audio...'
-            : interactionMode === 'barge-in'
-              ? 'Ready — speak anytime'
+            : interactionMode === 'conversation'
+              ? 'Ready — listening after AI responds'
               : 'Tap the mic to speak';
 
   const micColor =

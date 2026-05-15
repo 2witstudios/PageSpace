@@ -30,9 +30,9 @@ const INTERACTION_MODE_OPTIONS: { value: VoiceInteractionMode; label: string; de
     description: 'Tap the mic to start/stop recording',
   },
   {
-    value: 'barge-in',
-    label: 'Barge-in',
-    description: 'Automatically listens - speak to interrupt AI',
+    value: 'conversation',
+    label: 'Conversation',
+    description: 'Automatically listens after AI finishes speaking',
   },
 ];
 
