@@ -60,10 +60,11 @@ describe('useVoiceModeStore', () => {
       expect(useVoiceModeStore.getState().interactionMode).toBe('conversation');
     });
 
-    it('migrates legacy barge-in value to conversation', () => {
+    it('migrates legacy barge-in value to conversation and persists it', () => {
       localStorage.setItem('pagespace:voice:interactionMode', 'barge-in');
       useVoiceModeStore.getState().loadSettings();
       expect(useVoiceModeStore.getState().interactionMode).toBe('conversation');
+      expect(localStorage.getItem('pagespace:voice:interactionMode')).toBe('conversation');
     });
 
     it('preserves tap-to-speak when stored', () => {

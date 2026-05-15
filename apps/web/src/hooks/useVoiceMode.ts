@@ -586,7 +586,6 @@ export function useVoiceMode({
     }
   }, [
     isEnabled,
-    interactionMode,
     stopBargeInMonitoring,
     getAudioContext,
     bargeInStore,
