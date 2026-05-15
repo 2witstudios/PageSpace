@@ -53,4 +53,29 @@ describe('useVoiceModeStore', () => {
     expect(state.owner).toBeNull();
     expect(state.voiceState).toBe('idle');
   });
+
+  describe('loadSettings', () => {
+    it('defaults to conversation mode when nothing is stored', () => {
+      useVoiceModeStore.getState().loadSettings();
+      expect(useVoiceModeStore.getState().interactionMode).toBe('conversation');
+    });
+
+    it('migrates legacy barge-in value to conversation', () => {
+      localStorage.setItem('pagespace:voice:interactionMode', 'barge-in');
+      useVoiceModeStore.getState().loadSettings();
+      expect(useVoiceModeStore.getState().interactionMode).toBe('conversation');
+    });
+
+    it('preserves tap-to-speak when stored', () => {
+      localStorage.setItem('pagespace:voice:interactionMode', 'tap-to-speak');
+      useVoiceModeStore.getState().loadSettings();
+      expect(useVoiceModeStore.getState().interactionMode).toBe('tap-to-speak');
+    });
+
+    it('preserves conversation when already stored as conversation', () => {
+      localStorage.setItem('pagespace:voice:interactionMode', 'conversation');
+      useVoiceModeStore.getState().loadSettings();
+      expect(useVoiceModeStore.getState().interactionMode).toBe('conversation');
+    });
+  });
 });
