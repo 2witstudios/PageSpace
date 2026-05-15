@@ -60,6 +60,8 @@ export interface UseVoiceModeOptions {
   onStopStream?: () => void;
   /** Language for transcription (default: 'en') */
   language?: string;
+  /** Whether the AI stream is still active — blocks auto-listen during tool calls */
+  isAIStreaming?: boolean;
 }
 
 export interface UseVoiceModeReturn {
@@ -134,6 +136,7 @@ export function useVoiceMode({
   onError,
   onStopStream,
   language = 'en',
+  isAIStreaming = false,
 }: UseVoiceModeOptions = {}): UseVoiceModeReturn {
   // Store state
   const isEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -194,6 +197,10 @@ export function useVoiceMode({
   // Callbacks ref to avoid stale closures
   const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError, onStopStream });
   callbacksRef.current = { onTranscript, onSend, onSpeakComplete, onError, onStopStream };
+
+  // Tracks parent streaming state without causing stale closures in speak()
+  const isAIStreamingRef = useRef(isAIStreaming);
+  isAIStreamingRef.current = isAIStreaming;
 
   // Sentence queue for chained TTS playback
   const speechQueueRef = useRef<string[]>([]);
@@ -706,10 +713,11 @@ export function useVoiceMode({
             stopSpeakingStore();
             callbacksRef.current.onSpeakComplete?.();
 
-            // Read live store state to avoid stale closure — always auto-listen after TTS
+            // Read live store state to avoid stale closure — auto-listen after TTS,
+            // but only when the AI stream has fully finished (not mid-tool-call).
             const { isEnabled: liveEnabled, interactionMode: liveMode } =
               useVoiceModeStore.getState();
-            if (liveEnabled && liveMode === 'conversation') {
+            if (liveEnabled && liveMode === 'conversation' && !isAIStreamingRef.current) {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
                 void startListening();
