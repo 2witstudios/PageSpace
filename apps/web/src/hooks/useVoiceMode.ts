@@ -375,6 +375,8 @@ export function useVoiceMode({
     // If speaking, barge in first and transition to listening
     try {
       if (voiceStateRef.current === 'speaking') {
+        speechQueueRef.current = [];
+        prefetchedAudioRef.current = null;
         bargeInStore();
         stopAudioPlayback();
         setCurrentAudioId(null);
@@ -537,6 +539,7 @@ export function useVoiceMode({
         if (speechFrames >= REQUIRED_SPEECH_FRAMES) {
           stopBargeInMonitoring();
           speechQueueRef.current = [];
+          prefetchedAudioRef.current = null;
           callbacksRef.current.onStopStream?.();
           bargeInStore();
           stopAudioPlayback();
@@ -746,7 +749,8 @@ export function useVoiceMode({
       if (currentState === 'speaking') {
         speechQueueRef.current.push(text);
         if (!prefetchedAudioRef.current) {
-          prefetchedAudioRef.current = prefetchAudio(text);
+          // Pre-fetch the queue head (index 0), not the just-pushed tail
+          prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
         }
       } else {
         speechQueueRef.current = [];

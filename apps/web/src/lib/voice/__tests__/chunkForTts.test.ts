@@ -59,10 +59,12 @@ describe('normalizeForSpeech', () => {
     );
   });
 
-  it('reads alt text from images (does not silence them)', () => {
-    const out = normalizeForSpeech('Look ![decorative](https://img.png) here.');
+  it('silently drops images with empty alt text', () => {
+    const out = normalizeForSpeech('Look ![](https://img.png) here.');
     expect(out).not.toContain('img.png');
-    expect(out).toContain('decorative');
+    expect(out).not.toContain('![');
+    expect(out).toContain('Look');
+    expect(out).toContain('here');
   });
 
   it('converts table rows to comma-separated cell text with row separation', () => {

@@ -49,7 +49,7 @@ export function normalizeForSpeech(text: string): string {
   s = s.replace(HEADING, '');
   s = s.replace(LIST_BULLET, '');
   s = s.replace(LIST_ORDERED, '');
-  s = s.replace(/\[[ xX]\][ \t]*/g, ''); // task list checkboxes
+  s = s.replace(/^[ \t]*\[[ xX]\][ \t]*/gm, ''); // task list checkboxes (line-start only)
   s = s.replace(STRIKETHROUGH, '$1');
   s = s.replace(BOLD, '$2');
   s = s.replace(ITALIC, '$2');
