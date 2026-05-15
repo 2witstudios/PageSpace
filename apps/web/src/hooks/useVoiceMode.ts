@@ -720,7 +720,11 @@ export function useVoiceMode({
             if (liveEnabled && liveMode === 'conversation' && !isAIStreamingRef.current) {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
-                void startListening();
+                const { isEnabled: enabledNow, interactionMode: modeNow } =
+                  useVoiceModeStore.getState();
+                if (enabledNow && modeNow === 'conversation' && !isAIStreamingRef.current) {
+                  void startListening();
+                }
               }, 300);
             }
           }
