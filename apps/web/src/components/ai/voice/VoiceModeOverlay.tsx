@@ -306,8 +306,8 @@ export function VoiceModeOverlay({
 
           {/* Interaction mode hint */}
           <p className="text-sm text-muted-foreground text-center">
-            {interactionMode === 'barge-in'
-              ? 'Speak anytime to interrupt'
+            {interactionMode === 'conversation'
+              ? 'Listens automatically after AI responds'
               : 'Press Space or tap to toggle'}
           </p>
 

@@ -56,7 +56,7 @@ export interface UseVoiceModeOptions {
   onSpeakComplete?: () => void;
   /** Callback when an error occurs */
   onError?: (error: string) => void;
-  /** Callback to abort the in-flight LLM stream on barge-in */
+  /** Callback to abort the in-flight LLM stream when user interrupts playback */
   onStopStream?: () => void;
   /** Language for transcription (default: 'en') */
   language?: string;
@@ -85,8 +85,8 @@ export interface UseVoiceModeReturn {
   bargeIn: () => void;
 
   // Settings
-  interactionMode: 'barge-in' | 'tap-to-speak';
-  setInteractionMode: (mode: 'barge-in' | 'tap-to-speak') => void;
+  interactionMode: 'conversation' | 'tap-to-speak';
+  setInteractionMode: (mode: 'conversation' | 'tap-to-speak') => void;
   ttsVoice: TTSVoice;
   setTTSVoice: (voice: TTSVoice) => void;
   autoSend: boolean;
@@ -125,8 +125,7 @@ interface BargeInRefs {
  * - Audio recording via MediaRecorder API
  * - Speech-to-text via OpenAI Whisper
  * - Text-to-speech via OpenAI TTS
- * - Barge-in support (interrupt TTS when user speaks)
- * - Two interaction modes: tap-to-speak and barge-in
+ * - Two interaction modes: tap-to-speak and conversation (auto-listen after TTS)
  */
 export function useVoiceMode({
   onTranscript,
@@ -482,7 +481,7 @@ export function useVoiceMode({
 
   // Voice Activity Detection while TTS is speaking (real barge-in).
   const startBargeInMonitoring = useCallback(async () => {
-    if (!isEnabled || interactionMode !== 'barge-in') return;
+    if (!isEnabled) return;
 
     stopBargeInMonitoring();
 
@@ -587,7 +586,6 @@ export function useVoiceMode({
     }
   }, [
     isEnabled,
-    interactionMode,
     stopBargeInMonitoring,
     getAudioContext,
     bargeInStore,
@@ -711,7 +709,7 @@ export function useVoiceMode({
             // Read live store state to avoid stale closure — always auto-listen after TTS
             const { isEnabled: liveEnabled, interactionMode: liveMode } =
               useVoiceModeStore.getState();
-            if (liveEnabled && liveMode === 'barge-in') {
+            if (liveEnabled && liveMode === 'conversation') {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
                 void startListening();
@@ -725,10 +723,6 @@ export function useVoiceMode({
         // Kick off pre-fetch for the next queued chunk while this one plays
         if (speechQueueRef.current.length > 0 && !prefetchedAudioRef.current) {
           prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
-        }
-
-        if (interactionMode === 'barge-in' && isEnabled) {
-          void startBargeInMonitoring();
         }
       } catch (err) {
         const message = getSynthesisErrorMessage(err);
