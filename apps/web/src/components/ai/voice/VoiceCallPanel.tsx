@@ -101,7 +101,7 @@ export function VoiceCallPanel({
   }, [isAIStreaming]);
 
   // When stream ends, flush any buffered tail. queueSentence drops chunks
-  // when the user is mid-barge-in (listening/processing), so this is safe.
+  // while the user is listening/processing, so this is safe.
   useEffect(() => {
     if (isAIStreaming) return;
     const tail = pendingTextRef.current;
