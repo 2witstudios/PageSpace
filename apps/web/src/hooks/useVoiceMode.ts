@@ -514,9 +514,26 @@ export function useVoiceMode({
       bargeInRefs.current.stream = stream;
       bargeInRefs.current.analyser = analyser;
 
+      // Allow echo cancellation to calibrate before checking levels — without
+      // this, TTS audio bleeds through the mic on the first frames after
+      // getUserMedia returns (especially after a tool-call response starts).
+      await new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+      if (voiceStateRef.current !== 'speaking') {
+        stopBargeInMonitoring();
+        return;
+      }
+
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const SPEECH_THRESHOLD = 22;
-      const REQUIRED_SPEECH_FRAMES = 15;
+
+      // Restrict detection to the human speech frequency band (85–8000 Hz).
+      // Averaging all bins (0–24 kHz) lets low-frequency rumble and high-
+      // frequency hiss accumulate enough energy to trip the threshold.
+      const hzPerBin = audioContext.sampleRate / analyser.fftSize;
+      const speechStartBin = Math.max(0, Math.floor(85 / hzPerBin));
+      const speechEndBin = Math.min(dataArray.length, Math.ceil(8000 / hzPerBin));
+
+      const SPEECH_THRESHOLD = 35;
+      const REQUIRED_SPEECH_FRAMES = 25;
       let speechFrames = 0;
 
       const checkSpeech = () => {
@@ -528,12 +545,16 @@ export function useVoiceMode({
         }
 
         currentAnalyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        let sum = 0;
+        for (let i = speechStartBin; i < speechEndBin; i++) sum += dataArray[i];
+        const average = sum / (speechEndBin - speechStartBin);
 
         if (average >= SPEECH_THRESHOLD) {
           speechFrames += 1;
-        } else if (speechFrames > 0) {
-          speechFrames -= 1;
+        } else {
+          // Reset rather than decrement so intermittent noise cannot
+          // accumulate across quiet gaps to reach the trigger threshold.
+          speechFrames = 0;
         }
 
         if (speechFrames >= REQUIRED_SPEECH_FRAMES) {
