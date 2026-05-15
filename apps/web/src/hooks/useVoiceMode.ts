@@ -771,6 +771,7 @@ export function useVoiceMode({
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
+    prefetchedAudioRef.current = null;
     stopAudioPlayback();
     stopSpeakingStore();
     setCurrentAudioId(null);
@@ -791,6 +792,8 @@ export function useVoiceMode({
       if (recording.stream) {
         recording.stream.getTracks().forEach((track) => { track.stop(); });
       }
+      // Drop any in-flight pre-fetch so it can't resolve into an unmounted hook
+      prefetchedAudioRef.current = null;
       // Stop playback
       if (playback.autoListenTimer) {
         clearTimeout(playback.autoListenTimer);

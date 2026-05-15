@@ -38,10 +38,11 @@ export function normalizeForSpeech(text: string): string {
     return body ? ` ${body} ` : ' ';
   });
   s = s.replace(LINK, '$1');
-  // Tables: strip separator rows first, then extract cell text from content rows
+  // Tables: strip separator rows first, then extract cell text from content rows.
+  // Append '. ' so consecutive rows don't merge into one run-on comma list.
   s = s.replace(TABLE_SEPARATOR, '');
   s = s.replace(/^\|(.+?)\|?\s*$/gm, (_, cells: string) =>
-    cells.split('|').map((c: string) => c.trim()).filter(Boolean).join(', ')
+    cells.split('|').map((c: string) => c.trim()).filter(Boolean).join(', ') + '. '
   );
   s = s.replace(HORIZONTAL_RULE, '');
   s = s.replace(BLOCKQUOTE, '');

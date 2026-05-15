@@ -65,7 +65,7 @@ describe('normalizeForSpeech', () => {
     expect(out).toContain('decorative');
   });
 
-  it('converts table rows to comma-separated cell text', () => {
+  it('converts table rows to comma-separated cell text with row separation', () => {
     const table = '| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |';
     const out = normalizeForSpeech(table);
     expect(out).toContain('Name');
@@ -73,6 +73,11 @@ describe('normalizeForSpeech', () => {
     expect(out).toContain('Bob');
     expect(out).not.toContain('|');
     expect(out).not.toContain('---');
+    // Header and data rows should be separated, not merged into one run-on list
+    const aliceIdx = out.indexOf('Alice');
+    const bobIdx = out.indexOf('Bob');
+    expect(aliceIdx).toBeGreaterThan(-1);
+    expect(bobIdx).toBeGreaterThan(aliceIdx);
   });
 
   it('strips task list checkbox markers', () => {
