@@ -198,6 +198,8 @@ export function useVoiceMode({
 
   // Sentence queue for chained TTS playback
   const speechQueueRef = useRef<string[]>([]);
+  // Pre-fetched audio for the next queued chunk (eliminates inter-chunk silence)
+  const prefetchedAudioRef = useRef<Promise<AudioBuffer | null> | null>(null);
 
   // Derived state
   const isListening = voiceState === 'listening';
@@ -373,6 +375,8 @@ export function useVoiceMode({
     // If speaking, barge in first and transition to listening
     try {
       if (voiceStateRef.current === 'speaking') {
+        speechQueueRef.current = [];
+        prefetchedAudioRef.current = null;
         bargeInStore();
         stopAudioPlayback();
         setCurrentAudioId(null);
@@ -535,6 +539,7 @@ export function useVoiceMode({
         if (speechFrames >= REQUIRED_SPEECH_FRAMES) {
           stopBargeInMonitoring();
           speechQueueRef.current = [];
+          prefetchedAudioRef.current = null;
           callbacksRef.current.onStopStream?.();
           bargeInStore();
           stopAudioPlayback();
@@ -562,18 +567,42 @@ export function useVoiceMode({
     startListening,
   ]);
 
+  const prefetchAudio = useCallback(
+    async (text: string): Promise<AudioBuffer | null> => {
+      try {
+        const response = await fetchWithAuth('/api/voice/synthesize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: ttsVoice, speed: ttsSpeed }),
+        });
+        if (!response.ok) return null;
+        const audioData = await response.arrayBuffer();
+        const audioContext = getAudioContext();
+        return await audioContext.decodeAudioData(audioData);
+      } catch {
+        return null;
+      }
+    },
+    [ttsVoice, ttsSpeed, getAudioContext]
+  );
+
   // Speak text using TTS
   const speak = useCallback(
-    async (text: string) => {
+    async (text: string, preloadedBuffer?: AudioBuffer | null) => {
       if (!text.trim()) return;
 
       // Safety net: if a chunk somehow exceeds the OpenAI TTS 4096-char limit,
       // hard-split on word boundary and queue the remainder so nothing is dropped.
       let chunkToSpeak = text;
+      let effectivePreloaded = preloadedBuffer ?? null;
       if (chunkToSpeak.length > TTS_MAX_CHARS) {
         const pieces = splitOversizedForTts(chunkToSpeak, TTS_MAX_CHARS);
         chunkToSpeak = pieces[0];
         speechQueueRef.current.unshift(...pieces.slice(1));
+        // unshift changed queue[0] — any pre-fetch is now for the wrong text;
+        // also discard the passed-in buffer since it covers the full text, not the piece
+        prefetchedAudioRef.current = null;
+        effectivePreloaded = null;
       }
 
       try {
@@ -581,32 +610,35 @@ export function useVoiceMode({
         const audioId = createId();
         startSpeakingStore(audioId);
 
-        const response = await fetchWithAuth('/api/voice/synthesize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: chunkToSpeak,
-            voice: ttsVoice,
-            speed: ttsSpeed,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || errorData.error || 'Speech synthesis failed');
-        }
-
-        const audioData = await response.arrayBuffer();
         const audioContext = getAudioContext();
+        let audioBuffer: AudioBuffer;
 
-        // Resume audio context if suspended (browser autoplay policy)
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
+        if (effectivePreloaded) {
+          audioBuffer = effectivePreloaded;
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+        } else {
+          const response = await fetchWithAuth('/api/voice/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: chunkToSpeak, voice: ttsVoice, speed: ttsSpeed }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.message || errorData.error || 'Speech synthesis failed');
+          }
+
+          const audioData = await response.arrayBuffer();
+
+          // Resume audio context if suspended (browser autoplay policy)
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+
+          audioBuffer = await audioContext.decodeAudioData(audioData);
         }
-
-        const audioBuffer = await audioContext.decodeAudioData(audioData);
 
         // Guard: if barge-in cleared the audio ID during the fetch, discard this synthesis
         const { currentAudioId: liveAudioId } = useVoiceModeStore.getState();
@@ -627,7 +659,20 @@ export function useVoiceMode({
             playbackRefs.current.audioSource = null;
 
             if (speechQueueRef.current.length > 0) {
-              void speak(speechQueueRef.current.shift()!);
+              const nextText = speechQueueRef.current.shift()!;
+              const preloaded = prefetchedAudioRef.current;
+              // Advance the pre-fetch pointer to the new queue head
+              prefetchedAudioRef.current =
+                speechQueueRef.current.length > 0
+                  ? prefetchAudio(speechQueueRef.current[0])
+                  : null;
+              if (preloaded) {
+                preloaded
+                  .then((buf: AudioBuffer | null) => void speak(nextText, buf))
+                  .catch(() => void speak(nextText));
+              } else {
+                void speak(nextText);
+              }
               return;
             }
 
@@ -647,6 +692,11 @@ export function useVoiceMode({
         };
 
         source.start();
+
+        // Kick off pre-fetch for the next queued chunk while this one plays
+        if (speechQueueRef.current.length > 0 && !prefetchedAudioRef.current) {
+          prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
+        }
 
         if (interactionMode === 'barge-in' && isEnabled) {
           void startBargeInMonitoring();
@@ -671,6 +721,7 @@ export function useVoiceMode({
       ttsVoice,
       ttsSpeed,
       getAudioContext,
+      prefetchAudio,
       stopAudioPlayback,
       stopBargeInMonitoring,
       startSpeakingStore,
@@ -685,6 +736,7 @@ export function useVoiceMode({
 
   const clearSpeechQueue = useCallback(() => {
     speechQueueRef.current = [];
+    prefetchedAudioRef.current = null;
   }, []);
 
   const queueSentence = useCallback(
@@ -696,17 +748,22 @@ export function useVoiceMode({
       if (currentState === 'listening' || currentState === 'processing') return;
       if (currentState === 'speaking') {
         speechQueueRef.current.push(text);
+        if (!prefetchedAudioRef.current) {
+          // Pre-fetch the queue head (index 0), not the just-pushed tail
+          prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
+        }
       } else {
         speechQueueRef.current = [];
         void speak(text);
       }
     },
-    [speak]
+    [speak, prefetchAudio]
   );
 
   // Barge-in: interrupt TTS and start listening
   const bargeIn = useCallback(() => {
     speechQueueRef.current = [];
+    prefetchedAudioRef.current = null;
     callbacksRef.current.onStopStream?.();
     bargeInStore();
     stopAudioPlayback();
@@ -718,6 +775,7 @@ export function useVoiceMode({
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
+    prefetchedAudioRef.current = null;
     stopAudioPlayback();
     stopSpeakingStore();
     setCurrentAudioId(null);
@@ -738,6 +796,8 @@ export function useVoiceMode({
       if (recording.stream) {
         recording.stream.getTracks().forEach((track) => { track.stop(); });
       }
+      // Drop any in-flight pre-fetch so it can't resolve into an unmounted hook
+      prefetchedAudioRef.current = null;
       // Stop playback
       if (playback.autoListenTimer) {
         clearTimeout(playback.autoListenTimer);

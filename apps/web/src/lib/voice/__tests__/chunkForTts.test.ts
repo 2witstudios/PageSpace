@@ -7,13 +7,21 @@ import {
 } from '../chunkForTts';
 
 describe('normalizeForSpeech', () => {
-  it('strips fenced code blocks', () => {
+  it('extracts code block body for speaking (strips only fence markers)', () => {
     const input = 'Hello.\n```js\nconst x = 1;\n```\nWorld.';
     const out = normalizeForSpeech(input);
-    expect(out).not.toContain('```');
-    expect(out).not.toContain('const x');
+    expect(out).not.toContain('```'); // fence markers removed
+    expect(out).not.toContain('js');  // language tag removed
+    expect(out).toContain('const x'); // code body IS spoken
     expect(out).toContain('Hello');
     expect(out).toContain('World');
+  });
+
+  it('reads image alt text instead of dropping images silently', () => {
+    const out = normalizeForSpeech('Look ![a diagram](https://img.png) here.');
+    expect(out).toContain('a diagram');
+    expect(out).not.toContain('img.png');
+    expect(out).not.toContain('![');
   });
 
   it('unwraps inline code', () => {
@@ -51,10 +59,50 @@ describe('normalizeForSpeech', () => {
     );
   });
 
-  it('drops images entirely', () => {
-    const out = normalizeForSpeech('Look ![alt](https://img.png) here.');
+  it('silently drops images with empty alt text', () => {
+    const out = normalizeForSpeech('Look ![](https://img.png) here.');
     expect(out).not.toContain('img.png');
-    expect(out).not.toContain('alt');
+    expect(out).not.toContain('![');
+    expect(out).toContain('Look');
+    expect(out).toContain('here');
+  });
+
+  it('converts table rows to comma-separated cell text with row separation', () => {
+    const table = '| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |';
+    const out = normalizeForSpeech(table);
+    expect(out).toContain('Name');
+    expect(out).toContain('Alice');
+    expect(out).toContain('Bob');
+    expect(out).not.toContain('|');
+    expect(out).not.toContain('---');
+    // Header and data rows should be separated, not merged into one run-on list
+    const aliceIdx = out.indexOf('Alice');
+    const bobIdx = out.indexOf('Bob');
+    expect(aliceIdx).toBeGreaterThan(-1);
+    expect(bobIdx).toBeGreaterThan(aliceIdx);
+  });
+
+  it('strips task list checkbox markers', () => {
+    const out = normalizeForSpeech('- [ ] Buy milk\n- [x] Call doctor\n- [X] Send email');
+    expect(out).toContain('Buy milk');
+    expect(out).toContain('Call doctor');
+    expect(out).toContain('Send email');
+    expect(out).not.toContain('[ ]');
+    expect(out).not.toContain('[x]');
+  });
+
+  it('strips strikethrough markers but keeps the text', () => {
+    const out = normalizeForSpeech('This is ~~wrong~~ and this is correct.');
+    expect(out).toContain('wrong');
+    expect(out).toContain('correct');
+    expect(out).not.toContain('~~');
+  });
+
+  it('removes bare URLs', () => {
+    const out = normalizeForSpeech('See the docs at https://example.com/some/path for details.');
+    expect(out).toContain('See the docs at');
+    expect(out).toContain('for details');
+    expect(out).not.toContain('https://');
   });
 
   it('treats paragraph breaks as sentence boundaries', () => {
@@ -143,9 +191,38 @@ describe('chunkStreamingForTts', () => {
     expect(chunkStreamingForTts('')).toEqual({ ready: [], pending: '' });
   });
 
-  it('returns empty ready when buffer normalizes to nothing', () => {
+  it('voices code block body when the block is complete', () => {
     const result = chunkStreamingForTts('```\njust code\n```\n\n');
+    expect(result.ready.join(' ')).toContain('just code');
+    expect(result.ready.join(' ')).not.toContain('```');
+  });
+
+  it('does not find sentence boundaries inside a streaming (unclosed) fenced code block', () => {
+    // Only potential boundaries are inside the unclosed block — should stay in pending
+    const buffer = '```python\n# comment. with period.\nx = 1\n';
+    const result = chunkStreamingForTts(buffer);
     expect(result.ready).toEqual([]);
+    expect(result.pending).toBe(buffer);
+  });
+
+  it('does not treat ordered list numbers as sentence boundaries', () => {
+    const result = chunkStreamingForTts(
+      'Here are the steps.\n\n1. First item\n2. Second item\n3. Third item'
+    );
+    const allText = [...result.ready, result.pending].join(' ');
+    // All list items present in output
+    expect(allText).toContain('First item');
+    expect(allText).toContain('Second item');
+    expect(allText).toContain('Third item');
+    // "3." should NOT appear as a standalone sentence chunk
+    expect(result.ready.join(' ')).not.toMatch(/\b3\.\s*$/);
+  });
+
+  it('collapses double periods from paragraph-break-after-period artifact', () => {
+    // normalizeForSpeech converts \n\n → ". " which creates ".." after a sentence
+    const result = chunkStreamingForTts('Done.\n\nNext sentence.');
+    const all = result.ready.join(' ');
+    expect(all).not.toContain('..');
   });
 });
 
