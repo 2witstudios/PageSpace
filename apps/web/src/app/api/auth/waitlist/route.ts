@@ -6,6 +6,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserLimitEnabled } from '@/lib/user-limit';
 
 const waitlistSchema = z.object({
@@ -56,6 +57,12 @@ export async function POST(req: Request) {
       .insert(waitlistEntries)
       .values({ email: normalizedEmail, ...(name && { name: name.trim() }) })
       .onConflictDoNothing({ target: waitlistEntries.email });
+
+    auditRequest(req, {
+      eventType: 'auth.waitlist.join',
+      riskScore: 0,
+      details: { method: 'waitlist' },
+    });
 
     // Always return success — prevents email enumeration
     return Response.json({ message: 'You\'re on the list.' });

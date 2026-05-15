@@ -106,6 +106,11 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 vi.mock('@/lib/auth/invite-resolver', () => ({
   resolveInviteContext: vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' }),
 }));
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn().mockResolvedValue({ id: 'user_test', suspendedAt: null }),
+  },
+}));
 vi.mock('cookie', () => ({
   parse: vi.fn().mockReturnValue({ login_csrf: 'valid-csrf-token' }),
 }));
