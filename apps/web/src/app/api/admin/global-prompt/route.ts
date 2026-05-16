@@ -426,9 +426,7 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       },
       locationContext: locationContext ?? null,
       chatSource: {
-        type: 'page' as const,
-        agentPageId: '[agent-page-id]',
-        agentTitle: '[agent-title]',
+        type: 'global' as const,
       },
       enabledTools: null,
     };
