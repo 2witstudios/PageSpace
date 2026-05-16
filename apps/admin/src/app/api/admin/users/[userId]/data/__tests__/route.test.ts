@@ -72,7 +72,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logUserActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/compliance/anonymize', async (importOriginal) => {
+vi.mock('@pagespace/lib/compliance/anonymize', async () => {
   const { createHash } = await import('crypto');
   return {
     createAnonymizedActorEmail: (userId: string) => {
