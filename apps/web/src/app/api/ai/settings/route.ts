@@ -43,12 +43,15 @@ export async function GET(request: Request) {
     const user = await aiSettingsRepository.getUserSettings(userId);
     const pageSpaceSettings = getDefaultPageSpaceSettings();
     const rawProviders = buildProviderAvailabilityMap(availabilityOptions());
-    const providers = Object.fromEntries(
-      Object.entries(rawProviders).map(([k, v]) => [
-        k,
-        { isAvailable: USER_VISIBLE_PROVIDERS.has(k) ? v.isAvailable : false },
-      ])
-    );
+    // On-prem deployments expose all configured local providers; cloud masks everything except pagespace.
+    const providers = isOnPrem()
+      ? rawProviders
+      : Object.fromEntries(
+          Object.entries(rawProviders).map(([k, v]) => [
+            k,
+            { isAvailable: USER_VISIBLE_PROVIDERS.has(k) ? v.isAvailable : false },
+          ])
+        );
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
       action: 'get_settings',
@@ -110,7 +113,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (!USER_VISIBLE_PROVIDERS.has(provider)) {
+    if (!isOnPrem() && !USER_VISIBLE_PROVIDERS.has(provider)) {
       return NextResponse.json(
         { error: `Provider "${provider}" is not available on this instance.` },
         { status: 503 }

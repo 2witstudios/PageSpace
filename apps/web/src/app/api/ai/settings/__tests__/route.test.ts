@@ -139,7 +139,7 @@ describe('AI settings route', () => {
       expect(body.pageSpaceBackend).toBe('glm');
     });
 
-    it('marks each cloud provider available when its env var is set', async () => {
+    it('masks non-pagespace providers as unavailable in cloud mode even when env vars are set', async () => {
       process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
       process.env.OPENAI_DEFAULT_API_KEY = 'b';
       process.env.GOOGLE_AI_DEFAULT_API_KEY = 'c';
@@ -149,24 +149,23 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.providers.anthropic.isAvailable).toBe(true);
-      expect(body.providers.openai.isAvailable).toBe(true);
-      expect(body.providers.google.isAvailable).toBe(true);
-      expect(body.providers.xai.isAvailable).toBe(true);
-      expect(body.providers.openrouter.isAvailable).toBe(true);
-      expect(body.providers.openrouter_free.isAvailable).toBe(true);
+      // Cloud mode: only pagespace is exposed; all others are masked
+      expect(body.providers.anthropic.isAvailable).toBe(false);
+      expect(body.providers.openai.isAvailable).toBe(false);
+      expect(body.providers.google.isAvailable).toBe(false);
+      expect(body.providers.xai.isAvailable).toBe(false);
+      expect(body.providers.openrouter.isAvailable).toBe(false);
+      expect(body.providers.openrouter_free.isAvailable).toBe(false);
+      expect(body.providers.pagespace.isAvailable).toBe(true);
     });
 
-    it('marks ollama available only when OLLAMA_BASE_URL is set', async () => {
-      const before = await GET(makeRequest('GET'));
-      expect((await before.json()).providers.ollama.isAvailable).toBe(false);
-
+    it('masks ollama as unavailable in cloud mode regardless of OLLAMA_BASE_URL', async () => {
       process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
-      const after = await GET(makeRequest('GET'));
-      expect((await after.json()).providers.ollama.isAvailable).toBe(true);
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.ollama.isAvailable).toBe(false);
     });
 
-    it('hides cloud providers in onprem mode regardless of env state', async () => {
+    it('exposes configured local providers in onprem mode without masking', async () => {
       vi.mocked(isOnPrem).mockReturnValue(true);
       process.env.ANTHROPIC_DEFAULT_API_KEY = 'set';
       process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
@@ -174,8 +173,10 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
+      // On-prem: cloud providers still hidden (not in ONPREM_ALLOWED_PROVIDERS)
       expect(body.providers.anthropic.isAvailable).toBe(false);
       expect(body.providers.openai.isAvailable).toBe(false);
+      // On-prem: local providers are NOT masked — ollama shows up
       expect(body.providers.ollama.isAvailable).toBe(true);
     });
 
@@ -226,7 +227,22 @@ describe('AI settings route', () => {
   });
 
   describe('PATCH', () => {
-    it('updates the user selection when provider is available', async () => {
+    it('updates the user selection when provider is pagespace', async () => {
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'pagespace',
+        model: 'glm-4.5-air',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'pagespace',
+        model: 'glm-4.5-air',
+      });
+    });
+
+    it('returns 503 for non-pagespace providers in cloud mode', async () => {
       process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
 
       const response = await PATCH(makeRequest('PATCH', {
@@ -235,24 +251,18 @@ describe('AI settings route', () => {
       }));
       const body = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
-        provider: 'anthropic',
-        model: 'claude-sonnet-4-6',
-      });
+      expect(response.status).toBe(503);
+      expect(body.error).toContain('not available on this instance');
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 
-    it('returns 503 when the requested provider is not configured', async () => {
-      const response = await PATCH(makeRequest('PATCH', {
-        provider: 'anthropic',
-        model: 'claude-sonnet-4-6',
-      }));
-      const body = await response.json();
+    it('allows non-pagespace providers in onprem mode when configured', async () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
 
-      expect(response.status).toBe(503);
-      expect(body.error).toContain('not configured');
-      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
+      const response = await PATCH(makeRequest('PATCH', { provider: 'ollama' }));
+
+      expect(response.status).toBe(200);
     });
 
     it('returns 400 for an unknown provider', async () => {
@@ -264,22 +274,12 @@ describe('AI settings route', () => {
       expect(response.status).toBe(400);
     });
 
-    it('returns 400 when model is missing for a non-local provider', async () => {
-      process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
-
-      const response = await PATCH(makeRequest('PATCH', { provider: 'anthropic' }));
+    it('returns 400 when model is missing for pagespace', async () => {
+      const response = await PATCH(makeRequest('PATCH', { provider: 'pagespace' }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('Model is required');
-    });
-
-    it('allows local providers without a model', async () => {
-      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
-
-      const response = await PATCH(makeRequest('PATCH', { provider: 'ollama' }));
-
-      expect(response.status).toBe(200);
     });
 
     it('returns 403 when pro-tier model selected on free subscription', async () => {
