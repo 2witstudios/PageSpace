@@ -1,7 +1,13 @@
 # OpenAI-Compatible Inference API Epic
 
-**Status**: 📋 PLANNED
+**Status**: 🚧 IN PROGRESS
 **Goal**: Let third-party developers call PageSpace agents through the standard OpenAI Chat Completions interface using existing MCP tokens.
+
+## Execution Discipline
+
+- Every task follows strict TDD: write a failing colocated Vitest + Riteway test (RED), implement only enough to pass (GREEN), refactor if needed — no source change without a failing test first.
+- Each task lands as its own Conventional Commit (`feat(api): …`, `test(api): …`) on `claude/agents-api-endpoints-task-R7K0B` and is pushed immediately after the task's tests pass.
+- Tasks are executed strictly in order; a task is not started until the previous task's tests are green and committed.
 
 ## Overview
 
