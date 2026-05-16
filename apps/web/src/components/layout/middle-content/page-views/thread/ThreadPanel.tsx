@@ -24,17 +24,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
-import { Bell, BellOff, X } from 'lucide-react';
+import { Bell, BellOff, Check, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageInput } from '@/components/shared/MessageInput';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
+import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
+import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { AttachmentMeta, FileRelation } from '@/lib/attachment-utils';
-import type { Reaction } from '@/components/shared/MessageReactions';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 
 export type ThreadSource = 'channel' | 'dm';
@@ -173,6 +174,8 @@ export function ThreadPanel({
   const [optimisticFollowing, setOptimisticFollowing] = useState<boolean | undefined>(undefined);
   const [followError, setFollowError] = useState<string | null>(null);
   const [followInFlight, setFollowInFlight] = useState(false);
+  const [editingReplyId, setEditingReplyId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
 
   // Clear the unread-thread badge for this root the moment the panel opens.
   // Subsequent fan-outs while the panel is open could re-bump the badge; the
@@ -203,6 +206,8 @@ export function ThreadPanel({
     setOptimisticFollowing(undefined);
     setFollowError(null);
     setFollowInFlight(false);
+    setEditingReplyId(null);
+    setEditContent('');
   }, [parentId, contextId, source]);
 
   // Effective follow state: optimistic value wins while the toggle is
@@ -320,13 +325,69 @@ export function ThreadPanel({
       );
     };
 
+    const handleReactionAdded = (payload: { messageId: string; reaction: Reaction }) => {
+      mutate(
+        (current) => {
+          if (!current) return current;
+          let touched = false;
+          const next = current.messages.map((m) => {
+            if (m.id !== payload.messageId) return m;
+            if (m.reactions?.some((r) => r.id === payload.reaction.id)) return m;
+            // Drop a matching optimistic temp reaction so the broadcast row
+            // replaces it rather than duplicating.
+            const filtered = (m.reactions ?? []).filter(
+              (r) =>
+                !(
+                  r.id.startsWith('temp-') &&
+                  r.emoji === payload.reaction.emoji &&
+                  r.userId === payload.reaction.userId
+                ),
+            );
+            touched = true;
+            return { ...m, reactions: [...filtered, payload.reaction] };
+          });
+          return touched ? { ...current, messages: next } : current;
+        },
+        { revalidate: false },
+      );
+    };
+
+    const handleReactionRemoved = (payload: {
+      messageId: string;
+      emoji: string;
+      userId: string;
+    }) => {
+      mutate(
+        (current) => {
+          if (!current) return current;
+          let touched = false;
+          const next = current.messages.map((m) => {
+            if (m.id !== payload.messageId) return m;
+            touched = true;
+            return {
+              ...m,
+              reactions: (m.reactions ?? []).filter(
+                (r) => !(r.emoji === payload.emoji && r.userId === payload.userId),
+              ),
+            };
+          });
+          return touched ? { ...current, messages: next } : current;
+        },
+        { revalidate: false },
+      );
+    };
+
     socket.on(eventName, handler);
     socket.on('message_edited', handleEdited);
     socket.on('message_deleted', handleDeleted);
+    socket.on('reaction_added', handleReactionAdded);
+    socket.on('reaction_removed', handleReactionRemoved);
     return () => {
       socket.off(eventName, handler);
       socket.off('message_edited', handleEdited);
       socket.off('message_deleted', handleDeleted);
+      socket.off('reaction_added', handleReactionAdded);
+      socket.off('reaction_removed', handleReactionRemoved);
     };
   }, [socket, connectionStatus, source, parentId, mutate]);
 
@@ -403,6 +464,171 @@ export function ThreadPanel({
       }
     },
     [currentUserId, source, contextId, parentId, mutate],
+  );
+
+  // Per-reply mutation endpoints. Replies are ordinary message rows, so the
+  // same id-addressed routes the main channel/DM views use apply here.
+  const buildReplyUrl = useCallback(
+    (id: string) =>
+      source === 'channel'
+        ? `/api/channels/${contextId}/messages/${id}`
+        : `/api/messages/${contextId}/${id}`,
+    [source, contextId],
+  );
+
+  const buildReactionUrl = useCallback(
+    (id: string) =>
+      source === 'channel'
+        ? `/api/channels/${contextId}/messages/${id}/reactions`
+        : `/api/messages/${contextId}/${id}/reactions`,
+    [source, contextId],
+  );
+
+  const handleEditReply = useCallback(
+    async (id: string, content: string) => {
+      mutate(
+        (current) =>
+          current
+            ? {
+                ...current,
+                messages: current.messages.map((m) =>
+                  m.id === id ? { ...m, content } : m,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
+      setEditingReplyId(null);
+      try {
+        await patch(buildReplyUrl(id), { content });
+      } catch (err) {
+        console.error('Thread reply edit failed', err);
+        setSubmitError('Failed to edit reply');
+      }
+    },
+    [mutate, buildReplyUrl],
+  );
+
+  const handleDeleteReply = useCallback(
+    async (id: string) => {
+      mutate(
+        (current) =>
+          current
+            ? { ...current, messages: current.messages.filter((m) => m.id !== id) }
+            : current,
+        { revalidate: false },
+      );
+      setOptimisticReplies((prev) => prev.filter((r) => r.id !== id));
+      try {
+        await del(buildReplyUrl(id), {});
+      } catch (err) {
+        console.error('Thread reply delete failed', err);
+        setSubmitError('Failed to delete reply');
+      }
+    },
+    [mutate, buildReplyUrl],
+  );
+
+  const handleAddReaction = useCallback(
+    async (id: string, emoji: string) => {
+      if (!currentUserId) return;
+      const tempId = `temp-${Date.now()}`;
+      const optimistic: Reaction = {
+        id: tempId,
+        emoji,
+        userId: currentUserId,
+        user: { id: currentUserId, name: null },
+      };
+      mutate(
+        (current) =>
+          current
+            ? {
+                ...current,
+                messages: current.messages.map((m) =>
+                  m.id === id
+                    ? { ...m, reactions: [...(m.reactions ?? []), optimistic] }
+                    : m,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
+      try {
+        await post(buildReactionUrl(id), { emoji });
+      } catch (err) {
+        console.error('Thread reaction add failed', err);
+        mutate(
+          (current) =>
+            current
+              ? {
+                  ...current,
+                  messages: current.messages.map((m) =>
+                    m.id === id
+                      ? {
+                          ...m,
+                          reactions: (m.reactions ?? []).filter(
+                            (r) => r.id !== tempId,
+                          ),
+                        }
+                      : m,
+                  ),
+                }
+              : current,
+          { revalidate: false },
+        );
+      }
+    },
+    [currentUserId, mutate, buildReactionUrl],
+  );
+
+  const handleRemoveReaction = useCallback(
+    async (id: string, emoji: string) => {
+      if (!currentUserId) return;
+      let removed: Reaction | undefined;
+      mutate(
+        (current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            messages: current.messages.map((m) => {
+              if (m.id !== id) return m;
+              const next = (m.reactions ?? []).filter((r) => {
+                if (r.emoji === emoji && r.userId === currentUserId) {
+                  removed = r;
+                  return false;
+                }
+                return true;
+              });
+              return { ...m, reactions: next };
+            }),
+          };
+        },
+        { revalidate: false },
+      );
+      try {
+        await del(buildReactionUrl(id), { emoji });
+      } catch (err) {
+        console.error('Thread reaction remove failed', err);
+        if (removed) {
+          const restore = removed;
+          mutate(
+            (current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((m) =>
+                      m.id === id
+                        ? { ...m, reactions: [...(m.reactions ?? []), restore] }
+                        : m,
+                    ),
+                  }
+                : current,
+            { revalidate: false },
+          );
+        }
+      }
+    },
+    [currentUserId, mutate, buildReactionUrl],
   );
 
   // Once we have a fetch response, count the actual visible rows (server +
@@ -499,7 +725,7 @@ export function ThreadPanel({
           </div>
         )}
 
-        <div className="flex flex-col gap-3 px-4 pb-3">
+        <div className="flex flex-col gap-3 px-4 pt-4 pb-3">
           {replies.map((reply) => {
             const fallback = resolveAuthor(reply.authorId, reply.aiSenderName);
             const author: ThreadAuthor = {
@@ -507,9 +733,21 @@ export function ThreadPanel({
               image: reply.authorImage ?? fallback.image,
             };
             const isOwn = reply.authorId === currentUserId;
+            const isAi = !!reply.aiSenderName;
+            const isTemp = reply.id.startsWith('temp-');
+            const isEditing = editingReplyId === reply.id;
+            // Mirror the main channel/DM list: actions only on persisted,
+            // non-editing rows; owner controls only on the user's own
+            // (non-AI) replies.
+            const isReal = !isTemp && !isEditing;
+            const showOwnerActions = isOwn && !isAi && isReal;
             const initial = author.name?.charAt(0).toUpperCase() ?? '?';
             return (
-              <div key={reply.id} className="flex items-start gap-3" data-testid="thread-reply">
+              <div
+                key={reply.id}
+                className="group/msg relative flex items-start gap-3"
+                data-testid="thread-reply"
+              >
                 <Avatar className="h-8 w-8 shrink-0">
                   {author.image && <AvatarImage src={author.image} />}
                   <AvatarFallback>{initial}</AvatarFallback>
@@ -523,29 +761,97 @@ export function ThreadPanel({
                         minute: '2-digit',
                       })}
                     </span>
-                    {isOwn && reply.id.startsWith('temp-') && (
+                    {isOwn && isTemp && (
                       <span className="text-xs italic text-muted-foreground">sending…</span>
                     )}
                   </div>
-                  {reply.content && (
-                    <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
-                      {source === 'channel' ? (
-                        <StreamingMarkdown content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)} isStreaming={false} />
-                      ) : (
-                        renderMessageParts(convertToMessageParts(reply.content))
-                      )}
+                  {isEditing ? (
+                    <div className="mt-1 flex flex-col gap-2">
+                      <textarea
+                        className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                        rows={3}
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            if (editContent.trim())
+                              handleEditReply(reply.id, editContent.trim());
+                          }
+                          if (e.key === 'Escape') setEditingReplyId(null);
+                        }}
+                        autoFocus
+                      />
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <button
+                          onClick={() => {
+                            if (editContent.trim())
+                              handleEditReply(reply.id, editContent.trim());
+                          }}
+                          className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-primary-foreground transition-colors hover:bg-primary/90"
+                          type="button"
+                        >
+                          <Check size={12} /> Save
+                        </button>
+                        <button
+                          onClick={() => setEditingReplyId(null)}
+                          className="flex items-center gap-1 rounded px-2 py-1 transition-colors hover:bg-muted"
+                          type="button"
+                        >
+                          <X size={12} /> Cancel
+                        </button>
+                        <span className="opacity-60">Enter to save · Esc to cancel</span>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {reply.content && (
+                        <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
+                          {source === 'channel' ? (
+                            <StreamingMarkdown content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)} isStreaming={false} />
+                          ) : (
+                            renderMessageParts(convertToMessageParts(reply.content))
+                          )}
+                        </div>
+                      )}
+                      {(reply.fileId || reply.attachmentMeta) && (
+                        <MessageAttachment
+                          message={{
+                            fileId: reply.fileId ?? null,
+                            attachmentMeta: reply.attachmentMeta ?? null,
+                            file: reply.file ?? null,
+                          }}
+                        />
+                      )}
+                    </>
                   )}
-                  {(reply.fileId || reply.attachmentMeta) && (
-                    <MessageAttachment
-                      message={{
-                        fileId: reply.fileId ?? null,
-                        attachmentMeta: reply.attachmentMeta ?? null,
-                        file: reply.file ?? null,
-                      }}
+                  {currentUserId && !isTemp && (
+                    <MessageReactions
+                      reactions={reply.reactions ?? []}
+                      currentUserId={currentUserId}
+                      onAddReaction={(emoji) => handleAddReaction(reply.id, emoji)}
+                      onRemoveReaction={(emoji) => handleRemoveReaction(reply.id, emoji)}
                     />
                   )}
                 </div>
+                {isReal && (
+                  <MessageHoverToolbar
+                    canReact={!!currentUserId}
+                    canEdit={showOwnerActions}
+                    canDelete={showOwnerActions}
+                    canReplyInThread={false}
+                    canQuoteReply={false}
+                    reactions={reply.reactions}
+                    currentUserId={currentUserId ?? undefined}
+                    onAddReaction={(emoji) => handleAddReaction(reply.id, emoji)}
+                    onRemoveReaction={(emoji) => handleRemoveReaction(reply.id, emoji)}
+                    onEdit={() => {
+                      setEditingReplyId(reply.id);
+                      setEditContent(reply.content);
+                    }}
+                    onDelete={() => handleDeleteReply(reply.id)}
+                  />
+                )}
               </div>
             );
           })}
@@ -553,7 +859,12 @@ export function ThreadPanel({
       </div>
 
       {/* Composer */}
-      <div className="border-t border-border p-3">
+      <div
+        className="border-t border-border p-3"
+        style={{
+          paddingBottom: 'calc(0.75rem + var(--safe-bottom-offset, 0px))',
+        }}
+      >
         {submitError && (
           <div className="mb-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
             {submitError}
