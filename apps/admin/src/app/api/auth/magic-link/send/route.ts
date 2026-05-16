@@ -55,7 +55,7 @@ export async function POST(req: Request) {
       expiresAt,
     });
 
-    const adminUrl = process.env.ADMIN_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3005';
+    const adminUrl = process.env.ADMIN_URL ?? 'http://localhost:3005';
     const magicLinkUrl = `${adminUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
 
     await sendEmail({
