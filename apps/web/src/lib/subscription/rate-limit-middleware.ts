@@ -5,6 +5,9 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import type { ProviderType } from '@pagespace/lib/services/rate-limit-cache';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 
+/** Subscription tiers that have access to paid features (voice mode, etc.). */
+export const PAID_TIERS = new Set(['pro', 'founder', 'business']);
+
 export interface RateLimitResult {
   allowed: boolean;
   remaining: number;

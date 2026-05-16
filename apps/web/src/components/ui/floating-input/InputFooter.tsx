@@ -11,6 +11,10 @@ import { Mic, AudioLines, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { ToolsPopover } from './ToolsPopover';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { isBillingEnabled } from '@/lib/deployment-mode';
+
+const PAID_TIERS = new Set(['pro', 'founder', 'business']);
 
 export interface InputFooterProps {
   /** Whether web search is enabled */
@@ -106,6 +110,9 @@ export function InputFooter({
   disabled = false,
   className,
 }: InputFooterProps) {
+  const subscriptionTier = useAssistantSettingsStore((s) => s.subscriptionTier);
+  const isVoiceProGated = isBillingEnabled() && !PAID_TIERS.has(subscriptionTier);
+
   return (
     <div
       className={cn(
@@ -152,8 +159,8 @@ export function InputFooter({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onVoiceModeClick}
-              disabled={disabled}
+              onClick={isVoiceProGated ? undefined : onVoiceModeClick}
+              disabled={disabled || isVoiceProGated}
               className={cn(
                 'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
                 isVoiceModeActive
@@ -163,12 +170,20 @@ export function InputFooter({
             >
               <AudioLines className="h-4 w-4" />
               <span className="sr-only">
-                {isVoiceModeActive ? 'Exit voice mode' : 'Enter voice mode'}
+                {isVoiceProGated
+                  ? 'Voice mode requires Pro'
+                  : isVoiceModeActive
+                    ? 'Exit voice mode'
+                    : 'Enter voice mode'}
               </span>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
-            {isVoiceModeActive ? 'Exit voice mode' : 'Voice mode (hands-free)'}
+            {isVoiceProGated
+              ? 'Voice mode requires a Pro plan'
+              : isVoiceModeActive
+                ? 'Exit voice mode'
+                : 'Voice mode (hands-free)'}
           </TooltipContent>
         </Tooltip>
 
