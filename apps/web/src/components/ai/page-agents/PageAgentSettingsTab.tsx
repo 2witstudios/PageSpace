@@ -349,7 +349,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(AI_PROVIDERS).map(([key, provider]) => {
+                    {Object.entries(AI_PROVIDERS).filter(([key]) => key === 'pagespace').map(([key, provider]) => {
                       const configured = isProviderConfigured(key);
                       return (
                         <SelectItem key={key} value={key} disabled={!configured}>

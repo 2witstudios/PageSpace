@@ -16,6 +16,9 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+// Providers exposed to users. Expand this as per-provider billing tiers are set up.
+const USER_VISIBLE_PROVIDERS = new Set(['pagespace']);
+
 const GONE_RESPONSE = {
   error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
 };
@@ -39,7 +42,13 @@ export async function GET(request: Request) {
 
     const user = await aiSettingsRepository.getUserSettings(userId);
     const pageSpaceSettings = getDefaultPageSpaceSettings();
-    const providers = buildProviderAvailabilityMap(availabilityOptions());
+    const rawProviders = buildProviderAvailabilityMap(availabilityOptions());
+    const providers = Object.fromEntries(
+      Object.entries(rawProviders).map(([k, v]) => [
+        k,
+        { isAvailable: USER_VISIBLE_PROVIDERS.has(k) ? v.isAvailable : false },
+      ])
+    );
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
       action: 'get_settings',
@@ -98,6 +107,13 @@ export async function PATCH(request: Request) {
       return NextResponse.json(
         { error: `Invalid provider. Must be one of: ${ALL_PROVIDER_NAMES.join(', ')}` },
         { status: 400 }
+      );
+    }
+
+    if (!USER_VISIBLE_PROVIDERS.has(provider)) {
+      return NextResponse.json(
+        { error: `Provider "${provider}" is not available on this instance.` },
+        { status: 503 }
       );
     }
 

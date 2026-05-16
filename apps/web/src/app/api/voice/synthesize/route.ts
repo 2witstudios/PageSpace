@@ -14,6 +14,10 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
+
+const VOICE_TIERS = new Set(['pro', 'founder', 'business']);
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -33,6 +37,20 @@ export async function POST(request: Request) {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
+
+    if (isBillingEnabled()) {
+      const user = await aiSettingsRepository.getUserSettings(userId);
+      if (!VOICE_TIERS.has(user?.subscriptionTier ?? 'free')) {
+        return NextResponse.json(
+          {
+            error: 'Pro plan required',
+            message: 'Voice mode requires a Pro or above subscription.',
+            upgradeUrl: '/settings/billing',
+          },
+          { status: 403 }
+        );
+      }
+    }
 
     // Get managed OpenAI key for TTS
     const openAISettings = getManagedProviderKey('openai');
