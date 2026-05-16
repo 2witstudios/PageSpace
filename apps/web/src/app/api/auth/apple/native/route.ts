@@ -23,6 +23,8 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { isAtUserLimit } from '@/lib/user-limit';
+import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -128,6 +130,16 @@ export async function POST(req: Request) {
         user = await authRepository.findUserById(user.id) || user;
       }
     } else {
+      if (await isAtUserLimit()) {
+        const hasValidInvite = !!inviteToken &&
+          (await resolveInviteContext({ token: inviteToken, now: new Date() })).ok;
+        if (!hasValidInvite) {
+          return Response.json(
+            { code: 'user_limit_reached', error: 'Registration is currently at capacity.' },
+            { status: 403 },
+          );
+        }
+      }
       isNewUser = true;
       loggers.auth.info('Creating new user via native Apple OAuth', { email: maskEmail(email), platform });
       user = await authRepository.createUser({

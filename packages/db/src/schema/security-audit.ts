@@ -46,6 +46,7 @@ export type SecurityEventType =
   | 'auth.session.revoked'
   | 'auth.device.registered'
   | 'auth.device.revoked'
+  | 'auth.waitlist.join'
   | 'authz.access.granted'
   | 'authz.access.denied'
   | 'authz.permission.granted'

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { isAtUserLimit } from '@/lib/user-limit';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
@@ -20,6 +21,7 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -112,6 +114,21 @@ export async function POST(req: Request) {
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },
         { status: 429 }
       );
+    }
+
+    // Gate new signups when user limit is active. Only bypass for a
+    // verifiably valid invite token — presence alone is not sufficient
+    // because an attacker could send a fake token to skip the cap.
+    if (await isAtUserLimit()) {
+      const rawToken = validation.data.inviteToken;
+      const hasValidInvite = !!rawToken &&
+        (await resolveInviteContext({ token: rawToken, now: new Date() })).ok;
+      if (!hasValidInvite) {
+        return NextResponse.json(
+          { code: 'user_limit_reached', error: 'Registration is currently at capacity.' },
+          { status: 403 },
+        );
+      }
     }
 
     // Verify registration and create user

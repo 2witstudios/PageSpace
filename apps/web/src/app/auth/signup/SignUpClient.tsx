@@ -22,9 +22,134 @@ interface SignUpClientProps {
   inviteToken?: string;
   inviteContext?: InviteContextData;
   returnUrl?: string;
+  atLimit?: boolean;
 }
 
-export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpClientProps) {
+function WaitlistForm() {
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name: name || undefined }),
+      });
+      if (res.ok || res.status === 409) {
+        setSubmitted(true);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? 'Something went wrong. Please try again.');
+      }
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <AuthShell>
+        <motion.div
+          className="text-center"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+        >
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+            You&apos;re on the list.
+          </h1>
+          <p className="mt-3 text-sm text-muted-foreground">
+            We&apos;ll reach out to{' '}
+            <span className="font-medium text-gray-900 dark:text-white">{email}</span>{' '}
+            when a spot opens up.
+          </p>
+        </motion.div>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell>
+      <motion.div
+        className="mb-8 text-center"
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+      >
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+          We&apos;re at capacity.
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Join the waitlist and we&apos;ll let you know when a spot opens up.
+        </p>
+      </motion.div>
+
+      <motion.form
+        onSubmit={handleSubmit}
+        className="space-y-3"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15, duration: 0.3 }}
+      >
+        <input
+          type="text"
+          placeholder="Name (optional)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <input
+          type="email"
+          required
+          placeholder="Email address"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+
+        {error && (
+          <p className="text-center text-sm text-red-500">{error}</p>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading || !email}
+          className="w-full rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:opacity-50 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+        >
+          {loading ? 'Joining…' : 'Join waitlist'}
+        </button>
+      </motion.form>
+
+      <motion.div
+        className="mt-8 text-center"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.45, duration: 0.3 }}
+      >
+        <p className="text-sm text-muted-foreground">
+          Already have an account?{' '}
+          <Link
+            href="/auth/signin"
+            className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            Log in
+          </Link>
+        </p>
+      </motion.div>
+    </AuthShell>
+  );
+}
+
+function SignUpForm({ inviteToken, inviteContext, returnUrl }: Omit<SignUpClientProps, 'atLimit'>) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
   const router = useRouter();
@@ -190,4 +315,11 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
       </motion.div>
     </AuthShell>
   );
+}
+
+export function SignUpClient({ inviteToken, inviteContext, returnUrl, atLimit }: SignUpClientProps) {
+  if (atLimit) {
+    return <WaitlistForm />;
+  }
+  return <SignUpForm inviteToken={inviteToken} inviteContext={inviteContext} returnUrl={returnUrl} />;
 }
