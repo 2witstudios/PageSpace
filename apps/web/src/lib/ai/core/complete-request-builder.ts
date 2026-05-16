@@ -5,8 +5,9 @@
  * Used by the admin global-prompt viewer to show the exact context window.
  */
 
-import { buildSystemPrompt } from './system-prompt';
-import { filterToolsForReadOnly, getToolsSummary } from './tool-filtering';
+import { buildSystemPrompt, buildNonCoreToolNamesPrompt } from './system-prompt';
+import { filterToolsForReadOnly, isWriteTool } from './tool-filtering';
+import { CORE_TOOL_NAMES } from './stub-tools';
 import { buildTimestampSystemPrompt } from './timestamp-utils';
 import { buildMentionSystemPrompt } from './mention-processor';
 import {
@@ -54,12 +55,23 @@ export interface CompleteAIRequest {
   }>;
   experimental_context: {
     userId: string;
+    timezone: string | undefined;
+    aiProvider: string;
+    aiModel: string;
+    conversationId: string;
     locationContext?: LocationContext;
     modelCapabilities: {
-      supportsStreaming: boolean;
-      supportsToolCalling: boolean;
       hasVision: boolean;
+      hasTools: boolean;
+      model: string;
+      provider: string;
     };
+    chatSource: {
+      type: 'page';
+      agentPageId: string;
+      agentTitle: string;
+    };
+    enabledTools: string[] | null;
   };
 }
 
@@ -76,6 +88,7 @@ export interface CompletePayloadResult {
     allowed: string[];
     denied: string[];
   };
+  nonCoreToolNames: string[];
 }
 
 interface BuildCompleteRequestConfig {
@@ -146,26 +159,77 @@ export function buildCompleteRequest(
     );
   }
 
-  // Complete system prompt
+  // Apply read-only filtering (same logic as real Global Assistant)
+  const allFilteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
+
+  // Core tools get full schemas upfront; non-core tools are accessible via execute_tool
+  const coreFilteredTools = Object.fromEntries(
+    Object.entries(allFilteredTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
+  );
+  const nonCoreToolNames = Object.keys(allFilteredTools).filter(n => !CORE_TOOL_NAMES.has(n));
+
+  // Append non-core tool names to system prompt (matches real Global Assistant behavior)
+  const nonCoreNamesSection = buildNonCoreToolNamesPrompt(nonCoreToolNames);
+
+  // Complete system prompt (with non-core tool names section, matching real Global Assistant)
   const systemPrompt =
     baseSystemPrompt +
     mentionSystemPrompt +
     timestampSystemPrompt +
-    inlineInstructions;
+    inlineInstructions +
+    (nonCoreNamesSection ? '\n\n' + nonCoreNamesSection : '');
 
-  // Get filtered tools based on read-only mode
-  const filteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
-  const toolsSummary = getToolsSummary(isReadOnly);
-
-  // Convert tools to the format we display
-  const toolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
-  for (const [name, tool] of Object.entries(filteredTools)) {
-    toolsForExtraction[name] = {
+  // Build core tool schemas
+  const coreToolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
+  for (const [name, tool] of Object.entries(coreFilteredTools)) {
+    coreToolsForExtraction[name] = {
       description: tool.description,
       parameters: tool.inputSchema,
     };
   }
-  const toolSchemas = extractToolSchemas(toolsForExtraction);
+  const coreToolSchemas = extractToolSchemas(coreToolsForExtraction);
+
+  // tool_search and execute_tool are added dynamically at runtime; represent them with static schemas
+  const toolSearchJsonSchema = {
+    type: 'object' as const,
+    properties: {
+      query: {
+        type: 'string' as const,
+        description: 'Either "select:name1,name2" for specific tools or a search keyword',
+      },
+    },
+    required: ['query'],
+  };
+  const executeToolJsonSchema = {
+    type: 'object' as const,
+    properties: {
+      tool_name: { type: 'string' as const },
+      parameters: { type: 'object' as const, properties: {}, required: [] },
+    },
+    required: ['tool_name'],
+  };
+
+  const toolSchemas: ToolSchemaInfo[] = [
+    ...coreToolSchemas,
+    {
+      name: 'tool_search',
+      description:
+        'Get full parameter schemas for any PageSpace tool before calling it. Use "select:name1,name2" for specific tools by name, or a keyword like "calendar", "agent", "task", "channel", "drive" to find all tools in that area.',
+      parameters: toolSearchJsonSchema,
+      tokenEstimate: estimateSystemPromptTokens(
+        JSON.stringify({ name: 'tool_search', parameters: toolSearchJsonSchema })
+      ),
+    },
+    {
+      name: 'execute_tool',
+      description:
+        'Execute any PageSpace tool by name. Call tool_search first to discover available tools and get their parameter schemas.',
+      parameters: executeToolJsonSchema,
+      tokenEstimate: estimateSystemPromptTokens(
+        JSON.stringify({ name: 'execute_tool', parameters: executeToolJsonSchema })
+      ),
+    },
+  ];
 
   // Convert to ToolDefinition format
   const tools: ToolDefinition[] = toolSchemas.map(
@@ -176,15 +240,33 @@ export function buildCompleteRequest(
     })
   );
 
-  // Build experimental context
+  // Tool summary: upfront tools for this mode (core filtered by read-only + tool_search + execute_tool)
+  const coreAllowedNames = Object.keys(coreFilteredTools);
+  const toolsSummary = {
+    allowed: [...coreAllowedNames, 'tool_search', 'execute_tool'],
+    denied: isReadOnly ? Array.from(CORE_TOOL_NAMES).filter(n => isWriteTool(n)) : [],
+  };
+
+  // Build experimental context matching the real chat route shape
   const experimental_context = {
     userId: '[user-id]',
+    timezone: undefined as string | undefined,
+    aiProvider: '[varies by chat]',
+    aiModel: '[varies by chat]',
+    conversationId: '[generated per conversation]',
     locationContext: locationContext || undefined,
     modelCapabilities: {
-      supportsStreaming: true,
-      supportsToolCalling: true,
       hasVision: false,
+      hasTools: true,
+      model: '[varies by chat]',
+      provider: '[varies by chat]',
     },
+    chatSource: {
+      type: 'page' as const,
+      agentPageId: '[agent-page-id]',
+      agentTitle: '[agent-title]',
+    },
+    enabledTools: null as string[] | null,
   };
 
   // Build example messages
@@ -230,6 +312,7 @@ export function buildCompleteRequest(
     formattedString,
     tokenEstimates,
     toolsSummary,
+    nonCoreToolNames,
   };
 }
 

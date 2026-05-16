@@ -56,6 +56,10 @@ export interface CompleteAIRequest {
   }>;
   experimental_context: {
     userId: string;
+    timezone: string | undefined;
+    aiProvider: string;
+    aiModel: string;
+    conversationId: string;
     locationContext?: {
       currentPage?: {
         id: string;
@@ -71,10 +75,17 @@ export interface CompleteAIRequest {
       breadcrumbs?: Array<{ id: string; title: string }>;
     };
     modelCapabilities: {
-      supportsStreaming: boolean;
-      supportsToolCalling: boolean;
       hasVision: boolean;
+      hasTools: boolean;
+      model: string;
+      provider: string;
     };
+    chatSource: {
+      type: 'page';
+      agentPageId: string;
+      agentTitle: string;
+    };
+    enabledTools: string[] | null;
   };
 }
 
@@ -89,22 +100,24 @@ export interface CompletePayloadResult {
   request: CompleteAIRequest;
   formattedString: string;
   tokenEstimates: TokenEstimates;
+  nonCoreToolNames: string[];
 }
 
 export interface RolePromptData {
-  role: string;
+  mode: 'fullAccess' | 'readOnly';
   fullPrompt: string;
   sections: PromptSection[];
   totalTokens: number;
   toolsAllowed: string[];
   toolsDenied: string[];
+  nonCoreToolNames: string[];
   permissions: {
     canRead: boolean;
     canWrite: boolean;
     canDelete: boolean;
-    requiresConfirmation: boolean;
+    canOrganize: boolean;
   };
-  // Complete payload for this role (exact LLM request)
+  // Complete payload for this mode (exact LLM request)
   completePayload?: CompletePayloadResult;
 }
 
@@ -125,12 +138,15 @@ export interface PageInfo {
 
 export interface ExperimentalContext {
   userId: string;
-  chatId: string;
+  timezone: string | undefined;
+  aiProvider: string;
+  aiModel: string;
+  conversationId: string;
   modelCapabilities: {
-    supportsStreaming: boolean;
-    supportsToolCalling: boolean;
     hasVision: boolean;
-    maxTokens: number;
+    hasTools: boolean;
+    model: string;
+    provider: string;
   };
   locationContext: {
     currentDrive?: {
@@ -138,7 +154,20 @@ export interface ExperimentalContext {
       name: string;
       slug: string;
     };
+    currentPage?: {
+      id: string;
+      title: string;
+      type: string;
+      path: string;
+    };
+    breadcrumbs?: Array<{ id: string; title: string }>;
   } | null;
+  chatSource: {
+    type: 'page';
+    agentPageId: string;
+    agentTitle: string;
+  };
+  enabledTools: string[] | null;
 }
 
 export interface GlobalPromptResponse {
@@ -148,6 +177,7 @@ export interface GlobalPromptResponse {
   experimentalContext?: ExperimentalContext;
   availableDrives?: DriveInfo[];
   availablePages?: PageInfo[];
+  nonCoreToolNames?: string[];
   metadata: {
     generatedAt: string;
     adminUser: {
