@@ -1,6 +1,6 @@
 # Admin Console Standalone App Epic
 
-**Status**: 📋 PLANNED  
+**Status**: ✅ COMPLETED (2026-05-16)  
 **Goal**: Move the admin console out of `apps/web/` into a new standalone `apps/admin/` Next.js 15 app with its own auth, deployment surface, and trust boundary.
 
 ## Overview
