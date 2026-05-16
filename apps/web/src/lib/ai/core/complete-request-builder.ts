@@ -67,9 +67,7 @@ export interface CompleteAIRequest {
       provider: string;
     };
     chatSource: {
-      type: 'page';
-      agentPageId: string;
-      agentTitle: string;
+      type: 'global';
     };
     enabledTools: string[] | null;
   };
