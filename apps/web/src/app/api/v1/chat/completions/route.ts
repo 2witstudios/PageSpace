@@ -5,6 +5,7 @@ import {
 } from '@/lib/ai/core/provider-factory';
 import { resolveInferenceContext } from '@/lib/ai/openai-api/context-resolver';
 import { parseCompletionRequest } from '@/lib/ai/openai-api/request-adapter';
+import { persistApiExchange } from '@/lib/ai/openai-api/persistence';
 import {
   toChunk,
   toCompletion,
@@ -59,6 +60,28 @@ export async function POST(request: Request) {
   }
 
   const meta = createCompletionMeta(parsed.model);
+  const conversationId = `api-${meta.id}`;
+  const lastUserText =
+    [...parsed.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const startedAt = Date.now();
+
+  const persist = (assistantText: string, usage: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  }) =>
+    persistApiExchange({
+      userId: ctx.context.userId,
+      pageId: ctx.context.pageId,
+      conversationId,
+      userText: lastUserText,
+      assistantText,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      usage,
+      durationMs: Date.now() - startedAt,
+    }).catch(() => undefined);
+
   const aiResult = streamText({
     model: providerResult.model,
     system: agent.systemPrompt ?? undefined,
@@ -70,6 +93,11 @@ export async function POST(request: Request) {
       aiResult.text,
       aiResult.totalUsage,
     ]);
+    await persist(content, {
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      totalTokens: usage?.totalTokens,
+    });
     return Response.json(
       toCompletion(meta, {
         content,
@@ -88,7 +116,9 @@ export async function POST(request: Request) {
         controller.enqueue(
           encoder.encode(sseEvent(toChunk(meta, { role: 'assistant' }))),
         );
+        let assistantText = '';
         for await (const delta of aiResult.textStream) {
+          assistantText += delta;
           controller.enqueue(
             encoder.encode(sseEvent(toChunk(meta, { delta }))),
           );
@@ -96,6 +126,12 @@ export async function POST(request: Request) {
         controller.enqueue(
           encoder.encode(sseEvent(toChunk(meta, { finishReason: 'stop' }))),
         );
+        const usage = await aiResult.totalUsage.catch(() => undefined);
+        await persist(assistantText, {
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          totalTokens: usage?.totalTokens,
+        });
         controller.enqueue(encoder.encode(SSE_DONE));
       } catch (err) {
         controller.enqueue(

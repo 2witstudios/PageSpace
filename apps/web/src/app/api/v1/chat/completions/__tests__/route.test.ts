@@ -4,6 +4,7 @@ import { assert } from '@/lib/ai/core/__tests__/riteway';
 const resolveInferenceContext = vi.fn();
 const createAIProvider = vi.fn();
 const streamText = vi.fn();
+const persistApiExchange = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@/lib/ai/openai-api/context-resolver', () => ({
   resolveInferenceContext: (...a: unknown[]) => resolveInferenceContext(...a),
@@ -14,6 +15,9 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
     !!r && typeof r === 'object' && 'error' in r && 'status' in r,
 }));
 vi.mock('ai', () => ({ streamText: (...a: unknown[]) => streamText(...a) }));
+vi.mock('@/lib/ai/openai-api/persistence', () => ({
+  persistApiExchange: (...a: unknown[]) => persistApiExchange(...a),
+}));
 
 import { POST } from '../route';
 
@@ -43,6 +47,7 @@ describe('POST /api/v1/chat/completions', () => {
     resolveInferenceContext.mockReset();
     createAIProvider.mockReset();
     streamText.mockReset();
+    persistApiExchange.mockClear();
     resolveInferenceContext.mockResolvedValue(okContext);
     createAIProvider.mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'm' });
   });
@@ -106,6 +111,35 @@ describe('POST /api/v1/chat/completions', () => {
         total: json.usage?.total_tokens,
       },
       expected: { object: 'chat.completion', content: 'Hello world', total: 5 },
+    });
+  });
+
+  test('completed inference is persisted', async () => {
+    streamText.mockReturnValue({
+      textStream: textChunks(),
+      totalUsage: Promise.resolve({ inputTokens: 3, outputTokens: 2, totalTokens: 5 }),
+      text: Promise.resolve('Hello world'),
+    });
+
+    await POST(
+      makeRequest({
+        model: 'ps-agent://p1',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    );
+    const arg = persistApiExchange.mock.calls[0]?.[0] ?? {};
+
+    assert({
+      given: 'a completed non-streaming inference',
+      should: 'persist the exchange under the agent page with the assistant text',
+      actual: {
+        called: persistApiExchange.mock.calls.length,
+        pageId: arg.pageId,
+        userId: arg.userId,
+        assistantText: arg.assistantText,
+      },
+      expected: { called: 1, pageId: 'p1', userId: 'u1', assistantText: 'Hello world' },
     });
   });
 
