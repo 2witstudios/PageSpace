@@ -15,6 +15,10 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
+import {
+  WHISPER_DICTATION_PROMPT,
+  isHallucinatedTranscript,
+} from '@/lib/voice/whisper-hallucinations';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -105,6 +109,14 @@ export async function POST(request: Request) {
     openAIFormData.append('model', 'whisper-1');
     openAIFormData.append('response_format', 'json');
 
+    // Whisper hallucinates YouTube-style boilerplate ("Thank you for
+    // watching!") when it decodes silence, and the cloud API does not expose
+    // `no_speech_threshold`. Conditioning the decoder with a dictation prompt
+    // and pinning temperature to 0 (greedy, no fallback sampling) suppresses
+    // these fabricated completions. See OpenWhispr#462.
+    openAIFormData.append('prompt', WHISPER_DICTATION_PROMPT);
+    openAIFormData.append('temperature', '0');
+
     // Optionally set language for better accuracy
     if (language) {
       openAIFormData.append('language', language);
@@ -144,6 +156,13 @@ export async function POST(request: Request) {
     const result = await response.json();
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'voice', resourceId: 'self', details: { operation: 'transcribe', audioSize: audioFile.size } });
+
+    // Backstop: if the recording was silent/noise-only the conditioning above
+    // is not always enough — drop transcripts that are entirely a known
+    // hallucination phrase so they are never auto-sent as a user turn.
+    if (isHallucinatedTranscript(result.text)) {
+      return NextResponse.json({ text: '', duration: result.duration });
+    }
 
     return NextResponse.json({
       text: result.text,

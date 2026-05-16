@@ -112,6 +112,10 @@ interface VadRefs {
   analyser: AnalyserNode | null;
   animationFrame: number | null;
   silenceTimeout: NodeJS.Timeout | null;
+  // True once any voiced frame is observed during the current recording.
+  // Pure-silence recordings are discarded before reaching Whisper, which
+  // otherwise fabricates "Thank you for watching!" (OpenWhispr#462).
+  hadSpeech: boolean;
 }
 
 interface BargeInRefs {
@@ -180,6 +184,7 @@ export function useVoiceMode({
     analyser: null,
     animationFrame: null,
     silenceTimeout: null,
+    hadSpeech: false,
   });
   const bargeInRefs = useRef<BargeInRefs>({
     analyser: null,
@@ -304,6 +309,8 @@ export function useVoiceMode({
       const SILENCE_THRESHOLD = 12;
       const SILENCE_DURATION = 1400;
 
+      vadRefs.current.hadSpeech = false;
+
       const checkAudio = () => {
         if (!vadRefs.current.analyser) return;
 
@@ -322,6 +329,9 @@ export function useVoiceMode({
           }
         } else {
           silenceStart = null;
+          // Crossing the VAD's own non-silence bar means real voiced energy
+          // was present — mark the recording as containing speech.
+          vadRefs.current.hadSpeech = true;
         }
 
         vadRefs.current.animationFrame = requestAnimationFrame(checkAudio);
@@ -435,6 +445,16 @@ export function useVoiceMode({
           setVoiceState('idle');
           return;
         }
+
+        // No voiced frame was ever detected — the recording is silence or
+        // ambient noise. Sending it to Whisper would produce a fabricated
+        // transcript (and, in conversation mode, auto-send it as a real user
+        // turn). Discard without transcribing. See OpenWhispr#462.
+        if (!vadRefs.current.hadSpeech) {
+          setVoiceState('idle');
+          return;
+        }
+
         const transcript = await transcribeAudio(audioBlob);
 
         if (transcript) {
