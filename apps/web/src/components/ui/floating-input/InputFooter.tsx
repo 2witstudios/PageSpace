@@ -14,7 +14,7 @@ import { ToolsPopover } from './ToolsPopover';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { isBillingEnabled } from '@/lib/deployment-mode';
 
-const VOICE_TIERS = new Set(['pro', 'founder', 'business']);
+const PAID_TIERS = new Set(['pro', 'founder', 'business']);
 
 export interface InputFooterProps {
   /** Whether web search is enabled */
@@ -111,7 +111,7 @@ export function InputFooter({
   className,
 }: InputFooterProps) {
   const subscriptionTier = useAssistantSettingsStore((s) => s.subscriptionTier);
-  const isVoiceProGated = isBillingEnabled() && !VOICE_TIERS.has(subscriptionTier);
+  const isVoiceProGated = isBillingEnabled() && !PAID_TIERS.has(subscriptionTier);
 
   return (
     <div

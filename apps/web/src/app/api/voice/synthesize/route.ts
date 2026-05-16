@@ -16,8 +16,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
-
-const VOICE_TIERS = new Set(['pro', 'founder', 'business']);
+import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -40,7 +39,7 @@ export async function POST(request: Request) {
 
     if (isBillingEnabled()) {
       const user = await aiSettingsRepository.getUserSettings(userId);
-      if (!VOICE_TIERS.has(user?.subscriptionTier ?? 'free')) {
+      if (!PAID_TIERS.has(user?.subscriptionTier ?? 'free')) {
         return NextResponse.json(
           {
             error: 'Pro plan required',
