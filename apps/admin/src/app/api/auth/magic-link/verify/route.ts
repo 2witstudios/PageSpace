@@ -18,11 +18,7 @@ function redirectWithError(code: string): Response {
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const token = searchParams.get('token');
-
-    if (!token) {
-      return redirectWithError('invalid_token');
-    }
+    const token = searchParams.get('token') ?? '';
 
     const result = await verifyMagicLinkToken({ token });
 
