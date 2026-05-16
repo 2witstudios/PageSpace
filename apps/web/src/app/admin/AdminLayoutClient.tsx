@@ -15,10 +15,7 @@ export default function AdminLayoutClient({
   const pathname = usePathname();
   const router = useRouter();
   const currentTab = pathname === '/admin' ? 'overview' :
-                     pathname.includes('/monitoring') ? 'monitoring' :
-                     pathname.includes('/tables') ? 'tables' :
-                     pathname.includes('/global-prompt') ? 'global-prompt' :
-                     pathname.includes('/support') ? 'support' : 'users';
+                     pathname.includes('/global-prompt') ? 'global-prompt' : 'overview';
 
   return (
     <div className="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-10">
@@ -34,9 +31,9 @@ export default function AdminLayoutClient({
         </Button>
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>Admin Dashboard</CardTitle>
+            <CardTitle>Admin</CardTitle>
             <CardDescription>
-              Monitor system performance, manage users, view support requests, visualize database schema, and inspect AI system prompts
+              AI system prompt inspector and link to the standalone admin console
             </CardDescription>
           </CardHeader>
         </Card>
@@ -46,20 +43,8 @@ export default function AdminLayoutClient({
             <TabsTrigger value="overview" asChild>
               <Link href="/admin">Overview</Link>
             </TabsTrigger>
-            <TabsTrigger value="monitoring" asChild>
-              <Link href="/admin/monitoring">Monitoring</Link>
-            </TabsTrigger>
-            <TabsTrigger value="tables" asChild>
-              <Link href="/admin/tables">Database Tables</Link>
-            </TabsTrigger>
             <TabsTrigger value="global-prompt" asChild>
               <Link href="/admin/global-prompt">Global Prompt</Link>
-            </TabsTrigger>
-            <TabsTrigger value="users" asChild>
-              <Link href="/admin/users">User Management</Link>
-            </TabsTrigger>
-            <TabsTrigger value="support" asChild>
-              <Link href="/admin/support">Support</Link>
             </TabsTrigger>
           </TabsList>
 
