@@ -276,12 +276,7 @@ export function useVoiceMode({
 
         const result = await response.json();
         const text = (result.text as string).trim();
-        // "you" and "thank you" are Whisper hallucinations on near-silence; other
-        // conversational words like "thanks", "bye", "goodbye" are valid user input.
-        const WHISPER_ARTIFACTS = new Set(['you', 'thank you']);
-        const normalized = text.toLowerCase().replace(/[.!?,\s]+$/, '').trim();
-        if (WHISPER_ARTIFACTS.has(normalized)) return null;
-        return text;
+        return text || null;
       } catch (err) {
         const message = getTranscriptionErrorMessage(err);
         setError(message);
