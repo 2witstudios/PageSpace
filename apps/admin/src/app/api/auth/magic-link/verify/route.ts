@@ -8,8 +8,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
-function redirectWithError(code: string, req: Request): Response {
-  const url = new URL('/login', req.url);
+function redirectWithError(code: string): Response {
+  const base = process.env.ADMIN_URL ?? 'http://localhost:3005';
+  const url = new URL('/login', base);
   url.searchParams.set('error', code);
   return Response.redirect(url, 302);
 }
@@ -20,7 +21,7 @@ export async function GET(req: Request) {
     const token = searchParams.get('token');
 
     if (!token) {
-      return redirectWithError('invalid_token', req);
+      return redirectWithError('invalid_token');
     }
 
     const result = await verifyMagicLinkToken({ token });
@@ -35,7 +36,7 @@ export async function GET(req: Request) {
       };
       const code = errorMap[result.error.code] ?? 'invalid_token';
       loggers.auth.warn('Admin magic link verification failed', { code: result.error.code });
-      return redirectWithError(code, req);
+      return redirectWithError(code);
     }
 
     const { userId } = result.data;
@@ -56,7 +57,7 @@ export async function GET(req: Request) {
         details: { reason: 'not_admin' },
         riskScore: 0.4,
       });
-      return redirectWithError('not_admin', req);
+      return redirectWithError('not_admin');
     }
 
     const sessionToken = await sessionService.createSession({
@@ -80,6 +81,6 @@ export async function GET(req: Request) {
     return new Response(null, { status: 302, headers });
   } catch (error) {
     loggers.auth.error('Admin magic link verify error', error as Error);
-    return redirectWithError('server_error', req);
+    return redirectWithError('server_error');
   }
 }
