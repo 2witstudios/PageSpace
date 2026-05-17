@@ -31,6 +31,7 @@ import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { formatDistanceToNow } from 'date-fns';
 import { isFirstInGroup } from '@/lib/messages/grouping';
 
@@ -120,6 +121,7 @@ export default function InboxDMPage() {
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
   const isMobile = useMobile();
+  const { isOpen: keyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   const threadPanelOpen = useThreadPanelStore((state) => state.open);
   const threadPanelSource = useThreadPanelStore((state) => state.source);
@@ -775,7 +777,12 @@ export default function InboxDMPage() {
         <SheetContent
           side="right"
           className="w-full sm:max-w-full p-0"
-          style={{ height: 'var(--app-height, 100dvh)', top: 0, bottom: 'auto' }}
+          style={{
+            height: keyboardOpen ? `calc(100dvh - ${keyboardHeight}px)` : '100dvh',
+            top: 0,
+            bottom: 'auto',
+            paddingTop: 'env(safe-area-inset-top, 0px)',
+          }}
         >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}

@@ -30,6 +30,7 @@ import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import {
   type AttachmentMeta,
   type FileRelation,
@@ -81,6 +82,7 @@ function ChannelView({ page }: ChannelViewProps) {
   const openThread = useThreadPanelStore((state) => state.openThread);
   const closeThread = useThreadPanelStore((state) => state.close);
   const isMobile = useMobile();
+  const { isOpen: keyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   const isThreadVisible =
     threadPanelOpen &&
@@ -788,7 +790,12 @@ function ChannelView({ page }: ChannelViewProps) {
         <SheetContent
           side="right"
           className="w-full sm:max-w-full p-0"
-          style={{ height: 'var(--app-height, 100dvh)', top: 0, bottom: 'auto' }}
+          style={{
+            height: keyboardOpen ? `calc(100dvh - ${keyboardHeight}px)` : '100dvh',
+            top: 0,
+            bottom: 'auto',
+            paddingTop: 'env(safe-area-inset-top, 0px)',
+          }}
         >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
