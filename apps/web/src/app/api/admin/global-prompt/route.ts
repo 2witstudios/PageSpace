@@ -10,6 +10,7 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
@@ -58,7 +59,9 @@ interface ModePromptData {
   completePayload: CompletePayloadResult;
 }
 
-export const GET = withAdminAuth(async (adminUser, request) => {
+async function handleGlobalPrompt(userId: string, request: Request): Promise<Response> {
+  // Adapter: the inner logic expects an object with an `id` field
+  const adminUser = { id: userId };
   try {
     // Parse query params for context selection
     const { searchParams } = new URL(request.url);
@@ -449,7 +452,6 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         generatedAt: new Date().toISOString(),
         adminUser: {
           id: adminUser.id,
-          role: adminUser.role,
         },
         locationContext,
         selectedDriveId,
@@ -460,7 +462,20 @@ export const GET = withAdminAuth(async (adminUser, request) => {
     });
 
   } catch (error) {
-    console.error('Error generating global prompt data:', error);
+    loggers.api.error('Error generating global prompt data', error as Error);
     return new Response('Internal Server Error', { status: 500 });
   }
-});
+}
+
+export async function GET(request: Request): Promise<Response> {
+  const serviceSecret = request.headers.get('x-service-secret');
+  if (serviceSecret) {
+    if (!process.env.SERVICE_API_SECRET || serviceSecret !== process.env.SERVICE_API_SECRET) {
+      return Response.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const userId = request.headers.get('x-service-user-id');
+    if (!userId) return Response.json({ error: 'Missing user context' }, { status: 400 });
+    return handleGlobalPrompt(userId, request);
+  }
+  return withAdminAuth(async (adminUser, req) => handleGlobalPrompt(adminUser.id, req))(request);
+}
