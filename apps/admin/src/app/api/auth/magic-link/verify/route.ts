@@ -8,9 +8,16 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
+function getAdminUrl(): string {
+  if (!process.env.ADMIN_URL) {
+    if (process.env.NODE_ENV === 'production') throw new Error('ADMIN_URL env var must be set in production');
+    return 'http://localhost:3005';
+  }
+  return process.env.ADMIN_URL;
+}
+
 function redirectWithError(code: string): Response {
-  const base = process.env.ADMIN_URL ?? 'http://localhost:3005';
-  const url = new URL('/login', base);
+  const url = new URL('/login', getAdminUrl());
   url.searchParams.set('error', code);
   return Response.redirect(url, 302);
 }

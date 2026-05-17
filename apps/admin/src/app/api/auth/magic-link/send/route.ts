@@ -6,6 +6,8 @@ import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP } from '@pagespace/lib/auth/device-fingerprint-utils';
 
 const schema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
@@ -31,6 +33,26 @@ export async function POST(req: Request) {
 
     const email = parsed.data.email.toLowerCase().trim();
 
+    // Rate-limit by IP and email before touching the DB or sending email
+    const clientIP = getClientIP(req);
+    const [ipResult, emailResult] = await Promise.all([
+      checkDistributedRateLimit(`admin_magic_link:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
+      checkDistributedRateLimit(`admin_magic_link:email:${email}`, DISTRIBUTED_RATE_LIMITS.MAGIC_LINK),
+    ]);
+    if (!ipResult.allowed || !emailResult.allowed) {
+      const retryAfter = Math.max(ipResult.retryAfter ?? 0, emailResult.retryAfter ?? 0);
+      return Response.json(
+        { error: 'Too many requests. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfter),
+            'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.MAGIC_LINK.maxAttempts),
+          },
+        }
+      );
+    }
+
     // Look up user — must exist and be an admin
     const user = await db.query.users.findFirst({
       where: eq(users.email, email),
@@ -55,7 +77,9 @@ export async function POST(req: Request) {
       expiresAt,
     });
 
-    const adminUrl = process.env.ADMIN_URL ?? 'http://localhost:3005';
+    const adminUrl = process.env.ADMIN_URL ?? (process.env.NODE_ENV === 'production'
+      ? (() => { throw new Error('ADMIN_URL env var must be set in production') })()
+      : 'http://localhost:3005');
     const magicLinkUrl = `${adminUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
 
     await sendEmail({

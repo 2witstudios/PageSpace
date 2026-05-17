@@ -16,31 +16,31 @@ const adminSections: AdminSection[] = [
     title: "Monitoring",
     description: "System monitoring dashboard",
     icon: Activity,
-    href: "/admin/monitoring",
+    href: "/monitoring",
   },
   {
     title: "Database Tables",
     description: "Database schema visualization",
     icon: Database,
-    href: "/admin/tables",
+    href: "/tables",
   },
   {
     title: "Global Prompt",
     description: "Global AI prompt management",
     icon: MessageSquare,
-    href: "/admin/global-prompt",
+    href: "/global-prompt",
   },
   {
     title: "User Management",
     description: "Manage users and permissions",
     icon: Users,
-    href: "/admin/users",
+    href: "/users",
   },
   {
     title: "Support",
     description: "Support tools and requests",
     icon: Headphones,
-    href: "/admin/support",
+    href: "/support",
   },
 ];
 
