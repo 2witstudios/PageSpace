@@ -99,7 +99,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
    npm install -g pagespace-mcp@latest
    ```
 
-2. **Get your token** from [www.pagespace.ai/dashboard/settings/mcp](https://www.pagespace.ai/dashboard/settings/mcp)
+2. **Get your token** from [pagespace.ai/dashboard/settings/mcp](https://pagespace.ai/dashboard/settings/mcp)
 
 3. **Configure Claude Desktop** (add to MCP settings):
    ```json
@@ -109,7 +109,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
          "command": "npx",
          "args": ["-y", "pagespace-mcp@latest"],
          "env": {
-           "PAGESPACE_API_URL": "https://www.pagespace.ai",
+           "PAGESPACE_API_URL": "https://pagespace.ai",
            "PAGESPACE_AUTH_TOKEN": "your-mcp-token"
          }
        }

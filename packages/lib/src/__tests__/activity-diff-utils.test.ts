@@ -327,6 +327,30 @@ describe('activity-diff-utils', () => {
       expect(result!.actors).toContain('Bob');
     });
 
+    it('attributes primaryActor to the most recent contributor, not the first', () => {
+      const group = createMockGroup();
+      group.first = { ...group.first, actorDisplayName: 'Alice' };
+      group.last = { ...group.last, actorDisplayName: 'Bob' };
+      group.activities = [group.first, group.last];
+
+      const result = generateStackedDiff('Before', 'After', group);
+
+      expect(result).not.toBeNull();
+      // The "after" content reflects Bob's edit — he must get the credit.
+      expect(result!.primaryActor).toBe('Bob');
+    });
+
+    it('falls back to actorEmail for primaryActor when display name is missing', () => {
+      const group = createMockGroup();
+      group.last = { ...group.last, actorDisplayName: null, actorEmail: 'bob@example.com' };
+      group.activities = [group.first, group.last];
+
+      const result = generateStackedDiff('Before', 'After', group);
+
+      expect(result).not.toBeNull();
+      expect(result!.primaryActor).toBe('bob@example.com');
+    });
+
     it('marks isAiGenerated if any activity is AI-generated', () => {
       const group = createMockGroup({ isAiGenerated: true });
       const result = generateStackedDiff('Before', 'After', group);
@@ -422,6 +446,7 @@ describe('activity-diff-utils', () => {
       collapsedCount: 1,
       timeRange: { from: '2024-01-01T10:00:00Z', to: '2024-01-01T10:05:00Z' },
       actors: ['user@example.com'],
+      primaryActor: 'user@example.com',
       unifiedDiff: 'x'.repeat(diffSize),
       stats: { additions, deletions, unchanged: 0, totalChanges: 1 },
       isAiGenerated: false,
@@ -507,6 +532,7 @@ describe('activity-diff-utils', () => {
         collapsedCount: 1,
         timeRange: { from: '2024-01-01T10:00:00Z', to: '2024-01-01T10:05:00Z' },
         actors: ['user@example.com'],
+        primaryActor: 'user@example.com',
         unifiedDiff: largeDiff,
         stats: { additions: 1000, deletions: 500, unchanged: 0, totalChanges: 1 },
         isAiGenerated: false,

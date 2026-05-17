@@ -61,6 +61,7 @@ export function VoiceCallPanel({
   } = useVoiceMode({
     onSend,
     onStopStream,
+    isAIStreaming,
   });
 
   const isOwnerActive = isEnabled && activeOwner === owner;
