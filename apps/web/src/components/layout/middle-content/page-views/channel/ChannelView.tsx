@@ -612,7 +612,7 @@ function ChannelView({ page }: ChannelViewProps) {
                         const showOwnerActions = isOwnMessage && isRealMessage;
                         const replyCount = m.replyCount ?? 0;
                         return (
-                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
@@ -625,7 +625,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1 relative">
+                            <div className="flex flex-col min-w-0 flex-1">
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -724,27 +724,26 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canReact={permissions?.canView || false}
                                   />
                                 )}
-                                {isRealMessage && (
-                                  <MessageHoverToolbar
-                                    canReact={permissions?.canView || false}
-                                    canEdit={showOwnerActions}
-                                    canDelete={showOwnerActions}
-                                    canReplyInThread={!m.id.startsWith('temp-')}
-                                    canQuoteReply={true}
-                                    reactions={m.reactions}
-                                    currentUserId={user?.id}
-                                    className={!isFirst ? 'top-0' : undefined}
-                                    onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
-                                    onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
-                                    onQuoteReply={() => handleStartQuote(m)}
-                                    onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                    onDelete={() => handleDeleteMessage(m.id)}
-                                    onReplyInThread={() =>
-                                      openThread({ source: 'channel', contextId: page.id, parentId: m.id })
-                                    }
-                                  />
-                                )}
                             </div>
+                            {isRealMessage && (
+                              <MessageHoverToolbar
+                                canReact={permissions?.canView || false}
+                                canEdit={showOwnerActions}
+                                canDelete={showOwnerActions}
+                                canReplyInThread={!m.id.startsWith('temp-')}
+                                canQuoteReply={true}
+                                reactions={m.reactions}
+                                currentUserId={user?.id}
+                                onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                                onQuoteReply={() => handleStartQuote(m)}
+                                onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                onDelete={() => handleDeleteMessage(m.id)}
+                                onReplyInThread={() =>
+                                  openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                }
+                              />
+                            )}
                         </div>
                         );
                     })}
