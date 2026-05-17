@@ -36,6 +36,7 @@ import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { formatDistanceToNow } from 'date-fns';
 
 const fetcher = async (url: string) => {
@@ -112,6 +113,7 @@ export default function InboxChannelPage() {
   const { permissions } = usePermissions(pageId);
   const canEdit = permissions?.canEdit || false;
   const isMobile = useMobile();
+  const { isOpen: keyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   // Thread panel state — generic across channels and DMs.
   const threadPanelOpen = useThreadPanelStore((state) => state.open);
@@ -807,7 +809,16 @@ export default function InboxChannelPage() {
     )}
     {threadPanel && isMobile && (
       <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
-        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-full p-0"
+          style={{
+            height: keyboardOpen ? `calc(100dvh - ${keyboardHeight}px)` : '100dvh',
+            top: 0,
+            bottom: 'auto',
+            paddingTop: 'env(safe-area-inset-top, 0px)',
+          }}
+        >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
         </SheetContent>
