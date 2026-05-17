@@ -1,4 +1,14 @@
+import { isToday, isYesterday, isThisWeek, format } from 'date-fns';
+
 const GROUP_BREAK_MS = 5 * 60 * 1000;
+
+export function formatMessageDate(date: Date | string): string {
+  const d = new Date(date);
+  if (isToday(d)) return 'Today';
+  if (isYesterday(d)) return 'Yesterday';
+  if (isThisWeek(d)) return format(d, 'EEEE');
+  return format(d, 'MMMM d, yyyy');
+}
 
 export interface GroupableMessage {
   authorKey: string;
