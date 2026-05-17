@@ -781,7 +781,6 @@ export default function InboxDMPage() {
         <SheetContent
           side="right"
           className="w-full sm:max-w-full p-0"
-          style={{ height: 'var(--app-height, 100dvh)', top: 0, bottom: 'auto' }}
         >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
