@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, Fragment } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -34,7 +34,8 @@ import {
   type AttachmentMeta,
   type FileRelation,
 } from '@/lib/attachment-utils';
-import { isFirstInGroup } from '@/lib/messages/grouping';
+import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
+import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
 
 interface ChannelViewProps {
@@ -611,8 +612,13 @@ function ChannelView({ page }: ChannelViewProps) {
                         const isRealMessage = !m.id.startsWith('temp-') && editingMessageId !== m.id;
                         const showOwnerActions = isOwnMessage && isRealMessage;
                         const replyCount = m.replyCount ?? 0;
+                        const currentDateStr = new Date(m.createdAt).toDateString();
+                        const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
+                        const showDateSeparator = currentDateStr !== previousDateStr;
                         return (
-                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
+                        <Fragment key={m.id}>
+                        {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
+                        <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
@@ -745,6 +751,7 @@ function ChannelView({ page }: ChannelViewProps) {
                               />
                             )}
                         </div>
+                        </Fragment>
                         );
                     })}
             </ConversationContent>

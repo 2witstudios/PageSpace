@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -32,7 +32,8 @@ import { ThreadPanel } from '@/components/layout/middle-content/page-views/threa
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
-import { isFirstInGroup } from '@/lib/messages/grouping';
+import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
+import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -586,9 +587,14 @@ export default function InboxDMPage() {
               const replyCount = message.replyCount ?? 0;
               const showReplyInThread = !message.id.startsWith('temp-');
               const isLastRead = i === lastReadOwnIndex;
+              const currentDateStr = new Date(message.createdAt).toDateString();
+              const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
+              const showDateSeparator = currentDateStr !== previousDateStr;
 
               return (
-                <div key={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
+                <Fragment key={message.id}>
+                {showDateSeparator && <MessageDateSeparator label={formatMessageDate(message.createdAt)} />}
+                <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (
@@ -740,6 +746,7 @@ export default function InboxDMPage() {
                     />
                   )}
                 </div>
+                </Fragment>
               );
             })}
           </ConversationContent>
