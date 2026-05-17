@@ -21,9 +21,11 @@ export function isFirstInGroup(
 ): boolean {
   if (!previous) return true;
   if (current.authorKey !== previous.authorKey) return true;
-  const currentMs = new Date(current.createdAt).getTime();
-  const previousMs = new Date(previous.createdAt).getTime();
+  const currentDate = new Date(current.createdAt);
+  const previousDate = new Date(previous.createdAt);
+  const currentMs = currentDate.getTime();
+  const previousMs = previousDate.getTime();
   if (!Number.isFinite(currentMs) || !Number.isFinite(previousMs)) return true;
-  if (new Date(current.createdAt).toDateString() !== new Date(previous.createdAt).toDateString()) return true;
+  if (currentDate.toDateString() !== previousDate.toDateString()) return true;
   return currentMs - previousMs > GROUP_BREAK_MS;
 }
