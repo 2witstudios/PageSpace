@@ -9,6 +9,14 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { getClientIP } from '@pagespace/lib/auth/device-fingerprint-utils';
 
+function getAdminUrl(): string {
+  if (!process.env.ADMIN_URL) {
+    if (process.env.NODE_ENV === 'production') throw new Error('ADMIN_URL env var must be set in production');
+    return 'http://localhost:3005';
+  }
+  return process.env.ADMIN_URL;
+}
+
 const schema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
 });
@@ -77,10 +85,7 @@ export async function POST(req: Request) {
       expiresAt,
     });
 
-    const adminUrl = process.env.ADMIN_URL ?? (process.env.NODE_ENV === 'production'
-      ? (() => { throw new Error('ADMIN_URL env var must be set in production') })()
-      : 'http://localhost:3005');
-    const magicLinkUrl = `${adminUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
+    const magicLinkUrl = `${getAdminUrl()}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
 
     await sendEmail({
       to: email,

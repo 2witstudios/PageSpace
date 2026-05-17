@@ -10,6 +10,7 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
@@ -461,7 +462,7 @@ async function handleGlobalPrompt(userId: string, request: Request): Promise<Res
     });
 
   } catch (error) {
-    console.error('Error generating global prompt data:', error);
+    loggers.api.error('Error generating global prompt data', error as Error);
     return new Response('Internal Server Error', { status: 500 });
   }
 }
