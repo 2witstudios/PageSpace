@@ -24,5 +24,6 @@ export function isFirstInGroup(
   const currentMs = new Date(current.createdAt).getTime();
   const previousMs = new Date(previous.createdAt).getTime();
   if (!Number.isFinite(currentMs) || !Number.isFinite(previousMs)) return true;
+  if (new Date(current.createdAt).toDateString() !== new Date(previous.createdAt).toDateString()) return true;
   return currentMs - previousMs > GROUP_BREAK_MS;
 }
