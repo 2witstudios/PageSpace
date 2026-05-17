@@ -18,7 +18,7 @@ import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Check, X } from 'lucide-react';
+import { Lock, Check, X, MessageSquareText } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
@@ -706,11 +706,12 @@ function ChannelView({ page }: ChannelViewProps) {
                                       openThread({ source: 'channel', contextId: page.id, parentId: m.id })
                                     }
                                     data-testid={`thread-footer-${m.id}`}
-                                    className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                    className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                                   >
+                                    <MessageSquareText size={12} aria-hidden />
                                     {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                                     {m.lastReplyAt
-                                      ? ` · last reply ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                                      ? ` · ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
                                       : ''}
                                   </button>
                                 )}
