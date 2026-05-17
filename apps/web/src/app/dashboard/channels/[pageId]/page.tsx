@@ -7,7 +7,6 @@ import { Hash, ExternalLink } from 'lucide-react';
 import type { Page } from '@pagespace/lib/types';
 import { Button } from '@/components/ui/button';
 import { ChannelView } from '@/components/layout/middle-content/page-views/channel';
-import type { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const fetcher = async (url: string) => {
@@ -50,10 +49,6 @@ export default function InboxChannelPage() {
     );
   }
 
-  // ChannelView only reads `id` and `driveId`; it fetches its own messages
-  // and tree state, so the inbox route just adapts the page record.
-  const channelPage: TreePage = { ...page, children: [], aiChat: null, messages: [] };
-
   return (
     <div className="flex flex-col h-full w-full">
       <div className="flex-shrink-0 border-b border-border p-4">
@@ -77,7 +72,7 @@ export default function InboxChannelPage() {
       </div>
 
       <div className="flex-1 min-h-0">
-        <ChannelView page={channelPage} />
+        <ChannelView page={{ id: page.id, driveId: page.driveId }} />
       </div>
     </div>
   );
