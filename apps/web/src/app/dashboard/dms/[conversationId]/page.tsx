@@ -594,7 +594,7 @@ export default function InboxDMPage() {
               return (
                 <Fragment key={message.id}>
                 {showDateSeparator && <MessageDateSeparator label={formatMessageDate(message.createdAt)} />}
-                <div className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (
@@ -619,7 +619,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0 relative">
+                  <div className="flex-1 min-w-0">
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
@@ -725,27 +725,26 @@ export default function InboxDMPage() {
                         onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
                       />
                     )}
-                    {isRealMessage && (
-                      <MessageHoverToolbar
-                        canReact={true}
-                        canEdit={showOwnerActions}
-                        canDelete={showOwnerActions}
-                        canReplyInThread={showReplyInThread}
-                        canQuoteReply={true}
-                        reactions={message.reactions}
-                        currentUserId={user?.id}
-                        className={!isFirst ? 'top-0' : undefined}
-                        onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
-                        onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
-                        onQuoteReply={() => handleStartQuote(message)}
-                        onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                        onDelete={() => handleDeleteMessage(message.id)}
-                        onReplyInThread={() =>
-                          openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                        }
-                      />
-                    )}
                   </div>
+                  {isRealMessage && (
+                    <MessageHoverToolbar
+                      canReact={true}
+                      canEdit={showOwnerActions}
+                      canDelete={showOwnerActions}
+                      canReplyInThread={showReplyInThread}
+                      canQuoteReply={true}
+                      reactions={message.reactions}
+                      currentUserId={user?.id}
+                      onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                      onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
+                      onQuoteReply={() => handleStartQuote(message)}
+                      onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                      onDelete={() => handleDeleteMessage(message.id)}
+                      onReplyInThread={() =>
+                        openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
+                      }
+                    />
+                  )}
                 </div>
                 </Fragment>
               );

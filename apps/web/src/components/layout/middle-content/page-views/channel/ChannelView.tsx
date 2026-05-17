@@ -18,7 +18,7 @@ import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Check, X } from 'lucide-react';
+import { Lock, Check, X, MessageSquareText } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
@@ -618,7 +618,7 @@ function ChannelView({ page }: ChannelViewProps) {
                         return (
                         <Fragment key={m.id}>
                         {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
-                        <div className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                        <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
@@ -631,7 +631,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1 relative">
+                            <div className="flex flex-col min-w-0 flex-1">
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -712,11 +712,12 @@ function ChannelView({ page }: ChannelViewProps) {
                                       openThread({ source: 'channel', contextId: page.id, parentId: m.id })
                                     }
                                     data-testid={`thread-footer-${m.id}`}
-                                    className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                    className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                                   >
+                                    <MessageSquareText size={12} aria-hidden />
                                     {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                                     {m.lastReplyAt
-                                      ? ` · last reply ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                                      ? ` · ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
                                       : ''}
                                   </button>
                                 )}
@@ -729,27 +730,26 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canReact={permissions?.canView || false}
                                   />
                                 )}
-                                {isRealMessage && (
-                                  <MessageHoverToolbar
-                                    canReact={permissions?.canView || false}
-                                    canEdit={showOwnerActions}
-                                    canDelete={showOwnerActions}
-                                    canReplyInThread={!m.id.startsWith('temp-')}
-                                    canQuoteReply={true}
-                                    reactions={m.reactions}
-                                    currentUserId={user?.id}
-                                    className={!isFirst ? 'top-0' : undefined}
-                                    onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
-                                    onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
-                                    onQuoteReply={() => handleStartQuote(m)}
-                                    onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                    onDelete={() => handleDeleteMessage(m.id)}
-                                    onReplyInThread={() =>
-                                      openThread({ source: 'channel', contextId: page.id, parentId: m.id })
-                                    }
-                                  />
-                                )}
                             </div>
+                            {isRealMessage && (
+                              <MessageHoverToolbar
+                                canReact={permissions?.canView || false}
+                                canEdit={showOwnerActions}
+                                canDelete={showOwnerActions}
+                                canReplyInThread={!m.id.startsWith('temp-')}
+                                canQuoteReply={true}
+                                reactions={m.reactions}
+                                currentUserId={user?.id}
+                                onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                                onQuoteReply={() => handleStartQuote(m)}
+                                onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                onDelete={() => handleDeleteMessage(m.id)}
+                                onReplyInThread={() =>
+                                  openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                }
+                              />
+                            )}
                         </div>
                         </Fragment>
                         );
