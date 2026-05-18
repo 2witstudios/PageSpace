@@ -93,4 +93,46 @@ describe('validateInferenceRequest', () => {
       expected: true,
     });
   });
+
+  test('plain OpenAI message (no parts) is normalized to UIMessage with parts', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{ role: 'user', content: 'Hello from SDK' }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a plain OpenAI SDK message with string content and no parts',
+      should: 'return ok:true with the message normalized to UIMessage format (parts array with text part)',
+      actual: result.ok
+        ? {
+            hasParts: Array.isArray(result.data.messages[0].parts),
+            partType: result.data.messages[0].parts[0]?.type,
+            partText: result.data.messages[0].parts[0]?.type === 'text'
+              ? (result.data.messages[0].parts[0] as { type: 'text'; text: string }).text
+              : undefined,
+            hasId: typeof result.data.messages[0].id === 'string',
+          }
+        : undefined,
+      expected: { hasParts: true, partType: 'text', partText: 'Hello from SDK', hasId: true },
+    });
+  });
+
+  test('OpenAI content-array message is normalized to UIMessage with parts', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello array' }] }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an OpenAI SDK message with content as an array of text blocks',
+      should: 'return ok:true with parts extracted from the content array',
+      actual: result.ok
+        ? {
+            hasParts: Array.isArray(result.data.messages[0].parts),
+            partType: result.data.messages[0].parts[0]?.type,
+          }
+        : undefined,
+      expected: { hasParts: true, partType: 'text' },
+    });
+  });
 });

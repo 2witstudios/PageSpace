@@ -3,7 +3,7 @@ import { streamText, convertToModelMessages } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { pages, chatMessages } from '@pagespace/db/schema/core';
+import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -23,6 +23,7 @@ import {
 import { incrementUsage } from '@/lib/subscription/usage-service';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
+import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 
 export const maxDuration = 300;
 
@@ -96,12 +97,13 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // 9. Run inference — no UI coupling (no WebSocket, no stream lifecycle, no session ID)
+  const providerType = getProviderTier(page.aiProvider ?? 'pagespace', page.aiModel ?? undefined);
   const sanitized = sanitizeMessagesForModel(messages);
   const aiResult = streamText({
     model: providerResult.model,
     system: systemPrompt,
     messages: convertToModelMessages(sanitized),
-    onFinish: async ({ text, usage }) => {
+    onFinish: async ({ text }) => {
       const assistantId = createId();
       await saveMessageToDatabase({
         messageId: assistantId,
@@ -114,8 +116,8 @@ export async function POST(request: Request): Promise<Response> {
         loggers.ai.error('OpenAI API: failed to save assistant message', err as Error);
       });
 
-      if (usage && authResult.userId) {
-        await incrementUsage(authResult.userId, usage.completionTokens ?? 0).catch((err: unknown) => {
+      if (authResult.userId) {
+        await incrementUsage(authResult.userId, providerType).catch((err: unknown) => {
           loggers.ai.error('OpenAI API: failed to increment usage', err as Error);
         });
       }

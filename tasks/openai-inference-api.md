@@ -1,6 +1,6 @@
 # OpenAI-Compatible Inference API Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-05-18)
 **Goal**: Expose PageSpace agents as an OpenAI-compatible HTTP endpoint so developers can use any OpenAI SDK client to call PageSpace agents.
 
 ## Overview

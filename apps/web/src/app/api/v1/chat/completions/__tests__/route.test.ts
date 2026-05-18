@@ -139,7 +139,7 @@ describe('POST /api/v1/chat/completions', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([agentPage]),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
   });
 
   test('returns 401 when auth fails', async () => {
@@ -194,7 +194,7 @@ describe('POST /api/v1/chat/completions', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([]),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
     const response = await POST(makeRequest(validBody));
     assert({
       given: 'a model URI pointing to a page that does not exist',
@@ -209,7 +209,7 @@ describe('POST /api/v1/chat/completions', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([{ ...agentPage, type: 'DOCUMENT' }]),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
     const response = await POST(makeRequest(validBody));
     assert({
       given: 'a model URI pointing to a non-AI_CHAT page',
