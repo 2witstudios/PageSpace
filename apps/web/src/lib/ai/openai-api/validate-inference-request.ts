@@ -25,6 +25,9 @@ export const parseAgentModelUri = (model: string): string | null => {
  * and sanitizeMessagesForModel both read parts, so we must ensure parts is set.
  */
 const normalizeMessage = (msg: Record<string, unknown>): UIMessage => {
+  if (typeof msg !== 'object' || msg === null) {
+    return { id: crypto.randomUUID(), role: 'user' as UIMessage['role'], parts: [] } as unknown as UIMessage;
+  }
   if (Array.isArray(msg.parts)) {
     return msg as unknown as UIMessage;
   }

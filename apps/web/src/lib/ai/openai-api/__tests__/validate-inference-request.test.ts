@@ -135,4 +135,18 @@ describe('validateInferenceRequest', () => {
       expected: { hasParts: true, partType: 'text' },
     });
   });
+
+  test('null element in messages array does not throw', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [null],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a messages array containing a null element',
+      should: 'return ok:true without throwing, normalizing null to an empty-parts UIMessage',
+      actual: result.ok ? Array.isArray(result.data.messages[0].parts) : 'threw',
+      expected: true,
+    });
+  });
 });

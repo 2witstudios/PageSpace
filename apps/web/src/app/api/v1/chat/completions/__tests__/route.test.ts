@@ -84,7 +84,7 @@ vi.mock('ai', async (importOriginal) => {
         yield { type: 'text-delta', id: 'text-1', delta: 'Hello' };
         yield { type: 'finish' };
       },
-      usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
     })),
   };
 });

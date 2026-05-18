@@ -83,7 +83,7 @@ export async function POST(request: Request): Promise<Response> {
   // 8. Save user message (database-first — before streaming starts)
   const userMessage = messages[messages.length - 1];
   const conversationId = createId();
-  const userMessageId = userMessage.id ?? createId();
+  const userMessageId = userMessage.id;
   if (userMessage && userMessage.role === 'user') {
     await saveMessageToDatabase({
       messageId: userMessageId,
