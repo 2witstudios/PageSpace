@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
+import { MessageWithUser } from '@/hooks/usePageTree';
 import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
 import {
   Conversation,
@@ -38,8 +38,13 @@ import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
 
+interface ChannelRef {
+  id: string;
+  driveId: string;
+}
+
 interface ChannelViewProps {
-  page: TreePage;
+  page: ChannelRef;
 }
 
 // AI sender metadata for messages posted by AI tools
