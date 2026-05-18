@@ -138,8 +138,10 @@ export async function POST(request: Request): Promise<Response> {
             controller.enqueue(encoder.encode(line + '\n\n'));
           }
         }
-      } finally {
         controller.close();
+      } catch (err) {
+        loggers.ai.error('OpenAI API: stream failed', err as Error);
+        controller.error(err);
       }
     },
   });
