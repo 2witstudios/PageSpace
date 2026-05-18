@@ -2,6 +2,8 @@
 
 ## Active Epics
 
+- [OpenAI-Compatible Inference API](tasks/openai-inference-api.md) — `POST /api/v1/chat/completions`: MCP tokens as API keys, agents as models, OpenAI SDK drop-in compatible streaming.
+
 - [Public Share Links](tasks/public-share-links.md) — Reusable page/drive share links (Discord-style join + Google Drive-style access); sign-in required, fully revocable, zero PII in link records.
 
 - [Inline Quote Replies](tasks/inline-quote-replies.md) — Slack/Twitter-style inline quote-reply embeds in channels and DMs via additive `quotedMessageId` self-FK + read-time enrichment helper; orthogonal to the just-shipped thread panel.
