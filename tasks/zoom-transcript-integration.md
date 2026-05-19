@@ -92,6 +92,34 @@ Create `apps/web/src/app/api/integrations/zoom/settings/route.ts`.
 
 ---
 
+## Zoom API Client
+
+Create `apps/web/src/lib/integrations/zoom/zoom-api-client.ts` following the `google-calendar/api-client.ts` pattern.
+
+**Requirements**:
+- Given an access token, `buildAuthHeader` should return `{ Authorization: 'Bearer {token}' }` — access token must never appear in a URL
+- Given a meeting UUID, `buildRecordingsUrl` should return `https://api.zoom.us/v2/meetings/{encodedUuid}/recordings` with no user-controlled data in the host segment
+- Given a valid access token and meeting UUID, `getRecordings` should fetch from the hardcoded `api.zoom.us` base URL using the Bearer header and return `ZoomApiResult<ZoomRecordingsResponse>`
+- Given a 401 or 403 response, `getRecordings` should return `{ success: false, requiresReauth: true }`
+- Given a `downloadUrl` whose hostname is not `zoom.us` or a `*.zoom.us` subdomain, `downloadTranscript` should return `{ success: false, error: '...' }` without making any network call
+- Given a valid access token and a trusted `downloadUrl`, `downloadTranscript` should fetch using only the `Authorization: Bearer` header — the access token must not appear in the request URL
+
+## Token Refresh
+
+Create `apps/web/src/lib/integrations/zoom/token-refresh.ts` following the `google-calendar/token-refresh.ts` pattern.
+
+**Requirements**:
+- Given a null `tokenExpiresAt`, `isTokenExpired` should return false (unknown expiry treated as valid)
+- Given a `tokenExpiresAt` in the past or within the 5-minute buffer, `isTokenExpired` should return true
+- Given an active connection with a non-expired token, `getValidZoomAccessToken` should return the stored decrypted token without calling the Zoom API
+- Given an active connection with an expired token and a valid refresh token, `getValidZoomAccessToken` should POST to `https://zoom.us/oauth/token` with `grant_type=refresh_token`, re-encrypt and store the new token, and return it
+- Given an expired token and no refresh token, `getValidZoomAccessToken` should return `{ success: false, requiresReauth: true }`
+- Given a failed refresh API call, `getValidZoomAccessToken` should update connection status to `'expired'` and return `{ success: false, requiresReauth: true }`
+- Given `processZoomWebhook`, should call `getValidZoomAccessToken` instead of directly decrypting the stored token, so expired tokens are refreshed transparently
+- Given a meeting UUID, `buildRecordingsUrl` should return a URL whose path ends with `/recordings`
+- Given a non-2xx, non-auth HTTP response, `getRecordings` should return `{ success: false, statusCode: <httpStatus> }` so callers can distinguish error types
+- Given `downloadTranscript` encounters a network error (fetch throws), should return `{ success: false, error: message }` without throwing
+
 ## Webhook Processor
 
 Create `apps/web/src/lib/integrations/zoom/process-webhook.ts`.
@@ -99,7 +127,8 @@ Create `apps/web/src/lib/integrations/zoom/process-webhook.ts`.
 **Requirements**:
 - Given a `recording.transcript_completed` event body, should look up the `zoomConnections` row by `zoomAccountId` matching `payload.account_id`
 - Given no matching connection or a null `targetDriveId`, should log a warning and return without error (user hasn't configured a target yet)
-- Given a matched connection, should decrypt the access token, find the `file_type === 'TRANSCRIPT'` entry in `payload.object.recording_files`, and fetch the VTT via `GET {downloadUrl}?access_token={token}`
+- Given a matched connection, should decrypt the access token and call `getRecordings(accessToken, meetingUuid)` to re-fetch recording details from the Zoom API — must not use `download_url` from the webhook payload directly
+- Given the recordings response, should find the `file_type === 'TRANSCRIPT'` entry and call `downloadTranscript(accessToken, file.download_url)` using Bearer authentication
 - Given the VTT content, should run `parseVtt` → plain text for AI calls → `vttToHtml` for the document
 - Given `includeAiSummary` is true, should call `generateTranscriptSummary` and include the result
 - Given `includeActionItems` is true, should call `extractActionItems` and include the result
