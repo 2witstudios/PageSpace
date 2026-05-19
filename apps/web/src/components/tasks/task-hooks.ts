@@ -109,16 +109,35 @@ export function useTaskMutations(
   const handleMultiAssigneeChange = useCallback(async (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!task.taskListPageId) return;
 
+    const existingById = new Map<string, TaskAssigneeData>();
+    for (const a of task.assignees ?? []) {
+      if (a.userId) existingById.set(`user-${a.userId}`, a);
+      if (a.agentPageId) existingById.set(`agent-${a.agentPageId}`, a);
+    }
+
+    const optimisticAssignees: TaskAssigneeData[] = assigneeIds.map(({ type, id }) =>
+      existingById.get(`${type}-${id}`) ?? {
+        id: `optimistic-${type}-${id}`,
+        taskId: task.id,
+        userId: type === 'user' ? id : null,
+        agentPageId: type === 'agent' ? id : null,
+      }
+    );
+
+    setTasks(prev => prev.map(t =>
+      t.id === task.id ? { ...t, assignees: optimisticAssignees } : t
+    ));
+
     try {
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { assigneeIds });
       onPageMutate?.(task.taskListPageId);
       onSuccess?.();
-      // Refetch to get updated assignee data - assignees have relation data
       mutate(`/api/pages/${task.taskListPageId}/tasks`);
     } catch (err) {
       handleError(err as Error, 'Failed to update assignees');
+      setTasks(prev => prev.map(t => t.id === task.id ? task : t));
     }
-  }, [onPageMutate, onSuccess, handleError]);
+  }, [setTasks, onPageMutate, onSuccess, handleError]);
 
   const handleDueDateChange = useCallback(async (task: Task, dueDate: Date | null) => {
     if (!task.taskListPageId) return;
