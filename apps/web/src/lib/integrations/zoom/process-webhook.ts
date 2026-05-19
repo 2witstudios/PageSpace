@@ -1,10 +1,10 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { zoomConnections } from '@pagespace/db/schema/zoom';
-import { decrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
+import { getValidZoomAccessToken } from './token-refresh';
 import { parseVtt, vttToHtml } from './parse-vtt';
 import { buildDocumentHtml } from './build-document';
 import { generateTranscriptSummary } from './generate-summary';
@@ -67,7 +67,16 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
     return;
   }
 
-  const accessToken = await decrypt(connection.accessToken);
+  const tokenResult = await getValidZoomAccessToken(connection.userId);
+  if (!tokenResult.success) {
+    loggers.api.warn('Zoom webhook: could not obtain valid access token', {
+      userId: connection.userId,
+      error: tokenResult.error,
+      requiresReauth: tokenResult.requiresReauth,
+    });
+    return;
+  }
+  const { accessToken } = tokenResult;
 
   // Re-fetch recording details from Zoom API using the meeting UUID from the verified event.
   // We never use download_url directly from the webhook payload — zero-trust.
