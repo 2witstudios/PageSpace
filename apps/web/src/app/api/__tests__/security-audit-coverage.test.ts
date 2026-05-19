@@ -66,6 +66,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- External webhooks (no user session, verified by external party) ---
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
+  ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
 
   // --- Read receipts (low-risk, high-frequency) ---
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],

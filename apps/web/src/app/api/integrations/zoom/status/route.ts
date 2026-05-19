@@ -4,6 +4,7 @@ import { eq } from '@pagespace/db/operators';
 import { zoomConnections } from '@pagespace/db/schema/zoom';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -31,6 +32,8 @@ export async function GET(request: Request) {
         updatedAt: true,
       },
     });
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'zoom_connection', resourceId: 'self' });
 
     if (!connection) {
       return NextResponse.json({ connected: false, connection: null });
