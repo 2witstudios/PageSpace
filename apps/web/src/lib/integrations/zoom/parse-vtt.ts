@@ -1,3 +1,5 @@
+import { esc } from './_html';
+
 export interface VttSegment {
   speaker: string;
   text: string;
@@ -31,14 +33,6 @@ export function parseVtt(vttText: string): VttSegment[] {
   }
 
   return segments;
-}
-
-function esc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 export function vttToHtml(segments: VttSegment[]): string {

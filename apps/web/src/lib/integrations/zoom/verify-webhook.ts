@@ -2,6 +2,7 @@ import crypto from 'crypto';
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
+// Hashing both sides first ensures equal-length buffers, preventing length-based timing leaks.
 function timingSafeEqual(a: string, b: string): boolean {
   const hashA = crypto.createHash('sha256').update(a, 'utf8').digest();
   const hashB = crypto.createHash('sha256').update(b, 'utf8').digest();

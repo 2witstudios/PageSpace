@@ -36,7 +36,7 @@ export async function extractActionItems(
       .filter((item): item is ActionItem => typeof item?.text === 'string')
       .map((item) => ({
         text: item.text,
-        ...(item.assignee ? { assignee: item.assignee } : {}),
+        ...(typeof item.assignee === 'string' ? { assignee: item.assignee } : {}),
       }));
   } catch (err) {
     loggers.api.warn('Zoom action items: extraction failed', err as Error);

@@ -1,3 +1,5 @@
+import { esc } from './_html';
+
 export interface ActionItem {
   text: string;
   assignee?: string;
@@ -14,14 +16,6 @@ interface DocumentOptions {
   summary: string;
   actionItems: ActionItem[];
   transcriptHtml: string;
-}
-
-function esc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 export function buildDocumentHtml(meta: MeetingMeta, opts: DocumentOptions): string {
