@@ -136,7 +136,7 @@ describe('validateInferenceRequest', () => {
     });
   });
 
-  test('null element in messages array does not throw', () => {
+  test('null element in messages array returns 400', () => {
     const body = {
       model: 'ps-agent://page-123',
       messages: [null],
@@ -144,9 +144,51 @@ describe('validateInferenceRequest', () => {
     const result = validateInferenceRequest(body);
     assert({
       given: 'a messages array containing a null element',
-      should: 'return ok:true without throwing, normalizing null to an empty-parts UIMessage',
-      actual: result.ok ? Array.isArray(result.data.messages[0].parts) : 'threw',
-      expected: true,
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('message with unrecognized role returns 400', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{ role: 'admin', content: 'Hi' }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a message with a role not in the allowed set (user, assistant, system, tool)',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('message with no content and no parts returns 400', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{ role: 'user' }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a message with a valid role but no content and no parts',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('content-array message with no text parts returns 400', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{ role: 'user', content: [{ type: 'image', url: 'https://example.com/img.png' }] }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a message whose content array contains only non-text parts (e.g. image)',
+      should: 'return ok:false with status 400 because no text content can be extracted',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
     });
   });
 });

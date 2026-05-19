@@ -86,6 +86,9 @@ Pure `adaptToOpenAIChunk` function that transforms a single Vercel AI SDK `UIMes
 - `parseAgentModelUri` and `AGENT_MODEL_PREFIX` should have a single canonical definition — no duplicates across modules
 - `ValidatedInferenceRequest` should include the validated `model` string so the route handler does not need to re-cast `rawBody`
 - The `riteway` test helper should exist in one shared location, not duplicated across test directories
+- Given a messages array element that is not an object (e.g. `null`, a string, or a number), should return `{ ok: false, status: 400, error: 'each message must be an object' }`
+- Given a message with a role not in the allowed set (`user`, `assistant`, `system`, `tool`), should return `{ ok: false, status: 400, error: 'each message role must be one of: ...' }`
+- Given a message with no `content` and no `parts` (or a content-array with no extractable text), should return `{ ok: false, status: 400, error: 'each message must have non-empty content' }`
 
 ---
 

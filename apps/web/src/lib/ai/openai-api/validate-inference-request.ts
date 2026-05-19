@@ -21,26 +21,19 @@ export const parseAgentModelUri = (model: string): string | null => {
   return pageId || null;
 };
 
-/**
- * Normalize an incoming message (OpenAI SDK format or UIMessage) to UIMessage.
- * OpenAI SDK sends {role, content: string} without parts; extractMessageContent
- * and sanitizeMessagesForModel both read parts, so we must ensure parts is set.
- */
-const normalizeMessage = (msg: unknown): UIMessage => {
-  if (typeof msg !== 'object' || msg === null) {
-    return { id: createId(), role: 'user' as UIMessage['role'], parts: [] } as unknown as UIMessage;
+const VALID_ROLES = new Set(['user', 'assistant', 'system', 'tool']);
+
+const normalizeMessage = (msg: Record<string, unknown>): UIMessage => {
+  const id = typeof msg.id === 'string' ? msg.id : createId();
+  if (Array.isArray(msg.parts)) {
+    return { ...msg, id } as unknown as UIMessage;
   }
-  const m = msg as Record<string, unknown>;
-  if (Array.isArray(m.parts)) {
-    return m as unknown as UIMessage;
+  const role = msg.role as UIMessage['role'];
+  if (typeof msg.content === 'string') {
+    return { id, role, parts: [{ type: 'text' as const, text: msg.content }] } as unknown as UIMessage;
   }
-  const id = typeof m.id === 'string' ? m.id : createId();
-  const role = m.role as UIMessage['role'];
-  if (typeof m.content === 'string') {
-    return { id, role, parts: [{ type: 'text' as const, text: m.content }] } as unknown as UIMessage;
-  }
-  if (Array.isArray(m.content)) {
-    const parts = (m.content as Array<Record<string, unknown>>)
+  if (Array.isArray(msg.content)) {
+    const parts = (msg.content as Array<Record<string, unknown>>)
       .filter(c => c.type === 'text' && typeof c.text === 'string')
       .map(c => ({ type: 'text' as const, text: c.text as string }));
     return { id, role, parts } as unknown as UIMessage;
@@ -73,6 +66,24 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
     return { ok: false, status: 400, error: 'messages must be a non-empty array' };
   }
 
+  for (const msg of messages) {
+    if (typeof msg !== 'object' || msg === null) {
+      return { ok: false, status: 400, error: 'each message must be an object' };
+    }
+    const role = (msg as Record<string, unknown>).role;
+    if (typeof role !== 'string' || !VALID_ROLES.has(role)) {
+      return { ok: false, status: 400, error: 'each message role must be one of: user, assistant, system, tool' };
+    }
+  }
+
+  const normalized = (messages as Record<string, unknown>[]).map(normalizeMessage);
+
+  for (const msg of normalized) {
+    if (!Array.isArray(msg.parts) || msg.parts.length === 0) {
+      return { ok: false, status: 400, error: 'each message must have non-empty content' };
+    }
+  }
+
   const driveContext = typeof raw.drive_context === 'string' ? raw.drive_context : undefined;
 
   return {
@@ -80,7 +91,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
     data: {
       pageId,
       model: raw.model,
-      messages: messages.map(normalizeMessage),
+      messages: normalized,
       stream: true,
       driveContext,
     },
