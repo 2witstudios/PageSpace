@@ -97,8 +97,7 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
     // Build a clean URL from validated parts only: validated host + path, discarding original query params.
     const safeUrl = new URL(`https://${host}${parsedDownloadUrl.pathname}`);
     safeUrl.searchParams.set('access_token', accessToken);
-    // codeql[js/server-side-request-forgery] host is validated against the zoom.us allowlist above
-    const vttRes = await fetch(safeUrl, { signal: AbortSignal.timeout(30_000) });
+    const vttRes = await fetch(safeUrl, { signal: AbortSignal.timeout(30_000) }); // codeql[js/server-side-request-forgery] host is validated against the zoom.us allowlist above
     if (!vttRes.ok) {
       loggers.api.error('Zoom webhook: failed to download VTT', {
         status: vttRes.status,
