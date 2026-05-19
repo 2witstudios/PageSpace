@@ -59,7 +59,8 @@ export async function PATCH(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 
-    const body = await request.json();
+    let body: unknown;
+    try { body = await request.json(); } catch { body = {}; }
     const validation = settingsSchema.safeParse(body);
     if (!validation.success) {
       return NextResponse.json(

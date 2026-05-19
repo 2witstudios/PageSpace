@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { zoomConnections } from '@pagespace/db/schema/zoom';
 import { decrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -19,10 +19,12 @@ interface ZoomTranscriptPayload {
   payload: {
     account_id: string;
     object: {
+      uuid: string;
+      host_id: string;
+      host_email: string;
       topic: string;
       start_time: string;
       duration: number;
-      host_email: string;
       recording_files: RecordingFile[];
     };
   };
@@ -39,15 +41,19 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
   }
 
   const { account_id } = event.payload;
-  const { topic, start_time, duration, host_email, recording_files } = event.payload.object;
+  const { uuid: meetingUuid, host_id, host_email, topic, start_time, duration, recording_files } = event.payload.object;
 
-  // Look up the PageSpace user by Zoom account ID
+  // Match the specific host user — host_id is the Zoom user ID of who ran the meeting.
+  // Using both host_id and account_id prevents cross-account collision.
   const connection = await db.query.zoomConnections.findFirst({
-    where: eq(zoomConnections.zoomAccountId, account_id),
+    where: and(
+      eq(zoomConnections.zoomUserId, host_id),
+      eq(zoomConnections.zoomAccountId, account_id),
+    ),
   });
 
   if (!connection) {
-    loggers.api.warn('Zoom webhook: no connection found for account', { account_id });
+    loggers.api.warn('Zoom webhook: no connection found for host', { host_id, account_id });
     return;
   }
 
@@ -78,9 +84,18 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
   // Fetch VTT content (Zoom recording downloads use access_token query param)
   let vttText: string;
   try {
+    const parsedDownloadUrl = new URL(transcriptFile.download_url);
+    if (parsedDownloadUrl.hostname !== 'zoom.us' && !parsedDownloadUrl.hostname.endsWith('.zoom.us')) {
+      loggers.api.error('Zoom webhook: download_url host is not zoom.us', {
+        host: parsedDownloadUrl.hostname,
+        userId: connection.userId,
+      });
+      return;
+    }
     const accessToken = await decrypt(connection.accessToken);
-    const vttUrl = `${transcriptFile.download_url}?access_token=${encodeURIComponent(accessToken)}`;
-    const vttRes = await fetch(vttUrl);
+    parsedDownloadUrl.searchParams.set('access_token', accessToken);
+    const vttUrl = parsedDownloadUrl.toString();
+    const vttRes = await fetch(vttUrl, { signal: AbortSignal.timeout(30_000) });
     if (!vttRes.ok) {
       loggers.api.error('Zoom webhook: failed to download VTT', {
         status: vttRes.status,
@@ -127,7 +142,7 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
       content: html,
       contentMode: 'html',
     },
-    { context: { metadata: { source: 'zoom_transcript' } } }
+    { context: { metadata: { source: 'zoom_transcript', meetingUuid } } }
   );
 
   if (!result.success) {
@@ -143,5 +158,6 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
     userId: connection.userId,
     pageId: result.page.id,
     title,
+    meetingUuid,
   });
 }

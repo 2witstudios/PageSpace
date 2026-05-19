@@ -27,14 +27,19 @@ export async function POST(request: Request) {
     }
 
     // Best-effort token revocation
-    if (connection.accessToken !== 'REVOKED') {
+    if (
+      connection.accessToken !== 'REVOKED' &&
+      process.env.ZOOM_OAUTH_CLIENT_ID &&
+      process.env.ZOOM_OAUTH_CLIENT_SECRET
+    ) {
       try {
         const accessToken = await decrypt(connection.accessToken);
         const credentials = Buffer.from(
           `${process.env.ZOOM_OAUTH_CLIENT_ID}:${process.env.ZOOM_OAUTH_CLIENT_SECRET}`
         ).toString('base64');
 
-        await fetch(`https://zoom.us/oauth/revoke?token=${accessToken}`, {
+        const revokeParams = new URLSearchParams({ token: accessToken });
+        await fetch(`https://zoom.us/oauth/revoke?${revokeParams}`, {
           method: 'POST',
           headers: { Authorization: `Basic ${credentials}` },
         });
