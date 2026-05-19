@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
 import { db } from '@pagespace/db/db';
+import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 
 /**
@@ -121,15 +122,22 @@ export async function POST(request: Request) {
       agentData.enabledTools = enabledTools;
     }
 
-    // Create the agent
-    const newAgent = await pageAgentRepository.createAgent(agentData);
+    // Create the agent and membership atomically so there is never an agent
+    // without a drive role (partial failure rolls back both).
+    const newAgent = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(pages)
+        .values(agentData)
+        .returning({ id: pages.id, title: pages.title, type: pages.type });
 
-    // Grant the new agent a default MEMBER role in its drive
-    await db.insert(driveAgentMembers).values({
-      driveId: drive.id,
-      agentPageId: newAgent.id,
-      role: 'MEMBER',
-      addedBy: userId,
+      await tx.insert(driveAgentMembers).values({
+        driveId: drive.id,
+        agentPageId: created.id,
+        role: 'MEMBER',
+        addedBy: userId,
+      });
+
+      return created;
     });
 
     // Broadcast agent creation event
