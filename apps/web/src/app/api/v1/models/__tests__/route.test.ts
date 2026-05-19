@@ -34,7 +34,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  canUserViewPage: vi.fn().mockResolvedValue(true),
+  getBatchPagePermissions: vi.fn(),
 }));
 
 // --- imports after mocks ---
@@ -42,8 +42,12 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { inArray } from '@pagespace/db/operators';
+
+type PermLevel = { canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean };
+const allow: PermLevel = { canView: true, canEdit: false, canShare: false, canDelete: false };
+const deny: PermLevel = { canView: false, canEdit: false, canShare: false, canDelete: false };
 
 const mcpAuth = {
   userId: 'user-1',
@@ -84,7 +88,9 @@ describe('GET /api/v1/models', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
     vi.mocked(getAllowedDriveIds).mockReturnValue([]);
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(
+      new Map([['page-123', allow], ['page-456', allow]])
+    );
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([agentPage1, agentPage2]),
@@ -149,14 +155,14 @@ describe('GET /api/v1/models', () => {
     });
   });
 
-  test('excludes pages where canUserViewPage returns false', async () => {
-    vi.mocked(canUserViewPage).mockImplementation(async (_userId, pageId) =>
-      pageId === 'page-123'
+  test('excludes pages where permission check returns canView:false', async () => {
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(
+      new Map([['page-123', allow], ['page-456', deny]])
     );
     const response = await GET(makeRequest());
     const body = await response.json() as { data: unknown[] };
     assert({
-      given: 'canUserViewPage returning false for the second page',
+      given: 'getBatchPagePermissions returning canView:false for the second page',
       should: 'return only the accessible page',
       actual: body.data.length,
       expected: 1,
@@ -169,6 +175,7 @@ describe('GET /api/v1/models', () => {
         where: vi.fn().mockResolvedValue([]),
       }),
     } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(new Map());
     const response = await GET(makeRequest());
     const body = await response.json() as { object: string; data: unknown[] };
     assert({

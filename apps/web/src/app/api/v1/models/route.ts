@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import {
   authenticateRequestWithOptions,
   isAuthError,
@@ -23,19 +23,16 @@ export async function GET(request: Request): Promise<Response> {
     : and(eq(pages.type, PageType.AI_CHAT), eq(pages.isTrashed, false));
 
   const rows = await db.select().from(pages).where(whereClause);
+  const permissions = await getBatchPagePermissions(authResult.userId, rows.map((r) => r.id));
 
-  const models: Array<{ id: string; object: 'model'; created: number; owned_by: string }> = [];
-  for (const page of rows) {
-    const canView = await canUserViewPage(authResult.userId, page.id);
-    if (canView) {
-      models.push({
-        id: `ps-agent://${page.id}`,
-        object: 'model',
-        created: Math.floor(page.createdAt.getTime() / 1000),
-        owned_by: 'pagespace',
-      });
-    }
-  }
+  const models = rows
+    .filter((page) => permissions.get(page.id)?.canView)
+    .map((page) => ({
+      id: `ps-agent://${page.id}`,
+      object: 'model' as const,
+      created: Math.floor(page.createdAt.getTime() / 1000),
+      owned_by: 'pagespace',
+    }));
 
   return NextResponse.json({ object: 'list', data: models });
 }
