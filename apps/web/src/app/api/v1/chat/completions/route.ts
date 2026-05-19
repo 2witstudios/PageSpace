@@ -24,6 +24,7 @@ import { incrementUsage } from '@/lib/subscription/usage-service';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 export const maxDuration = 300;
 
@@ -32,7 +33,10 @@ const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 export async function POST(request: Request): Promise<Response> {
   // 1. Authenticate — MCP tokens only; no session, no CSRF, no browser session ID
   const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(authResult)) return authResult.error;
+  if (isAuthError(authResult)) {
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_inference', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+    return authResult.error;
+  }
 
   // 2. Validate request body
   let rawBody: unknown;
@@ -53,7 +57,10 @@ export async function POST(request: Request): Promise<Response> {
 
   // 3. MCP drive-scope check
   const scopeError = await checkMCPPageScope(authResult, pageId);
-  if (scopeError) return scopeError;
+  if (scopeError) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'mcp_page_scope_denied', method: 'POST' }, riskScore: 0.5 });
+    return scopeError;
+  }
 
   // 4. Load agent page
   const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
@@ -64,6 +71,7 @@ export async function POST(request: Request): Promise<Response> {
   // 5. Permission check
   const canView = await canUserViewPage(authResult.userId, pageId);
   if (!canView) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -95,6 +103,8 @@ export async function POST(request: Request): Promise<Response> {
       uiMessage: userMessage,
     });
   }
+
+  auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { model: modelName, conversationId }, riskScore: 0 });
 
   // 9. Run inference — no UI coupling (no WebSocket, no stream lifecycle, no session ID)
   const providerType = getProviderTier(page.aiProvider ?? 'pagespace', page.aiModel ?? undefined);
