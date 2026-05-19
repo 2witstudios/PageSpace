@@ -3,6 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 
 export interface ValidatedInferenceRequest {
   pageId: string;
+  model: string;
   messages: UIMessage[];
   stream: true;
   driveContext?: string;
@@ -78,6 +79,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
     ok: true,
     data: {
       pageId,
+      model: raw.model,
       messages: messages.map(normalizeMessage),
       stream: true,
       driveContext,

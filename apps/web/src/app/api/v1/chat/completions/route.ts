@@ -51,9 +51,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, messages, driveContext: _driveContext } = validation.data;
-  const rawBodyTyped = rawBody as Record<string, unknown>;
-  const modelName = rawBodyTyped.model as string;
+  const { pageId, model: modelName, messages, driveContext: _driveContext } = validation.data;
 
   // 3. MCP drive-scope check
   const scopeError = await checkMCPPageScope(authResult, pageId);
