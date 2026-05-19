@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'
@@ -753,6 +754,15 @@ export const pageService = {
       pageData.stateHash = stateHash;
 
       const [page] = await tx.insert(pages).values(pageData).returning();
+
+      if (isAIChatPage(params.type as PageTypeEnum)) {
+        await tx.insert(driveAgentMembers).values({
+          driveId: drive.id,
+          agentPageId: page.id,
+          role: 'MEMBER',
+          addedBy: userId,
+        });
+      }
 
       // Create page version BEFORE acquiring the activity chain lock,
       // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.

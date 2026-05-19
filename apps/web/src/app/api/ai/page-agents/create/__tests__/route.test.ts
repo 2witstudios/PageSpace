@@ -67,10 +67,25 @@ vi.mock('@/lib/ai/core', () => ({
   },
 }));
 
+// Mock DB for driveAgentMembers insert
+const { mockInsertValues, mockInsert } = vi.hoisted(() => {
+  const mockInsertValues = vi.fn().mockResolvedValue([]);
+  const mockInsert = vi.fn().mockReturnValue({ values: mockInsertValues });
+  return { mockInsertValues, mockInsert };
+});
+vi.mock('@pagespace/db/db', () => ({
+  db: { insert: mockInsert },
+}));
+
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveAgentMembers: 'driveAgentMembers_table',
+}));
+
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -99,6 +114,10 @@ const createRequest = (body: Record<string, unknown>) =>
 describe('POST /api/ai/page-agents/create', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+
+    // Default: db.insert(...).values(...) succeeds
+    mockInsertValues.mockResolvedValue([]);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
 
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
@@ -402,6 +421,25 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
+    it('should insert a MEMBER drive membership record for the new agent', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      await POST(request);
+
+      expect(mockInsert).toHaveBeenCalledWith(driveAgentMembers);
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: mockDriveId,
+          agentPageId: 'agent_123',
+          role: 'MEMBER',
+          addedBy: mockUserId,
+        })
+      );
+    });
   });
 
   describe('error handling', () => {

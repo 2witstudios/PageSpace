@@ -8,6 +8,8 @@ import { pageSpaceTools } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
+import { db } from '@pagespace/db/db';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 
 /**
  * POST /api/ai/page-agents/create
@@ -121,6 +123,14 @@ export async function POST(request: Request) {
 
     // Create the agent
     const newAgent = await pageAgentRepository.createAgent(agentData);
+
+    // Grant the new agent a default MEMBER role in its drive
+    await db.insert(driveAgentMembers).values({
+      driveId: drive.id,
+      agentPageId: newAgent.id,
+      role: 'MEMBER',
+      addedBy: userId,
+    });
 
     // Broadcast agent creation event
     await broadcastPageEvent(
