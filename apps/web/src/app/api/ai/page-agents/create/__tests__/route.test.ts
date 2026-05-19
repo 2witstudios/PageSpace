@@ -16,7 +16,6 @@ vi.mock('@/lib/repositories/page-agent-repository', () => ({
     getDriveById: vi.fn(),
     getParentPage: vi.fn(),
     getNextPosition: vi.fn(),
-    createAgent: vi.fn(),
   },
 }));
 
@@ -67,10 +66,38 @@ vi.mock('@/lib/ai/core', () => ({
   },
 }));
 
+// Mock DB — wraps both the pages insert and membership insert in a transaction.
+// tx.insert(pages).values(data).returning() → [createdAgent]
+// tx.insert(driveAgentMembers).values(data)  → awaitable (no .returning())
+const { mockInsertReturning, mockInsertValues, mockInsert, mockTransaction } = vi.hoisted(() => {
+  const mockInsertReturning = vi.fn().mockResolvedValue([{ id: 'agent_123', title: 'Test Agent', type: 'AI_CHAT' }]);
+  const mockInsertValues = vi.fn().mockReturnValue({ returning: mockInsertReturning });
+  const mockInsert = vi.fn().mockReturnValue({ values: mockInsertValues });
+  const mockTransaction = vi.fn().mockImplementation(
+    async (cb: (tx: { insert: typeof mockInsert }) => Promise<unknown>) =>
+      cb({ insert: mockInsert }),
+  );
+  return { mockInsertReturning, mockInsertValues, mockInsert, mockTransaction };
+});
+
+vi.mock('@pagespace/db/db', () => ({
+  db: { transaction: mockTransaction },
+}));
+
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveAgentMembers: 'driveAgentMembers_table',
+}));
+
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: 'pages_table',
+}));
+
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -100,6 +127,15 @@ describe('POST /api/ai/page-agents/create', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // Re-wire the DB insert chain after clearAllMocks wipes implementations
+    mockInsertReturning.mockResolvedValue([{ id: 'agent_123', title: 'Test Agent', type: 'AI_CHAT' }]);
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning });
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockTransaction.mockImplementation(
+      async (cb: (tx: { insert: typeof mockInsert }) => Promise<unknown>) =>
+        cb({ insert: mockInsert }),
+    );
+
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
@@ -118,13 +154,6 @@ describe('POST /api/ai/page-agents/create', () => {
 
     // Default: position calculation returns 1
     vi.mocked(pageAgentRepository.getNextPosition).mockResolvedValue(1);
-
-    // Default: agent creation succeeds
-    vi.mocked(pageAgentRepository.createAgent).mockResolvedValue({
-      id: 'agent_123',
-      title: 'Test Agent',
-      type: 'AI_CHAT',
-    });
   });
 
   describe('authentication', () => {
@@ -306,7 +335,7 @@ describe('POST /api/ai/page-agents/create', () => {
       });
     });
 
-    it('should pass correct data to repository when creating agent', async () => {
+    it('should pass correct data in transaction when creating agent', async () => {
       const request = createRequest({
         driveId: mockDriveId,
         title: 'Test Agent',
@@ -319,7 +348,10 @@ describe('POST /api/ai/page-agents/create', () => {
 
       await POST(request);
 
-      expect(pageAgentRepository.createAgent).toHaveBeenCalledWith(
+      // First insert in the transaction is the pages row
+      expect(mockInsert).toHaveBeenNthCalledWith(1, pages);
+      expect(mockInsertValues).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
           title: 'Test Agent',
           type: 'AI_CHAT',
@@ -350,7 +382,8 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(pageAgentRepository.createAgent).toHaveBeenCalledWith(
+      expect(mockInsertValues).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
           parentId: 'parent_123',
         })
@@ -402,13 +435,38 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
+    it('should insert pages and MEMBER membership atomically in one transaction', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      await POST(request);
+
+      // Both inserts happen inside the single transaction
+      expect(mockTransaction).toHaveBeenCalledOnce();
+
+      // First insert: pages table
+      expect(mockInsert).toHaveBeenNthCalledWith(1, pages);
+
+      // Second insert: drive membership with MEMBER role
+      expect(mockInsert).toHaveBeenNthCalledWith(2, driveAgentMembers);
+      expect(mockInsertValues).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          driveId: mockDriveId,
+          agentPageId: 'agent_123',
+          role: 'MEMBER',
+          addedBy: mockUserId,
+        })
+      );
+    });
   });
 
   describe('error handling', () => {
-    it('should return 500 when repository throws', async () => {
-      vi.mocked(pageAgentRepository.createAgent).mockRejectedValue(
-        new Error('Database connection failed')
-      );
+    it('should return 500 when transaction throws', async () => {
+      mockTransaction.mockRejectedValue(new Error('Database connection failed'));
 
       const request = createRequest({
         driveId: mockDriveId,
@@ -424,7 +482,7 @@ describe('POST /api/ai/page-agents/create', () => {
     });
 
     it('should not leak internal error details to client', async () => {
-      vi.mocked(pageAgentRepository.createAgent).mockRejectedValue(
+      mockTransaction.mockRejectedValue(
         new Error('SENSITIVE: connection string with password=secret123')
       );
 
