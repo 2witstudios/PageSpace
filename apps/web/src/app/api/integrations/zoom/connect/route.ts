@@ -5,6 +5,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
+import { normalizeZoomReturnPath } from '@/lib/integrations/zoom/return-url';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const callbackUrl = `${baseUrl}/api/integrations/zoom/callback`;
 
-    const stateData = { userId, returnUrl: validation.data.returnUrl ?? '/settings/integrations/zoom', timestamp: Date.now() };
+    const stateData = { userId, returnUrl: normalizeZoomReturnPath(validation.data.returnUrl), timestamp: Date.now() };
     const statePayload = JSON.stringify(stateData);
     const signature = crypto.createHmac('sha256', process.env.OAUTH_STATE_SECRET!).update(statePayload).digest('hex');
     const stateParam = Buffer.from(JSON.stringify({ data: stateData, sig: signature })).toString('base64');

@@ -7,6 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { encrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { normalizeZoomReturnPath } from '@/lib/integrations/zoom/return-url';
 
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -150,7 +151,8 @@ export async function GET(req: Request) {
     auditRequest(req, { eventType: 'auth.token.created', userId, details: { tokenType: 'zoom' } });
     auditRequest(req, { eventType: 'data.write', userId, resourceType: 'zoom_connection', resourceId: 'self', details: { operation: 'oauth_complete' } });
 
-    const redirectUrl = new URL(returnUrl || '/settings/integrations/zoom', baseUrl);
+    const safePath = normalizeZoomReturnPath(returnUrl);
+    const redirectUrl = new URL(safePath, baseUrl);
     redirectUrl.searchParams.set('connected', 'true');
     return NextResponse.redirect(redirectUrl);
   } catch (error) {

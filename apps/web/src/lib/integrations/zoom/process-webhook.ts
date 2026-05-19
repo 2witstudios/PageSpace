@@ -33,6 +33,11 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
 
   if (event?.event !== 'recording.transcript_completed') return;
 
+  if (!event.payload?.account_id || !event.payload?.object) {
+    loggers.api.warn('Zoom webhook: malformed recording.transcript_completed payload');
+    return;
+  }
+
   const { account_id } = event.payload;
   const { topic, start_time, duration, host_email, recording_files } = event.payload.object;
 
@@ -62,7 +67,9 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
   }
 
   // Find the VTT transcript file
-  const transcriptFile = recording_files.find((f) => f.file_type === 'TRANSCRIPT');
+  const transcriptFile = Array.isArray(recording_files)
+    ? recording_files.find((f) => f.file_type === 'TRANSCRIPT')
+    : undefined;
   if (!transcriptFile) {
     loggers.api.warn('Zoom webhook: no TRANSCRIPT file in recording_files', { topic });
     return;
