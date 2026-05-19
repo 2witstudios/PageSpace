@@ -1,6 +1,6 @@
 # OpenAI API v1 Follow-Up Epic
 
-**Status**: 📋 PLANNED
+**Status**: 🔄 IN PROGRESS (PR #1381)
 **Goal**: Close two gaps in the OpenAI-compatible inference API: missing token usage tracking and a missing model discovery endpoint.
 
 ## Overview
@@ -27,7 +27,7 @@ New `GET /api/v1/models` route that returns AI_CHAT pages accessible to the MCP 
 **Requirements**:
 - Given an unscoped MCP token, should return all non-trashed AI_CHAT pages without a drive filter
 - Given a scoped MCP token, should return only AI_CHAT pages whose `driveId` is in `allowedDriveIds`
-- Given a page where `canUserViewPage` returns false, should exclude it from the list
+- Given a page the user cannot view, should exclude it from the list
 - Given an auth failure, should return 401
 - Given no accessible AI_CHAT pages, should return `{ object: 'list', data: [] }` with 200
 - Given accessible pages, should shape each as `{ id: 'ps-agent://<pageId>', object: 'model', created: <unix>, owned_by: 'pagespace' }`

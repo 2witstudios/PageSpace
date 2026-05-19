@@ -4,6 +4,7 @@ import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   authenticateRequestWithOptions,
   isAuthError,
@@ -14,7 +15,10 @@ const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 
 export async function GET(request: Request): Promise<Response> {
   const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(authResult)) return authResult.error;
+  if (isAuthError(authResult)) {
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_models', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+    return authResult.error;
+  }
 
   const allowedDriveIds = getAllowedDriveIds(authResult);
 

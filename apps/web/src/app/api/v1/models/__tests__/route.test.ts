@@ -37,6 +37,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getBatchPagePermissions: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
 // --- imports after mocks ---
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
