@@ -22,7 +22,7 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Check, X } from 'lucide-react';
+import { Check, MessageSquareText, X } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
@@ -709,11 +709,12 @@ export default function InboxDMPage() {
                           openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
                         }
                         data-testid={`thread-footer-${message.id}`}
-                        className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                       >
+                        <MessageSquareText size={12} aria-hidden />
                         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                         {message.lastReplyAt
-                          ? ` · last reply ${formatDistanceToNow(new Date(message.lastReplyAt), { addSuffix: true })}`
+                          ? ` · ${formatDistanceToNow(new Date(message.lastReplyAt), { addSuffix: true })}`
                           : ''}
                       </button>
                     )}
@@ -781,7 +782,6 @@ export default function InboxDMPage() {
         <SheetContent
           side="right"
           className="w-full sm:max-w-full p-0"
-          style={{ height: 'var(--app-height, 100dvh)', top: 0, bottom: 'auto' }}
         >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}

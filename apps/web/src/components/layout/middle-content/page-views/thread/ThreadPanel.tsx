@@ -37,6 +37,7 @@ import { useSocketStore } from '@/stores/useSocketStore';
 import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { AttachmentMeta, FileRelation } from '@/lib/attachment-utils';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 export type ThreadSource = 'channel' | 'dm';
 
@@ -180,6 +181,7 @@ export function ThreadPanel({
   // Clear the unread-thread badge for this root the moment the panel opens.
   // Subsequent fan-outs while the panel is open could re-bump the badge; the
   // page-side mount unsubscribes from the badge by closing the panel.
+  const { isOpen: isKeyboardOpen, height: keyboardHeight } = useMobileKeyboard();
   const clearThreadBadge = useThreadInboxStore((state) => state.clearRoot);
   useEffect(() => {
     clearThreadBadge({ source, contextId, rootMessageId: parentId });
@@ -643,7 +645,7 @@ export function ThreadPanel({
       className="flex h-full w-full flex-col border-l border-border bg-background"
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top,0px))]">
         <div className="flex flex-col">
           <span className="text-sm font-semibold">Thread</span>
           {replyCount > 0 && (
@@ -862,7 +864,9 @@ export function ThreadPanel({
       <div
         className="border-t border-border p-3"
         style={{
-          paddingBottom: 'calc(0.75rem + var(--safe-bottom-offset, 0px))',
+          paddingBottom: isKeyboardOpen
+            ? `calc(0.75rem + ${keyboardHeight}px)`
+            : 'calc(0.75rem + var(--safe-bottom-offset, 0px))',
         }}
       >
         {submitError && (
