@@ -109,8 +109,10 @@ export function useTaskMutations(
   const handleMultiAssigneeChange = useCallback(async (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!task.taskListPageId) return;
 
+    const originalAssignees = task.assignees ?? [];
+
     const existingById = new Map<string, TaskAssigneeData>();
-    for (const a of task.assignees ?? []) {
+    for (const a of originalAssignees) {
       if (a.userId) existingById.set(`user-${a.userId}`, a);
       if (a.agentPageId) existingById.set(`agent-${a.agentPageId}`, a);
     }
@@ -135,7 +137,7 @@ export function useTaskMutations(
       mutate(`/api/pages/${task.taskListPageId}/tasks`);
     } catch (err) {
       handleError(err as Error, 'Failed to update assignees');
-      setTasks(prev => prev.map(t => t.id === task.id ? task : t));
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, assignees: originalAssignees } : t));
     }
   }, [setTasks, onPageMutate, onSuccess, handleError]);
 
