@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import { createId } from '@paralleldrive/cuid2';
 
 export interface ValidatedInferenceRequest {
   pageId: string;
@@ -26,13 +27,13 @@ export const parseAgentModelUri = (model: string): string | null => {
  */
 const normalizeMessage = (msg: unknown): UIMessage => {
   if (typeof msg !== 'object' || msg === null) {
-    return { id: crypto.randomUUID(), role: 'user' as UIMessage['role'], parts: [] } as unknown as UIMessage;
+    return { id: createId(), role: 'user' as UIMessage['role'], parts: [] } as unknown as UIMessage;
   }
   const m = msg as Record<string, unknown>;
   if (Array.isArray(m.parts)) {
     return m as unknown as UIMessage;
   }
-  const id = typeof m.id === 'string' ? m.id : crypto.randomUUID();
+  const id = typeof m.id === 'string' ? m.id : createId();
   const role = m.role as UIMessage['role'];
   if (typeof m.content === 'string') {
     return { id, role, parts: [{ type: 'text' as const, text: m.content }] } as unknown as UIMessage;
