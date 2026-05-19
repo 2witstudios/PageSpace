@@ -24,21 +24,18 @@ export async function GET(request: Request): Promise<Response> {
 
   const rows = await db.select().from(pages).where(whereClause);
 
-  const accessible = await Promise.all(
-    rows.map(async (page) => {
-      const ok = await canUserViewPage(authResult.userId, page.id);
-      return ok ? page : null;
-    })
-  );
-
-  const models = accessible
-    .filter((p): p is NonNullable<typeof p> => p !== null)
-    .map((page) => ({
-      id: `ps-agent://${page.id}`,
-      object: 'model' as const,
-      created: Math.floor(page.createdAt.getTime() / 1000),
-      owned_by: 'pagespace',
-    }));
+  const models: Array<{ id: string; object: 'model'; created: number; owned_by: string }> = [];
+  for (const page of rows) {
+    const canView = await canUserViewPage(authResult.userId, page.id);
+    if (canView) {
+      models.push({
+        id: `ps-agent://${page.id}`,
+        object: 'model',
+        created: Math.floor(page.createdAt.getTime() / 1000),
+        owned_by: 'pagespace',
+      });
+    }
+  }
 
   return NextResponse.json({ object: 'list', data: models });
 }

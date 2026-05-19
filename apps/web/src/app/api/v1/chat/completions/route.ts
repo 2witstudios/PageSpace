@@ -140,6 +140,7 @@ export async function POST(request: Request): Promise<Response> {
         outputTokens: totalUsage.outputTokens,
         duration: Date.now() - startTime,
         conversationId,
+        messageId: assistantId,
         pageId,
         success: true,
         metadata: { via: 'openai_api_v1' },
