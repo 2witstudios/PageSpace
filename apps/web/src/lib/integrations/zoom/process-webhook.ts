@@ -85,17 +85,20 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
   let vttText: string;
   try {
     const parsedDownloadUrl = new URL(transcriptFile.download_url);
-    if (parsedDownloadUrl.hostname !== 'zoom.us' && !parsedDownloadUrl.hostname.endsWith('.zoom.us')) {
+    const host = parsedDownloadUrl.hostname;
+    if (host !== 'zoom.us' && !host.endsWith('.zoom.us')) {
       loggers.api.error('Zoom webhook: download_url host is not zoom.us', {
-        host: parsedDownloadUrl.hostname,
+        host,
         userId: connection.userId,
       });
       return;
     }
     const accessToken = await decrypt(connection.accessToken);
-    parsedDownloadUrl.searchParams.set('access_token', accessToken);
-    const vttUrl = parsedDownloadUrl.toString();
-    const vttRes = await fetch(vttUrl, { signal: AbortSignal.timeout(30_000) });
+    // Build a clean URL from validated parts only: validated host + path, discarding original query params.
+    const safeUrl = new URL(`https://${host}${parsedDownloadUrl.pathname}`);
+    safeUrl.searchParams.set('access_token', accessToken);
+    // codeql[js/server-side-request-forgery] host is validated against the zoom.us allowlist above
+    const vttRes = await fetch(safeUrl, { signal: AbortSignal.timeout(30_000) });
     if (!vttRes.ok) {
       loggers.api.error('Zoom webhook: failed to download VTT', {
         status: vttRes.status,
