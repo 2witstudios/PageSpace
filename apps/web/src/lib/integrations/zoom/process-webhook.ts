@@ -4,15 +4,11 @@ import { zoomConnections } from '@pagespace/db/schema/zoom';
 import { decrypt } from '@pagespace/lib/encryption/encryption-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
+import { getRecordings, downloadTranscript } from './zoom-api-client';
 import { parseVtt, vttToHtml } from './parse-vtt';
 import { buildDocumentHtml } from './build-document';
 import { generateTranscriptSummary } from './generate-summary';
 import { extractActionItems } from './extract-action-items';
-
-interface RecordingFile {
-  file_type: string;
-  download_url: string;
-}
 
 interface ZoomTranscriptPayload {
   event: string;
@@ -25,7 +21,6 @@ interface ZoomTranscriptPayload {
       topic: string;
       start_time: string;
       duration: number;
-      recording_files: RecordingFile[];
     };
   };
 }
@@ -41,7 +36,7 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
   }
 
   const { account_id } = event.payload;
-  const { uuid: meetingUuid, host_id, host_email, topic, start_time, duration, recording_files } = event.payload.object;
+  const { uuid: meetingUuid, host_id, host_email, topic, start_time, duration } = event.payload.object;
 
   // Match the specific host user — host_id is the Zoom user ID of who ran the meeting.
   // Using both host_id and account_id prevents cross-account collision.
@@ -72,47 +67,37 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
     return;
   }
 
-  // Find the VTT transcript file
-  const transcriptFile = Array.isArray(recording_files)
-    ? recording_files.find((f) => f.file_type === 'TRANSCRIPT')
-    : undefined;
-  if (!transcriptFile) {
-    loggers.api.warn('Zoom webhook: no TRANSCRIPT file in recording_files', { topic });
-    return;
-  }
+  const accessToken = await decrypt(connection.accessToken);
 
-  // Fetch VTT content (Zoom recording downloads use access_token query param)
-  let vttText: string;
-  try {
-    const parsedDownloadUrl = new URL(transcriptFile.download_url);
-    const host = parsedDownloadUrl.hostname;
-    if (host !== 'zoom.us' && !host.endsWith('.zoom.us')) {
-      loggers.api.error('Zoom webhook: download_url host is not zoom.us', {
-        host,
-        userId: connection.userId,
-      });
-      return;
-    }
-    const accessToken = await decrypt(connection.accessToken);
-    // Build a clean URL from validated parts only: validated host + path, discarding original query params.
-    const safeUrl = new URL(`https://${host}${parsedDownloadUrl.pathname}`); // codeql[js/server-side-request-forgery,js/request-forgery] host is validated against the zoom.us allowlist above
-    safeUrl.searchParams.set('access_token', accessToken);
-    const vttRes = await fetch(safeUrl, { signal: AbortSignal.timeout(30_000) }); // codeql[js/server-side-request-forgery,js/request-forgery] host is validated against the zoom.us allowlist above
-    if (!vttRes.ok) {
-      loggers.api.error('Zoom webhook: failed to download VTT', {
-        status: vttRes.status,
-        userId: connection.userId,
-      });
-      return;
-    }
-    vttText = await vttRes.text();
-  } catch (err) {
-    loggers.api.error('Zoom webhook: error fetching transcript', {
-      error: err instanceof Error ? err.message : String(err),
+  // Re-fetch recording details from Zoom API using the meeting UUID from the verified event.
+  // We never use download_url directly from the webhook payload — zero-trust.
+  const recordingsResult = await getRecordings(accessToken, meetingUuid);
+  if (!recordingsResult.success) {
+    loggers.api.error('Zoom webhook: failed to fetch recordings from API', {
+      error: recordingsResult.error,
+      requiresReauth: recordingsResult.requiresReauth,
       userId: connection.userId,
     });
     return;
   }
+
+  const transcriptFile = recordingsResult.data.recording_files.find((f) => f.file_type === 'TRANSCRIPT');
+  if (!transcriptFile) {
+    loggers.api.warn('Zoom webhook: no TRANSCRIPT file in recordings response', { topic });
+    return;
+  }
+
+  // Download VTT using Bearer auth — token never appears in URL
+  const downloadResult = await downloadTranscript(accessToken, transcriptFile.download_url);
+  if (!downloadResult.success) {
+    loggers.api.error('Zoom webhook: failed to download transcript', {
+      error: downloadResult.error,
+      userId: connection.userId,
+    });
+    return;
+  }
+
+  const vttText = downloadResult.data;
 
   // Parse VTT and extract plain text for AI calls
   const segments = parseVtt(vttText);
