@@ -25,6 +25,7 @@ import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 export const maxDuration = 300;
 
@@ -105,13 +106,14 @@ export async function POST(request: Request): Promise<Response> {
   auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { model: modelName, conversationId }, riskScore: 0 });
 
   // 9. Run inference — no UI coupling (no WebSocket, no stream lifecycle, no session ID)
+  const startTime = Date.now();
   const providerType = getProviderTier(page.aiProvider ?? 'pagespace', page.aiModel ?? undefined);
   const sanitized = sanitizeMessagesForModel(messages);
   const aiResult = streamText({
     model: providerResult.model,
     system: systemPrompt,
     messages: convertToModelMessages(sanitized),
-    onFinish: async ({ text }) => {
+    onFinish: async ({ text, totalUsage }) => {
       const assistantId = createId();
       await saveMessageToDatabase({
         messageId: assistantId,
@@ -129,6 +131,21 @@ export async function POST(request: Request): Promise<Response> {
           loggers.ai.error('OpenAI API: failed to increment usage', err as Error);
         });
       }
+
+      await AIMonitoring.trackUsage({
+        userId: authResult.userId,
+        provider: page.aiProvider ?? 'pagespace',
+        model: page.aiModel ?? 'unknown',
+        inputTokens: totalUsage.inputTokens,
+        outputTokens: totalUsage.outputTokens,
+        duration: Date.now() - startTime,
+        conversationId,
+        pageId,
+        success: true,
+        metadata: { via: 'openai_api_v1' },
+      }).catch((err: unknown) => {
+        loggers.ai.error('OpenAI API: failed to track usage', err as Error);
+      });
     },
   });
 

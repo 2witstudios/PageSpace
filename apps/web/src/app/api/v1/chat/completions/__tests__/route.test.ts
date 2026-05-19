@@ -74,17 +74,25 @@ vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
 }));
 
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: {
+    trackUsage: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>();
   return {
     ...actual,
-    streamText: vi.fn().mockImplementation(() => ({
-      toUIMessageStream: function* () {
+    streamText: vi.fn().mockImplementation((options: { onFinish?: (data: { text: string; totalUsage: { inputTokens: number; outputTokens: number } }) => Promise<void> }) => ({
+      toUIMessageStream: async function* () {
         yield { type: 'start' };
         yield { type: 'text-delta', id: 'text-1', delta: 'Hello' };
         yield { type: 'finish' };
+        if (options?.onFinish) {
+          await options.onFinish({ text: 'Hello', totalUsage: { inputTokens: 10, outputTokens: 5 } });
+        }
       },
-      usage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
     })),
   };
 });
@@ -95,6 +103,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -268,6 +277,31 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'not return 400 (browser session ID is not required on this MCP-only path)',
       actual: response.status === 400,
       expected: false,
+    });
+  });
+
+  test('calls AIMonitoring.trackUsage with token counts after stream completes', async () => {
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+    const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+    assert({
+      given: 'a successful inference stream',
+      should: 'call AIMonitoring.trackUsage with inputTokens and outputTokens from totalUsage',
+      actual: calls.length > 0
+        ? { inputTokens: calls[0][0].inputTokens, outputTokens: calls[0][0].outputTokens, via: (calls[0][0].metadata as Record<string, unknown>)?.via }
+        : null,
+      expected: { inputTokens: 10, outputTokens: 5, via: 'openai_api_v1' },
+    });
+  });
+
+  test('AIMonitoring.trackUsage failure does not break the SSE stream', async () => {
+    vi.mocked(AIMonitoring.trackUsage).mockRejectedValueOnce(new Error('monitoring down'));
+    const response = await POST(makeRequest(validBody));
+    assert({
+      given: 'AIMonitoring.trackUsage throwing an error',
+      should: 'still return a 200 SSE response',
+      actual: { status: response.status, contentType: response.headers.get('content-type') },
+      expected: { status: 200, contentType: 'text/event-stream' },
     });
   });
 });
