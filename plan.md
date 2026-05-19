@@ -2,6 +2,7 @@
 
 ## Active Epics
 
+- [OpenAI-Compatible Inference API](tasks/openai-inference-api.md) — `POST /api/v1/chat/completions`: MCP tokens as API keys, agents as models, OpenAI SDK drop-in compatible streaming.
 - [Zoom Transcript Integration](tasks/zoom-transcript-integration.md) — Auto-save Zoom meeting transcripts as Document pages in a user-configured drive; webhook-driven, AI summary + action items, cloud-only.
 
 
