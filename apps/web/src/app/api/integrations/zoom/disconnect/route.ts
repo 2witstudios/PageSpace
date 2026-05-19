@@ -39,9 +39,13 @@ export async function POST(request: Request) {
         ).toString('base64');
 
         const revokeParams = new URLSearchParams({ token: accessToken });
-        await fetch(`https://zoom.us/oauth/revoke?${revokeParams}`, {
+        await fetch('https://zoom.us/oauth/revoke', {
           method: 'POST',
-          headers: { Authorization: `Basic ${credentials}` },
+          headers: {
+            Authorization: `Basic ${credentials}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: revokeParams.toString(),
         });
       } catch (err) {
         loggers.auth.warn('Failed to revoke Zoom token (continuing with disconnect)', {
