@@ -52,6 +52,7 @@ Pure `adaptToOpenAIChunk` function that transforms a single Vercel AI SDK `UIMes
 - Given a `finish` chunk with `finishReason: 'stop'`, should return an SSE line with `finish_reason: 'stop'` and empty `delta`
 - Given a `start` chunk, should return an SSE line for the opening `role: 'assistant'` delta with empty `content`
 - Given any chunk, should include a stable `id` (passed as parameter), `model` field, and `created` timestamp in the returned object
+- Given a `finish` chunk and the stream encoder appending `\n\n`, should produce exactly two separate SSE events (stop chunk and `[DONE]` sentinel) — not one multi-data event
 - Given the final stop chunk, should be followed by the `data: [DONE]` sentinel line
 - Given a `tool-call` or `tool-result` chunk, should be skipped (return `null`) — tool calls are not exposed in v1
 
@@ -76,6 +77,15 @@ Pure `adaptToOpenAIChunk` function that transforms a single Vercel AI SDK `UIMes
 - Given a valid request, should NOT emit any WebSocket broadcast events (no UI coupling)
 - Given a valid streaming response, the SSE output should be parseable by the `openai` npm SDK using `baseURL: 'https://api.pagespace.dev/v1'`
 - Given a valid request, should set `maxDuration = 300` to match the existing chat route
+
+---
+
+## Code Quality
+
+**Requirements**:
+- `parseAgentModelUri` and `AGENT_MODEL_PREFIX` should have a single canonical definition — no duplicates across modules
+- `ValidatedInferenceRequest` should include the validated `model` string so the route handler does not need to re-cast `rawBody`
+- The `riteway` test helper should exist in one shared location, not duplicated across test directories
 
 ---
 

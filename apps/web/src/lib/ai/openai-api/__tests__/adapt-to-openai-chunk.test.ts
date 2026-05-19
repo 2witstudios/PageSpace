@@ -98,6 +98,20 @@ describe('adaptToOpenAIChunk', () => {
     });
   });
 
+  test('finish chunk produces two separate SSE events when stream encoder appends \\n\\n', () => {
+    const result = adaptToOpenAIChunk({ type: 'finish' }, baseOpts);
+    // The route handler does: controller.enqueue(encoder.encode(line + '\n\n'))
+    // The combined string must split into exactly two SSE events — not one multi-data event.
+    const encoded = (result ?? '') + '\n\n';
+    const events = encoded.split('\n\n').filter(Boolean);
+    assert({
+      given: 'a finish chunk with the stream encoder\'s \\n\\n appended',
+      should: 'produce exactly two SSE events — stop chunk and [DONE] sentinel — each separated by \\n\\n',
+      actual: events.length,
+      expected: 2,
+    });
+  });
+
   test('chunk includes stable id, model, and created timestamp', () => {
     const result = adaptToOpenAIChunk({ type: 'text-delta', id: 'text-1', delta: 'hi' }, baseOpts);
     const parsed = result ? parseSSE(result) : {};

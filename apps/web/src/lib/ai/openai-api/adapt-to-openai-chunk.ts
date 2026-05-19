@@ -28,7 +28,7 @@ export const adaptToOpenAIChunk = (chunk: UIMessageChunk, options: AdaptOptions)
       return [
         toSSE(makeChunk(options, {}, 'stop')),
         'data: [DONE]',
-      ].join('\n');
+      ].join('\n\n');
 
     default:
       return null;
