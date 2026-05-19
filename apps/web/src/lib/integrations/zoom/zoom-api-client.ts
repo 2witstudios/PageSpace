@@ -73,6 +73,10 @@ export const downloadTranscript = async (
     return { success: false, error: `Untrusted download host: ${parsed.hostname}` };
   }
 
+  if (parsed.protocol !== 'https:') {
+    return { success: false, error: `Insecure protocol: HTTPS required for transcript download` };
+  }
+
   try {
     const res = await fetch(downloadUrl, {
       headers: buildAuthHeader(accessToken),

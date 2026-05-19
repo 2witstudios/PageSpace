@@ -140,6 +140,13 @@ describe('downloadTranscript', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it('rejects http:// URLs even for trusted zoom.us hostname', async () => {
+    const result = await downloadTranscript('token', 'http://zoom.us/rec/file.vtt');
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('HTTPS');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('accepts zoom.us hostname', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, text: async () => 'WEBVTT\n' });
     const result = await downloadTranscript('token', 'https://zoom.us/rec/file.vtt');
