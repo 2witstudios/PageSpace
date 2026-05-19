@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react';
 import { mutate } from 'swr';
 import { toast } from 'sonner';
 import { patch, del, post } from '@/lib/auth/auth-fetch';
-import type { Task, StatusConfigsByTaskList } from './types';
+import type { Task, StatusConfigsByTaskList, TaskAssigneeData } from './types';
 import type { TaskStatusConfig, TaskPriority } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { buildStatusConfig } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
