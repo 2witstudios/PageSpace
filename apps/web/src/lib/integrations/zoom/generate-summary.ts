@@ -25,7 +25,7 @@ export async function generateTranscriptSummary(
 
     return text.trim();
   } catch (err) {
-    loggers.api.warn('Zoom summary: generation failed', err as Error);
+    loggers.api.warn('Zoom summary: generation failed', { error: err instanceof Error ? err.message : String(err) });
     return '';
   }
 }

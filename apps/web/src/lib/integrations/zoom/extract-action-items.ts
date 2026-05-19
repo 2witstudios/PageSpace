@@ -39,7 +39,7 @@ export async function extractActionItems(
         ...(typeof item.assignee === 'string' ? { assignee: item.assignee } : {}),
       }));
   } catch (err) {
-    loggers.api.warn('Zoom action items: extraction failed', err as Error);
+    loggers.api.warn('Zoom action items: extraction failed', { error: err instanceof Error ? err.message : String(err) });
     return [];
   }
 }
