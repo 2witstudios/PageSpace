@@ -24,7 +24,7 @@ export async function extractActionItems(
       model: provider.model,
       system: SYSTEM_PROMPT,
       prompt: transcriptPlainText,
-      maxTokens: 512,
+      maxOutputTokens: 512,
     });
 
     const jsonText = text.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '');

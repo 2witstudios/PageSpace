@@ -20,7 +20,7 @@ export async function generateTranscriptSummary(
       model: provider.model,
       system: SYSTEM_PROMPT,
       prompt: transcriptPlainText,
-      maxTokens: 512,
+      maxOutputTokens: 512,
     });
 
     return text.trim();

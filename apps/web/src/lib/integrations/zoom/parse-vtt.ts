@@ -33,6 +33,14 @@ export function parseVtt(vttText: string): VttSegment[] {
   return segments;
 }
 
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function vttToHtml(segments: VttSegment[]): string {
   if (segments.length === 0) return '';
 
@@ -43,7 +51,7 @@ export function vttToHtml(segments: VttSegment[]): string {
   const flush = () => {
     if (currentLines.length > 0) {
       parts.push(
-        `<p><strong>${currentSpeaker}</strong><br>${currentLines.join(' ')}</p>`
+        `<p><strong>${esc(currentSpeaker)}</strong><br>${currentLines.map(esc).join(' ')}</p>`
       );
     }
   };

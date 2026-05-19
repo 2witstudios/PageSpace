@@ -101,4 +101,27 @@ describe('buildDocumentHtml', () => {
     expect(summaryIdx).toBeLessThan(actionsIdx);
     expect(actionsIdx).toBeLessThan(transcriptIdx);
   });
+
+  it('given meta fields containing HTML special characters, should escape them', () => {
+    const html = buildDocumentHtml(
+      { topic: '<script>alert(1)</script>', startTime: '2026-05-18T14:00:00Z', duration: 30, hostEmail: 'a&b@example.com' },
+      { summary: '', actionItems: [], transcriptHtml: '' },
+    );
+
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('a&amp;b@example.com');
+  });
+
+  it('given action item text and assignee containing HTML special characters, should escape them', () => {
+    const html = buildDocumentHtml(META, {
+      summary: '',
+      actionItems: [{ text: '<b>task</b>', assignee: '<img src=x onerror=alert(1)>' }],
+      transcriptHtml: '',
+    });
+
+    expect(html).not.toContain('<b>task</b>');
+    expect(html).toContain('&lt;b&gt;task&lt;/b&gt;');
+    expect(html).not.toContain('<img');
+  });
 });

@@ -16,6 +16,14 @@ interface DocumentOptions {
   transcriptHtml: string;
 }
 
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function buildDocumentHtml(meta: MeetingMeta, opts: DocumentOptions): string {
   const date = new Date(meta.startTime).toLocaleString('en-US', {
     dateStyle: 'long',
@@ -28,22 +36,22 @@ export function buildDocumentHtml(meta: MeetingMeta, opts: DocumentOptions): str
   parts.push(
     `<h2>Meeting Details</h2>` +
     `<table>` +
-    `<tr><td><strong>Topic</strong></td><td>${meta.topic}</td></tr>` +
+    `<tr><td><strong>Topic</strong></td><td>${esc(meta.topic)}</td></tr>` +
     `<tr><td><strong>Date</strong></td><td>${date}</td></tr>` +
     `<tr><td><strong>Duration</strong></td><td>${meta.duration} minutes</td></tr>` +
-    `<tr><td><strong>Host</strong></td><td>${meta.hostEmail}</td></tr>` +
+    `<tr><td><strong>Host</strong></td><td>${esc(meta.hostEmail)}</td></tr>` +
     `</table>`
   );
 
   if (opts.summary) {
-    parts.push(`<h2>Summary</h2><p>${opts.summary}</p>`);
+    parts.push(`<h2>Summary</h2><p>${esc(opts.summary)}</p>`);
   }
 
   if (opts.actionItems.length > 0) {
     const items = opts.actionItems
       .map((item) => {
-        const assignee = item.assignee ? ` (${item.assignee})` : '';
-        return `<li>${item.text}${assignee}</li>`;
+        const assignee = item.assignee ? ` (${esc(item.assignee)})` : '';
+        return `<li>${esc(item.text)}${assignee}</li>`;
       })
       .join('');
     parts.push(`<h2>Action Items</h2><ul>${items}</ul>`);

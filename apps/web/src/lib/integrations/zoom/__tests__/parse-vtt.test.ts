@@ -104,4 +104,15 @@ describe('vttToHtml', () => {
 
     expect(html).toContain('<strong>Unknown</strong>');
   });
+
+  it('given segments with HTML special characters in speaker or text, should escape them', () => {
+    const segments = [
+      { speaker: '<script>alert(1)</script>', text: 'A&B said <hello>', startTime: '00:00:01.000' },
+    ];
+    const html = vttToHtml(segments);
+
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('A&amp;B said &lt;hello&gt;');
+  });
 });
