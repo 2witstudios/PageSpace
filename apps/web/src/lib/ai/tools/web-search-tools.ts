@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import TurndownService from 'turndown';
 import { type ToolExecutionContext } from '../core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -118,9 +119,6 @@ async function performWebSearch({
 }
 
 export const webSearchTools = {
-  /**
-   * Search the web for current information using Brave Search API
-   */
   web_search: tool({
     description: `Search the web for current information, news, documentation, and real-time data. Use this when:
 - User asks about current events, news, or recent developments
@@ -202,6 +200,81 @@ Returns structured search results with titles, links, summaries, and publication
             'Check if BRAVE_API_KEY environment variable is configured',
             'Try a different search query',
             'If the error persists, inform the user that web search is temporarily unavailable',
+          ],
+        };
+      }
+    },
+  }),
+
+  web_fetch: tool({
+    description: `Fetch and read the full content of a specific URL as clean markdown. Use this when:
+- You have a direct URL and need its full content (not just a snippet)
+- web_search returned a link you want to read in detail
+- User provides a URL they want you to read
+- Fetching documentation, articles, GitHub files, API references
+
+Returns the page content converted to readable markdown.`,
+    inputSchema: z.object({
+      url: z.string().url().describe('The full URL to fetch (must start with https://)'),
+      maxLength: z.number().min(1000).max(50000).optional().default(20000)
+        .describe('Max characters of markdown to return (default 20000)'),
+    }),
+    execute: async ({ url, maxLength = 20000 }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      try {
+        webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url });
+
+        const response = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' },
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
+        }
+
+        const html = await response.text();
+        const cleaned = html
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '');
+
+        const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+        const markdown = td.turndown(cleaned).slice(0, maxLength);
+
+        webSearchLogger.info('URL fetch complete', {
+          userId: maskIdentifier(userId),
+          url,
+          markdownLength: markdown.length,
+          truncated: markdown.length === maxLength,
+        });
+
+        return {
+          success: true,
+          url,
+          contentLength: markdown.length,
+          truncated: markdown.length === maxLength,
+          content: markdown,
+          nextSteps: [
+            'Read and synthesize the fetched content',
+            'Cite the source URL when referencing this content',
+            'If content is truncated, focus on the most relevant sections',
+          ],
+        };
+      } catch (error) {
+        webSearchLogger.error('URL fetch failed', error as Error, {
+          userId: maskIdentifier(userId),
+          url,
+        });
+        return {
+          success: false,
+          url,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          content: '',
+          nextSteps: [
+            'Check the URL is publicly accessible (not behind auth or paywall)',
+            'Try web_search to find an alternative source',
           ],
         };
       }
