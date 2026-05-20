@@ -5,54 +5,54 @@
 
 # Memory processing - Daily at 6am UTC
 # Discovers patterns from user conversations and updates personalization
-0 6 * * * cron-curl POST http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
+0 6 * * * cron-curl POST __WEB_URL__/api/memory/cron >> /var/log/cron/memory.log 2>&1
 
 # Pulse summaries - Every 6 hours
 # Generates workspace activity summaries for active users
-0 */6 * * * cron-curl POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
+0 */6 * * * cron-curl POST __WEB_URL__/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
 
 # Token cleanup - Hourly
 # Removes expired device tokens from database
-0 * * * * cron-curl GET http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
+0 * * * * cron-curl GET __WEB_URL__/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
 
 # Calendar sync - Every 5 minutes
 # Syncs Google Calendar connections that are due based on their sync frequency
-*/5 * * * * cron-curl GET http://web:3000/api/cron/calendar-sync >> /var/log/cron/calendar-sync.log 2>&1
+*/5 * * * * cron-curl GET __WEB_URL__/api/cron/calendar-sync >> /var/log/cron/calendar-sync.log 2>&1
 
 # Retention cleanup - Daily at 1am UTC
 # Deletes expired rows from sessions, tokens, page versions, drive backups, permissions, monitoring data
-0 1 * * * cron-curl GET http://web:3000/api/cron/retention-cleanup >> /var/log/cron/retention-cleanup.log 2>&1
+0 1 * * * cron-curl GET __WEB_URL__/api/cron/retention-cleanup >> /var/log/cron/retention-cleanup.log 2>&1
 
 # Security audit chain verification - Daily at 2am UTC
 # Verifies hash chain integrity of security audit log
-0 2 * * * cron-curl GET http://web:3000/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
+0 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
 
 # AI usage log purge - Daily at 3am UTC
 # Anonymizes prompt/completion text >30 days, purges rows >90 days
-0 3 * * * cron-curl POST http://web:3000/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
+0 3 * * * cron-curl POST __WEB_URL__/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
 
 # Deleted message purge - Daily at 4am UTC
 # Hard-deletes soft-deleted messages and conversations older than 30 days
-0 4 * * * cron-curl POST http://web:3000/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1
+0 4 * * * cron-curl POST __WEB_URL__/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1
 
 # Workflow execution - Every 5 minutes
 # Checks for due scheduled workflows and executes them
-*/5 * * * * cron-curl POST http://web:3000/api/cron/workflows >> /var/log/cron/workflows.log 2>&1
+*/5 * * * * cron-curl POST __WEB_URL__/api/cron/workflows >> /var/log/cron/workflows.log 2>&1
 
 # Calendar trigger execution - Every 2 minutes
 # Fires scheduled agent work tied to calendar events
-*/2 * * * * cron-curl POST http://web:3000/api/cron/calendar-triggers >> /var/log/cron/calendar-triggers.log 2>&1
+*/2 * * * * cron-curl POST __WEB_URL__/api/cron/calendar-triggers >> /var/log/cron/calendar-triggers.log 2>&1
 
 # Trashed page purge - Daily at 5am UTC
 # Hard-deletes pages that have been in the trash for 30+ days (GDPR Art. 17 #909)
-0 5 * * * cron-curl GET http://web:3000/api/cron/purge-trashed-pages >> /var/log/cron/purge-trashed-pages.log 2>&1
+0 5 * * * cron-curl GET __WEB_URL__/api/cron/purge-trashed-pages >> /var/log/cron/purge-trashed-pages.log 2>&1
 
 # Orphaned file cleanup - Weekly on Sundays at 6am UTC
 # Detects and deletes file records with zero references + physical files
-0 6 * * 0 cron-curl GET http://web:3000/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
+0 6 * * 0 cron-curl GET __WEB_URL__/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
 
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3). Short cadence matches the 5-minute default
 # service-token lifetime so the table never grows more than a few cycles deep.
-*/15 * * * * cron-curl GET http://web:3000/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1
+*/15 * * * * cron-curl GET __WEB_URL__/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1

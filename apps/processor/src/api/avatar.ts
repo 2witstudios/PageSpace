@@ -44,6 +44,52 @@ if (!AVATAR_ROOT) {
   throw new Error('Invalid avatar storage configuration');
 }
 
+const CONTENT_TYPE_MAP: Record<string, string> = {
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+};
+
+// Public read endpoint — serves avatar images directly.
+// No service auth required; avatars are public. This endpoint exists so the
+// web app can proxy avatar reads through the processor when file storage is
+// not co-located (e.g. Fly.io deployments where only the processor has the volume).
+router.get('/:userId/:filename', async (req: Request, res: Response) => {
+  const userId = normalizeIdentifier(req.params.userId, IDENTIFIER_PATTERN);
+  const rawFilename = req.params.filename;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'Invalid user ID format' });
+  }
+
+  const ext = sanitizeExtension(rawFilename, DEFAULT_IMAGE_EXTENSION);
+  const filename = `avatar${ext}`;
+
+  const avatarsDir = resolvePathWithin(AVATAR_ROOT, userId);
+  if (!avatarsDir) {
+    return res.status(400).json({ error: 'Invalid avatar path' });
+  }
+
+  const filepath = resolvePathWithin(avatarsDir, filename);
+  if (!filepath) {
+    return res.status(404).end();
+  }
+
+  try {
+    const data = await fs.readFile(filepath);
+    const extension = filename.split('.').pop()?.toLowerCase() || 'jpeg';
+    const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(data);
+  } catch {
+    return res.status(404).end();
+  }
+});
+
 // Avatar upload endpoint
 router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
   try {
