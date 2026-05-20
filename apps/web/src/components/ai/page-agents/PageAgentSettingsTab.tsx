@@ -7,10 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import Link from 'next/link';
 import { AI_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
 
@@ -50,6 +51,42 @@ interface PageAgentSettingsTabProps {
   onModelChange: (model: string) => void;
   isProviderConfigured: (provider: string) => boolean;
   onSavingChange?: (isSaving: boolean) => void;
+}
+
+function ApiModelIdCard({ pageId }: { pageId: string }) {
+  const [copied, setCopied] = useState(false);
+  const modelId = `ps-agent://${pageId}`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(modelId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Code2 className="h-5 w-5" />
+          API Model ID
+        </CardTitle>
+        <CardDescription>
+          Use with the OpenAI-compatible API —{' '}
+          <Link href="/settings/mcp" className="underline underline-offset-2">
+            see MCP Settings for setup
+          </Link>
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 rounded-md bg-muted px-3 py-2 font-mono text-sm">{modelId}</code>
+          <Button size="sm" variant="outline" onClick={handleCopy}>
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export interface PageAgentSettingsTabRef {
@@ -334,6 +371,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   return (
     <div className="p-4">
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col space-y-6">
+        {/* API Model ID */}
+        <ApiModelIdCard pageId={pageId} />
+
         {/* AI Provider & Model Selection */}
         <Card>
           <CardHeader>
