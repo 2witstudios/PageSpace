@@ -38,11 +38,10 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
-      PNPM_HOME: /usr/local/bin
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
-        pnpm run db:migrate &&
+        bun run db:migrate &&
         echo 'Migrations complete'
       "
     networks:

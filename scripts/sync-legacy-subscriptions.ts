@@ -4,8 +4,8 @@
  * Creates gift subscriptions with 100% discount coupons.
  *
  * Usage:
- *   Local: pnpm tsx scripts/sync-legacy-subscriptions.ts
- *   Docker: docker exec pagespace-web-1 pnpm tsx scripts/sync-legacy-subscriptions.ts
+ *   Local: bun scripts/sync-legacy-subscriptions.ts
+ *   Docker: docker exec pagespace-web-1 bun scripts/sync-legacy-subscriptions.ts
  */
 
 import 'dotenv/config';

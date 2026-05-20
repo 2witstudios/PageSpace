@@ -3,7 +3,7 @@
  * Setup script to create the first admin user for on-premise PageSpace deployment.
  *
  * Usage:
- *   pnpm setup:admin --email admin@clinic.local --name "Dr. Smith"
+ *   bun run setup:admin --email admin@clinic.local --name "Dr. Smith"
  *
  * This script:
  * 1. Creates a user with admin role and business-tier subscription
@@ -38,10 +38,10 @@ async function main() {
   });
 
   if (!values.email || !values.name) {
-    console.error('Usage: pnpm setup:admin --email <email> --name <name>');
+    console.error('Usage: bun run setup:admin --email <email> --name <name>');
     console.error('');
     console.error('Example:');
-    console.error('  pnpm setup:admin --email admin@clinic.local --name "Dr. Smith"');
+    console.error('  bun run setup:admin --email admin@clinic.local --name "Dr. Smith"');
     process.exit(1);
   }
 

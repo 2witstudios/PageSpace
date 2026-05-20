@@ -11,7 +11,7 @@ We just shipped 1-level threads (PRs #1244, #1247, #1248), but threads pull conv
 
 ## Schema column
 
-Add nullable `quotedMessageId` self-FK to `channelMessages` and `directMessages` (mirroring the existing `parentId` and `mirroredFromId` shapes), plus a btree index for the enrichment lookup. Generate the migration via `pnpm db:generate`.
+Add nullable `quotedMessageId` self-FK to `channelMessages` and `directMessages` (mirroring the existing `parentId` and `mirroredFromId` shapes), plus a btree index for the enrichment lookup. Generate the migration via `bun run db:generate`.
 
 **Requirements**:
 - Given a hard-deleted original message, should preserve the quoting reply via `onDelete: 'set null'` so quote-replies never cascade-delete.
@@ -120,9 +120,9 @@ In `ChannelView.tsx`: add "Quote reply" `DropdownMenuItem` to both hover dropdow
 
 ## Verification (epic-level, post all subtasks)
 
-- `pnpm db:generate` produces only the additive migration.
-- `pnpm test:unit`, `pnpm typecheck`, `pnpm lint` green.
-- E2E in `pnpm dev`: hover → Quote reply → chip → send → embed renders; edit original → embed reflects on reload; soft-delete original → tombstone; cross-tab realtime delivers embed; thread-only and cross-channel quotes get rejected at API.
+- `bun run db:generate` produces only the additive migration.
+- `bun run test:unit`, `bun run typecheck`, `bun run lint` green.
+- E2E in `bun run dev`: hover → Quote reply → chip → send → embed renders; edit original → embed reflects on reload; soft-delete original → tombstone; cross-tab realtime delivers embed; thread-only and cross-channel quotes get rejected at API.
 
 ## Out of scope
 

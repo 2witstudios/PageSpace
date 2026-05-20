@@ -11,7 +11,7 @@ PageSpace already has single-person email invites (`pendingInvites`, `pendingPag
 
 ## driveShareLinks + pageShareLinks schema
 
-Create `packages/db/src/schema/share-links.ts` with two tables: `driveShareLinks` (`id`, `driveId`, `tokenHash`, `role`, `createdBy`, `createdAt`, `expiresAt`, `isActive`, `useCount`) and `pageShareLinks` (`id`, `pageId`, `tokenHash`, `permissions` jsonb, `createdBy`, `createdAt`, `expiresAt`, `isActive`, `useCount`). Export from schema index. Run `pnpm db:generate`.
+Create `packages/db/src/schema/share-links.ts` with two tables: `driveShareLinks` (`id`, `driveId`, `tokenHash`, `role`, `createdBy`, `createdAt`, `expiresAt`, `isActive`, `useCount`) and `pageShareLinks` (`id`, `pageId`, `tokenHash`, `permissions` jsonb, `createdBy`, `createdAt`, `expiresAt`, `isActive`, `useCount`). Export from schema index. Run `bun run db:generate`.
 
 **Requirements**:
 - Given a drive or page is hard-deleted, should cascade-delete its share link rows via `ON DELETE CASCADE` on `driveId`/`pageId` — orphaned tokens cannot be replayed.
@@ -121,12 +121,12 @@ Locate the drive members/settings panel and add an "Invite link" section followi
 
 ## Verification
 
-- `pnpm db:generate` produces migration with only two new `CREATE TABLE` statements.
-- `pnpm db:migrate` succeeds.
-- `pnpm test:unit` passes including new share-link-service tests.
+- `bun run db:generate` produces migration with only two new `CREATE TABLE` statements.
+- `bun run db:migrate` succeeds.
+- `bun run test:unit` passes including new share-link-service tests.
 - Drive share link: generate → copy → new-user session → `/s/[token]` → join → confirm user appears in `drive_members` with correct role.
 - Drive share link: revoke → `/s/[token]` → generic "no longer valid" card, no membership created.
 - Page share link: generate → copy → different signed-in user → visits `/s/[token]` → auto-accepted → lands on page with `canView`.
 - GDPR check: `drive_share_links` row has no `redeemedBy`; `drive_members` row is the only record of the join.
 - Zero-trust check: non-admin user attempts to revoke a drive share link → 403.
-- `pnpm typecheck` — no errors.
+- `bun run typecheck` — no errors.

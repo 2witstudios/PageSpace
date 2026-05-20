@@ -16,7 +16,7 @@ Add a cursor-tracking table to `packages/db/src/schema/monitoring.ts` and genera
 **Requirements**:
 - Given a new SIEM delivery system, should have a `siem_delivery_cursors` table to track the last delivered event per source
 - Given cursor columns (id, lastDeliveredId, lastDeliveredAt, lastError, lastErrorAt, deliveryCount, updatedAt), should support tracking delivery position, errors, and throughput
-- Given the schema change, should generate a Drizzle migration via `pnpm db:generate`
+- Given the schema change, should generate a Drizzle migration via `bun run db:generate`
 
 ---
 

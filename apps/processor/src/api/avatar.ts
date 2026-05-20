@@ -57,8 +57,8 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 // web app can proxy avatar reads through the processor when file storage is
 // not co-located (e.g. Fly.io deployments where only the processor has the volume).
 router.get('/:userId/:filename', async (req: Request, res: Response) => {
-  const userId = normalizeIdentifier(req.params.userId, IDENTIFIER_PATTERN);
-  const rawFilename = req.params.filename;
+  const userId = normalizeIdentifier(req.params.userId as string, IDENTIFIER_PATTERN);
+  const rawFilename = req.params.filename as string;
 
   if (!userId) {
     return res.status(400).json({ error: 'Invalid user ID format' });

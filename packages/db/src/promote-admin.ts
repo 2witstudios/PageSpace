@@ -5,7 +5,7 @@ import { eq } from './operators';
 const email = process.argv[2];
 
 if (!email) {
-  console.error('Usage: pnpm --filter @pagespace/db promote-admin <email>');
+  console.error('Usage: bun --filter \'@pagespace/db\' run promote-admin <email>');
   process.exit(1);
 }
 

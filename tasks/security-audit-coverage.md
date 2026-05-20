@@ -89,7 +89,7 @@ OAuth callbacks, passkey operations, token exchanges, magic links, device auth, 
 - [x] Fire-and-forget via centralized `audit()` with `.catch()`
 - [x] No functional behavior changes to any route
 - [ ] All auth routes have appropriate audit calls (~17/31 done; passkey/* + magic-link/send + mobile/refresh + device/register still pending)
-- [ ] `pnpm typecheck` passes
+- [ ] `bun run typecheck` passes
 - [ ] No new `any` types
 
 #### Sub-task: `pu/audit-passkey-ml` follow-up — passkey + magic-link cleanup
@@ -303,7 +303,7 @@ Background jobs and system endpoints. Many of these are internal/operational and
 ## Verification
 
 After all PRs merge:
-- `pnpm typecheck` passes
-- `pnpm test` passes
+- `bun run typecheck` passes
+- `bun run test` passes
 - Grep for routes without `securityAudit` — only skipped routes remain
-- Run `pnpm dev` and verify no runtime errors
+- Run `bun run dev` and verify no runtime errors

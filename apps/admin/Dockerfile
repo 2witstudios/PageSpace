@@ -2,14 +2,14 @@
 FROM node:22.17.0-alpine AS deps
 WORKDIR /app
 
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY apps/admin/package.json ./apps/admin/
 
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 COPY packages ./packages
 COPY apps/admin ./apps/admin
@@ -18,7 +18,8 @@ COPY types ./types
 
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+
+COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 COPY --from=deps /app .
 
@@ -26,8 +27,8 @@ ARG NEXT_PUBLIC_WEB_APP_URL=""
 ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
-RUN cd apps/admin && NODE_OPTIONS="--max-old-space-size=2048" pnpm build
+RUN bun --filter '@pagespace/db' run build && bun --filter '@pagespace/lib' run build
+RUN cd apps/admin && NODE_OPTIONS="--max-old-space-size=2048" bun run build
 
 ENV NODE_ENV=production
 

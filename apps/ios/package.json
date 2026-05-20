@@ -5,12 +5,12 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "pnpm exec cap sync ios",
-    "build:full": "pnpm --filter web build && pnpm exec cap sync ios",
-    "dev": "pnpm exec cap open ios",
-    "sync": "pnpm exec cap sync ios",
-    "update": "pnpm exec cap update ios",
-    "add-platform": "pnpm exec cap add ios"
+    "build": "bun x cap sync ios",
+    "build:full": "bun --filter 'web' run build && bun x cap sync ios",
+    "dev": "bun x cap open ios",
+    "sync": "bun x cap sync ios",
+    "update": "bun x cap update ios",
+    "add-platform": "bun x cap add ios"
   },
   "dependencies": {
     "@capacitor/app": "^7.0.3",

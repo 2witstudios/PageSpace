@@ -45,7 +45,7 @@ export function requireResourceBinding(contentHashSource: ContentHashSource = 'p
     let contentHash: string | undefined;
 
     if (contentHashSource === 'params') {
-      contentHash = req.params.contentHash;
+      contentHash = req.params.contentHash as string;
     } else if (contentHashSource === 'body') {
       contentHash = req.body?.contentHash;
     }

@@ -2,31 +2,32 @@
   "name": "pagespace-local",
   "private": true,
   "license": "UNLICENSED",
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "turbo dev --filter=!control-plane",
-    "dev:atlas": "pnpm --filter atlas dev",
+    "dev:atlas": "bun --filter 'atlas' run dev",
     "dev:db": "docker compose up postgres migrate seed -d",
     "dev:services": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up postgres processor realtime -d",
     "build": "turbo build",
-    "build:atlas": "pnpm --filter atlas build",
+    "build:atlas": "bun --filter 'atlas' run build",
     "lint": "turbo lint",
     "lint:scripts": "eslint --config scripts/eslint.config.mjs scripts",
     "typecheck": "turbo typecheck",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "pnpm --filter @pagespace/db db:migrate",
+    "db:migrate": "bun --filter '@pagespace/db' run db:migrate",
     "test": "./scripts/test-with-db.sh",
     "test:turbo": "turbo run test",
-    "test:unit": "pnpm --filter @pagespace/lib test && cd apps/web && npx vitest run",
-    "test:watch": "pnpm --filter @pagespace/lib test -- --watch",
-    "test:ui": "pnpm --filter @pagespace/lib test -- --ui",
+    "test:unit": "bun --filter '@pagespace/lib' run test && cd apps/web && npx vitest run",
+    "test:watch": "bun --filter '@pagespace/lib' run test -- --watch",
+    "test:ui": "bun --filter '@pagespace/lib' run test -- --ui",
     "test:coverage": "turbo run test:coverage",
     "coverage:report": "node scripts/coverage-report.mjs",
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
-    "test:scripts": "echo 'Script tests require isolated vitest context. Run: pnpm --filter @pagespace/db exec tsx ../../scripts/verify-token-migration.ts' && exit 1",
-    "verify:migrations": "pnpm --filter @pagespace/db exec tsx ../../scripts/verify-token-migration.ts",
-    "dev:desktop": "pnpm --filter desktop dev",
-    "build:desktop": "pnpm --filter desktop build",
-    "package:desktop": "pnpm --filter desktop package",
+    "test:scripts": "echo 'Script tests require isolated vitest context. Run: bun --cwd packages/db x tsx ../../scripts/verify-token-migration.ts' && exit 1",
+    "verify:migrations": "bun --cwd packages/db x tsx ../../scripts/verify-token-migration.ts",
+    "dev:desktop": "bun --filter 'desktop' run dev",
+    "build:desktop": "bun --filter 'desktop' run build",
+    "package:desktop": "bun --filter 'desktop' run package",
     "check:fetch": "node scripts/check-fetch-auth.js",
     "knip": "knip",
     "knip:fix": "knip --fix",
@@ -60,20 +61,26 @@
     "vitest": "^2.1.0",
     "yaml": "^2.8.2"
   },
-  "packageManager": "pnpm@10.13.1",
-  "pnpm": {
-    "overrides": {
-      "drizzle-orm": "^0.32.2",
-      "react": "^19.1.2",
-      "react-dom": "^19.1.2",
-      "@types/react": "^19.1.13",
-      "@types/react-dom": "^19.1.9",
-      "mdast-util-to-hast": "^13.2.1",
-      "@react-email/preview-server>next": "16.2.6"
-    },
-    "onlyBuiltDependencies": [
-      "@tensorflow/tfjs-node",
-      "sharp"
-    ]
-  }
+  "packageManager": "bun@1.3.12",
+  "overrides": {
+    "drizzle-orm": "^0.32.2",
+    "react": "^19.1.2",
+    "react-dom": "^19.1.2",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "mdast-util-to-hast": "^13.2.1",
+    "@react-email/preview-server>next": "16.2.6"
+  },
+  "trustedDependencies": [
+    "@tensorflow/tfjs-node",
+    "core-js",
+    "electron",
+    "electron-winstaller",
+    "esbuild",
+    "msw",
+    "sharp",
+    "tesseract.js",
+    "unrs-resolver",
+    "web"
+  ]
 }

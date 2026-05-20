@@ -17,13 +17,13 @@ The desktop app is a lightweight Electron wrapper that loads your PageSpace web 
 ### Prerequisites
 
 - Node.js 20+
-- pnpm
+- bun
 
 ### Running Locally
 
 ```bash
 # From the root of the monorepo
-pnpm --filter desktop dev
+bun --filter 'desktop' run dev
 ```
 
 This will launch the Electron app pointing to `http://localhost:3000` (make sure the web app is running).
@@ -32,13 +32,13 @@ This will launch the Electron app pointing to `http://localhost:3000` (make sure
 
 ```bash
 # Build TypeScript
-pnpm --filter desktop build
+bun --filter 'desktop' run build
 
 # Create distributable packages
-pnpm --filter desktop package        # Build for current platform
-pnpm --filter desktop package:mac    # Build for macOS
-pnpm --filter desktop package:win    # Build for Windows
-pnpm --filter desktop package:linux  # Build for Linux
+bun --filter 'desktop' run package        # Build for current platform
+bun --filter 'desktop' run package:mac    # Build for macOS
+bun --filter 'desktop' run package:win    # Build for Windows
+bun --filter 'desktop' run package:linux  # Build for Linux
 ```
 
 ## Configuration
@@ -202,9 +202,9 @@ You can use tools like:
 
 ### Build Errors
 
-1. Ensure all dependencies are installed: `pnpm install`
+1. Ensure all dependencies are installed: `bun install`
 2. Clear the build cache: `rm -rf dist dist-electron`
-3. Rebuild: `pnpm build && pnpm package`
+3. Rebuild: `bun run build && bun run package`
 
 ## License
 

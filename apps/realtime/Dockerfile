@@ -5,16 +5,15 @@
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
 
-RUN corepack enable && \
-    (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY apps/web/package.json ./apps/web/
 COPY apps/realtime/package.json ./apps/realtime/
 
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod=false
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 COPY types ./types
 COPY packages/db ./packages/db
@@ -23,26 +22,25 @@ COPY apps/realtime ./apps/realtime
 COPY tsconfig.json ./
 
 # Build shared packages and the realtime service
-RUN pnpm --filter @pagespace/db build && \
-    pnpm --filter @pagespace/lib build && \
-    pnpm --filter realtime build
+RUN bun --filter '@pagespace/db' run build && \
+    bun --filter '@pagespace/lib' run build && \
+    bun --filter 'realtime' run build
 
 # Stage 2: Production runner
 FROM node:22.17.0-alpine AS runner
 WORKDIR /app
 
-RUN corepack enable && \
-    (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy manifests and lockfile for production install
-COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
+COPY --from=builder /app/package.json /app/bun.lock ./
 COPY --from=builder /app/packages/db/package.json ./packages/db/
 COPY --from=builder /app/packages/lib/package.json ./packages/lib/
 COPY --from=builder /app/apps/web/package.json ./apps/web/
 COPY --from=builder /app/apps/realtime/package.json ./apps/realtime/
 
 # Install production-only dependencies
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile --production
 
 # Copy only compiled runtime artifacts from builder
 COPY --from=builder /app/packages/db/dist ./packages/db/dist

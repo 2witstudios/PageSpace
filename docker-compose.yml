@@ -31,11 +31,10 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
-      - PNPM_HOME=/usr/local/bin
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
-        pnpm run db:migrate &&
+        bun run db:migrate &&
         echo 'Migrations complete, starting services...'
       "
     healthcheck:
@@ -272,10 +271,10 @@ services:
     command: >
       sh -c "
         echo 'Setting up test database schema...' &&
-        cd packages/db && pnpm drizzle-kit push --force &&
+        cd packages/db && bunx drizzle-kit push --force &&
         cd ../.. &&
         echo 'Running tests...' &&
-        pnpm test:unit
+        bun run test:unit
       "
     networks:
       - internal

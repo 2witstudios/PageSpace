@@ -11,11 +11,11 @@ The admin console lives inside the user-facing web app today, meaning the same c
 
 ## Scaffold apps/admin
 
-Create a minimal Next.js 15 app with pnpm workspace registration, turbo pipeline entry, and base layout shell.
+Create a minimal Next.js 15 app with bun workspace registration, turbo pipeline entry, and base layout shell.
 
 **Requirements**:
 - Given a new app directory at `apps/admin/`, should have `package.json` referencing `@pagespace/db` and `@pagespace/lib` as workspace deps alongside Next.js 15 + shadcn/ui
-- Given the monorepo root `pnpm-workspace.yaml`, should include `apps/admin` as a member
+- Given the monorepo root `package.json workspaces`, should include `apps/admin` as a member
 - Given `turbo.json`, should include `admin#build` and `admin#dev` in the pipeline
 - Given `apps/admin/`, should have `tsconfig.json` extending the repo base config with path aliases matching the web app pattern (`@/*`)
 - Given the Next.js app shell, should serve from port `3005` in dev to avoid conflicts with web (3000), realtime (3001), processor (3002)
@@ -92,7 +92,7 @@ Delete all admin routes, pages, and components from `apps/web/` and clean up orp
 - Given `apps/web/src/components/admin/`, should be deleted entirely
 - Given `withAdminAuth` and `verifyAdminAuth` in `apps/web/src/lib/auth/auth.ts`, should be removed since no web-app routes use them after the move — do not leave dead exports
 - Given `apps/web/middleware.ts`, should remove any admin-route-specific handling that no longer applies
-- Given the web app build after deletion, should pass `pnpm typecheck` and `pnpm build` with no errors
+- Given the web app build after deletion, should pass `bun run typecheck` and `bun run build` with no errors
 
 ---
 
@@ -102,6 +102,6 @@ Wire the admin app into Docker Compose, dev scripts, and environment variable do
 
 **Requirements**:
 - Given `docker-compose.yml` (or equivalent in the deploy repo), should have an `admin` service entry with its own port mapping and `DATABASE_URL` env var (pointing to the same main app DB)
-- Given `pnpm dev` at the monorepo root, should start the admin app alongside web, realtime, and processor
+- Given `bun run dev` at the monorepo root, should start the admin app alongside web, realtime, and processor
 - Given `apps/admin/.env.example`, should document required env vars: `DATABASE_URL`, `NEXTAUTH_URL` (or equivalent base URL), `EMAIL_FROM`, and any mailer config needed for magic links
-- Given the admin app in CI, should run its own `pnpm typecheck` and `pnpm test` steps
+- Given the admin app in CI, should run its own `bun run typecheck` and `bun run test` steps

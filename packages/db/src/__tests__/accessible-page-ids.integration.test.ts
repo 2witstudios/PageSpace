@@ -4,7 +4,7 @@
  * These tests require a running Postgres database with the latest migrations
  * applied. Run via:
  *   ./scripts/test-with-db.sh
- *   pnpm --filter @pagespace/db test -- src/__tests__/accessible-page-ids.integration.test.ts
+ *   bun --filter '@pagespace/db' run test -- src/__tests__/accessible-page-ids.integration.test.ts
  *
  * The function is the canonical "what pages can this user view?" primitive that
  * collapses the (owner | drive-admin | explicit-grant) authorization graph into

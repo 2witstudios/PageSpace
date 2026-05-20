@@ -29,11 +29,10 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Set version from git tag
         run: |
@@ -44,7 +43,7 @@ jobs:
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: pnpm --filter desktop build
+        run: bun --filter 'desktop' run build
 
       - name: Import code signing certificate
         env:
@@ -85,7 +84,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package macOS app (signed and notarized)
-        run: pnpm --filter desktop package:mac
+        run: bun --filter 'desktop' run package:mac
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -115,11 +114,10 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Set version from git tag
         run: |
@@ -130,10 +128,10 @@ jobs:
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: pnpm --filter desktop build
+        run: bun --filter 'desktop' run build
 
       - name: Package Windows app
-        run: pnpm --filter desktop package:win
+        run: bun --filter 'desktop' run package:win
         env:
           CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
@@ -161,11 +159,10 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Set version from git tag
         run: |
@@ -176,10 +173,10 @@ jobs:
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: pnpm --filter desktop build
+        run: bun --filter 'desktop' run build
 
       - name: Package Linux app
-        run: pnpm --filter desktop package:linux
+        run: bun --filter 'desktop' run package:linux
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7

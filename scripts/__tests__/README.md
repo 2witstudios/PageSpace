@@ -10,10 +10,10 @@ This directory contains tests for the utility scripts in the `/scripts` director
 
 ```bash
 # Run the migration verification (requires database)
-pnpm verify:migrations
+bun run verify:migrations
 
 # With --allow-missing flag for partial migrations
-pnpm verify:migrations -- --allow-missing
+bun run verify:migrations -- --allow-missing
 ```
 
 ## Running Unit Tests

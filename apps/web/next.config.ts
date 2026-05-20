@@ -4,6 +4,7 @@ import CopyPlugin from "copy-webpack-plugin";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: ["@pagespace/db", "@pagespace/lib"],
   webpack: (config, { isServer }) => {
     if (!isServer) {

@@ -112,11 +112,11 @@ Tests should be run in CI using the same workaround:
 - Try killing any running processes on test ports
 
 ### Import errors
-- Run `pnpm install` in the root directory
-- Ensure workspace dependencies are linked: `pnpm install`
+- Run `bun install` in the root directory
+- Ensure workspace dependencies are linked: `bun install`
 
 ### TypeScript errors
-- Run `pnpm typecheck` to verify TypeScript compiles
+- Run `bun run typecheck` to verify TypeScript compiles
 - Check that `@pagespace/lib` and `@pagespace/db` are built
 
 ## Adding New Tests

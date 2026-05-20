@@ -17,17 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-# Enable corepack and pin pnpm (with basic retry for transient network issues)
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy only manifests for dependency install caching
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY apps/processor/package.json ./apps/processor/
 
 # Install dependencies
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod=false
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 # Now copy source code AFTER dependencies are installed
 COPY tsconfig.json ./
@@ -36,12 +35,12 @@ COPY packages ./packages
 COPY apps/processor ./apps/processor
 
 # Build shared workspaces before compiling the processor
-RUN pnpm --filter @pagespace/db build \
-  && pnpm --filter @pagespace/lib build
+RUN bun --filter '@pagespace/db' run build \
+  && bun --filter '@pagespace/lib' run build
 
 # Build the processor service
 WORKDIR /app/apps/processor
-RUN pnpm build
+RUN bun run build
 
 # Production stage
 FROM node:22.17.0-bookworm-slim AS production

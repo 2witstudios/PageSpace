@@ -4,7 +4,7 @@ PageSpace is an AI-native knowledge management and collaboration platform. Human
 
 ## Monorepo Structure
 
-pnpm workspace + Turbo build system.
+bun workspace + Turbo build system.
 
 ```
 apps/
@@ -32,7 +32,7 @@ packages/
 - **Real-time**: Socket.IO (single-process fanout; no external broker)
 - **Editors**: TipTap (rich text), Monaco (code), custom sheet + canvas
 - **State**: Zustand (client) + SWR (server cache)
-- **Build**: pnpm + Turbo + Docker Compose
+- **Build**: bun + Turbo + Docker Compose
 - **Deployment**: Docker images on GHCR (`ghcr.io/2witstudios/`), Caddy reverse proxy
 - **Deploy repo**: Compose file, Caddyfile, deploy scripts at `/Users/jono/production/PageSpace-Deploy/`
 
@@ -46,7 +46,7 @@ Three modes via `DEPLOYMENT_MODE` env var (see `packages/lib/src/deployment-mode
 
 ## Critical Rules
 
-**Package manager**: Always use `pnpm`. Never `npm`. This is a pnpm workspace — everything breaks otherwise.
+**Package manager**: Always use `bun`. Never `npm` or `pnpm`. This is a bun workspace — everything breaks otherwise.
 
 **Next.js 15 async params**: `params` in dynamic routes are Promises. You MUST await them:
 ```typescript
@@ -56,7 +56,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 ```
 Destructuring params directly without await is a silent runtime bug.
 
-**Database migrations**: Never manually create or edit SQL files in `packages/db/drizzle/`. Always use `pnpm db:generate` from schema changes in `packages/db/src/schema/`.
+**Database migrations**: Never manually create or edit SQL files in `packages/db/drizzle/`. Always use `bun run db:generate` from schema changes in `packages/db/src/schema/`.
 
 **No `any` types**: Always use proper TypeScript types.
 
@@ -89,30 +89,30 @@ When you need to understand a subsystem, read these canonical sources (not docs 
 
 ```bash
 # Development
-pnpm dev                    # Start all services (web, realtime, processor — excludes control-plane)
-pnpm dev:services           # Start Postgres, processor, realtime via Docker
-pnpm --filter web dev       # Start web app only
-pnpm --filter realtime dev  # Start realtime service only
-pnpm --filter processor dev # Start processor service only
-pnpm dev:desktop            # Start Electron desktop app
+bun run dev                          # Start all services (web, realtime, processor — excludes control-plane)
+bun run dev:services                 # Start Postgres, processor, realtime via Docker
+bun --filter 'web' run dev           # Start web app only
+bun --filter 'realtime' run dev      # Start realtime service only
+bun --filter 'processor' run dev     # Start processor service only
+bun run dev:desktop                  # Start Electron desktop app
 
 # Build
-pnpm build                  # Build all apps (Turbo)
-pnpm --filter web build     # Build web app only
+bun run build                        # Build all apps (Turbo)
+bun --filter 'web' run build         # Build web app only
 
 # Database
-pnpm db:generate            # Generate Drizzle migrations from schema changes
-pnpm db:migrate             # Run database migrations
-pnpm --filter @pagespace/db db:studio  # Open Drizzle Studio
+bun run db:generate                  # Generate Drizzle migrations from schema changes
+bun run db:migrate                   # Run database migrations
+bun --filter '@pagespace/db' run db:studio  # Open Drizzle Studio
 
 # Testing
-pnpm test                   # Run all tests (with DB setup)
-pnpm test:unit              # Run unit tests (packages/lib + apps/web)
-pnpm test:watch             # Run tests in watch mode
-pnpm test:coverage          # Run tests with coverage report
-pnpm test:security          # Run security tests
+bun run test                         # Run all tests (with DB setup)
+bun run test:unit                    # Run unit tests (packages/lib + apps/web)
+bun run test:watch                   # Run tests in watch mode
+bun run test:coverage                # Run tests with coverage report
+bun run test:security                # Run security tests
 
 # Quality
-pnpm lint                   # Lint all apps
-pnpm typecheck              # TypeScript checks across monorepo
+bun run lint                         # Lint all apps
+bun run typecheck                    # TypeScript checks across monorepo
 ```

@@ -13,7 +13,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: "pnpm dev",
+    command: "bun run dev",
     url: "http://localhost:3004",
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,

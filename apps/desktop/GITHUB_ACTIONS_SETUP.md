@@ -172,13 +172,13 @@ If you prefer to build locally instead of using GitHub Actions:
 
 ```bash
 # macOS (on Mac)
-pnpm --filter desktop package:mac
+bun --filter 'desktop' run package:mac
 
 # Windows (on Windows PC or VM)
-pnpm --filter desktop package:win
+bun --filter 'desktop' run package:win
 
 # Linux (on Linux)
-pnpm --filter desktop package:linux
+bun --filter 'desktop' run package:linux
 ```
 
 Packages will be in `apps/desktop/dist-electron/`

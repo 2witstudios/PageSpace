@@ -4,7 +4,7 @@
  * Requires a running Postgres database with the latest migrations applied.
  * Run via:
  *   ./scripts/test-with-db.sh
- *   pnpm --filter @pagespace/lib test -- src/services/__tests__/page-payload-service.integration.test.ts
+ *   bun --filter '@pagespace/lib' run test -- src/services/__tests__/page-payload-service.integration.test.ts
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';

@@ -28,13 +28,13 @@ Read and follow these before writing any code. They apply to every task in this 
 Set up the new app in the monorepo with a REST framework and test harness.
 
 **Requirements**:
-- Given `apps/control-plane/`, should be a TypeScript Node.js app in the pnpm workspace
+- Given `apps/control-plane/`, should be a TypeScript Node.js app in the bun workspace
 - Given the app, should expose a REST API on port 3010
 - Given the app, should have its own `package.json` with workspace dependency on `@pagespace/lib`
-- Given the pnpm workspace, `apps/*` wildcard already includes it — verify it resolves
+- Given the bun workspace, `apps/*` wildcard already includes it — verify it resolves
 - Given the app, should use Fastify (lightweight, schema-validated, good test story via `app.inject()`)
 - Given the app module, should export a `createApp()` factory for test isolation
-- Given `pnpm dev`, the control plane should NOT start automatically (it's infrastructure, not user-facing) — add a separate `pnpm --filter control-plane dev` script
+- Given `bun run dev`, the control plane should NOT start automatically (it's infrastructure, not user-facing) — add a separate `bun --filter 'control-plane' run dev` script
 - Given the app, should have its own `vitest.config.ts` and `tsconfig.json`
 
 **TDD Approach**:
@@ -84,7 +84,7 @@ Define the Drizzle schema for tenant metadata, events, and backups.
 ## Evaluation Gate
 
 Before moving to Epic 6b:
-1. Does `pnpm --filter control-plane dev` start the server on port 3010?
+1. Does `bun --filter 'control-plane' run dev` start the server on port 3010?
 2. Does the health check return 200?
 3. Do schema tests pass?
 4. Do migrations generate cleanly?

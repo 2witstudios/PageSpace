@@ -16,8 +16,8 @@
  *   2. The next logActivity() call detects no prior hash → generates a new
  *      chainSeed and starts a fresh tamper-evident chain
  *
- * Run with: pnpm tsx scripts/rehash-activity-logs.ts
- * Dry run:  pnpm tsx scripts/rehash-activity-logs.ts --dry-run
+ * Run with: bun scripts/rehash-activity-logs.ts
+ * Dry run:  bun scripts/rehash-activity-logs.ts --dry-run
  */
 
 import 'dotenv/config';

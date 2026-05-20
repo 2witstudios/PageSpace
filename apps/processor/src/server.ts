@@ -296,7 +296,7 @@ app.get(
   requireScope('queue:read'),
   async (req, res) => {
     try {
-      const job = await queueManager.getJob(req.params.jobId);
+      const job = await queueManager.getJob(req.params.jobId as string);
       if (!job) {
         return res.status(404).json({ error: 'Job not found' });
       }

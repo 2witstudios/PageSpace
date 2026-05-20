@@ -3,19 +3,18 @@
 FROM node:22.17.0-alpine AS deps
 WORKDIR /app
 
-# Enable corepack and pin pnpm
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy workspace manifests — marketing depends on @pagespace/lib,
-# which in turn depends on @pagespace/db. pnpm needs all three
+# which in turn depends on @pagespace/db. bun needs all three
 # package.json files present before it can resolve the workspace graph.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY apps/marketing/package.json ./apps/marketing/
 
-# Install dependencies for marketing and its transitive workspace deps
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --filter marketing...
+# Install all workspace dependencies
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 # Copy source code after dependencies are installed
 COPY packages ./packages
@@ -26,7 +25,8 @@ COPY types ./types
 # Build stage
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+
+COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 COPY --from=deps /app .
 
@@ -49,9 +49,9 @@ ENV NODE_ENV=production
 
 # Build workspace deps first so their dist/ output (which marketing
 # consumes via the package.json "exports" map) is available.
-RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
+RUN bun --filter '@pagespace/db' run build && bun --filter '@pagespace/lib' run build
 
-RUN cd apps/marketing && pnpm build
+RUN cd apps/marketing && bun run build
 
 # Production image
 FROM node:22.17.0-alpine AS runner

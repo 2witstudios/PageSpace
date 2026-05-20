@@ -6,7 +6,7 @@
  * Run this after the token hashing migration to confirm success.
  *
  * Usage:
- *   pnpm tsx scripts/verify-token-migration.ts [--allow-missing]
+ *   bun scripts/verify-token-migration.ts [--allow-missing]
  *
  * Options:
  *   --allow-missing   Allow missing tables (useful during partial migrations)
@@ -205,12 +205,12 @@ export async function main() {
     console.log('\nAction Required:');
     if (missingTables.length > 0 && !allowMissing) {
       console.log('  Missing tables detected. Run database migrations first:');
-      console.log('    pnpm db:migrate');
+      console.log('    bun run db:migrate');
       console.log('\n  Or use --allow-missing to skip missing table checks:');
-      console.log('    pnpm tsx scripts/verify-token-migration.ts --allow-missing');
+      console.log('    bun scripts/verify-token-migration.ts --allow-missing');
     } else {
       console.log('  Some tokens are missing hash values. Run migration:');
-      console.log('    pnpm tsx scripts/migrate-token-hashes.ts');
+      console.log('    bun scripts/migrate-token-hashes.ts');
     }
     process.exit(1);
   }

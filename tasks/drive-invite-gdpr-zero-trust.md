@@ -11,7 +11,7 @@ Drive invites currently auto-create a `users` row when the inviter sends — bef
 
 ## pendingInvites schema
 
-Add a `pendingInvites` table in `packages/db/src/schema/pending-invites.ts` with `id`, `tokenHash`, `email`, `driveId`, `role`, `invitedBy`, `expiresAt`, `consumedAt`, `createdAt`. Wire it into `packages/db/src/schema.ts` (barrel + namespace) and `packages/db/package.json` exports. Generate the migration via `pnpm db:generate`.
+Add a `pendingInvites` table in `packages/db/src/schema/pending-invites.ts` with `id`, `tokenHash`, `email`, `driveId`, `role`, `invitedBy`, `expiresAt`, `consumedAt`, `createdAt`. Wire it into `packages/db/src/schema.ts` (barrel + namespace) and `packages/db/package.json` exports. Generate the migration via `bun run db:generate`.
 
 **Requirements**:
 - Given a drive is hard-deleted, should cascade-delete its `pendingInvites` rows so abandoned tokens cannot be replayed against re-created drives sharing an id.
@@ -148,10 +148,10 @@ Create `packages/db/src/migrate-pending-invites.ts` (TypeScript script run via `
 
 ## Verification (epic-level, post all subtasks)
 
-- `pnpm typecheck`, `pnpm lint`, `pnpm test:unit` all green.
-- `pnpm db:generate` produces a single new SQL file with one `CREATE TABLE pending_invites` and the partial index — no drift.
-- `pnpm --filter @pagespace/db migrate-pending-invites` (against a seeded local DB) deletes the legacy `acceptedAt IS NULL` rows + orphan email-only users, and is idempotent on second run.
-- E2E in `pnpm --filter web dev`:
+- `bun run typecheck`, `bun run lint`, `bun run test:unit` all green.
+- `bun run db:generate` produces a single new SQL file with one `CREATE TABLE pending_invites` and the partial index — no drift.
+- `bun --filter '@pagespace/db' run migrate-pending-invites` (against a seeded local DB) deletes the legacy `acceptedAt IS NULL` rows + orphan email-only users, and is idempotent on second run.
+- E2E in `bun --filter 'web' run dev`:
   - **New invitee**: invite a fresh email → DB has `pending_invites` row, **no `users` row** → click email link → consent screen → "Create account & join" → signup with ToS checkbox required → DB has `users` (with `tosAcceptedAt`, `emailVerified` set) + `drive_members` (`acceptedAt` set) + `pending_invites.consumedAt` set → land on `/dashboard/<driveId>?welcome=true`.
   - **Existing user, fast path**: invite a verified existing email → `drive_members` row written directly via `handleUserIdPath`, no email sent, no `pending_invites` row.
   - **Existing user via email link**: consent screen → "Sign in to join" → `/invite/<token>/accept` → if no session, two-click via `/auth/signin?invite=<token>` → land on `/dashboard/<driveId>?invited=1`.

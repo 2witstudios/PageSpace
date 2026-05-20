@@ -17,8 +17,8 @@
  * so a partial failure leaves the DB in a consistent state.
  *
  * Usage:
- *   pnpm --filter @pagespace/db migrate-pending-invites
- *   pnpm --filter @pagespace/db migrate-pending-invites -- --dry-run
+ *   bun --filter '@pagespace/db' run migrate-pending-invites
+ *   bun --filter '@pagespace/db' run migrate-pending-invites -- --dry-run
  */
 
 import { db } from './db';
