@@ -80,7 +80,7 @@ function ApiModelIdCard({ pageId }: { pageId: string }) {
       <CardContent>
         <div className="flex items-center gap-2">
           <code className="flex-1 rounded-md bg-muted px-3 py-2 font-mono text-sm">{modelId}</code>
-          <Button size="sm" variant="outline" onClick={handleCopy}>
+          <Button type="button" size="sm" variant="outline" onClick={handleCopy}>
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           </Button>
         </div>

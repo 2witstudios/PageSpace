@@ -79,11 +79,13 @@ client = OpenAI(
     api_key="YOUR_MCP_TOKEN",
 )
 
-response = client.chat.completions.create(
+stream = client.chat.completions.create(
     model="ps-agent://<pageId>",
     messages=[{"role": "user", "content": "Hello!"}],
+    stream=True,
 )
-print(response.choices[0].message.content)`;
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)`;
 
   const tsSnippet = `import OpenAI from "openai";
 
@@ -92,18 +94,22 @@ const client = new OpenAI({
   apiKey: "YOUR_MCP_TOKEN",
 });
 
-const response = await client.chat.completions.create({
+const stream = await client.chat.completions.create({
   model: "ps-agent://<pageId>",
   messages: [{ role: "user", content: "Hello!" }],
+  stream: true,
 });
-console.log(response.choices[0].message.content);`;
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}`;
 
   const curlSnippet = `curl ${baseUrl}/chat/completions \\
   -H "Authorization: Bearer YOUR_MCP_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "ps-agent://<pageId>",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
   }'`;
 
   return (
