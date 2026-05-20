@@ -75,10 +75,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id' },
 }));
 
-// Mock websocket utilities for real-time permission revocation
+// Mock websocket utilities for real-time permission revocation and broadcast
 vi.mock('@/lib/websocket', () => ({
   kickUserFromPage: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
   kickUserFromPageActivity: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
+  broadcastPageEvent: vi.fn().mockResolvedValue(undefined),
+  createPageEventPayload: vi.fn((driveId, pageId, operation) => ({ driveId, pageId, operation })),
 }));
 
 import { permissionManagementService } from '@/services/api';

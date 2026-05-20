@@ -136,7 +136,10 @@ export const applySecurityHeaders = (
 
 export const isPublicPageRoute = (pathname: string): boolean =>
   pathname === '/auth' ||
-  pathname.startsWith('/auth/');
+  pathname.startsWith('/auth/') ||
+  pathname === '/invite' ||
+  pathname.startsWith('/invite/') ||
+  pathname.startsWith('/s/');
 
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||

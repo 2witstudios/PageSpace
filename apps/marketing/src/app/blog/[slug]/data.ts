@@ -52,7 +52,7 @@ If you regularly hit the pro daily limit, [upgrade to a higher plan](/pricing) f
 
 Two reasons. Key management was the biggest setup hurdle for new users — most never finished configuring providers, and the experience suffered. Holding encrypted keys for every user was also a meaningful security surface area we didn't need to own. Operators provision once at the deployment level; there's nothing per-user to leak.
 
-If a provider you used regularly has disappeared from your model picker, or a model isn't behaving the way you expect, reach out on Discord or email hello@pagespace.ai.
+If a provider you used regularly has disappeared from your model picker, or a model isn't behaving the way you expect, reach out on the [AI Agent Hub](https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t) or email hello@pagespace.ai.
     `,
     author: "Jono",
     date: "2026-05-01",

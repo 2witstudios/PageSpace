@@ -56,10 +56,12 @@ export interface UseVoiceModeOptions {
   onSpeakComplete?: () => void;
   /** Callback when an error occurs */
   onError?: (error: string) => void;
-  /** Callback to abort the in-flight LLM stream on barge-in */
+  /** Callback to abort the in-flight LLM stream when user interrupts playback */
   onStopStream?: () => void;
   /** Language for transcription (default: 'en') */
   language?: string;
+  /** Whether the AI stream is still active — blocks auto-listen during tool calls */
+  isAIStreaming?: boolean;
 }
 
 export interface UseVoiceModeReturn {
@@ -85,8 +87,8 @@ export interface UseVoiceModeReturn {
   bargeIn: () => void;
 
   // Settings
-  interactionMode: 'barge-in' | 'tap-to-speak';
-  setInteractionMode: (mode: 'barge-in' | 'tap-to-speak') => void;
+  interactionMode: 'conversation' | 'tap-to-speak';
+  setInteractionMode: (mode: 'conversation' | 'tap-to-speak') => void;
   ttsVoice: TTSVoice;
   setTTSVoice: (voice: TTSVoice) => void;
   autoSend: boolean;
@@ -125,8 +127,7 @@ interface BargeInRefs {
  * - Audio recording via MediaRecorder API
  * - Speech-to-text via OpenAI Whisper
  * - Text-to-speech via OpenAI TTS
- * - Barge-in support (interrupt TTS when user speaks)
- * - Two interaction modes: tap-to-speak and barge-in
+ * - Two interaction modes: tap-to-speak and conversation (auto-listen after TTS)
  */
 export function useVoiceMode({
   onTranscript,
@@ -135,6 +136,7 @@ export function useVoiceMode({
   onError,
   onStopStream,
   language = 'en',
+  isAIStreaming = false,
 }: UseVoiceModeOptions = {}): UseVoiceModeReturn {
   // Store state
   const isEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -196,8 +198,14 @@ export function useVoiceMode({
   const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError, onStopStream });
   callbacksRef.current = { onTranscript, onSend, onSpeakComplete, onError, onStopStream };
 
+  // Tracks parent streaming state without causing stale closures in speak()
+  const isAIStreamingRef = useRef(isAIStreaming);
+  isAIStreamingRef.current = isAIStreaming;
+
   // Sentence queue for chained TTS playback
   const speechQueueRef = useRef<string[]>([]);
+  // Pre-fetched audio for the next queued chunk (eliminates inter-chunk silence)
+  const prefetchedAudioRef = useRef<Promise<AudioBuffer | null> | null>(null);
 
   // Derived state
   const isListening = voiceState === 'listening';
@@ -268,10 +276,7 @@ export function useVoiceMode({
 
         const result = await response.json();
         const text = (result.text as string).trim();
-        const WHISPER_ARTIFACTS = new Set(['you', 'thank you', 'thanks', 'bye', 'goodbye']);
-        const normalized = text.toLowerCase().replace(/[.!?,\s]+$/, '').trim();
-        if (WHISPER_ARTIFACTS.has(normalized)) return null;
-        return text;
+        return text || null;
       } catch (err) {
         const message = getTranscriptionErrorMessage(err);
         setError(message);
@@ -373,6 +378,8 @@ export function useVoiceMode({
     // If speaking, barge in first and transition to listening
     try {
       if (voiceStateRef.current === 'speaking') {
+        speechQueueRef.current = [];
+        prefetchedAudioRef.current = null;
         bargeInStore();
         stopAudioPlayback();
         setCurrentAudioId(null);
@@ -478,7 +485,7 @@ export function useVoiceMode({
 
   // Voice Activity Detection while TTS is speaking (real barge-in).
   const startBargeInMonitoring = useCallback(async () => {
-    if (!isEnabled || interactionMode !== 'barge-in') return;
+    if (!isEnabled) return;
 
     stopBargeInMonitoring();
 
@@ -510,9 +517,34 @@ export function useVoiceMode({
       bargeInRefs.current.stream = stream;
       bargeInRefs.current.analyser = analyser;
 
+      // Allow echo cancellation to calibrate before checking levels — without
+      // this, TTS audio bleeds through the mic on the first frames after
+      // getUserMedia returns (especially after a tool-call response starts).
+      await new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+
+      // If a newer call to startBargeInMonitoring() ran during the warmup it
+      // will have replaced (or nulled) bargeInRefs.current.analyser via
+      // stopBargeInMonitoring().  This invocation is stale — exit without
+      // starting a second rAF loop.  The stream tracks were already stopped
+      // by the newer call, so no cleanup is needed here.
+      if (bargeInRefs.current.analyser !== analyser) return;
+
+      if (voiceStateRef.current !== 'speaking') {
+        stopBargeInMonitoring();
+        return;
+      }
+
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const SPEECH_THRESHOLD = 22;
-      const REQUIRED_SPEECH_FRAMES = 15;
+
+      // Restrict detection to the human speech frequency band (85–8000 Hz).
+      // Averaging all bins (0–24 kHz) lets low-frequency rumble and high-
+      // frequency hiss accumulate enough energy to trip the threshold.
+      const hzPerBin = audioContext.sampleRate / analyser.fftSize;
+      const speechStartBin = Math.max(0, Math.floor(85 / hzPerBin));
+      const speechEndBin = Math.min(dataArray.length, Math.ceil(8000 / hzPerBin));
+
+      const SPEECH_THRESHOLD = 35;
+      const REQUIRED_SPEECH_FRAMES = 25;
       let speechFrames = 0;
 
       const checkSpeech = () => {
@@ -524,17 +556,22 @@ export function useVoiceMode({
         }
 
         currentAnalyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        let sum = 0;
+        for (let i = speechStartBin; i < speechEndBin; i++) sum += dataArray[i];
+        const average = sum / (speechEndBin - speechStartBin);
 
         if (average >= SPEECH_THRESHOLD) {
           speechFrames += 1;
-        } else if (speechFrames > 0) {
-          speechFrames -= 1;
+        } else {
+          // Reset rather than decrement so intermittent noise cannot
+          // accumulate across quiet gaps to reach the trigger threshold.
+          speechFrames = 0;
         }
 
         if (speechFrames >= REQUIRED_SPEECH_FRAMES) {
           stopBargeInMonitoring();
           speechQueueRef.current = [];
+          prefetchedAudioRef.current = null;
           callbacksRef.current.onStopStream?.();
           bargeInStore();
           stopAudioPlayback();
@@ -553,7 +590,6 @@ export function useVoiceMode({
     }
   }, [
     isEnabled,
-    interactionMode,
     stopBargeInMonitoring,
     getAudioContext,
     bargeInStore,
@@ -562,18 +598,42 @@ export function useVoiceMode({
     startListening,
   ]);
 
+  const prefetchAudio = useCallback(
+    async (text: string): Promise<AudioBuffer | null> => {
+      try {
+        const response = await fetchWithAuth('/api/voice/synthesize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: ttsVoice, speed: ttsSpeed }),
+        });
+        if (!response.ok) return null;
+        const audioData = await response.arrayBuffer();
+        const audioContext = getAudioContext();
+        return await audioContext.decodeAudioData(audioData);
+      } catch {
+        return null;
+      }
+    },
+    [ttsVoice, ttsSpeed, getAudioContext]
+  );
+
   // Speak text using TTS
   const speak = useCallback(
-    async (text: string) => {
+    async (text: string, preloadedBuffer?: AudioBuffer | null) => {
       if (!text.trim()) return;
 
       // Safety net: if a chunk somehow exceeds the OpenAI TTS 4096-char limit,
       // hard-split on word boundary and queue the remainder so nothing is dropped.
       let chunkToSpeak = text;
+      let effectivePreloaded = preloadedBuffer ?? null;
       if (chunkToSpeak.length > TTS_MAX_CHARS) {
         const pieces = splitOversizedForTts(chunkToSpeak, TTS_MAX_CHARS);
         chunkToSpeak = pieces[0];
         speechQueueRef.current.unshift(...pieces.slice(1));
+        // unshift changed queue[0] — any pre-fetch is now for the wrong text;
+        // also discard the passed-in buffer since it covers the full text, not the piece
+        prefetchedAudioRef.current = null;
+        effectivePreloaded = null;
       }
 
       try {
@@ -581,32 +641,35 @@ export function useVoiceMode({
         const audioId = createId();
         startSpeakingStore(audioId);
 
-        const response = await fetchWithAuth('/api/voice/synthesize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: chunkToSpeak,
-            voice: ttsVoice,
-            speed: ttsSpeed,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || errorData.error || 'Speech synthesis failed');
-        }
-
-        const audioData = await response.arrayBuffer();
         const audioContext = getAudioContext();
+        let audioBuffer: AudioBuffer;
 
-        // Resume audio context if suspended (browser autoplay policy)
-        if (audioContext.state === 'suspended') {
-          await audioContext.resume();
+        if (effectivePreloaded) {
+          audioBuffer = effectivePreloaded;
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+        } else {
+          const response = await fetchWithAuth('/api/voice/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: chunkToSpeak, voice: ttsVoice, speed: ttsSpeed }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.message || errorData.error || 'Speech synthesis failed');
+          }
+
+          const audioData = await response.arrayBuffer();
+
+          // Resume audio context if suspended (browser autoplay policy)
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+
+          audioBuffer = await audioContext.decodeAudioData(audioData);
         }
-
-        const audioBuffer = await audioContext.decodeAudioData(audioData);
 
         // Guard: if barge-in cleared the audio ID during the fetch, discard this synthesis
         const { currentAudioId: liveAudioId } = useVoiceModeStore.getState();
@@ -627,20 +690,38 @@ export function useVoiceMode({
             playbackRefs.current.audioSource = null;
 
             if (speechQueueRef.current.length > 0) {
-              void speak(speechQueueRef.current.shift()!);
+              const nextText = speechQueueRef.current.shift()!;
+              const preloaded = prefetchedAudioRef.current;
+              // Advance the pre-fetch pointer to the new queue head
+              prefetchedAudioRef.current =
+                speechQueueRef.current.length > 0
+                  ? prefetchAudio(speechQueueRef.current[0])
+                  : null;
+              if (preloaded) {
+                preloaded
+                  .then((buf: AudioBuffer | null) => void speak(nextText, buf))
+                  .catch(() => void speak(nextText));
+              } else {
+                void speak(nextText);
+              }
               return;
             }
 
             stopSpeakingStore();
             callbacksRef.current.onSpeakComplete?.();
 
-            // Read live store state to avoid stale closure — always auto-listen after TTS
+            // Read live store state to avoid stale closure — auto-listen after TTS,
+            // but only when the AI stream has fully finished (not mid-tool-call).
             const { isEnabled: liveEnabled, interactionMode: liveMode } =
               useVoiceModeStore.getState();
-            if (liveEnabled && liveMode === 'barge-in') {
+            if (liveEnabled && liveMode === 'conversation' && !isAIStreamingRef.current) {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
-                void startListening();
+                const { isEnabled: enabledNow, interactionMode: modeNow } =
+                  useVoiceModeStore.getState();
+                if (enabledNow && modeNow === 'conversation' && !isAIStreamingRef.current) {
+                  void startListening();
+                }
               }, 300);
             }
           }
@@ -648,8 +729,9 @@ export function useVoiceMode({
 
         source.start();
 
-        if (interactionMode === 'barge-in' && isEnabled) {
-          void startBargeInMonitoring();
+        // Kick off pre-fetch for the next queued chunk while this one plays
+        if (speechQueueRef.current.length > 0 && !prefetchedAudioRef.current) {
+          prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
         }
       } catch (err) {
         const message = getSynthesisErrorMessage(err);
@@ -671,6 +753,7 @@ export function useVoiceMode({
       ttsVoice,
       ttsSpeed,
       getAudioContext,
+      prefetchAudio,
       stopAudioPlayback,
       stopBargeInMonitoring,
       startSpeakingStore,
@@ -685,6 +768,7 @@ export function useVoiceMode({
 
   const clearSpeechQueue = useCallback(() => {
     speechQueueRef.current = [];
+    prefetchedAudioRef.current = null;
   }, []);
 
   const queueSentence = useCallback(
@@ -696,17 +780,22 @@ export function useVoiceMode({
       if (currentState === 'listening' || currentState === 'processing') return;
       if (currentState === 'speaking') {
         speechQueueRef.current.push(text);
+        if (!prefetchedAudioRef.current) {
+          // Pre-fetch the queue head (index 0), not the just-pushed tail
+          prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
+        }
       } else {
         speechQueueRef.current = [];
         void speak(text);
       }
     },
-    [speak]
+    [speak, prefetchAudio]
   );
 
   // Barge-in: interrupt TTS and start listening
   const bargeIn = useCallback(() => {
     speechQueueRef.current = [];
+    prefetchedAudioRef.current = null;
     callbacksRef.current.onStopStream?.();
     bargeInStore();
     stopAudioPlayback();
@@ -718,6 +807,7 @@ export function useVoiceMode({
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
+    prefetchedAudioRef.current = null;
     stopAudioPlayback();
     stopSpeakingStore();
     setCurrentAudioId(null);
@@ -738,6 +828,8 @@ export function useVoiceMode({
       if (recording.stream) {
         recording.stream.getTracks().forEach((track) => { track.stop(); });
       }
+      // Drop any in-flight pre-fetch so it can't resolve into an unmounted hook
+      prefetchedAudioRef.current = null;
       // Stop playback
       if (playback.autoListenTimer) {
         clearTimeout(playback.autoListenTimer);

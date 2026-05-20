@@ -3,7 +3,7 @@
  *
  * Manages voice mode state for hands-free AI interaction.
  * Supports two interaction modes:
- * - Barge-in: Automatically detects speech and interrupts TTS playback
+ * - Conversation: Auto-listens after TTS finishes playing
  * - Tap-to-speak: Manual control with tap to start/stop recording
  *
  * Uses OpenAI's Whisper for STT and OpenAI TTS for speech synthesis.
@@ -18,7 +18,7 @@ const VOICE_TTS_VOICE_KEY = 'pagespace:voice:ttsVoice';
 const VOICE_AUTO_SEND_KEY = 'pagespace:voice:autoSend';
 
 export type VoiceModeOwner = 'global-assistant' | 'ai-page' | 'sidebar-chat';
-export type VoiceInteractionMode = 'barge-in' | 'tap-to-speak';
+export type VoiceInteractionMode = 'conversation' | 'tap-to-speak';
 
 export type VoiceState =
   | 'idle' // Voice mode off
@@ -88,7 +88,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   owner: null,
   voiceState: 'idle',
   hasLoadedSettings: false,
-  interactionMode: 'barge-in',
+  interactionMode: 'conversation',
   ttsVoice: 'nova',
   ttsSpeed: 1.0,
   autoSend: true,
@@ -204,12 +204,18 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     }
 
     // Note: We intentionally don't restore isEnabled - user should explicitly enable voice mode each session
-    const interactionMode = localStorage.getItem(VOICE_INTERACTION_MODE_KEY) as VoiceInteractionMode | null;
+    const rawMode = localStorage.getItem(VOICE_INTERACTION_MODE_KEY);
+    // 'barge-in' was the previous name for 'conversation' — migrate it
+    const interactionMode: VoiceInteractionMode =
+      rawMode === 'tap-to-speak' ? 'tap-to-speak' : 'conversation';
+    if (rawMode === 'barge-in') {
+      localStorage.setItem(VOICE_INTERACTION_MODE_KEY, interactionMode);
+    }
     const ttsVoice = localStorage.getItem(VOICE_TTS_VOICE_KEY) as TTSVoice | null;
     const autoSend = localStorage.getItem(VOICE_AUTO_SEND_KEY);
 
     set({
-      interactionMode: interactionMode || 'barge-in',
+      interactionMode,
       ttsVoice: ttsVoice || 'nova',
       autoSend: autoSend !== 'false', // Default true
       hasLoadedSettings: true,

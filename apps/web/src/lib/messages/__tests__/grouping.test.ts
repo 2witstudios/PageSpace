@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { isFirstInGroup } from '../grouping';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { isFirstInGroup, formatMessageDate } from '../grouping';
 
 describe('isFirstInGroup', () => {
   const t0 = new Date('2026-05-04T12:00:00Z');
@@ -79,5 +79,66 @@ describe('isFirstInGroup', () => {
         { authorKey: 'u1', createdAt: 'not a date' },
       ),
     ).toBe(true);
+  });
+
+  it('breaks the group when messages cross midnight even within the 5-minute window', () => {
+    // 23:59 → 00:00 next day, 1 minute apart — same author
+    const beforeMidnight = new Date('2026-05-04T23:59:30Z');
+    const afterMidnight = new Date('2026-05-05T00:00:30Z');
+    expect(
+      isFirstInGroup(
+        { authorKey: 'u1', createdAt: afterMidnight },
+        { authorKey: 'u1', createdAt: beforeMidnight },
+      ),
+    ).toBe(true);
+  });
+
+  it('does not break the group when messages are on the same calendar day within the window', () => {
+    // Same day, same author, 2 minutes apart — should still group
+    const a = new Date('2026-05-04T09:00:00Z');
+    const b = new Date('2026-05-04T09:02:00Z');
+    expect(
+      isFirstInGroup(
+        { authorKey: 'u1', createdAt: b },
+        { authorKey: 'u1', createdAt: a },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('formatMessageDate', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns "Today" for a date on the current calendar day', () => {
+    vi.setSystemTime(new Date('2026-05-04T15:00:00Z'));
+    expect(formatMessageDate(new Date('2026-05-04T08:00:00Z'))).toBe('Today');
+  });
+
+  it('returns "Yesterday" for a date on the previous calendar day', () => {
+    vi.setSystemTime(new Date('2026-05-04T15:00:00Z'));
+    expect(formatMessageDate(new Date('2026-05-03T10:00:00Z'))).toBe('Yesterday');
+  });
+
+  it('returns a weekday name for a date within the current week', () => {
+    // 2026-05-04 is a Monday; set "now" to Friday 2026-05-08
+    vi.setSystemTime(new Date('2026-05-08T12:00:00Z'));
+    const result = formatMessageDate(new Date('2026-05-05T10:00:00Z'));
+    expect(result).toBe('Tuesday');
+  });
+
+  it('returns "Month d, yyyy" for dates older than the current week', () => {
+    vi.setSystemTime(new Date('2026-05-17T12:00:00Z'));
+    expect(formatMessageDate(new Date('2026-05-01T10:00:00Z'))).toBe('May 1, 2026');
+  });
+
+  it('accepts ISO string input', () => {
+    vi.setSystemTime(new Date('2026-05-04T15:00:00Z'));
+    expect(formatMessageDate('2026-05-04T08:00:00Z')).toBe('Today');
   });
 });

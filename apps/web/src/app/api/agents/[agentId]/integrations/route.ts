@@ -9,6 +9,7 @@ import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
 import type { ToolDefinition } from '@pagespace/lib/integrations/types';
+import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -168,6 +169,8 @@ export async function POST(
     });
 
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'agent_grant', resourceId: agentId });
+
+    void broadcastAgentGrantChanged({ agentId, triggeredBy: { userId: auth.userId } });
 
     return NextResponse.json({ grant }, { status: 201 });
   } catch (error) {

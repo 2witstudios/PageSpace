@@ -13,6 +13,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -22,6 +23,7 @@ const shareInviteBodySchema = z
     permissions: z
       .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
       .min(1, 'At least VIEW permission is required'),
+    expiryDays: z.number().int().min(1).max(365).nullable().optional(),
   })
   .superRefine(({ permissions }, ctx) => {
     if (
@@ -87,7 +89,7 @@ export async function POST(
         { status: 400 },
       );
     }
-    const { email, permissions } = parsed.data;
+    const { email, permissions, expiryDays } = parsed.data;
 
     // R5: DELETE is blocked at the zod layer above; this is a belt-and-suspenders guard
     // (the zod enum only allows VIEW | EDIT | SHARE, so DELETE can never reach here)
@@ -150,6 +152,14 @@ export async function POST(
         details: { targetUserId: existingUser.id, permissions, operation: 'share_invite_direct' },
       });
 
+      if (page.driveId) {
+        broadcastPageEvent(
+          createPageEventPayload(page.driveId, pageId, 'updated')
+        ).catch((err: Error) => {
+          loggers.api.error('Failed to broadcast share-invite page event:', err);
+        });
+      }
+
       return NextResponse.json({
         kind: 'granted',
         permissionId: permissionRow.id,
@@ -184,7 +194,10 @@ export async function POST(
       );
     }
 
-    const { token, tokenHash, expiresAt } = createInviteToken({ now });
+    const { token, tokenHash, expiresAt } = createInviteToken({
+      now,
+      expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
+    });
 
     let pendingInvite: { id: string };
     try {

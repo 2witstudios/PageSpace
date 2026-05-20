@@ -136,7 +136,7 @@ export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCal
                 {/* Events first (take visual precedence) */}
                 {group.events.map((event) => (
                   <EventCard
-                    key={event.id}
+                    key={`${event.id}-${event.startAt}`}
                     event={event}
                     colors={resolveEventColor(event, context, driveColorMap ?? null)}
                     onClick={() => handlers.onEventClick(event)}

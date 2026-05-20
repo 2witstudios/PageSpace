@@ -14,7 +14,7 @@ import { permissionManagementService } from '@/services/api';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
+import { kickUserFromPage, kickUserFromPageActivity, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -126,6 +126,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       where: eq(pages.id, pageId),
       columns: { driveId: true },
     });
+
+    if (page?.driveId) {
+      broadcastPageEvent(
+        createPageEventPayload(page.driveId, pageId, 'updated')
+      ).catch((err: Error) => {
+        loggers.api.error('Failed to broadcast page permission event:', err);
+      });
+    }
 
     return NextResponse.json({
       id: result.data.permissionId,

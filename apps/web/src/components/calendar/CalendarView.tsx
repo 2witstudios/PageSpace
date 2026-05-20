@@ -27,12 +27,15 @@ import { MobileCalendarView } from './MobileCalendarView';
 import { EventModal } from './EventModal';
 import { CalendarSidebar } from './CalendarSidebar';
 import {
+  AttendeeStatus,
   CalendarViewMode,
   CalendarEvent,
   CalendarHandlers,
   EventColorConfig,
+  RecurrenceRule,
   getDriveCalendarColor,
 } from './calendar-types';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface CalendarViewProps {
   context: 'user' | 'drive';
@@ -70,6 +73,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     allDay: boolean;
   } | null>(null);
 
+  const currentUserId = useAuthStore((s) => s.user?.id);
+
   const {
     events,
     tasks,
@@ -78,6 +83,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     createEvent,
     updateEvent,
     deleteEvent,
+    updateRsvp,
+    addAttendees,
+    removeAttendee,
     refresh: _refresh,
   } = useCalendarData({
     context,
@@ -93,6 +101,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   const { hiddenCalendars, toggleCalendar, showAll, hideAll, hiddenEventTypes, toggleEventType, isEventTypeVisible } =
     useCalendarFilterStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [selectedCalendarKey, setSelectedCalendarKey] = useState('personal');
 
   // Force-refresh drives on mount so the sidebar reflects current memberships
   const isUserContext = context === 'user';
@@ -157,6 +166,19 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     () => calendarEntries.map((c) => c.key),
     [calendarEntries]
   );
+
+  // When user context: derive the effective driveId/context for the event modal.
+  // Editing an existing event: use the event's own driveId. A null driveId means
+  // the event is personal — convert null→undefined so it isn't confused with "no
+  // event selected". Never inherit the selected calendar key when editing.
+  // Creating a new event: use the selected calendar key.
+  const creationDriveId = isUserContext && selectedCalendarKey !== 'personal'
+    ? selectedCalendarKey
+    : (isUserContext ? undefined : driveId);
+  const effectiveModalDriveId = selectedEvent
+    ? (selectedEvent.driveId ?? undefined)
+    : creationDriveId;
+  const effectiveModalContext: 'user' | 'drive' = effectiveModalDriveId ? 'drive' : 'user';
 
   const { data: googleCalendarStatus } = useSWR<GoogleCalendarStatusResponse>(
     '/api/integrations/google-calendar/status',
@@ -246,6 +268,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     color?: string;
     attendeeIds?: string[];
     pageId?: string | null;
+    recurrenceRule?: RecurrenceRule | null;
     agentTrigger?: {
       agentPageId: string;
       prompt?: string;
@@ -258,13 +281,100 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     } else {
       // POST schema doesn't accept null (only undefined no-op or object upsert)
       const { agentTrigger, ...rest } = eventData;
+      const driveOverride = isUserContext && selectedCalendarKey !== 'personal'
+        ? selectedCalendarKey
+        : undefined;
       await createEvent({
         ...rest,
         agentTrigger: agentTrigger ?? undefined,
-      });
+      }, driveOverride);
     }
     setIsEventModalOpen(false);
   };
+
+  const handleRsvp = useCallback(async (status: AttendeeStatus) => {
+    if (!selectedEvent) return;
+    const previousEvent = selectedEvent;
+    setSelectedEvent((prev) =>
+      prev
+        ? {
+            ...prev,
+            attendees: prev.attendees.map((a) =>
+              a.userId === currentUserId
+                ? { ...a, status, respondedAt: new Date().toISOString() }
+                : a,
+            ),
+          }
+        : null,
+    );
+    try {
+      await updateRsvp(selectedEvent.id, status);
+    } catch {
+      setSelectedEvent(previousEvent);
+      throw new Error('Failed to update RSVP');
+    }
+  }, [selectedEvent, updateRsvp, currentUserId]);
+
+  const handleAddAttendee = useCallback(
+    async (userId: string) => {
+      if (!selectedEvent) return;
+      const prevEvent = selectedEvent;
+      setSelectedEvent((prev) =>
+        prev
+          ? {
+              ...prev,
+              attendees: [
+                ...prev.attendees,
+                {
+                  id: userId,
+                  eventId: prev.id,
+                  userId,
+                  status: 'PENDING' as const,
+                  responseNote: null,
+                  isOrganizer: false,
+                  isOptional: false,
+                  invitedAt: new Date().toISOString(),
+                  respondedAt: null,
+                  user: { id: userId, name: null, image: null },
+                },
+              ],
+            }
+          : null
+      );
+      const targetEventId = selectedEvent.id;
+      try {
+        const updatedAttendees = await addAttendees(targetEventId, [userId]);
+        if (updatedAttendees.length > 0) {
+          setSelectedEvent((prev) =>
+            prev && prev.id === targetEventId ? { ...prev, attendees: updatedAttendees } : prev
+          );
+        }
+      } catch {
+        setSelectedEvent((prev) =>
+          prev && prev.id === targetEventId ? prevEvent : prev
+        );
+        throw new Error('Failed to add attendee');
+      }
+    },
+    [selectedEvent, addAttendees]
+  );
+
+  const handleRemoveAttendee = useCallback(
+    async (userId: string) => {
+      if (!selectedEvent) return;
+      const prevEvent = selectedEvent;
+      setSelectedEvent((prev) =>
+        prev ? { ...prev, attendees: prev.attendees.filter((a) => a.userId !== userId) } : null
+      );
+      try {
+        await removeAttendee(selectedEvent.id, userId);
+      } catch {
+        setSelectedEvent(prevEvent);
+        throw new Error('Failed to remove attendee');
+      }
+    },
+    [selectedEvent, removeAttendee]
+  );
 
   // Get header title based on view mode
   const getHeaderTitle = () => {
@@ -316,8 +426,11 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           defaultValues={newEventDefaults}
           onSave={handleEventSave}
           onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
-          driveId={driveId}
-          context={context}
+          onRsvp={handleRsvp}
+          onAddAttendee={handleAddAttendee}
+          onRemoveAttendee={handleRemoveAttendee}
+          driveId={effectiveModalDriveId}
+          context={effectiveModalContext}
         />
       </div>
     );
@@ -510,6 +623,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
               userEventsVisible={isEventTypeVisible('user')}
               onToggleAgentEvents={() => toggleEventType('agent')}
               onToggleUserEvents={() => toggleEventType('user')}
+              selectedKey={selectedCalendarKey}
+              onSelectCalendar={setSelectedCalendarKey}
             />
           </aside>
         )}
@@ -576,8 +691,11 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         defaultValues={newEventDefaults}
         onSave={handleEventSave}
         onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
-        driveId={driveId}
-        context={context}
+        onRsvp={handleRsvp}
+        onAddAttendee={handleAddAttendee}
+        onRemoveAttendee={handleRemoveAttendee}
+        driveId={effectiveModalDriveId}
+        context={effectiveModalContext}
       />
     </div>
   );

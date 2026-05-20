@@ -14,6 +14,9 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/lib/services/invites';
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
+import { db } from '@pagespace/db/db';
+import { and, eq } from '@pagespace/db/operators';
+import { driveRoles } from '@pagespace/db/schema/members';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -39,6 +42,7 @@ const inviteBodySchema = z.union([
     role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
     customRoleId: z.string().nullable().optional(),
     permissions: z.array(permissionEntrySchema).default([]),
+    expiryDays: z.number().int().min(1).max(365).nullable().optional(),
   }),
 ]);
 
@@ -147,6 +151,7 @@ interface EmailBody {
   role: 'MEMBER' | 'ADMIN';
   customRoleId?: string | null;
   permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+  expiryDays?: number | null;
 }
 
 async function handleUserIdPath(args: {
@@ -200,6 +205,17 @@ async function handleUserIdPath(args: {
         driveId,
         inviterUserId,
       });
+    }
+  }
+
+  if (customRoleId && role !== 'ADMIN') {
+    const roleExists = await db
+      .select({ id: driveRoles.id })
+      .from(driveRoles)
+      .where(and(eq(driveRoles.id, customRoleId), eq(driveRoles.driveId, driveId)))
+      .limit(1);
+    if (roleExists.length === 0) {
+      return NextResponse.json({ error: 'Custom role not found in this drive' }, { status: 400 });
     }
   }
 
@@ -266,6 +282,7 @@ async function handleUserIdPath(args: {
       driveId,
       driveName: drive.name,
       role,
+      customRoleId: role === 'ADMIN' ? null : (customRoleId ?? null),
       invitedUserId,
       inviterUserId,
       ...(sourceEmail !== undefined && { inviteEmail: sourceEmail }),
@@ -402,7 +419,22 @@ async function handleEmailPath(args: {
     );
   }
 
-  const { token, tokenHash, expiresAt } = createInviteToken({ now });
+  if (customRoleId && role !== 'ADMIN') {
+    const roleExists = await db
+      .select({ id: driveRoles.id })
+      .from(driveRoles)
+      .where(and(eq(driveRoles.id, customRoleId), eq(driveRoles.driveId, driveId)))
+      .limit(1);
+    if (roleExists.length === 0) {
+      return NextResponse.json({ error: 'Custom role not found in this drive' }, { status: 400 });
+    }
+  }
+
+  const expiryDays = 'expiryDays' in body ? body.expiryDays : undefined;
+  const { token, tokenHash, expiresAt } = createInviteToken({
+    now,
+    expiryMinutes: expiryDays ? expiryDays * 24 * 60 : null,
+  });
 
   let pendingInvite: { id: string };
   try {
@@ -411,6 +443,7 @@ async function handleEmailPath(args: {
       email,
       driveId,
       role,
+      customRoleId: role === 'ADMIN' ? null : (customRoleId ?? null),
       invitedBy: inviterUserId,
       expiresAt,
       now,

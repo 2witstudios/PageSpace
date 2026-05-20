@@ -8,7 +8,6 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import {
-  createCalendarTriggerWorkflow,
   removeCalendarTrigger,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
@@ -173,9 +172,6 @@ export const calendarWriteTools = {
           if (!driveId) {
             return { success: false, error: 'Agent triggers require a drive event (driveId must be provided).' };
           }
-          if (recurrence) {
-            return { success: false, error: 'Agent triggers are not yet supported on recurring events. Create a one-time event instead.' };
-          }
           if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
             return { success: false, error: 'Agent trigger needs either a prompt or instructionPageId.' };
           }
@@ -315,8 +311,7 @@ export const calendarWriteTools = {
 
           let createdTriggerIdLocal: string | null = null;
           if (agentTrigger && driveId && validatedAgent) {
-            const { triggerId: newTriggerId } = await createCalendarTriggerWorkflow({
-              tx,
+            const { triggerId: newTriggerId } = await upsertCalendarTriggerWorkflowInTx(tx, {
               driveId,
               scheduledById: userId,
               calendarEventId: createdEvent.id,
@@ -328,6 +323,8 @@ export const calendarWriteTools = {
                 instructionPageId: agentTrigger.instructionPageId ?? null,
                 contextPageIds: agentTrigger.contextPageIds ?? [],
               },
+              recurrenceRule: recurrence ?? null,
+              recurrenceExceptions: [],
             });
 
             await tx
@@ -516,18 +513,6 @@ export const calendarWriteTools = {
           };
         }
 
-        // Reject agentTrigger upserts on recurring events. The cron poller
-        // fires triggers as one-shot occurrences, so attaching one to a
-        // recurring event would silently misfire on every occurrence after
-        // the first. Mirrors the create_calendar_event guard.
-        const willBeRecurring = recurrence !== undefined ? recurrence !== null : event.recurrenceRule !== null;
-        if (agentTrigger && willBeRecurring) {
-          return {
-            success: false,
-            error: 'Agent triggers are not supported for recurring events.',
-          };
-        }
-
         // Pre-validate agentTrigger BEFORE opening the tx so a bad payload
         // (off-drive agent / context page, missing prompt-or-instruction)
         // doesn't briefly hold row locks during the event update.
@@ -588,6 +573,7 @@ export const calendarWriteTools = {
           if (agentTrigger === null) {
             await removeCalendarTrigger(tx, eventId);
           } else if (agentTrigger && event.driveId) {
+            const effectiveRecurrenceRule = recurrence !== undefined ? recurrence : event.recurrenceRule;
             await upsertCalendarTriggerWorkflowInTx(tx, {
               driveId: event.driveId,
               scheduledById: userId,
@@ -595,6 +581,8 @@ export const calendarWriteTools = {
               triggerAt: updated.startAt,
               timezone: updated.timezone ?? 'UTC',
               agentTrigger,
+              recurrenceRule: effectiveRecurrenceRule,
+              recurrenceExceptions: event.recurrenceExceptions ?? [],
             });
           }
 

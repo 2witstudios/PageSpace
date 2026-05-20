@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -14,6 +14,8 @@ import { useAgentGrants, useUserConnections, useDriveConnections } from '@/hooks
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { post, put, del } from '@/lib/auth/auth-fetch';
 import type { SafeConnection, SafeGrant } from '@/components/integrations/types';
+import { useSocket } from '@/hooks/useSocket';
+import type { AgentGrantChangedPayload } from '@/lib/websocket/socket-utils';
 
 interface AgentIntegrationsPanelProps {
   pageId: string;
@@ -38,9 +40,22 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
   const { grants, isLoading: loadingGrants, error: grantsError, mutate: mutateGrants } = useAgentGrants(pageId);
   const { connections: userConnections, isLoading: loadingUser, error: userError } = useUserConnections();
   const { connections: driveConnections, isLoading: loadingDrive, error: driveError } = useDriveConnections(driveId);
+  const socket = useSocket();
 
   const [toggling, setToggling] = useState<string | null>(null);
   const [updatingGrant, setUpdatingGrant] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleGrantChanged = (payload: AgentGrantChangedPayload) => {
+      if (payload.agentId !== pageId) return;
+      mutateGrants();
+    };
+    socket.on('agent:grant_changed', handleGrantChanged);
+    return () => {
+      socket.off('agent:grant_changed', handleGrantChanged);
+    };
+  }, [socket, pageId, mutateGrants]);
 
   const isLoading = loadingGrants || loadingUser || loadingDrive;
   const error = grantsError || userError || driveError;

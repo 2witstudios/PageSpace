@@ -95,29 +95,39 @@ const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListP
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg min-w-48 max-w-sm">
       {props.items.length ? (
         <ul className="max-h-60 overflow-y-auto">
-          {props.items.map((item, index) => (
-            <li
-              key={item.id}
-              className={`px-3 py-2 cursor-pointer transition-colors duration-150 ease-in-out hover:bg-gray-100 hover:dark:bg-gray-700 ${
-                index === selectedIndex ? 'bg-gray-100 dark:bg-gray-700 border-l-2 border-blue-500' : ''
-              }`}
-              onClick={() => selectItem(index)}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {item.label}
-                </span>
-                <span className="text-xs text-gray-500 ml-auto">
-                  {item.type}
-                </span>
-              </div>
-              {item.description && (
-                <div className="text-xs text-gray-500 mt-1 truncate">
-                  {item.description}
+          {props.items.map((item, index) => {
+            const isGroup = item.type === 'everyone' || item.type === 'role';
+            return (
+              <li
+                key={`${item.id}-${index}`}
+                className={`px-3 py-2 cursor-pointer transition-colors duration-150 ease-in-out hover:bg-gray-100 hover:dark:bg-gray-700 ${
+                  index === selectedIndex ? 'bg-gray-100 dark:bg-gray-700 border-l-2 border-blue-500' : ''
+                }`}
+                onClick={() => selectItem(index)}
+              >
+                <div className="flex items-center gap-2">
+                  {isGroup && (
+                    <span className="text-xs font-bold text-white bg-indigo-500 rounded px-1 py-0.5 shrink-0">
+                      @
+                    </span>
+                  )}
+                  <span className={`text-sm font-medium ${isGroup ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                    {item.label}
+                  </span>
+                  {!isGroup && (
+                    <span className="text-xs text-gray-500 ml-auto">
+                      {item.type}
+                    </span>
+                  )}
                 </div>
-              )}
-            </li>
-          ))}
+                {item.description && (
+                  <div className="text-xs text-gray-500 mt-1 truncate">
+                    {item.description}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <div className="p-3 text-sm text-gray-500">No results found</div>
@@ -152,45 +162,48 @@ const PageMentionNode = Mention.extend({
       label: { default: null },
       driveId: { default: null },
       driveSlug: { default: null },
+      // 'page' | 'user' | 'everyone' | 'role'
+      mentionType: { default: 'page' },
     };
   },
 
   addNodeView() {
-    return ({ node }: { node: { attrs: { id: string; label: string; driveId: string; driveSlug: string } } }) => {
-      const dom = document.createElement('a');
-      const href = node.attrs.driveId
-        ? `/dashboard/${node.attrs.driveId}/${node.attrs.id}`
-        : `/dashboard/`;
+    return ({ node }: { node: { attrs: { id: string; label: string; driveId: string; driveSlug: string; mentionType: string } } }) => {
+      const { mentionType, id, label, driveId } = node.attrs;
+      const isGroup = mentionType === 'everyone' || mentionType === 'role';
 
-      // Set up link attributes - NO target="_blank" to stay in WebView on Capacitor
+      if (isGroup) {
+        const dom = document.createElement('span');
+        dom.className = 'mention mention--group';
+        dom.contentEditable = 'false';
+        dom.setAttribute('data-mention-type', mentionType);
+        if (mentionType === 'role') dom.setAttribute('data-role-id', id);
+        if (driveId) dom.setAttribute('data-drive-id', driveId);
+        dom.textContent = `@${label}`;
+        dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
+        return { dom, contentDOM: null };
+      }
+
+      const dom = document.createElement('a');
+      const href = driveId ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
+
+      // NO target="_blank" - stays in WebView on Capacitor
       dom.href = href;
       dom.rel = 'noopener noreferrer nofollow';
       dom.className = 'mention';
       dom.contentEditable = 'false';
       dom.setAttribute('data-mention-type', 'page');
-      dom.setAttribute('data-page-id', node.attrs.id);
+      dom.setAttribute('data-page-id', id);
+      dom.textContent = `@${label}`;
 
-      // Set content
-      dom.textContent = `@${node.attrs.label}`;
-
-      // Handle click events - dispatch navigation event for React router handling
-      // Falls back to window.location for non-React contexts
       dom.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        // Dispatch event for parent component to handle with router.push()
         dispatchInternalNavigation(href);
       });
+      dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
 
-      // Prevent selection on click
-      dom.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-      });
-
-      return {
-        dom,
-        contentDOM: null, // No content DOM since this is atomic
-      };
+      return { dom, contentDOM: null };
     };
   },
 });
@@ -201,21 +214,48 @@ export const PageMention = PageMentionNode.configure({
     contenteditable: 'false',
   },
   renderHTML({ options, node }) {
-    const href = node.attrs.driveId
-      ? `/dashboard/${node.attrs.driveId}/${node.attrs.id}`
-      : `/dashboard/`;
+    const { mentionType, id, label, driveId } = node.attrs;
+
+    if (mentionType === 'everyone') {
+      return [
+        'span',
+        {
+          ...options.HTMLAttributes,
+          'data-mention-type': 'everyone',
+          'data-drive-id': driveId ?? '',
+          contenteditable: 'false',
+        },
+        `@${label}`,
+      ];
+    }
+
+    if (mentionType === 'role') {
+      return [
+        'span',
+        {
+          ...options.HTMLAttributes,
+          'data-mention-type': 'role',
+          'data-role-id': id,
+          'data-drive-id': driveId ?? '',
+          contenteditable: 'false',
+        },
+        `@${label}`,
+      ];
+    }
+
+    const href = driveId ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
     return [
       'a',
       {
         ...options.HTMLAttributes,
-        href: href,
+        href,
         // NO target="_blank" - stays in WebView on Capacitor iOS
         rel: 'noopener noreferrer nofollow',
         'data-mention-type': 'page',
-        'data-page-id': node.attrs.id,
+        'data-page-id': id,
         contenteditable: 'false',
       },
-      `@${node.attrs.label}`,
+      `@${label}`,
     ];
   },
   suggestion: {
@@ -230,7 +270,7 @@ export const PageMention = PageMentionNode.configure({
         return [];
       }
 
-      const types = ['page', 'user'].join(',');
+      const types = ['page', 'user', 'everyone', 'role'].join(',');
       const url = `/api/mentions/search?q=${encodeURIComponent(query)}&driveId=${encodeURIComponent(currentDriveId)}&types=${types}`;
       console.log('[TipTap] Fetching suggestions from:', url);
 
@@ -255,8 +295,12 @@ export const PageMention = PageMentionNode.configure({
               command: (item: MentionSuggestion) => {
                 console.log('[TipTap] command called with item:', item);
                 const { drives } = useDriveStore.getState();
-                const drive = drives.find(d => d.id === (item.data as PageMentionData).driveId);
-                
+                const isGroup = item.type === 'everyone' || item.type === 'role';
+                const itemDriveId = isGroup
+                  ? (item.data as { driveId: string }).driveId
+                  : (item.data as PageMentionData).driveId;
+                const drive = drives.find(d => d.id === itemDriveId);
+
                 console.log('[TipTap] Executing mention insertion command');
                 const { editor, range } = props;
                 editor
@@ -269,17 +313,18 @@ export const PageMention = PageMentionNode.configure({
                       attrs: {
                         id: item.id,
                         label: item.label,
-                        driveId: (item.data as PageMentionData).driveId,
+                        driveId: itemDriveId,
                         driveSlug: drive?.slug || '',
+                        mentionType: item.type,
                       },
                     },
                     {
                       type: 'text',
-                      text: '\u00A0', // Add a non-breaking space right after
+                      text: '\u00A0', // Non-breaking space after mention
                     },
                   ])
                   .run();
-                
+
                 console.log('[TipTap] Mention insertion command completed');
               },
             },
@@ -316,8 +361,12 @@ export const PageMention = PageMentionNode.configure({
             items: props.items,
             command: (item: MentionSuggestion) => {
               const { drives } = useDriveStore.getState();
-              const drive = drives.find(d => d.id === (item.data as PageMentionData).driveId);
-              
+              const isGroup = item.type === 'everyone' || item.type === 'role';
+              const itemDriveId = isGroup
+                ? (item.data as { driveId: string }).driveId
+                : (item.data as PageMentionData).driveId;
+              const drive = drives.find(d => d.id === itemDriveId);
+
               const { editor, range } = props;
               editor
                 .chain()
@@ -329,13 +378,14 @@ export const PageMention = PageMentionNode.configure({
                     attrs: {
                       id: item.id,
                       label: item.label,
-                      driveId: (item.data as PageMentionData).driveId,
+                      driveId: itemDriveId,
                       driveSlug: drive?.slug || '',
+                      mentionType: item.type,
                     },
                   },
                   {
                     type: 'text',
-                    text: '\u00A0', // Add a non-breaking space right after
+                    text: '\u00A0', // Non-breaking space after mention
                   },
                 ])
                 .run();

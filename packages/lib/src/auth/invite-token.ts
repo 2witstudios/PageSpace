@@ -11,23 +11,23 @@
 import { generateToken, hashToken } from './token-utils';
 import { secureCompare } from './secure-compare';
 
-const DEFAULT_EXPIRY_MINUTES = 60 * 48;
-
 export interface CreatedInviteToken {
   token: string;
   tokenHash: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
 }
 
 export const createInviteToken = ({
   now,
-  expiryMinutes = DEFAULT_EXPIRY_MINUTES,
+  expiryMinutes = null,
 }: {
   now: Date;
-  expiryMinutes?: number;
+  expiryMinutes?: number | null;
 }): CreatedInviteToken => {
   const { token, hash } = generateToken('ps_invite');
-  const expiresAt = new Date(now.getTime() + expiryMinutes * 60 * 1000);
+  const expiresAt = expiryMinutes !== null
+    ? new Date(now.getTime() + expiryMinutes * 60 * 1000)
+    : null;
   return { token, tokenHash: hash, expiresAt };
 };
 

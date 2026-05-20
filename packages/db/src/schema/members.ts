@@ -66,6 +66,21 @@ export const driveMembers = pgTable('drive_members', {
   }
 });
 
+// Drive agent members - AI agent pages with drive-scoped RBAC roles
+export const driveAgentMembers = pgTable('drive_agent_members', {
+  id:           text('id').primaryKey().$defaultFn(() => createId()),
+  driveId:      text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  agentPageId:  text('agentPageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  role:         memberRole('role').default('MEMBER').notNull(),
+  customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
+  addedBy:      text('addedBy').references(() => users.id, { onDelete: 'set null' }),
+  addedAt:      timestamp('addedAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  driveAgentKey: unique('drive_agent_members_drive_agent_key').on(table.driveId, table.agentPageId),
+  driveIdx:  index('drive_agent_members_drive_id_idx').on(table.driveId),
+  agentIdx:  index('drive_agent_members_agent_page_id_idx').on(table.agentPageId),
+}));
+
 // Enhanced permissions with boolean flags
 export const pagePermissions = pgTable('page_permissions', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -134,6 +149,25 @@ export const pagePermissionsRelations = relations(pagePermissions, ({ one }) => 
   }),
   grantedByUser: one(users, {
     fields: [pagePermissions.grantedBy],
+    references: [users.id],
+  }),
+}));
+
+export const driveAgentMembersRelations = relations(driveAgentMembers, ({ one }) => ({
+  drive: one(drives, {
+    fields: [driveAgentMembers.driveId],
+    references: [drives.id],
+  }),
+  agentPage: one(pages, {
+    fields: [driveAgentMembers.agentPageId],
+    references: [pages.id],
+  }),
+  customRole: one(driveRoles, {
+    fields: [driveAgentMembers.customRoleId],
+    references: [driveRoles.id],
+  }),
+  addedByUser: one(users, {
+    fields: [driveAgentMembers.addedBy],
     references: [users.id],
   }),
 }));

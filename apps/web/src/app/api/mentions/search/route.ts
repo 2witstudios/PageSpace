@@ -8,6 +8,7 @@ import { db } from '@pagespace/db/db'
 import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
 
@@ -219,6 +220,79 @@ export async function GET(request: Request) {
       return NextResponse.json([]);
     }
 
+    // For within-drive searches, pre-fetch member list once so both the group-mention
+    // gate and the user-suggestion block can reuse it without a double query.
+    let withinDriveMemberIds: string[] | null = null;
+    if (!crossDrive && driveId) {
+      const ids = await getDriveRecipientUserIds(driveId);
+      withinDriveMemberIds = ids;
+      if (ids.length === 0) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      }
+    }
+
+    // Group mentions (@everyone, @role) — within-drive only, visible to members/owners only.
+    // Users with only page-level access must not see role membership metadata.
+    const wantsGroups =
+      !crossDrive &&
+      driveId &&
+      withinDriveMemberIds?.includes(userId) &&
+      (requestedTypes.includes('user') ||
+        requestedTypes.includes('everyone' as MentionType) ||
+        requestedTypes.includes('role' as MentionType));
+
+    if (wantsGroups) {
+      const q = query.trim().toLowerCase();
+
+      // @everyone
+      if (!q || 'everyone'.startsWith(q)) {
+        suggestions.push({
+          id: 'everyone',
+          label: 'everyone',
+          type: 'everyone',
+          data: { driveId: driveId! },
+          description: 'Notify all drive members',
+        });
+      }
+
+      // Standard roles
+      const standardRoles: { id: 'OWNER' | 'ADMIN' | 'MEMBER'; label: string }[] = [
+        { id: 'OWNER', label: 'Owner' },
+        { id: 'ADMIN', label: 'Admin' },
+        { id: 'MEMBER', label: 'Member' },
+      ];
+      for (const { id, label } of standardRoles) {
+        if (!q || label.toLowerCase().startsWith(q) || id.toLowerCase().startsWith(q)) {
+          suggestions.push({
+            id,
+            label,
+            type: 'role',
+            data: { driveId: driveId!, roleId: id },
+            description: `Notify all ${label.toLowerCase()}s`,
+          });
+        }
+      }
+
+      // Custom drive roles
+      const customRoles = await db
+        .select({ id: driveRoles.id, name: driveRoles.name, color: driveRoles.color })
+        .from(driveRoles)
+        .where(eq(driveRoles.driveId, driveId!))
+        .orderBy(driveRoles.position);
+
+      for (const cr of customRoles) {
+        if (!q || cr.name.toLowerCase().includes(q)) {
+          suggestions.push({
+            id: cr.id,
+            label: cr.name,
+            type: 'role',
+            data: { driveId: driveId!, roleId: cr.id, color: cr.color ?? undefined },
+            description: `Notify all ${cr.name} members`,
+          });
+        }
+      }
+    }
+
     // Search pages (all page types)
     if (requestedTypes.includes('page')) {
       const searchCondition = buildMultiWordSearchCondition(query);
@@ -296,14 +370,9 @@ export async function GET(request: Request) {
           }
         }
       } else {
-        // Within-drive: surface members only to other drive members/owners
-        const memberIds = await getDriveRecipientUserIds(driveId!);
-        if (memberIds.length === 0) {
-          return NextResponse.json(
-            { error: 'Drive not found' },
-            { status: 404 }
-          );
-        }
+        // Within-drive: surface members only to other drive members/owners.
+        // Reuse the already-fetched withinDriveMemberIds to avoid a second DB query.
+        const memberIds = withinDriveMemberIds ?? [];
         if (memberIds.includes(userId)) {
           for (const id of memberIds) {
             authorizedUserIds.add(id);
@@ -350,21 +419,20 @@ export async function GET(request: Request) {
     }
 
 
-    // Sort by relevance when there's a query; preserve DB order (updatedAt) when empty
+    // Keep group mentions (everyone/role) at the top; sort page/user by relevance
+    const groupSuggestions = suggestions.filter(s => s.type === 'everyone' || s.type === 'role');
+    const otherSuggestions = suggestions.filter(s => s.type !== 'everyone' && s.type !== 'role');
+
     if (query.trim()) {
-      suggestions.sort((a, b) => {
+      otherSuggestions.sort((a, b) => {
         const aScore = calculateRelevanceScore(a.label, query);
         const bScore = calculateRelevanceScore(b.label, query);
-
-        if (aScore !== bScore) {
-          return bScore - aScore;
-        }
-
+        if (aScore !== bScore) return bScore - aScore;
         return a.label.localeCompare(b.label);
       });
     }
 
-    const finalSuggestions = suggestions.slice(0, 10);
+    const finalSuggestions = [...groupSuggestions, ...otherSuggestions].slice(0, 10);
     loggers.api.debug('[API] Returning suggestions', { count: finalSuggestions.length, suggestions: finalSuggestions });
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: driveId ?? '*', details: { source: 'mentions', resultCount: finalSuggestions.length } });

@@ -10,7 +10,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
-import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
+import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
@@ -447,7 +447,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       // event, inflating the recipient's unread count by 2 instead of 1.
       const isThreadOnlyReply = !mirrorWithRelations;
       if (isThreadOnlyReply && replyContent.trim().length > 0 && channel?.driveId) {
-        const mentionedUserIds = extractMentionedUserIds(replyContent);
+        const mentionedUserIds = await expandMentionsToUserIds(replyContent, channel.driveId);
         // Non-followers need channel_updated so the thread surfaces in their unread.
         // Followers already receive thread_updated above — sending channel_updated
         // too would double-count their unread.
@@ -645,7 +645,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       });
 
       try {
-        const mentionedIds = extractMentionedUserIds(messageContent);
+        const mentionedIds = await expandMentionsToUserIds(messageContent, channel.driveId);
         const candidates = mentionedIds.filter((id) => id !== userId);
         if (candidates.length > 0) {
           const viewChecks = await Promise.all(

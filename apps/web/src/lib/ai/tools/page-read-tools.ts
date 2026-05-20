@@ -6,7 +6,7 @@ import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
-import { getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
+import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { getPageTypeEmoji, isFolderPage, isCodePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
@@ -29,14 +29,10 @@ export const pageReadTools = {
       }
 
       try {
-        // Check if user has access to this drive using the provided ID
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
-          throw new Error(`You don't have access to the "${driveSlug}" workspace`);
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
+          return { success: false, error: `You don't have access to the "${driveSlug}" workspace` };
         }
-
-        // Get all pages user has access to in the drive (optimized single query)
-        const visiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
 
         // Sort by position to maintain order
         visiblePages.sort((a, b) => a.position - b.position);
@@ -124,9 +120,7 @@ export const pageReadTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
-        // Check user access permissions (silent to reduce log noise)
-        const accessLevel = await getUserAccessLevel(userId, page.id, { silent: true });
-        if (!accessLevel) {
+        if (!await canActorViewPage(context as ToolExecutionContext, page.id)) {
           throw new Error('Insufficient permissions to read this document');
         }
 
@@ -650,9 +644,7 @@ export const pageReadTools = {
       }
 
       try {
-        // Check if user has access to this drive using the provided ID
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error(`You don't have access to the "${driveSlug}" workspace`);
         }
 
@@ -753,13 +745,8 @@ export const pageReadTools = {
           };
         }
 
-        // Check user access permissions
-        const accessLevel = await getUserAccessLevel(userId, page.id, { silent: true });
-        if (!accessLevel) {
-          return {
-            success: false,
-            error: 'Insufficient permissions to access this agent',
-          };
+        if (!await canActorViewPage(context as ToolExecutionContext, page.id)) {
+          return { success: false, error: 'Insufficient permissions to access this agent' };
         }
 
         // Query conversations grouped by conversationId
@@ -917,13 +904,8 @@ export const pageReadTools = {
           };
         }
 
-        // Check user access permissions
-        const accessLevel = await getUserAccessLevel(userId, page.id, { silent: true });
-        if (!accessLevel) {
-          return {
-            success: false,
-            error: 'Insufficient permissions to access this conversation',
-          };
+        if (!await canActorViewPage(context as ToolExecutionContext, page.id)) {
+          return { success: false, error: 'Insufficient permissions to access this conversation' };
         }
 
         // Get all messages for this conversation

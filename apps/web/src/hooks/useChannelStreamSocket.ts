@@ -14,6 +14,8 @@ import type {
   ChatMessageDeletedPayload,
   ChatUndoAppliedPayload,
   ChatConversationAddedPayload,
+  ChatConversationRenamedPayload,
+  ChatConversationDeletedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
 
@@ -74,6 +76,18 @@ export interface UseChannelStreamSocketOptions {
    * conversation to their history list, gated by `shouldPrependConversation`.
    */
   onConversationAdded?: (payload: ChatConversationAddedPayload) => void;
+  /**
+   * Fires when a remote tab renames a conversation in this agent room.
+   * Same stale-room (`agentId !== channelId`) + own-tab dedup as
+   * `onConversationAdded`.
+   */
+  onConversationRenamed?: (payload: ChatConversationRenamedPayload) => void;
+  /**
+   * Fires when a remote tab deletes a conversation in this agent room.
+   * Same stale-room (`agentId !== channelId`) + own-tab dedup as
+   * `onConversationAdded`.
+   */
+  onConversationDeleted?: (payload: ChatConversationDeletedPayload) => void;
 }
 
 /** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
@@ -91,6 +105,8 @@ export function useChannelStreamSocket(
   const onMessageDeletedRef = useRef(options?.onMessageDeleted);
   const onUndoAppliedRef = useRef(options?.onUndoApplied);
   const onConversationAddedRef = useRef(options?.onConversationAdded);
+  const onConversationRenamedRef = useRef(options?.onConversationRenamed);
+  const onConversationDeletedRef = useRef(options?.onConversationDeleted);
   onStreamCompleteRef.current = options?.onStreamComplete;
   onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
   onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
@@ -99,6 +115,8 @@ export function useChannelStreamSocket(
   onMessageDeletedRef.current = options?.onMessageDeleted;
   onUndoAppliedRef.current = options?.onUndoApplied;
   onConversationAddedRef.current = options?.onConversationAdded;
+  onConversationRenamedRef.current = options?.onConversationRenamed;
+  onConversationDeletedRef.current = options?.onConversationDeleted;
 
   useEffect(() => {
     if (!socket || !channelId) return;
@@ -258,6 +276,18 @@ export function useChannelStreamSocket(
       onConversationAddedRef.current?.(payload);
     };
 
+    const handleConversationRenamed = (payload: ChatConversationRenamedPayload) => {
+      if (payload.agentId !== channelId) return;
+      if (isOwnStream(payload.triggeredBy, localBrowserSessionId)) return;
+      onConversationRenamedRef.current?.(payload);
+    };
+
+    const handleConversationDeleted = (payload: ChatConversationDeletedPayload) => {
+      if (payload.agentId !== channelId) return;
+      if (isOwnStream(payload.triggeredBy, localBrowserSessionId)) return;
+      onConversationDeletedRef.current?.(payload);
+    };
+
     socket.on('chat:stream_start', handleStreamStart);
     socket.on('chat:stream_complete', handleStreamComplete);
     socket.on('chat:user_message', handleUserMessage);
@@ -265,6 +295,8 @@ export function useChannelStreamSocket(
     socket.on('chat:message_deleted', handleMessageDeleted);
     socket.on('chat:undo_applied', handleUndoApplied);
     socket.on('chat:conversation_added', handleConversationAdded);
+    socket.on('chat:conversation_renamed', handleConversationRenamed);
+    socket.on('chat:conversation_deleted', handleConversationDeleted);
 
     return () => {
       cancelled = true;
@@ -275,6 +307,8 @@ export function useChannelStreamSocket(
       socket.off('chat:message_deleted', handleMessageDeleted);
       socket.off('chat:undo_applied', handleUndoApplied);
       socket.off('chat:conversation_added', handleConversationAdded);
+      socket.off('chat:conversation_renamed', handleConversationRenamed);
+      socket.off('chat:conversation_deleted', handleConversationDeleted);
       for (const controller of controllers.values()) {
         controller.abort();
       }

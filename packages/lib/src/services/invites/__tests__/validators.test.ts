@@ -12,6 +12,7 @@ const baseInvite = (overrides: Partial<Invite> = {}): Invite => ({
   driveId: 'drive_1',
   driveName: 'Acme',
   role: 'MEMBER',
+  customRoleId: null,
   invitedBy: 'user_inviter',
   expiresAt: new Date('2099-01-01T00:00:00.000Z'),
   consumedAt: null,
@@ -86,6 +87,13 @@ describe('validateInviteForUser', () => {
       now,
     });
     expect(result).toEqual({ ok: false, error: 'TOKEN_EXPIRED' });
+  });
+
+  it('given an invite with null expiresAt (no expiry), should return ok', () => {
+    const invite = baseInvite({ expiresAt: null });
+    expect(
+      validateInviteForUser({ invite, userEmail, suspendedAt: null, now }),
+    ).toEqual({ ok: true, data: invite });
   });
 });
 

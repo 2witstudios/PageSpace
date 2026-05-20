@@ -257,7 +257,7 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2">
                 <Wrench className="h-5 w-5" />
-                Tool Definitions ({modeFilteredTools.length} available in {selectedMode === 'fullAccess' ? 'Full Access' : 'Read-Only'} mode)
+                Upfront Tool Definitions ({modeFilteredTools.length} sent with full schemas in {selectedMode === 'fullAccess' ? 'Full Access' : 'Read-Only'} mode)
               </CardTitle>
               <Button
                 variant="outline"
@@ -346,16 +346,35 @@ export default function GlobalPromptClient({ data }: GlobalPromptClientProps) {
               })}
             </Accordion>
 
-            {/* Denied Tools for this Mode */}
+            {/* Core tools blocked by read-only mode */}
             {deniedTools.length > 0 && (
               <div className="mt-6 pt-6 border-t">
                 <h4 className="text-sm font-medium mb-3 text-red-600 dark:text-red-400">
-                  Denied Tools in {selectedMode === 'fullAccess' ? 'Full Access' : 'Read-Only'} mode ({deniedTools.length})
+                  Core tools blocked in Read-Only mode ({deniedTools.length})
                 </h4>
                 <div className="flex flex-wrap gap-2">
                   {deniedTools.map((tool) => (
                     <Badge key={tool.name} variant="secondary" className="font-mono text-xs opacity-50">
                       {tool.name}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Non-core tools accessible via execute_tool */}
+            {(currentModeData.nonCoreToolNames?.length ?? 0) > 0 && (
+              <div className="mt-6 pt-6 border-t">
+                <h4 className="text-sm font-medium mb-1">
+                  Non-Core Tools — accessible via <code className="bg-muted px-1 py-0.5 rounded text-xs">execute_tool</code> ({currentModeData.nonCoreToolNames.length})
+                </h4>
+                <p className="text-xs text-muted-foreground mb-3">
+                  These tools are not sent upfront. The model calls <code className="bg-muted px-1 py-0.5 rounded">tool_search</code> to discover schemas, then <code className="bg-muted px-1 py-0.5 rounded">execute_tool</code> to run them.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {currentModeData.nonCoreToolNames.map((name) => (
+                    <Badge key={name} variant="outline" className="font-mono text-xs">
+                      {name}
                     </Badge>
                   ))}
                 </div>

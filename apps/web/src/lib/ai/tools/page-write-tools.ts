@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { canActorEditPage, canActorDeletePage } from './actor-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -205,12 +205,12 @@ async function trashPage(
   }
 
   if (withChildren) {
-    const canDelete = await canUserDeletePage(userId, page.id);
+    const canDelete = await canActorDeletePage(context, page.id);
     if (!canDelete) {
       throw new Error('Insufficient permissions to trash this page and its children');
     }
   } else {
-    const canEdit = await canUserEditPage(userId, page.id);
+    const canEdit = await canActorEditPage(context as ToolExecutionContext, page.id);
     if (!canEdit) {
       throw new Error('Insufficient permissions to trash this page');
     }
@@ -311,7 +311,7 @@ async function restorePage(
     throw new Error(`Trashed page with ID "${pageId}" not found`);
   }
 
-  const canEdit = await canUserEditPage(userId, trashedPage.id);
+  const canEdit = await canActorEditPage(context as ToolExecutionContext, trashedPage.id);
   if (!canEdit) {
     throw new Error('Insufficient permissions to restore this page');
   }
@@ -426,7 +426,7 @@ export const pageWriteTools = {
         }
 
         // Check user permissions (need EDIT access)
-        const canEdit = await canUserEditPage(userId, page.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext,page.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to edit this document');
         }
@@ -551,17 +551,18 @@ export const pageWriteTools = {
           }
         }
 
-        // Check permissions for page creation
+        // Check permissions for page creation.
+        // The drive is the root parent node: creating a child anywhere requires
+        // canEdit on the parent. For root-level pages the drive is the parent.
         if (parentId) {
-          // Creating in a folder - check permissions on parent page
-          const canEdit = await canUserEditPage(userId, parentId);
+          const canEdit = await canActorEditPage(context as ToolExecutionContext, parentId);
           if (!canEdit) {
             throw new Error('Insufficient permissions to create pages in this folder');
           }
         } else {
-          // Creating at root level - check if user owns the drive
-          if (drive.ownerId !== userId) {
-            throw new Error('Only drive owners can create pages at the root level');
+          const canEdit = await canActorEditPage(context as ToolExecutionContext, driveId);
+          if (!canEdit) {
+            throw new Error('Insufficient permissions to create pages in this drive');
           }
         }
 
@@ -702,7 +703,7 @@ export const pageWriteTools = {
         }
 
         // Check permissions
-        const canEdit = await canUserEditPage(userId, page.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext,page.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to rename this page');
         }
@@ -909,7 +910,7 @@ export const pageWriteTools = {
         }
 
         // Check permissions on the source page
-        const canEdit = await canUserEditPage(userId, page.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext,page.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to move this page');
         }
@@ -924,7 +925,7 @@ export const pageWriteTools = {
 
         // Check permissions on the destination if moving to a folder
         if (newParentId) {
-          const canEditDest = await canUserEditPage(userId, newParentId);
+          const canEditDest = await canActorEditPage(context as ToolExecutionContext,newParentId);
           if (!canEditDest) {
             throw new Error('Insufficient permissions to move page to this destination');
           }
@@ -1018,7 +1019,7 @@ export const pageWriteTools = {
         }
 
         // Check user permissions
-        const canEdit = await canUserEditPage(userId, page.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext,page.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to edit this sheet');
         }

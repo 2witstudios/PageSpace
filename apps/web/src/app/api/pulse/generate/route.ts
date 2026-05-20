@@ -34,6 +34,7 @@ import {
   type DiffRequest,
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
@@ -89,6 +90,12 @@ export async function POST(req: Request) {
         isNotNull(driveMembers.acceptedAt)
       ));
     const driveIds = userDrives.map(d => d.driveId);
+
+    // Pages the user is actually permitted to view (owner | drive-admin |
+    // explicit page permission). Drive membership alone does NOT grant access
+    // to every page in a drive, so Pulse must scope all page content, diffs,
+    // and per-page activity to this set or it leaks restricted pages.
+    const accessiblePages = new Set(await accessiblePageIds(userId));
 
     // ========================================
     // 1. WORKSPACE CONTEXT
@@ -166,6 +173,7 @@ export async function POST(req: Request) {
     // Filter to page content changes that we can diff
     const pageActivities = rawActivity.filter(
       a => a.pageId &&
+           accessiblePages.has(a.pageId) &&
            a.driveId &&
            a.resourceType === 'page' &&
            (a.operation === 'update' || a.operation === 'create') &&
@@ -282,12 +290,18 @@ export async function POST(req: Request) {
 
     rawActivity.forEach(a => {
       if (a.resourceType !== 'page' || !a.resourceId) return;
-      const key = `${a.actorId}-${a.resourceId}`;
+      // For page resources, resourceId is the pageId — enforce view permission.
+      if (!accessiblePages.has(a.resourceId)) return;
+      // Key on the denormalized actorEmail (NOT NULL, snapshotted per row).
+      // userId is nullable (FK ON DELETE SET NULL / system actors); keying on
+      // it collapses every null-user row on a page into one bucket and
+      // mislabels them as whichever actor was seen first.
+      const key = `${a.actorEmail}-${a.resourceId}`;
       const driveName = driveDetails.find(d => d.id === a.driveId)?.name || 'Unknown';
 
       if (!activityByPersonPage[key]) {
         activityByPersonPage[key] = {
-          person: a.actorName || 'Someone',
+          person: a.actorName ?? a.actorEmail,
           pageId: a.resourceId,
           pageTitle: a.resourceTitle || 'Untitled',
           driveName,
@@ -380,7 +394,9 @@ export async function POST(req: Request) {
       .orderBy(desc(chatMessages.createdAt))
       .limit(15) : [];
 
-    const chatsByPage = recentPageChats.reduce((acc, chat) => {
+    const chatsByPage = recentPageChats
+      .filter(chat => chat.pageId && accessiblePages.has(chat.pageId))
+      .reduce((acc, chat) => {
       const key = chat.pageId;
       if (!acc[key]) {
         acc[key] = {
@@ -512,6 +528,7 @@ export async function POST(req: Request) {
       contentChanges: contentDiffs.map((diff: StackedDiff & { driveId: string }) => ({
         page: diff.pageTitle || 'Untitled',
         actors: diff.actors,
+        primaryActor: diff.primaryActor,
         editCount: diff.collapsedCount,
         timeRange: diff.timeRange,
         isAiGenerated: diff.isAiGenerated,
@@ -682,9 +699,9 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
         mentions: contextData.mentions.map(m => ({ by: m.by, inPage: m.inPage })),
         notifications: [],
         sharedWithYou: contextData.sharedWithYou.map(s => ({ page: s.page, by: s.by })),
-        contentChanges: contextData.contentChanges.slice(0, 5).map((c: { page: string; actors: string[] }) => ({
+        contentChanges: contextData.contentChanges.slice(0, 5).map((c: { page: string; primaryActor: string }) => ({
           page: c.page,
-          by: c.actors[0] || 'Someone',
+          by: c.primaryActor || 'Someone',
         })),
         pages: {
           updatedToday: contextData.activitySummary.filter(a => new Date(a.lastActive) >= startOfToday).length,

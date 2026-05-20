@@ -157,6 +157,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     createConversation,
     deleteConversation,
     prependConversationOptimistic,
+    refreshConversations,
   } = useConversations({
     agentId: page.id,
     currentConversationId,
@@ -380,6 +381,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       if (!shouldPrependConversation(payload, getBrowserSessionId(), conversations)) return;
       prependConversationOptimistic(payload.conversation);
     },
+    onConversationRenamed: () => {
+      refreshConversations();
+    },
+    onConversationDeleted: () => {
+      refreshConversations();
+    },
     onStreamComplete: (messageId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
       if (!stream || stream.parts.length === 0) return;
@@ -443,7 +450,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return;
     const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+    const text = textParts.map((p) => (p as { text: string }).text).join('');
     if (!text.trim()) return;
     if (lastAssistantMsg.id === voiceBaselineRef.current) return;
 
@@ -843,6 +850,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           <PageAgentSettingsTab
             ref={agentSettingsRef}
             pageId={page.id}
+            driveId={driveId}
             config={agentConfig}
             onConfigUpdate={setAgentConfig}
             selectedProvider={selectedProvider}

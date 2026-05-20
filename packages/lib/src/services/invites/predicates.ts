@@ -4,9 +4,9 @@ export const isInviteExpired = ({
   expiresAt,
   now,
 }: {
-  expiresAt: Date;
+  expiresAt: Date | null;
   now: Date;
-}): boolean => now.getTime() >= expiresAt.getTime();
+}): boolean => expiresAt !== null && now.getTime() >= expiresAt.getTime();
 
 export const isInviteConsumed = ({
   consumedAt,

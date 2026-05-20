@@ -108,6 +108,7 @@ export const acceptInviteForExistingUser =
       driveId: invite.driveId,
       driveName: invite.driveName,
       role: invite.role,
+      customRoleId: invite.customRoleId,
       invitedUserId: input.userId,
       inviterUserId: invite.invitedBy,
     };
@@ -242,6 +243,7 @@ export const acceptInviteForNewUser =
       driveId: invite.driveId,
       driveName: invite.driveName,
       role: invite.role,
+      customRoleId: invite.customRoleId,
       invitedUserId: input.userId,
       inviterUserId: invite.invitedBy,
     };

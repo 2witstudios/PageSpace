@@ -4,6 +4,9 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
+import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
+import { maskIdentifier } from '@/lib/logging/mask';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -94,6 +97,18 @@ export async function PATCH(
       action: 'update_conversation',
       agentId,
     } });
+
+    void (async () => {
+      try {
+        const triggeredBy = await resolveTriggeredBy(auth.userId, request);
+        await broadcastAiConversationRenamed({ agentId, conversationId, title, triggeredBy });
+      } catch (broadcastError) {
+        loggers.ai.error('Failed to broadcast chat conversation-renamed', broadcastError as Error, {
+          agentId: maskIdentifier(agentId),
+          conversationId: maskIdentifier(conversationId),
+        });
+      }
+    })();
 
     return NextResponse.json({
       success: true,
@@ -189,6 +204,18 @@ export async function DELETE(
       action: 'delete_conversation',
       agentId,
     } });
+
+    void (async () => {
+      try {
+        const triggeredBy = await resolveTriggeredBy(auth.userId, request);
+        await broadcastAiConversationDeleted({ agentId, conversationId, triggeredBy });
+      } catch (broadcastError) {
+        loggers.ai.error('Failed to broadcast chat conversation-deleted', broadcastError as Error, {
+          agentId: maskIdentifier(agentId),
+          conversationId: maskIdentifier(conversationId),
+        });
+      }
+    })();
 
     return NextResponse.json({
       success: true,

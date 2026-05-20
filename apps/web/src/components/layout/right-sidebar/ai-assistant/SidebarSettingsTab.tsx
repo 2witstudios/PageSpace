@@ -504,10 +504,8 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {/* Display all providers dynamically */}
-                {Object.entries(AI_PROVIDERS).map(([key, provider]) => {
-                  // Skip openrouter_free in the status display as it uses the same key as openrouter
-                  if (key === 'openrouter_free') return null;
+                {/* Display only user-visible providers */}
+                {Object.entries(AI_PROVIDERS).filter(([key]) => key === 'pagespace').map(([key, provider]) => {
                   
                   const isConfigured = isProviderConfigured(key);
                   const displayName = key === 'pagespace' ? `${provider.name} (Default)` : provider.name;
@@ -546,7 +544,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(AI_PROVIDERS).map(([key, provider]) => {
+                    {Object.entries(AI_PROVIDERS).filter(([key]) => key === 'pagespace').map(([key, provider]) => {
                       const configured = isProviderConfigured(key);
                       return (
                         <SelectItem key={key} value={key}>

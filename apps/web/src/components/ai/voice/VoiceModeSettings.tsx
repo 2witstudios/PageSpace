@@ -30,9 +30,9 @@ const INTERACTION_MODE_OPTIONS: { value: VoiceInteractionMode; label: string; de
     description: 'Tap the mic to start/stop recording',
   },
   {
-    value: 'barge-in',
-    label: 'Barge-in',
-    description: 'Automatically listens - speak to interrupt AI',
+    value: 'conversation',
+    label: 'Conversation',
+    description: 'Automatically listens after AI finishes speaking',
   },
 ];
 
@@ -40,7 +40,7 @@ const INTERACTION_MODE_OPTIONS: { value: VoiceInteractionMode; label: string; de
  * VoiceModeSettings - Settings panel for voice mode configuration.
  *
  * Allows users to configure:
- * - Interaction mode (tap-to-speak vs barge-in)
+ * - Interaction mode (tap-to-speak vs conversation)
  * - TTS voice selection
  * - TTS speed
  * - Auto-send transcriptions

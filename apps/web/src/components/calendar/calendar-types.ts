@@ -60,6 +60,12 @@ export interface CalendarEvent {
     slug: string;
   } | null;
   hasAgentTrigger?: boolean;
+  /** Present only on virtual occurrences produced by server-side expansion.
+   *  Stores the parent recurring event's original ISO startAt so the edit
+   *  modal can restore the series base date rather than the occurrence date,
+   *  preventing accidental anchor-shifting when saving without a date change. */
+  recurringBaseStartAt?: string;
+  recurringBaseEndAt?: string;
 }
 
 export interface RecurrenceRule {

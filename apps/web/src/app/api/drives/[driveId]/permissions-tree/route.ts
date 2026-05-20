@@ -6,6 +6,7 @@ import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 
 interface PageNode {
   id: string;
@@ -19,6 +20,7 @@ interface PageNode {
     canShare: boolean;
   };
 }
+
 
 export async function GET(
   request: Request,
@@ -119,7 +121,6 @@ export async function GET(
 
     const tree = buildTree(null);
 
-    // Also return drive info
     const driveInfo = {
       id: drive[0].id,
       name: drive[0].name,
@@ -127,11 +128,38 @@ export async function GET(
       ownerId: drive[0].ownerId,
     };
 
+    // Drive-as-root-node: prepend a synthetic drive root node so the UI
+    // permission matrix can display and edit drive-level access (which gates
+    // root-level page creation) using the same code path as page nodes.
+    let driveRootPermissions: { canView: boolean; canEdit: boolean; canShare: boolean } | undefined;
+    if (targetUserId) {
+      // Explicit drive-level entry in the permissions map takes precedence
+      // (used by agent custom roles which store the driveId as a key).
+      const explicit = existingPermissions.get(driveId);
+      if (explicit) {
+        driveRootPermissions = explicit;
+      } else {
+        const access = await getUserAccessLevel(targetUserId, driveId);
+        driveRootPermissions = access
+          ? { canView: access.canView, canEdit: access.canEdit, canShare: access.canShare }
+          : { canView: false, canEdit: false, canShare: false };
+      }
+    }
+
+    const driveRootNode: PageNode = {
+      id: driveInfo.id,
+      title: driveInfo.name,
+      type: 'DRIVE',
+      position: -1,
+      children: [],
+      ...(driveRootPermissions !== undefined ? { currentPermissions: driveRootPermissions } : {}),
+    };
+
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'drive_permissions', resourceId: driveId, details: { action: 'view_permissions_tree', pageCount: allPages.length } });
 
     return NextResponse.json({
       drive: driveInfo,
-      pages: tree,
+      pages: [driveRootNode, ...tree],
       totalPages: allPages.length,
     });
   } catch (error) {

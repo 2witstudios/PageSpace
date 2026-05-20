@@ -35,6 +35,8 @@ export * from './schema/pending-invites';
 export * from './schema/pending-page-invites';
 export * from './schema/pending-connection-invites';
 export * from './schema/ai-streams';
+export * from './schema/share-links';
+export * from './schema/zoom';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -73,6 +75,8 @@ import * as pendingInvites from './schema/pending-invites';
 import * as pendingPageInvites from './schema/pending-page-invites';
 import * as pendingConnectionInvites from './schema/pending-connection-invites';
 import * as aiStreams from './schema/ai-streams';
+import * as shareLinks from './schema/share-links';
+import * as zoom from './schema/zoom';
 
 export const schema = {
   ...auth,
@@ -112,4 +116,6 @@ export const schema = {
   ...pendingPageInvites,
   ...pendingConnectionInvites,
   ...aiStreams,
+  ...shareLinks,
+  ...zoom,
 };

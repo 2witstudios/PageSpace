@@ -254,10 +254,10 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns 403 when user is not owner or admin', async () => {
+    it('returns 403 when user is not a drive member (root level)', async () => {
       vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
-        error: 'Only drive owners and admins can create pages',
+        error: 'You must be a drive member to create pages',
         status: 403,
       });
 
@@ -269,7 +269,45 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toMatch(/owner|admin/i);
+      expect(body.error).toMatch(/member/i);
+    });
+
+    it('returns 403 when user lacks edit permission on parent page', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Insufficient permissions to create pages in this folder',
+        status: 403,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_456',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/permission/i);
+    });
+
+    it('returns 400 when parent page belongs to a different drive', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Parent page not found in this drive',
+        status: 400,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_other_drive',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not found/i);
     });
   });
 

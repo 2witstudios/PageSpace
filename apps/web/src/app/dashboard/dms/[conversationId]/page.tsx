@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -22,8 +22,9 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Check, X } from 'lucide-react';
+import { Check, MessageSquareText, X } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
@@ -31,7 +32,8 @@ import { ThreadPanel } from '@/components/layout/middle-content/page-views/threa
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
-import { isFirstInGroup } from '@/lib/messages/grouping';
+import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
+import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -59,6 +61,8 @@ interface Message {
   lastReplyAt?: string | null;
   quotedMessageId?: string | null;
   quotedMessage?: QuotedMessageSnapshot | null;
+  mirroredFromId?: string | null;
+  mirroredFrom?: { parentId: string | null } | null;
 }
 
 interface DmConversation {
@@ -233,16 +237,32 @@ export default function InboxDMPage() {
       );
     };
 
+    const handleMessageEdited = (data: { messageId: string; content: string; editedAt: string }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.messageId ? { ...m, content: data.content, isEdited: true, editedAt: data.editedAt } : m
+        )
+      );
+    };
+
+    const handleMessageDeleted = (data: { messageId: string }) => {
+      setMessages((prev) => prev.filter((m) => m.id !== data.messageId));
+    };
+
     socket.on('new_dm_message', handleNewMessage);
     socket.on('reaction_added', handleReactionAdded);
     socket.on('reaction_removed', handleReactionRemoved);
     socket.on('thread_reply_count_updated', handleThreadCountUpdated);
+    socket.on('message_edited', handleMessageEdited);
+    socket.on('message_deleted', handleMessageDeleted);
 
     return () => {
       socket.off('new_dm_message', handleNewMessage);
       socket.off('reaction_added', handleReactionAdded);
       socket.off('reaction_removed', handleReactionRemoved);
       socket.off('thread_reply_count_updated', handleThreadCountUpdated);
+      socket.off('message_edited', handleMessageEdited);
+      socket.off('message_deleted', handleMessageDeleted);
       socket.emit('leave_dm_conversation', conversationId);
     };
   }, [conversationId, user, socket]);
@@ -567,9 +587,14 @@ export default function InboxDMPage() {
               const replyCount = message.replyCount ?? 0;
               const showReplyInThread = !message.id.startsWith('temp-');
               const isLastRead = i === lastReadOwnIndex;
+              const currentDateStr = new Date(message.createdAt).toDateString();
+              const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
+              const showDateSeparator = currentDateStr !== previousDateStr;
 
               return (
-                <div key={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                <Fragment key={message.id}>
+                {showDateSeparator && <MessageDateSeparator label={formatMessageDate(message.createdAt)} />}
+                <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (
@@ -594,7 +619,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0 relative">
+                  <div className="flex-1 min-w-0">
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
@@ -649,6 +674,13 @@ export default function InboxDMPage() {
                       </div>
                     ) : (
                       <>
+                        {message.mirroredFromId && (
+                          <ThreadOriginBadge
+                            onOpenThread={message.mirroredFrom?.parentId
+                              ? () => openThread({ source: 'dm', contextId: conversationId, parentId: message.mirroredFrom!.parentId! })
+                              : undefined}
+                          />
+                        )}
                         {(message.quotedMessage || message.quotedMessageId) && (
                           <MessageQuoteBlock quoted={message.quotedMessage ?? null} />
                         )}
@@ -677,11 +709,12 @@ export default function InboxDMPage() {
                           openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
                         }
                         data-testid={`thread-footer-${message.id}`}
-                        className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                       >
+                        <MessageSquareText size={12} aria-hidden />
                         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                         {message.lastReplyAt
-                          ? ` · last reply ${formatDistanceToNow(new Date(message.lastReplyAt), { addSuffix: true })}`
+                          ? ` · ${formatDistanceToNow(new Date(message.lastReplyAt), { addSuffix: true })}`
                           : ''}
                       </button>
                     )}
@@ -693,28 +726,28 @@ export default function InboxDMPage() {
                         onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
                       />
                     )}
-                    {isRealMessage && (
-                      <MessageHoverToolbar
-                        canReact={true}
-                        canEdit={showOwnerActions}
-                        canDelete={showOwnerActions}
-                        canReplyInThread={showReplyInThread}
-                        canQuoteReply={true}
-                        reactions={message.reactions}
-                        currentUserId={user?.id}
-                        className={!isFirst ? 'top-0' : undefined}
-                        onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
-                        onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
-                        onQuoteReply={() => handleStartQuote(message)}
-                        onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                        onDelete={() => handleDeleteMessage(message.id)}
-                        onReplyInThread={() =>
-                          openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                        }
-                      />
-                    )}
                   </div>
+                  {isRealMessage && (
+                    <MessageHoverToolbar
+                      canReact={true}
+                      canEdit={showOwnerActions}
+                      canDelete={showOwnerActions}
+                      canReplyInThread={showReplyInThread}
+                      canQuoteReply={true}
+                      reactions={message.reactions}
+                      currentUserId={user?.id}
+                      onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                      onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
+                      onQuoteReply={() => handleStartQuote(message)}
+                      onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                      onDelete={() => handleDeleteMessage(message.id)}
+                      onReplyInThread={() =>
+                        openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
+                      }
+                    />
+                  )}
                 </div>
+                </Fragment>
               );
             })}
           </ConversationContent>
@@ -746,7 +779,10 @@ export default function InboxDMPage() {
     )}
     {threadPanel && isMobile && (
       <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
-        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-full p-0"
+        >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
         </SheetContent>

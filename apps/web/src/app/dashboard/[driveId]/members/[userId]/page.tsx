@@ -437,6 +437,7 @@ export default function MemberSettingsPage() {
                 userId={userId}
                 permissions={permissions}
                 onChange={handlePermissionChange}
+                readOnlyDriveRoot
               />
             </CardContent>
           </Card>

@@ -10,12 +10,12 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
   type LocationContext,
   type ToolDefinitionForExtraction,
-  getToolsSummary,
   pageSpaceTools,
   extractToolSchemas,
   calculateTotalToolTokens,
@@ -26,6 +26,7 @@ import {
   buildInlineInstructions,
   buildGlobalAssistantInstructions,
 } from '@/lib/ai/core';
+import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
@@ -47,6 +48,7 @@ interface ModePromptData {
   totalTokens: number;
   toolsAllowed: string[];
   toolsDenied: string[];
+  nonCoreToolNames: string[];
   permissions: {
     canRead: boolean;
     canWrite: boolean;
@@ -57,7 +59,9 @@ interface ModePromptData {
   completePayload: CompletePayloadResult;
 }
 
-export const GET = withAdminAuth(async (adminUser, request) => {
+async function handleGlobalPrompt(userId: string, request: Request): Promise<Response> {
+  // Adapter: the inner logic expects an object with an `id` field
+  const adminUser = { id: userId };
   try {
     // Parse query params for context selection
     const { searchParams } = new URL(request.url);
@@ -311,8 +315,7 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         });
       }
 
-      // Get tool permissions summary
-      const toolsSummary = getToolsSummary(isReadOnly);
+      // Tool summary comes from completePayload (core tools + tool_search + execute_tool)
 
       // Append async context sections to the full prompt
       const fullPromptWithAsyncContext =
@@ -338,8 +341,9 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         fullPrompt: fullPromptWithAsyncContext,
         sections,
         totalTokens: completePayload.tokenEstimates.total,
-        toolsAllowed: toolsSummary.allowed,
-        toolsDenied: toolsSummary.denied,
+        toolsAllowed: completePayload.toolsSummary.allowed,
+        toolsDenied: completePayload.toolsSummary.denied,
+        nonCoreToolNames: completePayload.nonCoreToolNames,
         permissions: {
           canRead: true,
           canWrite: !isReadOnly,
@@ -350,34 +354,91 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       };
     }
 
-    // Extract full tool schemas for display (all tools, not filtered by mode)
-    const toolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
+    // Extract core tool schemas only (what's sent upfront in the Global Assistant)
+    const coreToolsForDisplay: Record<string, ToolDefinitionForExtraction> = {};
     for (const [name, tool] of Object.entries(pageSpaceTools)) {
-      toolsForExtraction[name] = {
-        description: tool.description,
-        parameters: tool.inputSchema,
-      };
+      if (CORE_TOOL_NAMES.has(name)) {
+        coreToolsForDisplay[name] = {
+          description: tool.description,
+          parameters: tool.inputSchema,
+        };
+      }
     }
-    const allToolSchemas = extractToolSchemas(toolsForExtraction);
+    const coreToolSchemas = extractToolSchemas(coreToolsForDisplay);
+
+    // Add tool_search and execute_tool (dynamic at runtime, static schemas for display)
+    const toolSearchJsonSchema = {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string' as const,
+          description: 'Either "select:name1,name2" for specific tools or a search keyword',
+        },
+      },
+      required: ['query'],
+    };
+    const executeToolJsonSchema = {
+      type: 'object' as const,
+      properties: {
+        tool_name: { type: 'string' as const },
+        parameters: { type: 'object' as const, properties: {}, required: [] },
+      },
+      required: ['tool_name'],
+    };
+
+    const allToolSchemas = [
+      ...coreToolSchemas,
+      {
+        name: 'tool_search',
+        description:
+          'Get full parameter schemas for any PageSpace tool before calling it. Use "select:name1,name2" for specific tools by name, or a keyword like "calendar", "agent", "task", "channel", "drive" to find all tools in that area.',
+        parameters: toolSearchJsonSchema,
+        tokenEstimate: estimateSystemPromptTokens(
+          JSON.stringify({ name: 'tool_search', parameters: toolSearchJsonSchema })
+        ),
+      },
+      {
+        name: 'execute_tool',
+        description:
+          'Execute any PageSpace tool by name. Call tool_search first to discover available tools and get their parameter schemas.',
+        parameters: executeToolJsonSchema,
+        tokenEstimate: estimateSystemPromptTokens(
+          JSON.stringify({ name: 'execute_tool', parameters: executeToolJsonSchema })
+        ),
+      },
+    ];
     const totalToolTokens = calculateTotalToolTokens(allToolSchemas);
 
-    // Build experimental context (what gets passed to tool execute functions)
+    // Non-core tool names (accessible via execute_tool, not sent upfront)
+    const allNonCoreToolNames = Object.keys(pageSpaceTools).filter(
+      n => !CORE_TOOL_NAMES.has(n)
+    );
+
+    // Build experimental context matching the real chat route shape (preview values shown)
     const experimentalContext = {
       userId: adminUser.id,
-      chatId: '[chat-id-placeholder]',
+      timezone: undefined,
+      aiProvider: '[varies by chat]',
+      aiModel: '[varies by chat]',
+      conversationId: '[generated per conversation]',
       modelCapabilities: {
-        supportsStreaming: true,
-        supportsToolCalling: true,
-        hasVision: false, // Varies by model
-        maxTokens: 128000, // Example value
+        hasVision: false,
+        hasTools: true,
+        model: '[varies by chat]',
+        provider: '[varies by chat]',
       },
-      locationContext: locationContext || null,
+      locationContext: locationContext ?? null,
+      chatSource: {
+        type: 'global' as const,
+      },
+      enabledTools: null,
     };
 
     return Response.json({
       promptData,
       toolSchemas: allToolSchemas,
       totalToolTokens,
+      nonCoreToolNames: allNonCoreToolNames,
       experimentalContext,
       availableDrives,
       availablePages: availablePages.map(p => ({
@@ -391,7 +452,6 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         generatedAt: new Date().toISOString(),
         adminUser: {
           id: adminUser.id,
-          role: adminUser.role,
         },
         locationContext,
         selectedDriveId,
@@ -402,7 +462,20 @@ export const GET = withAdminAuth(async (adminUser, request) => {
     });
 
   } catch (error) {
-    console.error('Error generating global prompt data:', error);
+    loggers.api.error('Error generating global prompt data', error as Error);
     return new Response('Internal Server Error', { status: 500 });
   }
-});
+}
+
+export async function GET(request: Request): Promise<Response> {
+  const serviceSecret = request.headers.get('x-service-secret');
+  if (serviceSecret) {
+    if (!process.env.SERVICE_API_SECRET || serviceSecret !== process.env.SERVICE_API_SECRET) {
+      return Response.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const userId = request.headers.get('x-service-user-id');
+    if (!userId) return Response.json({ error: 'Missing user context' }, { status: 400 });
+    return handleGlobalPrompt(userId, request);
+  }
+  return withAdminAuth(async (adminUser, req) => handleGlobalPrompt(adminUser.id, req))(request);
+}

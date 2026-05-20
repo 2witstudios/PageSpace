@@ -15,6 +15,7 @@ export interface AppleAuthResult {
   isNewUser?: boolean;
   invitedDriveId?: string | null;
   inviteError?: string;
+  returnUrl?: string;
   user?: {
     id: string;
     name: string | null;
@@ -30,6 +31,7 @@ type AppleNativeAuthResponse = {
   isNewUser?: boolean;
   invitedDriveId?: string | null;
   inviteError?: string;
+  returnUrl?: string;
   user?: AppleAuthResult['user'];
 };
 
@@ -39,7 +41,7 @@ const APPLE_CLIENT_ID = 'ai.pagespace.ios';
  * Perform native Apple Sign-In and exchange tokens with backend.
  * Only works when running in the iOS Capacitor app.
  */
-export async function signInWithApple(options: { inviteToken?: string } = {}): Promise<AppleAuthResult> {
+export async function signInWithApple(options: { inviteToken?: string; returnUrl?: string } = {}): Promise<AppleAuthResult> {
   // Guard: only run on iOS native app
   if (!isCapacitorApp() || getPlatform() !== 'ios') {
     return { success: false, error: 'Not in iOS app' };
@@ -99,6 +101,7 @@ export async function signInWithApple(options: { inviteToken?: string } = {}): P
         givenName,
         familyName,
         ...(options.inviteToken && { inviteToken: options.inviteToken }),
+        ...(options.returnUrl && { returnUrl: options.returnUrl }),
       }),
     });
 
@@ -108,7 +111,7 @@ export async function signInWithApple(options: { inviteToken?: string } = {}): P
       throw new Error(errorData.error || 'Authentication failed');
     }
 
-    const { sessionToken, csrfToken, deviceToken, isNewUser, invitedDriveId, inviteError, user } =
+    const { sessionToken, csrfToken, deviceToken, isNewUser, invitedDriveId, inviteError, returnUrl, user } =
       (await response.json()) as AppleNativeAuthResponse;
 
     if (!sessionToken) {
@@ -134,6 +137,7 @@ export async function signInWithApple(options: { inviteToken?: string } = {}): P
       user,
       ...(invitedDriveId !== undefined && { invitedDriveId }),
       ...(inviteError && { inviteError }),
+      ...(returnUrl && { returnUrl }),
     };
   } catch (error) {
     console.error('[iOS Apple Auth] Sign-in failed:', error);

@@ -28,6 +28,13 @@ export interface StackedDiff {
   };
   /** Unique actors who made changes (emails or display names) */
   actors: string[];
+  /**
+   * The actor responsible for the resulting ("after") content of this diff.
+   * This is the most recent contributor in the group, not the first — the
+   * stacked diff's "after" state reflects their edit. Use this for "who
+   * changed X" attribution instead of actors[0].
+   */
+  primaryActor: string;
   /** Git-style unified diff - main content for AI consumption */
   unifiedDiff: string;
   /** Addition/deletion statistics */
@@ -192,6 +199,7 @@ export function generateStackedDiff(
           : group.last.timestamp.toISOString(),
       },
       actors: getUniqueActors(group.activities),
+      primaryActor: getPrimaryActor(group),
       unifiedDiff: '[Content too large for diff - showing stats only]',
       stats: {
         additions,
@@ -230,6 +238,7 @@ export function generateStackedDiff(
         : group.last.timestamp.toISOString(),
     },
     actors: getUniqueActors(group.activities),
+    primaryActor: getPrimaryActor(group),
     unifiedDiff,
     stats,
     isAiGenerated: group.activities.some(a => a.isAiGenerated),
@@ -340,14 +349,31 @@ function calculateDiffStats(oldContent: string, newContent: string): DiffStats {
 }
 
 /**
+ * Resolves a single activity to a stable display identity.
+ * Falls back to the denormalized email (always present) when no display name
+ * was snapshotted, so an actor is never silently relabelled as "Someone".
+ */
+function actorIdentity(activity: ActivityForDiff): string {
+  return activity.actorDisplayName ?? activity.actorEmail;
+}
+
+/**
  * Gets unique actor names from activities
  */
 function getUniqueActors(activities: ActivityForDiff[]): string[] {
   const actors = new Set<string>();
   for (const activity of activities) {
-    actors.add(activity.actorDisplayName ?? activity.actorEmail);
+    actors.add(actorIdentity(activity));
   }
   return Array.from(actors);
+}
+
+/**
+ * The actor whose edit produced the group's resulting ("after") content.
+ * Activities in a group are ordered oldest→newest, so this is the last one.
+ */
+function getPrimaryActor(group: ActivityDiffGroup): string {
+  return actorIdentity(group.last);
 }
 
 /**

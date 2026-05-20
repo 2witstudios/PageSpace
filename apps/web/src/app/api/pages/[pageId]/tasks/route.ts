@@ -11,7 +11,7 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/per
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
-import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
+import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -523,7 +523,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   if (description) {
     try {
-      const mentionedIds = extractMentionedUserIds(description);
+      const mentionedIds = await expandMentionsToUserIds(description, taskListPage.driveId!);
       const candidates = mentionedIds.filter((id) => id !== userId);
       if (candidates.length > 0) {
         const taskPageId = result.page.id;

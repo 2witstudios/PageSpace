@@ -10,7 +10,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import {
@@ -33,6 +33,7 @@ const nativeAuthSchema = z.object({
   deviceId: z.string().min(1, 'Device ID is required'),
   deviceName: z.string().optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
+  returnUrl: z.string().max(2048).optional(),
 });
 
 /**
@@ -73,7 +74,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken, platform, deviceId, deviceName, inviteToken } = validation.data;
+    const { idToken, platform, deviceId, deviceName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
+    const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
     // Validate required environment variables
     if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_IOS_CLIENT_ID) {
@@ -278,6 +280,7 @@ export async function POST(req: Request) {
       invitedPageId: inviteResult.invitedPageId,
       invitedConnectionId: inviteResult.connectionId,
       ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
+      ...(returnUrl && { returnUrl }),
       user: {
         id: user.id,
         name: user.name,

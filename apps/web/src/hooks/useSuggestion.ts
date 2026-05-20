@@ -48,7 +48,7 @@ export function useSuggestion({
   inputRef,
   onValueChange,
   trigger = '@',
-  allowedTypes = ['page', 'user'],
+  allowedTypes = ['page', 'user', 'everyone', 'role'] as MentionType[],
   driveId,
   crossDrive = false,
   mentionFormat = 'label',

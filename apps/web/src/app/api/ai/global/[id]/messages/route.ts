@@ -28,6 +28,8 @@ import {
   buildMentionSystemPrompt,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
+  buildNonCoreToolNamesPrompt,
+  TOOL_DISCOVERY_PROMPT,
   buildAgentAwarenessPrompt,
   filterToolsForReadOnly,
   filterToolsForWebSearch,
@@ -40,6 +42,8 @@ import {
   getUserPersonalization,
   getUserTimezone,
 } from '@/lib/ai/core';
+import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
+import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
@@ -64,6 +68,7 @@ import {
 import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -589,8 +594,8 @@ export async function POST(
       }
     }
 
-    // Add global assistant specific instructions
-    const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
+    // Add global assistant specific instructions (including tool discovery — only this route has tool_search)
+    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + mentionSystemPrompt + timestampSystemPrompt + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
@@ -686,14 +691,34 @@ MENTION PROCESSING:
       }
     }
 
+    // Full filtered tool set. NOT sent to model directly; used as dispatch map for
+    // execute_tool and as tool_search catalog.
+    const filteredAllTools = filterToolsForWebSearch(
+      filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+      webSearchMode
+    ) as ToolSet;
+
+    // Core tools go to the model with full schemas
+    const coreTools = Object.fromEntries(
+      Object.entries(filteredAllTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
+    ) as ToolSet;
+
+    // Non-core tools hidden from model; accessible only via execute_tool
+    const nonCoreTools = Object.fromEntries(
+      Object.entries(filteredAllTools).filter(([name]) => !CORE_TOOL_NAMES.has(name))
+    ) as ToolSet;
+
+    const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
-      + pageTreePrompt;
+      + pageTreePrompt
+      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '');
 
-    // Filter tools based on read-only mode and web search toggle
-    const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
-    // Apply web search filtering (exclude web_search if disabled)
-    let finalTools: ToolSet = filterToolsForWebSearch(postReadOnlyTools, webSearchMode) as ToolSet;
+    let finalTools: ToolSet = {
+      ...coreTools,
+      tool_search: createToolSearchTool(filteredAllTools),
+      execute_tool: createExecuteTool(nonCoreTools),
+    };
 
     loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
@@ -801,7 +826,7 @@ MENTION PROCESSING:
 
     // Calculate context size BEFORE streaming (for real context window tracking)
     const contextCalculation = calculateTotalContextSize({
-      systemPrompt,
+      systemPrompt: finalSystemPrompt,
       messages: processedMessages, // Use UIMessage array (not model messages)
       tools: finalTools,
       model: currentModel,

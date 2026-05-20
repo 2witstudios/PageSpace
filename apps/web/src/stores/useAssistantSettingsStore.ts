@@ -27,6 +27,7 @@ interface AssistantSettingsState {
   currentProvider: string | null;
   currentModel: string | null;
   isAnyProviderConfigured: boolean;
+  subscriptionTier: string;
 
   // Chat input toggles (persisted to localStorage)
   webSearchEnabled: boolean;
@@ -55,6 +56,7 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   currentProvider: null,
   currentModel: null,
   isAnyProviderConfigured: false,
+  subscriptionTier: 'free',
   webSearchEnabled: false,
   writeMode: true, // Default to write mode (full access)
   isLoading: false,
@@ -152,6 +154,7 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
           currentProvider: data.currentProvider || null,
           currentModel: data.currentModel || null,
           isAnyProviderConfigured: data.isAnyProviderConfigured || false,
+          subscriptionTier: data.userSubscriptionTier || 'free',
           isInitialized: true,
           isLoading: false,
         });

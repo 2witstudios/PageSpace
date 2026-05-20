@@ -124,7 +124,9 @@ export function isProviderAvailable(
     return false;
   }
   if (provider === 'pagespace') {
-    return getDefaultPageSpaceSettings() !== null;
+    // Cloud: pagespace is always available as the hosted backend.
+    // On-prem: still requires explicit backend credential config.
+    return !options.isOnPrem || getDefaultPageSpaceSettings() !== null;
   }
   return getManagedProviderKey(provider) !== null;
 }

@@ -68,7 +68,8 @@
       "react-dom": "^19.1.2",
       "@types/react": "^19.1.13",
       "@types/react-dom": "^19.1.9",
-      "mdast-util-to-hast": "^13.2.1"
+      "mdast-util-to-hast": "^13.2.1",
+      "@react-email/preview-server>next": "16.2.6"
     },
     "onlyBuiltDependencies": [
       "@tensorflow/tfjs-node",

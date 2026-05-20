@@ -87,6 +87,7 @@ export default function SuggestionPopup({
         `}
       >
         {items.map((suggestion, index) => {
+          const isGroup = suggestion.type === 'everyone' || suggestion.type === 'role';
           return (
             <li
               key={`${suggestion.id}-${index}`}
@@ -103,10 +104,15 @@ export default function SuggestionPopup({
               onMouseEnter={() => onSelectionChange(index)}
             >
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {isGroup && (
+                  <span className="text-xs font-bold text-white bg-indigo-500 rounded px-1 py-0.5 shrink-0">
+                    @
+                  </span>
+                )}
+                <span className={`text-sm font-medium ${isGroup ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-900 dark:text-gray-100'}`}>
                   {suggestion.label}
                 </span>
-                {suggestion.type && (
+                {!isGroup && suggestion.type && (
                   <span className="text-xs text-gray-500 ml-auto">
                     {suggestion.type}
                   </span>

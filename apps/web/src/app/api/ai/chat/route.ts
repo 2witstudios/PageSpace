@@ -46,7 +46,7 @@ import {
   buildTimestampSystemPrompt,
   buildSystemPrompt,
   buildPersonalizationPrompt,
-  buildPageAITools,
+  filterToolsForReadOnly,
   getPageTreeContext,
   getModelCapabilities,
   convertMCPToolsToAISDKSchemas,
@@ -68,6 +68,8 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
   createStreamAbortController,
   removeStream,
@@ -275,10 +277,10 @@ export async function POST(request: Request) {
     }
 
     // Extract custom agent configuration from page.
-    // Note: page.enabledTools is intentionally NOT consulted here. It seeds the
-    // composer's tool toggles on the client; the toggles in the request body
-    // are the source of truth at runtime so the UI doesn't lie about what the
-    // model can actually do.
+    // page.enabledTools seeds the composer's tool toggles on the client and is
+    // enforced server-side (see agentEnabledTools filter below).
+    // Request-body toggles (isReadOnly, webSearchEnabled) are applied independently:
+    // isReadOnly filters the baseline; webSearchEnabled overrides the allowlist.
     const customSystemPrompt = page.systemPrompt;
 
     // Fetch drive prompt if page has includeDrivePrompt enabled
@@ -361,6 +363,29 @@ export async function POST(request: Request) {
           action: 'chat_message',
           conversationId,
         } });
+
+        // Fire mention notifications for @user, @everyone, @role mentions in AI chat pages.
+        // Gate each recipient on view permission to prevent leaking page metadata.
+        if (page?.driveId) {
+          expandMentionsToUserIds(messageContent, page.driveId)
+            .then(async (notifyIds) => {
+              const candidates = notifyIds.filter((id) => id !== userId);
+              if (candidates.length === 0) return;
+              const viewChecks = await Promise.all(
+                candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, chatId!) }))
+              );
+              await Promise.allSettled(
+                viewChecks
+                  .filter((e) => e.canView)
+                  .map((e) =>
+                    createMentionNotification(e.id, chatId!, userId!).catch((err) =>
+                      loggers.ai.error('AI Chat: Failed to send mention notification', err as Error)
+                    )
+                  )
+              );
+            })
+            .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
+        }
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
@@ -507,19 +532,39 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Build tools from the full PageSpace baseline, modulated by the composer's
-    // runtime toggles (read-only + web search). This makes the popover the
-    // single source of truth — see comment near customSystemPrompt above.
-    let filteredTools: ToolSet = buildPageAITools(pageSpaceTools, {
-      isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode,
-    });
+    // Step 1: Apply isReadOnly filter to PageSpace baseline tools.
+    const baseTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+
+    // Step 2: Extract web_search so it can be handled as a runtime-toggle override
+    // independently of the per-agent allowlist.
+    const { web_search: webSearchToolDef, ...baseToolsWithoutWebSearch } = baseTools as Record<string, ToolSet[string]>;
+
+    // Step 3: Apply per-agent PageSpace tool allowlist.
+    // null/undefined = unconfigured page — no restriction (backwards compat).
+    // []            = zero tools selected — block all PageSpace tools.
+    // ['tool1', …]  = only those tools.
+    const agentEnabledTools = page.enabledTools as string[] | null;
+    let filteredTools: ToolSet;
+    if (agentEnabledTools != null) {
+      filteredTools = Object.fromEntries(
+        Object.entries(baseToolsWithoutWebSearch).filter(([name]) => agentEnabledTools.includes(name))
+      ) as ToolSet;
+    } else {
+      filteredTools = baseToolsWithoutWebSearch as ToolSet;
+    }
+
+    // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
+    // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
+    if (webSearchMode && webSearchToolDef) {
+      filteredTools = { ...filteredTools, web_search: webSearchToolDef };
+    }
 
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
       totalTools: Object.keys(pageSpaceTools).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode
+      webSearchEnabled: webSearchMode,
+      enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
@@ -834,6 +879,7 @@ export async function POST(request: Request) {
                 agentPageId: chatId,
                 agentTitle: page.title,
               },
+              enabledTools: agentEnabledTools ?? null,
             }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onChunk: ({ chunk }) => {

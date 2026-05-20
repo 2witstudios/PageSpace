@@ -83,6 +83,12 @@ export function useProviderSettings({
   const isProviderConfigured = useCallback(
     (provider: string): boolean => {
       if (!providerSettings) return false;
+      // pagespace availability is tracked directly on the providers map, not via its glm backend.
+      // getBackendProvider('pagespace') returns 'glm', but glm may be false while pagespace is true
+      // (e.g. when Google or OpenRouter is the active backend).
+      if (provider === 'pagespace') {
+        return providerSettings.providers.pagespace?.isAvailable ?? false;
+      }
       const backendProvider = getBackendProvider(provider);
       const status =
         providerSettings.providers[backendProvider as keyof typeof providerSettings.providers] ??

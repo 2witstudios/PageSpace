@@ -209,7 +209,7 @@ export default function TermsOfService() {
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Email:</strong> hello@pagespace.ai</li>
               <li><strong>Support:</strong> Available through the in-app help system</li>
-              <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">PageSpace Discord</a></li>
+              <li><strong>Community:</strong> <a href="https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">AI Agent Hub</a></li>
             </ul>
           </section>
         </div>

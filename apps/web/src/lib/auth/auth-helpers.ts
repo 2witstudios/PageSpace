@@ -56,7 +56,7 @@ export function isSafeReturnUrl(url: string | undefined): boolean {
  * here would re-introduce the URL-fragility this allowlist was designed to
  * mitigate.
  */
-export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/account'] as const;
+export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/account', '/s/'] as const;
 
 /**
  * Validates that a `next=` redirect target is both same-origin (composed via

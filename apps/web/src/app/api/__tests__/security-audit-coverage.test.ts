@@ -56,9 +56,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['auth/apple/signin', 'OAuth initiation redirect, no user session or data access'],
   ['auth/google/signin', 'OAuth initiation redirect, no user session or data access'],
 
-  // --- Deprecated endpoints ---
-  ['admin/users/[userId]/subscription', 'Deprecated (410 Gone), replaced by gift-subscription'],
-
   // --- Stateless token endpoints (no user data accessed) ---
   ['auth/csrf', 'Stateless CSRF token generation, no user data'],
   ['auth/login-csrf', 'Stateless login CSRF token, no user data'],
@@ -66,6 +63,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- External webhooks (no user session, verified by external party) ---
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
+  ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
 
   // --- Read receipts (low-risk, high-frequency) ---
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],
@@ -76,10 +74,19 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 
+  // --- Share link management routes ---
+  // TODO: Add audit coverage in follow-up PR
+  ['drives/[driveId]/share-links', 'Share link CRUD — invite link management, follow-up'],
+  ['drives/[driveId]/share-links/[linkId]', 'Share link revoke — covered by parent drive auth, follow-up'],
+  ['pages/[pageId]/share-links', 'Page share link CRUD — covered by page canShare check, follow-up'],
+  ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
+  ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
+
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],
   ['drives/[driveId]/agents', 'Agent list for drive — follow-up'],
+  ['drives/[driveId]/agents/members', 'Agent member list — read-only, covered by parent drive audit, follow-up'],
   ['drives/[driveId]/assignees', 'Assignee list for drive — follow-up'],
   ['drives/[driveId]/history', 'Drive history view — follow-up'],
   ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],

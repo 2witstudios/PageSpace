@@ -25,6 +25,22 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn(),
+    getUserAccessLevel: vi.fn(),
+}));
+vi.mock('../actor-permissions', () => ({
+  canActorViewPage: vi.fn(),
+  canActorEditPage: vi.fn(),
+  canActorDeletePage: vi.fn(),
+  canActorAccessDrive: vi.fn(),
+  getActorAccessiblePagesInDrive: vi.fn(),
+  getAgentPageId: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
+  getAgentAccessLevel: vi.fn(),
+  canAgentViewPage: vi.fn(),
+  canAgentEditPage: vi.fn(),
+  hasAgentDriveMembership: vi.fn(),
+  getAgentAccessiblePagesInDrive: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -91,14 +107,14 @@ vi.mock('../../core', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canActorViewPage } from '../actor-permissions';
 import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
 import { generateText } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
 
 const mockDb = vi.mocked(db);
-const mockCanUserViewPage = vi.mocked(canUserViewPage);
+const mockCanActorViewPage = vi.mocked(canActorViewPage);
 
 interface MockDb {
   select: ReturnType<typeof vi.fn>;
@@ -173,7 +189,7 @@ describe('agent-communication-tools', () => {
 
   describe('ask_agent', () => {
     beforeEach(() => {
-      mockCanUserViewPage.mockResolvedValue(true);
+      mockCanActorViewPage.mockResolvedValue(true);
       vi.mocked(mockDb.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -244,7 +260,7 @@ describe('agent-communication-tools', () => {
         aiProvider: null,
         aiModel: null,
       });
-      mockCanUserViewPage.mockResolvedValue(false);
+      mockCanActorViewPage.mockResolvedValue(false);
 
       const context = {
         toolCallId: '1', messages: [],

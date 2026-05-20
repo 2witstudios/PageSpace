@@ -470,7 +470,7 @@ function MobileMonthAgenda({
                   const colors = resolveEventColor(event, context, driveColorMap ?? null);
                   return (
                     <button
-                      key={event.id}
+                      key={`${event.id}-${event.startAt}`}
                       className={cn(
                         'w-full text-left p-3 rounded-lg border-l-4',
                         colors.bg,

@@ -1,0 +1,12 @@
+import 'apps/web/ai-evals/tool-discovery/spec.mdc'
+
+userPrompt = """
+Based on the tool discovery spec, a user asks: "Show me all my workspaces."
+
+Available tools: list_drives (core), tool_search.
+
+Describe the correct first tool call to fulfill this request. Should you call tool_search first or list_drives directly?
+"""
+
+- Given a user request to list workspaces, should call list_drives as the first tool
+- Given list_drives is a core tool with a full schema, should not call tool_search before list_drives

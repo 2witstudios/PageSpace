@@ -19,6 +19,10 @@
       "types": "./dist/schema/ai-streams.d.ts",
       "default": "./dist/schema/ai-streams.js"
     },
+    "./schema/share-links": {
+      "types": "./dist/schema/share-links.d.ts",
+      "default": "./dist/schema/share-links.js"
+    },
     "./schema/auth": {
       "types": "./dist/schema/auth.d.ts",
       "default": "./dist/schema/auth.js"
@@ -162,6 +166,10 @@
     "./schema/workflow-runs": {
       "types": "./dist/schema/workflow-runs.d.ts",
       "default": "./dist/schema/workflow-runs.js"
+    },
+    "./schema/zoom": {
+      "types": "./dist/schema/zoom.d.ts",
+      "default": "./dist/schema/zoom.js"
     },
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",

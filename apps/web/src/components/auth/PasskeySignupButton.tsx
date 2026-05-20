@@ -28,6 +28,8 @@ interface PasskeySignupButtonProps {
   lockedEmail?: string;
   /** Forwarded to /api/auth/signup-passkey so the server can attach the new user to the invite. */
   inviteToken?: string;
+  /** If set, overrides the server redirect after successful registration (e.g. share link return). */
+  nextPath?: string;
 }
 
 export function PasskeySignupButton({
@@ -40,6 +42,7 @@ export function PasskeySignupButton({
   disabled = false,
   lockedEmail,
   inviteToken,
+  nextPath,
 }: PasskeySignupButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
@@ -156,9 +159,9 @@ export function PasskeySignupButton({
       toast.success('Account created successfully!');
 
       if (onSuccess) {
-        onSuccess(verifyData.redirectUrl);
+        onSuccess(nextPath ?? verifyData.redirectUrl);
       } else {
-        window.location.href = verifyData.redirectUrl;
+        window.location.href = nextPath ?? verifyData.redirectUrl;
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -177,7 +180,7 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, refreshToken, email, name, acceptedTos, inviteToken, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, acceptedTos, inviteToken, nextPath, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {

@@ -59,6 +59,11 @@ export const channelMessagesRelations = relations(channelMessages, ({ one, many 
         references: [files.id],
     }),
     reactions: many(channelMessageReactions),
+    mirroredFrom: one(channelMessages, {
+        fields: [channelMessages.mirroredFromId],
+        references: [channelMessages.id],
+        relationName: 'mirroredFrom',
+    }),
 }));
 
 /**

@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'
@@ -605,10 +606,25 @@ export const pageService = {
       return { success: false, error: 'Drive not found', status: 404 };
     }
 
-    // Check authorization
-    const hasPermission = await isDriveOwnerOrAdmin(userId, params.driveId);
-    if (!hasPermission) {
-      return { success: false, error: 'Only drive owners and admins can create pages', status: 403 };
+    // Check authorization — nested pages require edit permission on the parent;
+    // root-level pages treat the drive as the root parent and require canEdit on the drive.
+    if (params.parentId) {
+      const parentPage = await db.query.pages.findFirst({
+        where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
+        columns: { id: true },
+      });
+      if (!parentPage) {
+        return { success: false, error: 'Parent page not found in this drive', status: 400 };
+      }
+      const canEdit = await canUserEditPage(userId, params.parentId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };
+      }
+    } else {
+      const canEdit = await canUserEditPage(userId, params.driveId);
+      if (!canEdit) {
+        return { success: false, error: 'Insufficient permissions to create pages in this drive', status: 403 };
+      }
     }
 
     // Calculate position - use isNull when parentId is null/undefined
@@ -738,6 +754,15 @@ export const pageService = {
       pageData.stateHash = stateHash;
 
       const [page] = await tx.insert(pages).values(pageData).returning();
+
+      if (isAIChatPage(params.type as PageTypeEnum)) {
+        await tx.insert(driveAgentMembers).values({
+          driveId: drive.id,
+          agentPageId: page.id,
+          role: 'MEMBER',
+          addedBy: userId,
+        });
+      }
 
       // Create page version BEFORE acquiring the activity chain lock,
       // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.

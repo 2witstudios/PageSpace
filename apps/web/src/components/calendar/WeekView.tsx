@@ -138,7 +138,7 @@ export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, 
                 <div className="px-1 py-1 border-t bg-muted/20 space-y-0.5 max-h-20 overflow-y-auto">
                   {dayAllDayEvents.map((event) => (
                     <AllDayEventPill
-                      key={event.id}
+                      key={`${event.id}-${event.startAt}`}
                       event={event}
                       colors={resolveEventColor(event, context, driveColorMap ?? null)}
                       onClick={() => handlers.onEventClick(event)}
@@ -211,7 +211,7 @@ export function WeekView({ currentDate, events, tasks, handlers, driveColorMap, 
 
                   return (
                     <button
-                      key={event.id}
+                      key={`${event.id}-${event.startAt}`}
                       className={cn(
                         'absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2',
                         colors.bg,

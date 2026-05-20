@@ -20,6 +20,8 @@ interface CalendarSidebarProps {
   userEventsVisible: boolean;
   onToggleAgentEvents: () => void;
   onToggleUserEvents: () => void;
+  selectedKey?: string;
+  onSelectCalendar?: (key: string) => void;
   className?: string;
 }
 
@@ -32,6 +34,8 @@ export function CalendarSidebar({
   userEventsVisible,
   onToggleAgentEvents,
   onToggleUserEvents,
+  selectedKey,
+  onSelectCalendar,
   className,
 }: CalendarSidebarProps) {
   const hasCalendars = calendars.length > 0;
@@ -57,18 +61,22 @@ export function CalendarSidebar({
           key={cal.key}
           role="button"
           tabIndex={0}
-          onClick={() => onToggle(cal.key)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(cal.key); } }}
+          onClick={() => onSelectCalendar ? onSelectCalendar(cal.key) : onToggle(cal.key)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (onSelectCalendar) { onSelectCalendar(cal.key); } else { onToggle(cal.key); } } }}
           className={cn(
             'flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer transition-colors',
             'hover:bg-muted/50',
-            !cal.visible && 'opacity-50'
+            !cal.visible && 'opacity-50',
+            cal.key === selectedKey && 'bg-accent/50'
           )}
         >
           <span
             role="checkbox"
             aria-checked={cal.visible}
             aria-label={`Toggle ${cal.name}`}
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); onToggle(cal.key); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onToggle(cal.key); } }}
             className={cn(
               'size-3.5 shrink-0 rounded-sm border transition-colors',
               cal.visible

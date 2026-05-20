@@ -58,12 +58,4 @@ describe('GDPR: audit details must not contain user-typed text or PII', () => {
     }
   });
 
-  it('admin/audit-logs/route.ts should not include userId filter in audit details', () => {
-    const source = readRoute('admin/audit-logs/route.ts');
-    const blocks = extractAuditDetailsBlocks(source);
-    for (const block of blocks) {
-      // Should not contain raw filter objects with userId
-      expect(block).not.toMatch(/filters.*userId/);
-    }
-  });
 });

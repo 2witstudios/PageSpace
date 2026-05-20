@@ -4,15 +4,25 @@ import { createInviteToken, verifyInviteToken } from '../invite-token';
 const now = new Date('2026-05-06T12:00:00.000Z');
 
 describe('createInviteToken', () => {
-  it('given default expiry, should set expiresAt 48 hours after now', () => {
+  it('given no expiryMinutes, should return null expiresAt (no expiry)', () => {
     const result = createInviteToken({ now });
-    const expected = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-    expect(result.expiresAt.getTime()).toBe(expected.getTime());
+    expect(result.expiresAt).toBeNull();
+  });
+
+  it('given expiryMinutes: null, should return null expiresAt', () => {
+    const result = createInviteToken({ now, expiryMinutes: null });
+    expect(result.expiresAt).toBeNull();
   });
 
   it('given expiryMinutes override, should honor it', () => {
     const result = createInviteToken({ now, expiryMinutes: 60 });
-    expect(result.expiresAt.getTime()).toBe(now.getTime() + 60 * 60 * 1000);
+    expect(result.expiresAt!.getTime()).toBe(now.getTime() + 60 * 60 * 1000);
+  });
+
+  it('given expiryMinutes: 48*60, should set expiresAt 48 hours after now', () => {
+    const result = createInviteToken({ now, expiryMinutes: 48 * 60 });
+    const expected = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+    expect(result.expiresAt!.getTime()).toBe(expected.getTime());
   });
 
   it('given a fresh call, should mint a token with the ps_invite_ prefix', () => {

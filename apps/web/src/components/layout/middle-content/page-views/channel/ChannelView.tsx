@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, Fragment } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
-import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { MessageWithUser } from '@/hooks/usePageTree';
+import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
 import {
   Conversation,
   ConversationContent,
@@ -18,9 +18,10 @@ import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Check, X } from 'lucide-react';
+import { Lock, Check, X, MessageSquareText } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -33,11 +34,17 @@ import {
   type AttachmentMeta,
   type FileRelation,
 } from '@/lib/attachment-utils';
-import { isFirstInGroup } from '@/lib/messages/grouping';
+import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
+import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
 
+interface ChannelRef {
+  id: string;
+  driveId: string;
+}
+
 interface ChannelViewProps {
-  page: TreePage;
+  page: ChannelRef;
 }
 
 // AI sender metadata for messages posted by AI tools
@@ -59,6 +66,8 @@ interface MessageWithReactions extends MessageWithUser {
   quotedMessage?: QuotedMessageSnapshot | null;
   replyCount?: number;
   lastReplyAt?: string | null;
+  mirroredFromId?: string | null;
+  mirroredFrom?: { parentId: string | null } | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -529,7 +538,7 @@ function ChannelView({ page }: ChannelViewProps) {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <StreamingMarkdown content={m.content} isStreaming={false} />
+              <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -608,8 +617,13 @@ function ChannelView({ page }: ChannelViewProps) {
                         const isRealMessage = !m.id.startsWith('temp-') && editingMessageId !== m.id;
                         const showOwnerActions = isOwnMessage && isRealMessage;
                         const replyCount = m.replyCount ?? 0;
+                        const currentDateStr = new Date(m.createdAt).toDateString();
+                        const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
+                        const showDateSeparator = currentDateStr !== previousDateStr;
                         return (
-                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                        <Fragment key={m.id}>
+                        {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
+                        <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
@@ -622,7 +636,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1 relative">
+                            <div className="flex flex-col min-w-0 flex-1">
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -675,12 +689,19 @@ function ChannelView({ page }: ChannelViewProps) {
                                   </div>
                                 ) : (
                                   <>
+                                    {m.mirroredFromId && (
+                                      <ThreadOriginBadge
+                                        onOpenThread={m.mirroredFrom?.parentId
+                                          ? () => openThread({ source: 'channel', contextId: page.id, parentId: m.mirroredFrom!.parentId! })
+                                          : undefined}
+                                      />
+                                    )}
                                     {(m.quotedMessage || m.quotedMessageId) && (
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        <StreamingMarkdown content={m.content} isStreaming={false} />
+                                        <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (
@@ -696,11 +717,12 @@ function ChannelView({ page }: ChannelViewProps) {
                                       openThread({ source: 'channel', contextId: page.id, parentId: m.id })
                                     }
                                     data-testid={`thread-footer-${m.id}`}
-                                    className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                    className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                                   >
+                                    <MessageSquareText size={12} aria-hidden />
                                     {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                                     {m.lastReplyAt
-                                      ? ` · last reply ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                                      ? ` · ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
                                       : ''}
                                   </button>
                                 )}
@@ -713,28 +735,28 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canReact={permissions?.canView || false}
                                   />
                                 )}
-                                {isRealMessage && (
-                                  <MessageHoverToolbar
-                                    canReact={permissions?.canView || false}
-                                    canEdit={showOwnerActions}
-                                    canDelete={showOwnerActions}
-                                    canReplyInThread={!m.id.startsWith('temp-')}
-                                    canQuoteReply={true}
-                                    reactions={m.reactions}
-                                    currentUserId={user?.id}
-                                    className={!isFirst ? 'top-0' : undefined}
-                                    onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
-                                    onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
-                                    onQuoteReply={() => handleStartQuote(m)}
-                                    onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                    onDelete={() => handleDeleteMessage(m.id)}
-                                    onReplyInThread={() =>
-                                      openThread({ source: 'channel', contextId: page.id, parentId: m.id })
-                                    }
-                                  />
-                                )}
                             </div>
+                            {isRealMessage && (
+                              <MessageHoverToolbar
+                                canReact={permissions?.canView || false}
+                                canEdit={showOwnerActions}
+                                canDelete={showOwnerActions}
+                                canReplyInThread={!m.id.startsWith('temp-')}
+                                canQuoteReply={true}
+                                reactions={m.reactions}
+                                currentUserId={user?.id}
+                                onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                                onQuoteReply={() => handleStartQuote(m)}
+                                onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                onDelete={() => handleDeleteMessage(m.id)}
+                                onReplyInThread={() =>
+                                  openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                }
+                              />
+                            )}
                         </div>
+                        </Fragment>
                         );
                     })}
             </ConversationContent>
@@ -775,7 +797,10 @@ function ChannelView({ page }: ChannelViewProps) {
     )}
     {threadPanel && isMobile && (
       <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
-        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-full p-0"
+        >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
         </SheetContent>

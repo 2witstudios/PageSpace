@@ -150,10 +150,7 @@ export default function AdminGlobalPromptPage() {
   }
 
   const roles = Object.keys(data.promptData);
-  const totalSections = Object.values(data.promptData).reduce(
-    (sum, role) => sum + role.sections.length,
-    0
-  );
+  const totalSections = Object.values(data.promptData)[0]?.sections.length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -289,7 +286,7 @@ export default function AdminGlobalPromptPage() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">{roles.length}</div>
-              <div className="text-muted-foreground">Agent Roles</div>
+              <div className="text-muted-foreground">Access Modes</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">{totalSections}</div>
@@ -299,7 +296,7 @@ export default function AdminGlobalPromptPage() {
               <div className="text-2xl font-bold text-primary">
                 {data.toolSchemas?.length || Object.values(data.promptData)[0]?.toolsAllowed.length || 0}
               </div>
-              <div className="text-muted-foreground">Total Tools</div>
+              <div className="text-muted-foreground">Upfront Tools</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">

@@ -1,10 +1,8 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, sql } from '@pagespace/db/operators'
+import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
-import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
-import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -14,6 +12,7 @@ import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrat
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import {
   removeCalendarTrigger,
+  resyncCalendarTriggerTimings,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
@@ -250,18 +249,6 @@ export async function PATCH(
       );
     }
 
-    // Reject agent-trigger upserts on recurring events. The cron poller
-    // fires one-shot occurrences, so attaching one trigger to a recurring
-    // event would silently misfire on every occurrence past the first.
-    // Mirrors the POST /events and PUT /triggers guards.
-    const willBeRecurring = data.recurrenceRule !== undefined ? data.recurrenceRule !== null : event.recurrenceRule !== null;
-    if (data.agentTrigger && willBeRecurring) {
-      return NextResponse.json(
-        { error: 'Agent triggers are not supported for recurring events' },
-        { status: 400 }
-      );
-    }
-
     // Pre-validate agent trigger before opening the event update tx so a bad
     // payload (off-drive agent / context page, missing prompt-or-instruction)
     // returns 400 without dirtying event state.
@@ -303,24 +290,10 @@ export async function PATCH(
         .where(eq(calendarEvents.id, eventId))
         .returning();
 
-      if (adjustedStartAt && data.agentTrigger === undefined) {
-        // Caller didn't touch the trigger payload — keep the existing
-        // re-aim semantics: only triggers that haven't been processed yet
-        // get their triggerAt bumped. If the caller IS upserting the
-        // trigger this tick, the upsert below will set triggerAt itself
-        // and there's no point doing the re-aim sweep.
-        await tx
-          .update(calendarTriggers)
-          .set({ triggerAt: adjustedStartAt })
-          .where(and(
-            eq(calendarTriggers.calendarEventId, eventId),
-            sql`NOT EXISTS (
-              SELECT 1 FROM ${workflowRuns}
-              WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
-                AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-            )`,
-          ));
-      }
+      // Effective recurrence rule after the update (undefined = unchanged).
+      const effectiveRecurrenceRule = data.recurrenceRule !== undefined
+        ? data.recurrenceRule
+        : event.recurrenceRule;
 
       // Apply agentTrigger changes inside the same tx so partial writes
       // can't leave the event mutated but the trigger out of sync.
@@ -334,7 +307,20 @@ export async function PATCH(
           triggerAt: newStartAt,
           timezone: data.timezone ?? event.timezone ?? 'UTC',
           agentTrigger: data.agentTrigger,
+          recurrenceRule: effectiveRecurrenceRule,
+          recurrenceExceptions: event.recurrenceExceptions ?? [],
         });
+      } else if (data.agentTrigger === undefined && (adjustedStartAt || data.recurrenceRule !== undefined)) {
+        // Caller didn't touch agentTrigger but timing/recurrence changed.
+        // For recurring events: re-expand the full occurrence series.
+        // For one-shot events: re-aim the single pending trigger row.
+        await resyncCalendarTriggerTimings(
+          tx,
+          eventId,
+          newStartAt,
+          effectiveRecurrenceRule,
+          event.recurrenceExceptions ?? [],
+        );
       }
 
       return result;
