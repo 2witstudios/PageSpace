@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock dependencies
+const mockLookupFn = vi.fn();
 vi.mock('dns', () => ({
-  promises: {
-    lookup: vi.fn(),
-  },
+  default: { promises: { lookup: mockLookupFn } },
+  promises: { lookup: mockLookupFn },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -29,7 +29,6 @@ vi.mock('../../core', () => ({}));
 
 import { webSearchTools } from '../web-search-tools';
 import type { ToolExecutionContext } from '../../core';
-import { promises as dnsMock } from 'dns';
 
 type WebSearchResult = Exclude<
   Awaited<ReturnType<NonNullable<(typeof webSearchTools.web_search)['execute']>>>,
@@ -275,8 +274,6 @@ describe('web-search-tools', () => {
 
 // ─── web_fetch tests ────────────────────────────────────────────────────────
 
-const mockDnsLookup = vi.mocked(dnsMock.lookup);
-
 /** Build a minimal fetch Response with a streaming body. */
 function mockFetchResponse(
   body: string,
@@ -308,7 +305,7 @@ describe('web_fetch', () => {
     vi.clearAllMocks();
     global.fetch = vi.fn();
     // Default: public DNS resolves to a public IP
-    mockDnsLookup.mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never);
+    mockLookupFn.mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never);
   });
 
   afterEach(() => {
@@ -338,7 +335,7 @@ describe('web_fetch', () => {
       expect(result.success).toBe(false);
       expect(String(result.error)).toMatch(/https/i);
       expect(fetch).not.toHaveBeenCalled();
-      expect(mockDnsLookup).not.toHaveBeenCalled();
+      expect(mockLookupFn).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -368,7 +365,7 @@ describe('web_fetch', () => {
     });
 
     it('blocks when DNS resolves to a private IP (DNS rebinding)', async () => {
-      mockDnsLookup.mockResolvedValue([{ address: '10.0.0.1', family: 4 }] as never);
+      mockLookupFn.mockResolvedValue([{ address: '10.0.0.1', family: 4 }] as never);
       const result = await webSearchTools.web_fetch!.execute!(
         { url: 'https://evil.example.com', maxLength: 20000 },
         mockContext('user-123')
@@ -379,7 +376,7 @@ describe('web_fetch', () => {
     });
 
     it('fails closed when DNS resolution fails', async () => {
-      mockDnsLookup.mockRejectedValue(new Error('ENOTFOUND'));
+      mockLookupFn.mockRejectedValue(new Error('ENOTFOUND'));
       const result = await webSearchTools.web_fetch!.execute!(
         { url: 'https://nxdomain.invalid', maxLength: 20000 },
         mockContext('user-123')
