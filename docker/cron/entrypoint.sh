@@ -53,4 +53,9 @@ awk -v secret="$CRON_SECRET" '{ gsub(/__CRON_SECRET__/, secret); print }' /usr/l
   && mv /usr/local/bin/cron-curl.tmp /usr/local/bin/cron-curl
 chmod 700 /usr/local/bin/cron-curl
 
+# Substitute WEB_URL into the crontab (defaults to Docker Compose service name for backward compat)
+WEB_URL="${WEB_URL:-http://web:3000}"
+awk -v web_url="$WEB_URL" '{ gsub(/__WEB_URL__/, web_url); print }' /etc/crontabs/root > /tmp/crontab.tmp \
+  && mv /tmp/crontab.tmp /etc/crontabs/root
+
 exec crond -f -d 8
