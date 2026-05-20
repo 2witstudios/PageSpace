@@ -55,6 +55,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <Button
+      type="button"
       size="sm"
       variant="outline"
       onClick={() => {
