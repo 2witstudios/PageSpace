@@ -191,4 +191,28 @@ describe('validateInferenceRequest', () => {
       expected: { ok: false, status: 400 },
     });
   });
+
+  test('conversation_id is extracted and returned as conversationId', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, conversation_id: 'conv-xyz' };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a body with a conversation_id field',
+      should: 'include conversationId in the parsed data',
+      actual: result.ok ? result.data.conversationId : undefined,
+      expected: 'conv-xyz',
+    });
+  });
+
+  test('whitespace-only conversation_id is treated as absent', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, conversation_id: '   ' };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a conversation_id containing only whitespace',
+      should: 'return undefined for conversationId',
+      actual: result.ok ? result.data.conversationId : 'error',
+      expected: undefined,
+    });
+  });
 });

@@ -61,7 +61,10 @@ vi.mock('@/lib/ai/core', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue('You are a helpful agent.'),
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
   saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
-  convertDbMessageToUIMessage: vi.fn((m: unknown) => m),
+  convertDbMessageToUIMessage: vi.fn((m: unknown) => {
+    const msg = m as { id: string; role: string; content: string };
+    return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
+  }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
 }));
@@ -72,6 +75,10 @@ vi.mock('@/lib/subscription/usage-service', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
+}));
+
+vi.mock('@/lib/repositories/chat-message-repository', () => ({
+  chatMessageRepository: { getMessagesForPage: vi.fn().mockResolvedValue([]) },
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -104,6 +111,8 @@ import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { sanitizeMessagesForModel } from '@/lib/ai/core';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -149,6 +158,7 @@ describe('POST /api/v1/chat/completions', () => {
         where: vi.fn().mockResolvedValue([agentPage]),
       }),
     } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
   });
 
   test('returns 401 when auth fails', async () => {
@@ -302,6 +312,77 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'still return a 200 SSE response',
       actual: { status: response.status, contentType: response.headers.get('content-type') },
       expected: { status: 200, contentType: 'text/event-stream' },
+    });
+  });
+
+  test('thread mode: calls getMessagesForPage with pageId and conversationId', async () => {
+    const dbMessages = [
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+    ];
+    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    const calls = vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls;
+    assert({
+      given: 'a request with a valid conversation_id',
+      should: 'call getMessagesForPage with the pageId and conversationId and return 200',
+      actual: {
+        status: response.status,
+        calledWithPageId: calls[0]?.[0],
+        calledWithConvId: calls[0]?.[1],
+      },
+      expected: {
+        status: 200,
+        calledWithPageId: 'page-123',
+        calledWithConvId: 'conv-abc',
+      },
+    });
+  });
+
+  test('thread mode: empty history is allowed (first message in thread)', async () => {
+    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce([]);
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-new' }));
+    assert({
+      given: 'a thread mode request where no prior messages exist',
+      should: 'still return a 200 SSE stream',
+      actual: response.status,
+      expected: 200,
+    });
+  });
+
+  test('thread mode: DB history messages are prepended before the new user message', async () => {
+    const dbMessages = [
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+    ];
+    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    const sanitizeCalls = vi.mocked(sanitizeMessagesForModel).mock.calls;
+    assert({
+      given: 'a thread mode request with 2 prior DB messages and 1 new user message',
+      should: 'pass 3 messages to sanitizeMessagesForModel (2 history + 1 new)',
+      actual: sanitizeCalls[0]?.[0]?.length,
+      expected: 3,
+    });
+  });
+
+  test('openai mode: does not call getMessagesForPage when conversation_id is absent', async () => {
+    await POST(makeRequest(validBody));
+    assert({
+      given: 'a request without a conversation_id',
+      should: 'not call getMessagesForPage',
+      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  test('whitespace-only conversation_id is treated as absent', async () => {
+    await POST(makeRequest({ ...validBody, conversation_id: '   ' }));
+    assert({
+      given: 'a conversation_id containing only whitespace',
+      should: 'not call getMessagesForPage',
+      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      expected: 0,
     });
   });
 });
