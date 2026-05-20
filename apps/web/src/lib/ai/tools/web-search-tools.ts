@@ -259,26 +259,38 @@ Returns the page content converted to readable markdown.`,
           throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
         }
 
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
+          return {
+            success: false,
+            url,
+            error: `Unsupported content type: ${contentType}`,
+            content: '',
+            nextSteps: ['This URL returns non-HTML content. Try web_search for a different source.'],
+          };
+        }
+
         const html = await response.text();
         const cleaned = html
           .replace(/<script[\s\S]*?<\/script>/gi, '')
           .replace(/<style[\s\S]*?<\/style>/gi, '');
 
         const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
-        const markdown = td.turndown(cleaned).slice(0, maxLength);
+        const fullMarkdown = td.turndown(cleaned);
+        const markdown = fullMarkdown.slice(0, maxLength);
 
         webSearchLogger.info('URL fetch complete', {
           userId: maskIdentifier(userId),
           url,
           markdownLength: markdown.length,
-          truncated: markdown.length === maxLength,
+          truncated: fullMarkdown.length > maxLength,
         });
 
         return {
           success: true,
           url,
           contentLength: markdown.length,
-          truncated: markdown.length === maxLength,
+          truncated: fullMarkdown.length > maxLength,
           content: markdown,
           nextSteps: [
             'Read and synthesize the fetched content',
