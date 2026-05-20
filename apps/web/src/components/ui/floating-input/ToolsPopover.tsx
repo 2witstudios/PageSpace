@@ -134,7 +134,7 @@ export function ToolsPopover({
                 'text-sm',
                 webSearchEnabled ? 'text-foreground' : 'text-muted-foreground'
               )}>
-                Web Search
+                Web
               </span>
             </div>
             <Switch

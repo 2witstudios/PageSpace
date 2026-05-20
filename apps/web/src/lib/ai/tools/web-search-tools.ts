@@ -1,5 +1,7 @@
+import { promises as dnsPromises } from 'dns';
 import { tool } from 'ai';
 import { z } from 'zod';
+import TurndownService from 'turndown';
 import { type ToolExecutionContext } from '../core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -7,9 +9,15 @@ import { maskIdentifier } from '@/lib/logging/mask';
 const webSearchLogger = loggers.ai.child({ module: 'web-search-tools' });
 
 const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
+const MAX_FETCH_BYTES = 5 * 1024 * 1024; // 5 MB hard cap on buffered response
 
 function safeHostname(url: string): string {
   try { return new URL(url).hostname; } catch { return ''; }
+}
+
+/** Strips query string and fragment before logging to avoid leaking tokens in URL params. */
+function redactUrl(url: string): string {
+  try { const u = new URL(url); return u.origin + u.pathname; } catch { return '[unparseable url]'; }
 }
 
 /** Map internal recency filter values to Brave's freshness parameter */
@@ -117,10 +125,48 @@ async function performWebSearch({
   }
 }
 
+/** Returns true for any IP that must not be fetched (loopback, RFC1918, link-local, IPv6 private). */
+function isPrivateIp(ip: string): boolean {
+  const h = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '0.0.0.0') return true;
+  // IPv6
+  if (h === '::1') return true;
+  if (h.startsWith('fe80:')) return true;                   // fe80::/10 link-local
+  if (h.startsWith('fc') || h.startsWith('fd')) return true; // fc00::/7 unique-local
+  if (h.startsWith('::ffff:')) return isPrivateIp(h.slice(7)); // IPv4-mapped
+  // IPv4
+  const ipv4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    if (a === 10) return true;                          // 10.0.0.0/8
+    if (a === 127) return true;                         // 127.0.0.0/8 loopback
+    if (a === 169 && b === 254) return true;            // 169.254.0.0/16 link-local + cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;            // 192.168.0.0/16
+  }
+  return false;
+}
+
+/**
+ * Resolves hostname to all addresses and rejects if any is private.
+ * Catches public hostnames that resolve to internal IPs (DNS rebinding mitigation).
+ * Throws on block or DNS failure (fail-closed).
+ */
+async function validatePublicHost(hostname: string): Promise<void> {
+  if (isPrivateIp(hostname)) throw new Error('Fetching private or internal hosts is not allowed');
+  let addresses: { address: string; family: number }[];
+  try {
+    addresses = await dnsPromises.lookup(hostname, { all: true });
+  } catch {
+    throw new Error('Unable to resolve hostname');
+  }
+  if (!addresses.length) throw new Error('Hostname resolved to no addresses');
+  for (const { address } of addresses) {
+    if (isPrivateIp(address)) throw new Error('Fetching private or internal hosts is not allowed');
+  }
+}
+
 export const webSearchTools = {
-  /**
-   * Search the web for current information using Brave Search API
-   */
   web_search: tool({
     description: `Search the web for current information, news, documentation, and real-time data. Use this when:
 - User asks about current events, news, or recent developments
@@ -202,6 +248,137 @@ Returns structured search results with titles, links, summaries, and publication
             'Check if BRAVE_API_KEY environment variable is configured',
             'Try a different search query',
             'If the error persists, inform the user that web search is temporarily unavailable',
+          ],
+        };
+      }
+    },
+  }),
+
+  web_fetch: tool({
+    description: `Fetch and read the full content of a specific URL as clean markdown. Use this when:
+- You have a direct URL and need its full content (not just a snippet)
+- web_search returned a link you want to read in detail
+- User provides a URL they want you to read
+- Fetching documentation, articles, GitHub files, API references
+
+Returns the page content converted to readable markdown.`,
+    inputSchema: z.object({
+      url: z.string().url().describe('The full URL to fetch (must start with https://)'),
+      maxLength: z.number().min(1000).max(50000).optional().default(20000)
+        .describe('Max characters of markdown to return (default 20000)'),
+    }),
+    execute: async ({ url, maxLength = 20000 }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:') {
+          return { success: false, url, error: 'Only HTTPS URLs are supported', content: '', nextSteps: ['Use an https:// URL'] };
+        }
+
+        try {
+          await validatePublicHost(parsed.hostname);
+        } catch (e) {
+          return { success: false, url, error: (e as Error).message, content: '', nextSteps: ['Provide a publicly accessible URL'] };
+        }
+
+        webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url: redactUrl(url) });
+
+        const response = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' },
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
+        }
+
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
+          return {
+            success: false,
+            url,
+            error: `Unsupported content type: ${contentType}`,
+            content: '',
+            nextSteps: ['This URL returns non-HTML content. Try web_search for a different source.'],
+          };
+        }
+
+        const clHeader = response.headers.get('content-length');
+        if (clHeader && Number(clHeader) > MAX_FETCH_BYTES) {
+          return {
+            success: false,
+            url,
+            error: `Response too large (${Math.round(Number(clHeader) / 1024 / 1024)} MB, max 5 MB)`,
+            content: '',
+            nextSteps: ['Try web_search for a summary of this content'],
+          };
+        }
+
+        // Stream body with hard byte cap to avoid buffering large responses
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('Response body is not readable');
+        const chunks: Uint8Array[] = [];
+        let bytesRead = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          const remaining = MAX_FETCH_BYTES - bytesRead;
+          if (value.length >= remaining) {
+            chunks.push(value.subarray(0, remaining));
+            bytesRead += remaining;
+            await reader.cancel();
+            break;
+          }
+          chunks.push(value);
+          bytesRead += value.length;
+        }
+        const allBytes = new Uint8Array(bytesRead);
+        let offset = 0;
+        for (const chunk of chunks) { allBytes.set(chunk, offset); offset += chunk.length; }
+        const html = new TextDecoder().decode(allBytes);
+
+        const cleaned = html
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '');
+
+        const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+        const fullMarkdown = td.turndown(cleaned);
+        const markdown = fullMarkdown.slice(0, maxLength);
+
+        webSearchLogger.info('URL fetch complete', {
+          userId: maskIdentifier(userId),
+          url: redactUrl(url),
+          markdownLength: markdown.length,
+          truncated: fullMarkdown.length > maxLength,
+        });
+
+        return {
+          success: true,
+          url,
+          contentLength: markdown.length,
+          truncated: fullMarkdown.length > maxLength,
+          content: markdown,
+          nextSteps: [
+            'Read and synthesize the fetched content',
+            'Cite the source URL when referencing this content',
+            'If content is truncated, focus on the most relevant sections',
+          ],
+        };
+      } catch (error) {
+        webSearchLogger.error('URL fetch failed', error as Error, {
+          userId: maskIdentifier(userId),
+          url: redactUrl(url),
+        });
+        return {
+          success: false,
+          url,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          content: '',
+          nextSteps: [
+            'Check the URL is publicly accessible (not behind auth or paywall)',
+            'Try web_search to find an alternative source',
           ],
         };
       }

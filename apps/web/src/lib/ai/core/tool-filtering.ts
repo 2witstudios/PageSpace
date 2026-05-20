@@ -36,7 +36,7 @@ const WRITE_TOOLS = new Set([
 ]);
 
 // Web search tools (excluded when web search is disabled)
-const WEB_SEARCH_TOOLS = new Set(['web_search']);
+const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 
 /**
  * Check if a tool modifies content
@@ -146,6 +146,7 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     'glob_search',
     'multi_drive_search',
     'web_search',
+    'web_fetch',
     // Agent communication
     'ask_agent',
     // Write tools
