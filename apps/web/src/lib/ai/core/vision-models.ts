@@ -43,6 +43,8 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-4': true,
 
   // Anthropic Claude 3+ (all have vision)
+  'claude-opus-4.7': true,
+  'claude-opus-4.7-fast-20260512': true,
   'claude-opus-4-6-20260204': true,
   'claude-sonnet-4-6-20260217': true,
   'claude-opus-4.6': true,
@@ -76,6 +78,9 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gemini-2.0-flash-exp': true,
   'gemini-1.5-pro': true,
   'gemini-1.5-flash': true,
+
+  // Google Gemini 3.5 Series
+  'gemini-3.5-flash': true,
 
   // xAI Grok Vision models
   'grok-4': true,
