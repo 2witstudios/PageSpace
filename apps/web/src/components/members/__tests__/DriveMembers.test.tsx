@@ -164,7 +164,7 @@ describe('DriveMembers', () => {
     mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL));
 
     socket.__emit('drive:member_added', { driveId: 'other' });
     await new Promise((r) => setTimeout(r, 20));
