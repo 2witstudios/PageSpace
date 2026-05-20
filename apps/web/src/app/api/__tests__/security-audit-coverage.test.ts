@@ -56,9 +56,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['auth/apple/signin', 'OAuth initiation redirect, no user session or data access'],
   ['auth/google/signin', 'OAuth initiation redirect, no user session or data access'],
 
-  // --- Deprecated endpoints ---
-  ['admin/users/[userId]/subscription', 'Deprecated (410 Gone), replaced by gift-subscription'],
-
   // --- Stateless token endpoints (no user data accessed) ---
   ['auth/csrf', 'Stateless CSRF token generation, no user data'],
   ['auth/login-csrf', 'Stateless login CSRF token, no user data'],
