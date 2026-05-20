@@ -37,6 +37,7 @@ import {
 import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
+import { cn } from '@/lib/utils';
 
 interface ChannelRef {
   id: string;
@@ -636,7 +637,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1">
+                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "[@media(hover:none)]:pr-28")}>
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
