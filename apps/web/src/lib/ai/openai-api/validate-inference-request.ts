@@ -87,8 +87,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
 
   const driveContext = typeof raw.drive_context === 'string' ? raw.drive_context : undefined;
 
-  const rawConvId = typeof raw.conversation_id === 'string' ? raw.conversation_id.trim() : undefined;
-  const conversationId = rawConvId || undefined;
+  const conversationId = (typeof raw.conversation_id === 'string' && raw.conversation_id.trim()) || undefined;
 
   return {
     ok: true,

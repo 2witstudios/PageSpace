@@ -112,6 +112,7 @@ import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { sanitizeMessagesForModel } from '@/lib/ai/core';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -346,6 +347,22 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'still return a 200 SSE stream',
       actual: response.status,
       expected: 200,
+    });
+  });
+
+  test('thread mode: DB history messages are prepended before the new user message', async () => {
+    const dbMessages = [
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+    ];
+    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    const sanitizeCalls = vi.mocked(sanitizeMessagesForModel).mock.calls;
+    assert({
+      given: 'a thread mode request with 2 prior DB messages and 1 new user message',
+      should: 'pass 3 messages to sanitizeMessagesForModel (2 history + 1 new)',
+      actual: sanitizeCalls[0]?.[0]?.length,
+      expected: 3,
     });
   });
 

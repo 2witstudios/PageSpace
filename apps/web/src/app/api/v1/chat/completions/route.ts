@@ -92,17 +92,14 @@ export async function POST(request: Request): Promise<Response> {
   // 8. Build message context and save new user message
   const isThreadMode = incomingConversationId !== undefined;
   const conversationId = isThreadMode ? incomingConversationId : createId();
+  const userMessage = messages[messages.length - 1];
 
   let inferenceMessages = messages;
-
   if (isThreadMode) {
     const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
-    const historyMessages = dbMessages.map(convertDbMessageToUIMessage);
-    const newUserMessage = messages[messages.length - 1];
-    inferenceMessages = [...historyMessages, newUserMessage];
+    inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
   }
 
-  const userMessage = messages[messages.length - 1];
   const userMessageId = userMessage.id;
   if (userMessage && userMessage.role === 'user') {
     await saveMessageToDatabase({
