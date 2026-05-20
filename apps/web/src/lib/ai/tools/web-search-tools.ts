@@ -118,6 +118,22 @@ async function performWebSearch({
   }
 }
 
+/** Block SSRF: rejects loopback, RFC1918, link-local, and cloud-metadata hosts. */
+function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1' || h === '0.0.0.0') return true;
+  const ipv4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    if (a === 10) return true;                          // 10.0.0.0/8
+    if (a === 127) return true;                         // 127.0.0.0/8 loopback
+    if (a === 169 && b === 254) return true;            // 169.254.0.0/16 link-local + AWS metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;            // 192.168.0.0/16
+  }
+  return false;
+}
+
 export const webSearchTools = {
   web_search: tool({
     description: `Search the web for current information, news, documentation, and real-time data. Use this when:
@@ -224,6 +240,14 @@ Returns the page content converted to readable markdown.`,
       if (!userId) throw new Error('User authentication required');
 
       try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:') {
+          return { success: false, url, error: 'Only HTTPS URLs are supported', content: '', nextSteps: ['Use an https:// URL'] };
+        }
+        if (isPrivateHost(parsed.hostname)) {
+          return { success: false, url, error: 'Fetching private or internal hosts is not allowed', content: '', nextSteps: ['Provide a publicly accessible URL'] };
+        }
+
         webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url });
 
         const response = await fetch(url, {
