@@ -8,6 +8,7 @@
  * Usage:
  *   node scripts/sync-openrouter-models.mjs            # full report
  *   node scripts/sync-openrouter-models.mjs --free     # free tier only
+ *   node scripts/sync-openrouter-models.mjs --paid     # paid tier only
  *   node scripts/sync-openrouter-models.mjs --pricing  # pricing drift only
  *
  * This script is intentionally read-only — it reports drift so a human can
@@ -26,6 +27,11 @@ const FREE_ONLY = process.argv.includes('--free');
 const PAID_ONLY = process.argv.includes('--paid');
 const PRICING_ONLY = process.argv.includes('--pricing');
 
+if (FREE_ONLY && PAID_ONLY) {
+  console.error('Error: --free and --paid are mutually exclusive');
+  process.exit(1);
+}
+
 // --- Read current files --------------------------------------------------------
 
 const configSource = readFileSync(CONFIG_PATH, 'utf8');
@@ -41,10 +47,13 @@ const pricedModels = new Set(
   [...monitoringSource.matchAll(/'([\w\/\-.:]+(?::free)?)'\s*:\s*\{\s*input:/g)].map(m => m[1])
 );
 
-// Extract model IDs that have context window entries
-const contextModels = new Set(
-  [...monitoringSource.matchAll(/'([\w\/\-.:]+(?::free)?)'\s*:\s*\d+,/g)].map(m => m[1])
-);
+// Extract local pricing values from ai-monitoring.ts for drift comparison
+const localPricing = {};
+for (const match of monitoringSource.matchAll(
+  /'([\w\/\-.:]+(?::free)?)'\s*:\s*\{\s*input:\s*([\d.]+),\s*output:\s*([\d.]+)/g
+)) {
+  localPricing[match[1]] = { input: parseFloat(match[2]), output: parseFloat(match[3]) };
+}
 
 // --- Fetch OpenRouter models ---------------------------------------------------
 
@@ -77,6 +86,8 @@ const missing = { paid: [], free: [] };
 const missingPricing = [];   // in config but no pricing entry in monitoring.ts
 const pricingDrift = [];     // in config + monitoring, but monitoring price differs from API
 
+const PRICE_EPSILON = 0.001; // tolerance for floating-point price comparison
+
 for (const model of models) {
   const free = isFree(model);
   if (FREE_ONLY && !free) continue;
@@ -87,12 +98,28 @@ for (const model of models) {
   const ctx = model.context_length;
 
   if (!existingModels.has(model.id)) {
-    const entry = { id: model.id, name: model.name, ctx, apiInputPerM, apiOutputPerM };
-    (free ? missing.free : missing.paid).push(entry);
-  } else if (!PRICING_ONLY && !free) {
-    // Check pricing drift for paid models already in config
+    if (!PRICING_ONLY) {
+      const entry = { id: model.id, name: model.name, ctx, apiInputPerM, apiOutputPerM };
+      (free ? missing.free : missing.paid).push(entry);
+    }
+  } else if (!free) {
+    // Check missing pricing for paid models in config
     if (!pricedModels.has(model.id) && apiInputPerM > 0) {
       missingPricing.push({ id: model.id, name: model.name, ctx, apiInputPerM, apiOutputPerM });
+    }
+    // Check actual price drift for models that do have pricing entries
+    if (pricedModels.has(model.id) && apiInputPerM > 0 && localPricing[model.id]) {
+      const local = localPricing[model.id];
+      if (
+        Math.abs(local.input - apiInputPerM) > PRICE_EPSILON ||
+        Math.abs(local.output - apiOutputPerM) > PRICE_EPSILON
+      ) {
+        pricingDrift.push({
+          id: model.id, name: model.name, ctx,
+          apiInputPerM, apiOutputPerM,
+          localInputPerM: local.input, localOutputPerM: local.output,
+        });
+      }
     }
   }
 }
@@ -121,6 +148,20 @@ const fmtMissing = (list, label) => {
   }
 };
 
+const fmtDrift = (list) => {
+  if (!list.length) {
+    console.log('\n✅ Pricing drift: all monitored prices match OpenRouter API');
+    return;
+  }
+  console.log(`\n⚠️  Pricing drift — ${list.length} model(s) differ from OpenRouter API:\n`);
+  for (const e of list) {
+    console.log(`  '${e.id}':`);
+    console.log(`    API:   ${fmtPrice(e.apiInputPerM)} in / ${fmtPrice(e.apiOutputPerM)} out`);
+    console.log(`    Local: ${fmtPrice(e.localInputPerM)} in / ${fmtPrice(e.localOutputPerM)} out`);
+  }
+  console.log('\nUpdate pricing in packages/lib/src/monitoring/ai-monitoring.ts');
+};
+
 console.log(`\nTotal OpenRouter models: ${models.length}`);
 
 if (!PRICING_ONLY) {
@@ -129,10 +170,11 @@ if (!PRICING_ONLY) {
 }
 
 fmtMissing(missingPricing, 'Models in config but missing pricing in ai-monitoring.ts');
+fmtDrift(pricingDrift);
 
 if (missingPricing.length) {
   console.log('\nAdd pricing entries to packages/lib/src/monitoring/ai-monitoring.ts');
 }
-if (missing.paid.length || missing.free.length) {
+if (!PRICING_ONLY && (missing.paid.length || missing.free.length)) {
   console.log('\nAdd model entries to apps/web/src/lib/ai/core/ai-providers-config.ts');
 }

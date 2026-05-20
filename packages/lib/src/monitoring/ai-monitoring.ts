@@ -288,8 +288,13 @@ export const MODEL_CONTEXT_WINDOWS = {
   'anthropic/claude-3-haiku': 200000,
 
   // OpenRouter Models - OpenAI
+  'openai/gpt-5.5-pro': 200000,
+  'openai/gpt-5.5': 272000,
   'openai/gpt-5.4-pro': 200000,
   'openai/gpt-5.4': 272000,
+  'openai/gpt-5.4-mini': 128000,
+  'openai/gpt-5.4-nano': 128000,
+  'openai/gpt-5.3-chat': 272000,
   'openai/gpt-5.3-chat-latest': 272000,
   'openai/gpt-5.3-codex': 272000,
   'openai/gpt-5.2': 400000,
@@ -333,6 +338,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'meta-llama/llama-3.1-405b-instruct': 128000,
 
   // OpenRouter Models - Mistral
+  'mistralai/mistral-medium-3-5': 262144,
+  'mistralai/mistral-small-2603': 262144,
   'mistralai/mistral-medium-3.1': 128000,
   'mistralai/mistral-small-3.2-24b-instruct': 32000,
   'mistralai/codestral-2508': 32000,
@@ -340,17 +347,21 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/devstral-small': 128000,
 
   // OpenRouter Models - Chinese/Asian
+  'z-ai/glm-5-turbo': 202752,
   'z-ai/glm-5': 202752,
   'z-ai/glm-4.7': 200000,
   'z-ai/glm-4.5v': 128000,
   'z-ai/glm-4.5': 128000,
   'z-ai/glm-4.5-air': 128000,
   'z-ai/glm-4-32b': 128000,
-  'qwen/qwen3.6-max-preview-20260420': 131072,
-  'qwen/qwen3.6-plus-04-02': 131072,
-  'qwen/qwen3.5-flash-20260224': 131072,
+  'qwen/qwen3.6-max-preview': 131072,
+  'qwen/qwen3.6-plus': 131072,
+  'qwen/qwen3.6-flash': 131072,
+  'qwen/qwen3.6-35b-a3b': 131072,
+  'qwen/qwen3.6-27b': 131072,
+  'qwen/qwen3.5-flash-02-23': 131072,
   'qwen/qwen3.5-397b-a17b': 131072,
-  'qwen/qwen3.5-plus-2026-02-15': 131072,
+  'qwen/qwen3.5-plus-20260420': 131072,
   'qwen/qwen3.5-122b-a10b': 131072,
   'qwen/qwen3.5-35b-a3b': 131072,
   'qwen/qwen3.5-27b': 131072,
@@ -360,6 +371,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'qwen/qwen3-235b-a22b-2507': 128000,
   'qwen/qwen3-coder': 128000,
   'moonshotai/kimi-k2': 128000,
+  'minimax/minimax-m2.7': 204800,
   'minimax/minimax-m2.5': 204800,
   'minimax/minimax-m1': 128000,
   'bytedance-seed/seed-2.0-lite': 262144,
@@ -384,6 +396,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'x-ai/grok-4': 128000,
 
   // OpenRouter Models - Other
+  'inception/mercury-2': 128000,
   'inception/mercury': 128000,
 
   // Google AI Direct (source: ai.google.dev/gemini-api/docs/models, 2026-05)
