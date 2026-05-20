@@ -12,7 +12,8 @@ import type {
   TextExtractResult,
   IngestResult,
 } from '../types';
-import { setPageCompleted, setPageFailed, setPageProcessing, setPageVisual } from '../db';
+import { setPageCompleted, setPageFailed, setPageProcessing, setPageVideoProcessed, setPageVisual } from '../db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { needsTextExtraction } from './text-extractor';
 
 export function mapJobState(state: string): ProcessingJob['status'] {
@@ -202,8 +203,18 @@ export class QueueManager {
     // Video processing worker
     await this.boss.work('video-process',
       async ([job]) => {
-        console.log(`Processing video job: ${job.id}`);
-        return await processVideo(job.data as VideoProcessJobData);
+        loggers.processor.info(`Processing video job: ${job.id}`);
+        const data = job.data as VideoProcessJobData;
+        const result = await processVideo(data);
+        if (result.success && data.fileId) {
+          await setPageVideoProcessed(data.fileId, {
+            duration: result.duration,
+            width: result.width,
+            height: result.height,
+            thumbnailKey: result.thumbnailKey,
+          });
+        }
+        return result;
       }
     );
 

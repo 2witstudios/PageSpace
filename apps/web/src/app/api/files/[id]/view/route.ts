@@ -9,6 +9,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { isFilePage } from '@pagespace/lib/content/page-types.config'
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 
 interface RouteParams {
@@ -49,7 +50,9 @@ export async function GET(
       const contentHash = page.filePath;
       const mimeType = page.mimeType || 'application/octet-stream';
       const ttl = getPresignedUrlTtl(mimeType);
-      const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl);
+      const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);
+      const disposition = isDangerousMimeType(mimeType) ? `attachment; filename="${filename}"` : undefined;
+      const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition, mimeType);
 
       auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'view', mimeType } });
 
@@ -73,7 +76,8 @@ export async function GET(
     const contentHash = file.storagePath || file.id;
     const mimeType = file.mimeType || 'application/octet-stream';
     const ttl = getPresignedUrlTtl(mimeType);
-    const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl);
+    const disposition = isDangerousMimeType(mimeType) ? `attachment; filename="${sanitizeFilenameForHeader(contentHash)}"` : undefined;
+    const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition, mimeType);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'view', mimeType } });
 

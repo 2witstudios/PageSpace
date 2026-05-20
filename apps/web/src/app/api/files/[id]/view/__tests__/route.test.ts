@@ -36,6 +36,11 @@ vi.mock('@pagespace/lib/permissions/file-access', () => ({
     canUserAccessFile: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock('@pagespace/lib/utils/file-security', () => ({
+  isDangerousMimeType: vi.fn().mockReturnValue(false),
+  sanitizeFilenameForHeader: vi.fn((s: string) => s),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -97,7 +102,8 @@ describe('GET /api/files/[id]/view', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('https://fly.storage.tigris.dev/presigned-url');
-    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number));
+    // disposition=undefined (safe type), mimeType passed for ResponseContentType
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number), undefined, 'application/pdf');
   });
 
   it('redirects to presigned URL for DM-linked null-drive file', async () => {
@@ -115,7 +121,7 @@ describe('GET /api/files/[id]/view', () => {
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
     expect(response.status).toBe(302);
-    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number));
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number), undefined, 'image/png');
   });
 
   it('returns 401 when unauthenticated', async () => {

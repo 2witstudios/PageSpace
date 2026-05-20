@@ -69,16 +69,20 @@ export interface SaveOriginalOptions {
   service?: string;
 }
 
-const STREAM_TO_BUFFER_MAX_BYTES = 50 * 1024 * 1024; // 50 MB — cache/metadata objects only
+const METADATA_MAX_BYTES = 50 * 1024 * 1024;      // 50 MB — JSON metadata & cached variants
+const ORIGINAL_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB — ceiling for original file reads
 
-async function streamToBuffer(body: GetObjectCommandOutput['Body']): Promise<Buffer> {
+async function streamToBuffer(
+  body: GetObjectCommandOutput['Body'],
+  maxBytes = METADATA_MAX_BYTES,
+): Promise<Buffer> {
   if (!body) return Buffer.alloc(0);
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of body as AsyncIterable<Uint8Array>) {
     total += chunk.length;
-    if (total > STREAM_TO_BUFFER_MAX_BYTES) {
-      throw new Error(`S3 object exceeds maximum buffer size of ${STREAM_TO_BUFFER_MAX_BYTES} bytes`);
+    if (total > maxBytes) {
+      throw new Error(`S3 object exceeds maximum buffer size of ${maxBytes} bytes`);
     }
     chunks.push(Buffer.from(chunk));
   }
@@ -455,7 +459,7 @@ export class ContentStore {
       const resp = await this.s3.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
       );
-      return streamToBuffer(resp.Body);
+      return streamToBuffer(resp.Body, ORIGINAL_MAX_BYTES);
     } catch {
       return null;
     }

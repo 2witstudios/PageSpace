@@ -319,7 +319,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
                 </div>
               )}
               {attachments.map(att => (
-                <div key={att.id} className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                <div key={att.instanceId} className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
                   {att.mimeType.startsWith('image/') ? (
                     // eslint-disable-next-line @next/next/no-img-element -- 32px thumbnail preview; auth-gated API route
                     <img

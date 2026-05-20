@@ -71,6 +71,21 @@ export async function setPageVisual(pageId: string): Promise<void> {
   }
 }
 
+export async function setPageVideoProcessed(
+  pageId: string,
+  meta: { duration?: number; width?: number; height?: number; thumbnailKey?: string },
+): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query(
+      'UPDATE pages SET "extractionMetadata" = $1::jsonb, "processedAt" = NOW() WHERE id = $2',
+      [JSON.stringify(meta), pageId],
+    );
+  } finally {
+    client.release();
+  }
+}
+
 export async function setPageFailed(pageId: string, errorMessage: string): Promise<void> {
   const client = await getPool().connect();
   try {

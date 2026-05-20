@@ -32,7 +32,8 @@ export async function generatePresignedUrl(
   contentHash: string,
   preset?: string,
   ttlSeconds = 3600,
-  responseContentDisposition?: string
+  responseContentDisposition?: string,
+  responseContentType?: string,
 ): Promise<string> {
   const key = preset && preset !== 'original'
     ? `cache/${contentHash}/${preset}`
@@ -42,6 +43,7 @@ export async function generatePresignedUrl(
     Bucket: getS3Bucket(),
     Key: key,
     ...(responseContentDisposition ? { ResponseContentDisposition: responseContentDisposition } : {}),
+    ...(responseContentType ? { ResponseContentType: responseContentType } : {}),
   });
 
   return getSignedUrl(getS3Client(), command, { expiresIn: ttlSeconds });
