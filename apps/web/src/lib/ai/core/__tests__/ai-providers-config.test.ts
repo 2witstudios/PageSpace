@@ -97,8 +97,8 @@ describe('ai-providers-config', () => {
       expect(getDefaultModel('pagespace')).toBe('glm-4.7');
     });
 
-    it('should return gemini-2.5-flash for google provider', () => {
-      expect(getDefaultModel('google')).toBe('gemini-2.5-flash');
+    it('should return gemini-3.5-flash for google provider', () => {
+      expect(getDefaultModel('google')).toBe('gemini-3.5-flash');
     });
 
     it('should return glm-4.7 for unknown provider', () => {
