@@ -79,7 +79,7 @@ export function MessageHoverToolbar({
   return (
     <div
       className={cn(
-        'shrink-0 self-start',
+        'shrink-0',
         'flex items-center gap-0.5 p-0.5',
         'rounded-md border border-border bg-popover shadow-sm',
         // Hover devices: hidden by default, shown on hover/focus or when picker is open.
