@@ -26,7 +26,7 @@ export async function GET(request: Request): Promise<Response> {
     ? and(eq(pages.type, PageType.AI_CHAT), eq(pages.isTrashed, false), inArray(pages.driveId, allowedDriveIds))
     : and(eq(pages.type, PageType.AI_CHAT), eq(pages.isTrashed, false));
 
-  const rows = await db.select().from(pages).where(whereClause);
+  const rows = await db.select({ id: pages.id, createdAt: pages.createdAt }).from(pages).where(whereClause);
   const permissions = await getBatchPagePermissions(authResult.userId, rows.map((r) => r.id));
 
   const models = rows
