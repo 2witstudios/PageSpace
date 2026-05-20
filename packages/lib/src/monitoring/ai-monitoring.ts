@@ -10,19 +10,37 @@ import { writeAiUsage } from '../logging/logger-database';
 import { loggers } from '../logging/logger-config';
 
 /**
- * AI Provider Pricing (per 1M tokens)
- * Prices in USD as of 2025-01
+ * AI Provider Pricing (per 1M tokens, USD)
+ * Sources: OpenRouter /api/v1/models (per-token × 1M), Anthropic docs, Google AI docs, xAI docs
+ * Updated: 2026-05
  */
 export const AI_PRICING = {
-  // OpenRouter Paid Models - Anthropic
-  'anthropic/claude-opus-4.5': { input: 15.00, output: 75.00 },
+  // OpenRouter - Anthropic (source: openrouter.ai/api/v1/models)
+  'anthropic/claude-opus-4.7': { input: 5.00, output: 25.00 },
+  'anthropic/claude-opus-4.7-fast': { input: 30.00, output: 150.00 },
+  'anthropic/claude-opus-4.6': { input: 5.00, output: 25.00 },
+  'anthropic/claude-opus-4.6-fast': { input: 30.00, output: 150.00 },
+  'anthropic/claude-sonnet-4.6': { input: 3.00, output: 15.00 },
+  'anthropic/claude-opus-4.5': { input: 5.00, output: 25.00 },
   'anthropic/claude-sonnet-4.5': { input: 3.00, output: 15.00 },
-  'anthropic/claude-haiku-4.5': { input: 0.80, output: 4.00 },
-  'anthropic/claude-3.5-sonnet': { input: 3.00, output: 15.00 },
-  'anthropic/claude-3-haiku': { input: 0.25, output: 1.25 },
+  'anthropic/claude-haiku-4.5': { input: 1.00, output: 5.00 },
   'anthropic/claude-opus-4.1': { input: 15.00, output: 75.00 },
+  'anthropic/claude-opus-4': { input: 15.00, output: 75.00 },
+  'anthropic/claude-sonnet-4': { input: 3.00, output: 15.00 },
+  'anthropic/claude-3.5-sonnet': { input: 3.00, output: 15.00 },
+  'anthropic/claude-3.5-haiku': { input: 1.00, output: 5.00 },
+  'anthropic/claude-3-haiku': { input: 0.25, output: 1.25 },
 
-  // OpenRouter Paid Models - OpenAI
+  // OpenRouter - OpenAI (source: openrouter.ai/api/v1/models)
+  'openai/gpt-5.5-pro': { input: 30.00, output: 180.00 },
+  'openai/gpt-5.5': { input: 5.00, output: 30.00 },
+  'openai/gpt-5.4-pro': { input: 30.00, output: 180.00 },
+  'openai/gpt-5.4': { input: 2.50, output: 15.00 },
+  'openai/gpt-5.4-mini': { input: 0.75, output: 4.50 },
+  'openai/gpt-5.4-nano': { input: 0.20, output: 1.25 },
+  'openai/gpt-5.3-chat': { input: 1.75, output: 14.00 },
+  'openai/gpt-5.3-chat-latest': { input: 1.75, output: 14.00 },
+  'openai/gpt-5.3-codex': { input: 1.75, output: 14.00 },
   'openai/gpt-5.2': { input: 1.75, output: 14.00 },
   'openai/gpt-5.2-codex': { input: 1.75, output: 14.00 },
   'openai/gpt-5.2-mini': { input: 0.35, output: 2.80 },
@@ -40,65 +58,114 @@ export const AI_PRICING = {
   'openai/gpt-oss-120b': { input: 0.00, output: 0.00 },
   'openai/gpt-oss-20b': { input: 0.00, output: 0.00 },
 
-  // OpenRouter Paid Models - Google
-  'google/gemini-3-pro-preview': { input: 1.25, output: 5.00 },
+  // OpenRouter - Google (source: openrouter.ai/api/v1/models)
+  'google/gemini-3.5-flash': { input: 1.50, output: 9.00 },
+  'google/gemini-3.1-pro-preview': { input: 2.00, output: 12.00 },
+  'google/gemini-3.1-pro-preview-customtools': { input: 2.00, output: 12.00 },
+  'google/gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
+  'google/gemini-3.1-flash-lite-preview': { input: 0.25, output: 1.50 },
+  'google/gemini-3.1-flash-image-preview': { input: 0.50, output: 3.00 },
   'google/gemini-3-flash-preview': { input: 0.50, output: 3.00 },
+  'google/gemini-2.5-pro': { input: 1.25, output: 10.00 },
+  'google/gemini-2.5-flash': { input: 0.30, output: 2.50 },
+  'google/gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
+  'google/gemini-2.5-flash-lite-preview-06-17': { input: 0.10, output: 0.40 },
+  'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
+  'google/gemma-4-31b-it': { input: 0.12, output: 0.37 },
+  'google/gemma-4-26b-a4b-it': { input: 0.06, output: 0.33 },
+
+  // OpenRouter - Meta (source: openrouter.ai/api/v1/models)
+  'meta-llama/llama-4-maverick': { input: 0.10, output: 0.10 },
+  'meta-llama/llama-4-scout': { input: 0.10, output: 0.10 },
+  'meta-llama/llama-3.3-70b-instruct': { input: 0.10, output: 0.10 },
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
+
+  // OpenRouter - Mistral (source: openrouter.ai/api/v1/models)
+  'mistralai/mistral-medium-3-5': { input: 1.50, output: 7.50 },
+  'mistralai/mistral-small-2603': { input: 0.15, output: 0.60 },
   'mistralai/mistral-medium-3.1': { input: 2.70, output: 8.10 },
   'mistralai/mistral-small-3.2-24b-instruct': { input: 0.20, output: 0.60 },
   'mistralai/codestral-2508': { input: 0.30, output: 0.90 },
   'mistralai/devstral-medium': { input: 0.40, output: 2.00 },
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
-  'google/gemini-2.5-pro': { input: 1.25, output: 5.00 },
-  'google/gemini-2.5-flash': { input: 0.075, output: 0.30 },
-  'google/gemini-2.5-flash-lite': { input: 0.02, output: 0.08 },
-  'google/gemini-2.5-flash-lite-preview-06-17': { input: 0.02, output: 0.08 },
-  'google/gemini-2.0-pro': { input: 1.25, output: 5.00 },
 
-  // OpenRouter Paid Models - Chinese/Asian (openrouter.ai, Dec 2025)
+  // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
+  'z-ai/glm-5-turbo': { input: 1.20, output: 4.00 },
+  'z-ai/glm-5': { input: 0.80, output: 2.56 },
   'z-ai/glm-4.7': { input: 0.39, output: 1.90 },
   'z-ai/glm-4.5v': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5-air': { input: 0.35, output: 1.55 },
   'z-ai/glm-4-32b': { input: 0.35, output: 1.55 },
+  'qwen/qwen3.6-max-preview': { input: 1.04, output: 6.24 },
+  'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
+  'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
+  'qwen/qwen3.6-35b-a3b': { input: 0.15, output: 1.00 },
+  'qwen/qwen3.6-27b': { input: 0.32, output: 3.20 },
+  'qwen/qwen3.5-plus-20260420': { input: 0.30, output: 1.80 },
+  'qwen/qwen3.5-flash-02-23': { input: 0.065, output: 0.26 },
+  'qwen/qwen3.5-397b-a17b': { input: 0.80, output: 3.20 },
+  'qwen/qwen3.5-122b-a10b': { input: 0.26, output: 2.08 },
+  'qwen/qwen3.5-35b-a3b': { input: 0.139, output: 1.00 },
+  'qwen/qwen3.5-27b': { input: 0.195, output: 1.56 },
+  'qwen/qwen3-max-thinking': { input: 1.20, output: 6.00 },
   'qwen/qwen3-max': { input: 1.20, output: 6.00 },
   'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.50, output: 2.00 },
   'qwen/qwen3-235b-a22b-2507': { input: 0.50, output: 2.00 },
   'qwen/qwen3-coder': { input: 0.50, output: 2.00 },
   'moonshotai/kimi-k2': { input: 0.48, output: 2.00 },
-  'minimax/minimax-m1': { input: 0.44, output: 1.76 },
-  'z-ai/glm-5': { input: 0.80, output: 2.56 },
+  'minimax/minimax-m2.7': { input: 0.279, output: 1.20 },
   'minimax/minimax-m2.5': { input: 0.30, output: 1.20 },
+  'minimax/minimax-m1': { input: 0.44, output: 1.76 },
+  'bytedance-seed/seed-2.0-lite': { input: 0.25, output: 2.00 },
+  'bytedance-seed/seed-2.0-mini': { input: 0.10, output: 0.40 },
 
-  // OpenRouter Paid Models - DeepSeek (openrouter.ai, Dec 2025)
+  // OpenRouter - DeepSeek (source: openrouter.ai/api/v1/models)
+  'deepseek/deepseek-v4-pro': { input: 0.435, output: 0.87 },
+  'deepseek/deepseek-v4-flash': { input: 0.112, output: 0.224 },
+  'deepseek/deepseek-v3.2': { input: 0.30, output: 1.20 },
   'deepseek/deepseek-v3.1-terminus': { input: 0.21, output: 0.32 },
+  'deepseek/deepseek-r1-0528': { input: 0.50, output: 2.00 },
 
-  // OpenRouter Paid Models - AI21
+  // OpenRouter - AI21
   'ai21/jamba-mini-1.7': { input: 0.50, output: 0.70 },
   'ai21/jamba-large-1.7': { input: 0.50, output: 0.70 },
 
-  // OpenRouter Paid Models - xAI (openrouter.ai, Dec 2025)
+  // OpenRouter - xAI (source: openrouter.ai/api/v1/models)
+  'x-ai/grok-4.3': { input: 1.25, output: 2.50 },
+  'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
+  'x-ai/grok-4.20-multi-agent': { input: 2.00, output: 6.00 },
   'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
   'x-ai/grok-4': { input: 3.00, output: 15.00 },
 
-  // OpenRouter Paid Models - Other
+  // OpenRouter - Other (source: openrouter.ai/api/v1/models)
+  'inception/mercury-2': { input: 0.25, output: 0.75 },
   'inception/mercury': { input: 0.50, output: 1.50 },
 
-  // Google AI Direct Models
-  'gemini-3-pro': { input: 1.25, output: 5.00 },
+  // Google AI Direct (source: ai.google.dev/gemini-api/docs/pricing, 2026-05)
+  'gemini-3.5-flash': { input: 1.50, output: 9.00 },
+  'gemini-3.1-pro-preview': { input: 2.00, output: 12.00 },
+  'gemini-3.1-pro-preview-customtools': { input: 2.00, output: 12.00 },
+  'gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
+  'gemini-3.1-flash-lite-preview': { input: 0.25, output: 1.50 },
   'gemini-3-flash-preview': { input: 0.50, output: 3.00 },
-  'gemini-2.5-pro': { input: 1.25, output: 5.00 },
-  'gemini-2.5-flash': { input: 0.075, output: 0.30 },
-  'gemini-2.5-flash-lite': { input: 0.02, output: 0.08 },
-  'gemini-2.0-pro-exp': { input: 0.00, output: 0.00 }, // Free during preview
+  'gemini-2.5-pro': { input: 1.25, output: 10.00 },
+  'gemini-2.5-flash': { input: 0.30, output: 2.50 },
+  'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
+  'gemini-2.5-flash-lite-preview-06-17': { input: 0.10, output: 0.40 },
+  'gemini-2.0-pro-exp': { input: 0.00, output: 0.00 },
   'gemini-2.0-flash': { input: 0.10, output: 0.40 },
-  'gemini-2.0-flash-exp': { input: 0.00, output: 0.00 }, // Free during preview
+  'gemini-2.0-flash-exp': { input: 0.00, output: 0.00 },
   'gemini-2.0-flash-lite': { input: 0.04, output: 0.16 },
   'gemini-1.5-flash': { input: 0.075, output: 0.30 },
   'gemini-1.5-flash-8b': { input: 0.0375, output: 0.15 },
   'gemini-1.5-pro': { input: 1.25, output: 5.00 },
 
-  // OpenAI Direct Models (platform.openai.com/docs/pricing, Jan 2026)
+  // OpenAI Direct Models (platform.openai.com/docs/pricing, 2026)
+  'gpt-5.4-pro': { input: 30.00, output: 180.00 },
+  'gpt-5.4': { input: 2.50, output: 15.00 },
+  'gpt-5.3-chat-latest': { input: 10.00, output: 40.00 },
+  'gpt-5.3-codex': { input: 10.00, output: 40.00 },
   'gpt-5.2': { input: 1.75, output: 14.00 },
   'gpt-5.2-codex': { input: 1.75, output: 14.00 },
   'gpt-5.2-mini': { input: 0.35, output: 2.80 },
@@ -124,27 +191,35 @@ export const AI_PRICING = {
   'o1-mini': { input: 3.00, output: 12.00 },
   'o1-preview': { input: 15.00, output: 60.00 },
 
-  // Anthropic Direct Models
-  'claude-opus-4-5-20251124': { input: 15.00, output: 75.00 },
+  // Anthropic Direct (source: platform.claude.com/docs/about-claude/models, 2026-05)
+  'claude-opus-4-7': { input: 5.00, output: 25.00 },
+  'claude-sonnet-4-6': { input: 3.00, output: 15.00 },
+  'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00 },
+  'claude-haiku-4-5': { input: 1.00, output: 5.00 },
+  'claude-opus-4-6': { input: 5.00, output: 25.00 },
   'claude-sonnet-4-5-20250929': { input: 3.00, output: 15.00 },
-  'claude-haiku-4-5-20251001': { input: 0.80, output: 4.00 },
+  'claude-sonnet-4-5': { input: 3.00, output: 15.00 },
+  'claude-opus-4-5-20251101': { input: 5.00, output: 25.00 },
+  'claude-opus-4-5': { input: 5.00, output: 25.00 },
   'claude-opus-4-1-20250805': { input: 15.00, output: 75.00 },
+  'claude-opus-4-1': { input: 15.00, output: 75.00 },
   'claude-sonnet-4-1-20250805': { input: 3.00, output: 15.00 },
   'claude-3-7-sonnet-20250219': { input: 3.00, output: 15.00 },
   'claude-3-5-sonnet-20241022': { input: 3.00, output: 15.00 },
   'claude-3-5-sonnet-20240620': { input: 3.00, output: 15.00 },
   'claude-3-5-sonnet-latest': { input: 3.00, output: 15.00 },
-  'claude-3-5-haiku-20241022': { input: 0.80, output: 4.00 },
-  'claude-3-5-haiku-latest': { input: 0.80, output: 4.00 },
+  'claude-3-5-haiku-20241022': { input: 1.00, output: 5.00 },
+  'claude-3-5-haiku-latest': { input: 1.00, output: 5.00 },
   'claude-3-opus-20240229': { input: 15.00, output: 75.00 },
   'claude-3-opus-latest': { input: 15.00, output: 75.00 },
   'claude-3-sonnet-20240229': { input: 3.00, output: 15.00 },
   'claude-3-haiku-20240307': { input: 0.25, output: 1.25 },
 
-  // xAI Direct Models (docs.x.ai/docs/models, Dec 2025)
+  // xAI Direct (source: docs.x.ai/docs/models, 2026-05)
+  'grok-4.3': { input: 1.25, output: 2.50 },
   'grok-4': { input: 3.00, output: 15.00 },
-  'grok-4-fast-reasoning': { input: 0.20, output: 0.50 },
-  'grok-4-fast-non-reasoning': { input: 0.20, output: 0.50 },
+  'grok-4-fast-reasoning': { input: 1.25, output: 2.50 },
+  'grok-4-fast-non-reasoning': { input: 1.25, output: 2.50 },
   'grok-code-fast-1': { input: 0.20, output: 0.50 },
   'grok-3': { input: 3.00, output: 15.00 },
   'grok-3-latest': { input: 3.00, output: 15.00 },
@@ -193,18 +268,30 @@ export const AI_PRICING = {
 /**
  * Model Context Window Sizes (in tokens)
  * Maximum context length for each model
- * Updated November 2025
+ * Updated May 2026
  */
 export const MODEL_CONTEXT_WINDOWS = {
   // OpenRouter Models - Anthropic
+  'anthropic/claude-opus-4.7': 1000000,
+  'anthropic/claude-opus-4.7-fast': 1000000,
+  'anthropic/claude-opus-4.6': 1000000,
+  'anthropic/claude-opus-4.6-fast': 1000000,
+  'anthropic/claude-sonnet-4.6': 1000000,
   'anthropic/claude-opus-4.5': 200000,
   'anthropic/claude-sonnet-4.5': 200000,
   'anthropic/claude-haiku-4.5': 200000,
-  'anthropic/claude-3.5-sonnet': 200000,
-  'anthropic/claude-3-haiku': 200000,
   'anthropic/claude-opus-4.1': 200000,
+  'anthropic/claude-opus-4': 200000,
+  'anthropic/claude-sonnet-4': 1000000,
+  'anthropic/claude-3.5-sonnet': 200000,
+  'anthropic/claude-3.5-haiku': 200000,
+  'anthropic/claude-3-haiku': 200000,
 
   // OpenRouter Models - OpenAI
+  'openai/gpt-5.4-pro': 200000,
+  'openai/gpt-5.4': 272000,
+  'openai/gpt-5.3-chat-latest': 272000,
+  'openai/gpt-5.3-codex': 272000,
   'openai/gpt-5.2': 400000,
   'openai/gpt-5.2-codex': 400000,
   'openai/gpt-5.2-mini': 256000,
@@ -222,16 +309,13 @@ export const MODEL_CONTEXT_WINDOWS = {
   'openai/gpt-oss-120b': 128000,
   'openai/gpt-oss-20b': 128000,
 
-  // OpenRouter Models - Other
-  'meta-llama/llama-3.1-405b-instruct': 128000,
-  'mistralai/mistral-medium-3.1': 128000,
-  'mistralai/mistral-small-3.2-24b-instruct': 32000,
-  'mistralai/codestral-2508': 32000,
-  'mistralai/devstral-medium': 128000,
-  'mistralai/devstral-small': 128000,
-
   // OpenRouter Models - Google
-  'google/gemini-3-pro-preview': 1048576,
+  'google/gemini-3.5-flash': 1048576,
+  'google/gemini-3.1-pro-preview': 1048576,
+  'google/gemini-3.1-pro-preview-customtools': 1048576,
+  'google/gemini-3.1-flash-lite': 1048576,
+  'google/gemini-3.1-flash-lite-preview': 1048576,
+  'google/gemini-3.1-flash-image-preview': 131072,
   'google/gemini-3-flash-preview': 1048576,
   'google/gemini-2.5-pro': 2000000,
   'google/gemini-2.5-flash': 1000000,
@@ -239,51 +323,93 @@ export const MODEL_CONTEXT_WINDOWS = {
   'google/gemini-2.5-flash-lite-preview-06-17': 1000000,
   'google/gemini-2.0-pro': 2000000,
   'google/gemini-2.0-flash': 1000000,
+  'google/gemma-4-31b-it': 262144,
+  'google/gemma-4-26b-a4b-it': 262144,
+
+  // OpenRouter Models - Meta
+  'meta-llama/llama-4-maverick': 1048576,
+  'meta-llama/llama-4-scout': 10000000,
+  'meta-llama/llama-3.3-70b-instruct': 131072,
+  'meta-llama/llama-3.1-405b-instruct': 128000,
+
+  // OpenRouter Models - Mistral
+  'mistralai/mistral-medium-3.1': 128000,
+  'mistralai/mistral-small-3.2-24b-instruct': 32000,
+  'mistralai/codestral-2508': 32000,
+  'mistralai/devstral-medium': 128000,
+  'mistralai/devstral-small': 128000,
 
   // OpenRouter Models - Chinese/Asian
+  'z-ai/glm-5': 202752,
   'z-ai/glm-4.7': 200000,
   'z-ai/glm-4.5v': 128000,
   'z-ai/glm-4.5': 128000,
   'z-ai/glm-4.5-air': 128000,
   'z-ai/glm-4-32b': 128000,
+  'qwen/qwen3.6-max-preview-20260420': 131072,
+  'qwen/qwen3.6-plus-04-02': 131072,
+  'qwen/qwen3.5-flash-20260224': 131072,
+  'qwen/qwen3.5-397b-a17b': 131072,
+  'qwen/qwen3.5-plus-2026-02-15': 131072,
+  'qwen/qwen3.5-122b-a10b': 131072,
+  'qwen/qwen3.5-35b-a3b': 131072,
+  'qwen/qwen3.5-27b': 131072,
+  'qwen/qwen3-max-thinking': 128000,
   'qwen/qwen3-max': 128000,
   'qwen/qwen3-235b-a22b-thinking-2507': 128000,
   'qwen/qwen3-235b-a22b-2507': 128000,
   'qwen/qwen3-coder': 128000,
   'moonshotai/kimi-k2': 128000,
-  'minimax/minimax-m1': 128000,
-  'z-ai/glm-5': 202752,
   'minimax/minimax-m2.5': 204800,
+  'minimax/minimax-m1': 128000,
+  'bytedance-seed/seed-2.0-lite': 262144,
+  'bytedance-seed/seed-2.0-mini': 262144,
 
   // OpenRouter Models - DeepSeek
+  'deepseek/deepseek-v4-pro': 1048576,
+  'deepseek/deepseek-v4-flash': 1048576,
+  'deepseek/deepseek-v3.2': 131072,
   'deepseek/deepseek-v3.1-terminus': 128000,
+  'deepseek/deepseek-r1-0528': 163840,
 
   // OpenRouter Models - AI21
   'ai21/jamba-mini-1.7': 256000,
   'ai21/jamba-large-1.7': 256000,
 
-  // OpenRouter Models - xAI
+  // OpenRouter Models - xAI (source: openrouter.ai/api/v1/models)
+  'x-ai/grok-4.3': 1000000,
+  'x-ai/grok-4.20': 2000000,
+  'x-ai/grok-4.20-multi-agent': 2000000,
   'x-ai/grok-4-fast': 2000000,
   'x-ai/grok-4': 128000,
 
   // OpenRouter Models - Other
   'inception/mercury': 128000,
 
-  // Google AI Direct Models
-  'gemini-3-pro': 1048576,
+  // Google AI Direct (source: ai.google.dev/gemini-api/docs/models, 2026-05)
+  'gemini-3.5-flash': 1048576,
+  'gemini-3.1-pro-preview': 1048576,
+  'gemini-3.1-pro-preview-customtools': 1048576,
+  'gemini-3.1-flash-lite': 1048576,
+  'gemini-3.1-flash-lite-preview': 1048576,
   'gemini-3-flash-preview': 1048576,
-  'gemini-2.5-pro': 2000000,
-  'gemini-2.5-flash': 1000000,
-  'gemini-2.5-flash-lite': 1000000,
-  'gemini-2.0-pro-exp': 2000000,
-  'gemini-2.0-flash': 1000000,
-  'gemini-2.0-flash-exp': 1000000,
-  'gemini-2.0-flash-lite': 1000000,
-  'gemini-1.5-flash': 1000000,
-  'gemini-1.5-flash-8b': 1000000,
-  'gemini-1.5-pro': 2000000,
+  'gemini-2.5-pro': 2097152,
+  'gemini-2.5-flash': 1048576,
+  'gemini-2.5-flash-lite': 1048576,
+  'gemini-2.5-flash-lite-preview-06-17': 1048576,
+  'gemini-2.0-pro-exp': 2097152,
+  'gemini-2.0-flash': 1048576,
+  'gemini-2.0-flash-exp': 1048576,
+  'gemini-2.0-flash-lite': 1048576,
+  'gemini-1.5-flash': 1048576,
+  'gemini-1.5-flash-8b': 1048576,
+  'gemini-1.5-pro': 2097152,
 
   // OpenAI Direct Models
+  'gpt-5.4-pro': 200000,
+  'gpt-5.4': 272000,
+  'gpt-5.3-chat-latest': 272000,
+  'gpt-5.3-codex': 272000,
   'gpt-5.2': 400000,
   'gpt-5.2-codex': 400000,
   'gpt-5.2-mini': 256000,
@@ -309,12 +435,18 @@ export const MODEL_CONTEXT_WINDOWS = {
   'o1-mini': 200000,
   'o1-preview': 200000,
 
-  // Anthropic Direct Models
-  'claude-opus-4-5-20251124': 200000,
-  'claude-sonnet-4-5': 200000,
-  'claude-sonnet-4-5-20250929': 200000,
+  // Anthropic Direct (source: platform.claude.com/docs/about-claude/models, 2026-05)
+  'claude-opus-4-7': 1000000,
+  'claude-sonnet-4-6': 1000000,
   'claude-haiku-4-5-20251001': 200000,
+  'claude-haiku-4-5': 200000,
+  'claude-opus-4-6': 1000000,
+  'claude-sonnet-4-5-20250929': 200000,
+  'claude-sonnet-4-5': 200000,
+  'claude-opus-4-5-20251101': 200000,
+  'claude-opus-4-5': 200000,
   'claude-opus-4-1-20250805': 200000,
+  'claude-opus-4-1': 200000,
   'claude-sonnet-4-1-20250805': 200000,
   'claude-3-7-sonnet-20250219': 200000,
   'claude-3-5-sonnet-20241022': 200000,

@@ -85,20 +85,31 @@ export const AI_PROVIDERS = {
     name: 'OpenRouter (Paid)',
     models: {
       // Anthropic Models (2026)
+      'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
+      'anthropic/claude-opus-4.7-fast': 'Claude Opus 4.7 Fast',
       'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+      'anthropic/claude-opus-4.6-fast': 'Claude Opus 4.6 Fast',
       'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
 
       // Anthropic Models (2025)
+      'anthropic/claude-opus-4.1': 'Claude Opus 4.1',
+      'anthropic/claude-opus-4': 'Claude Opus 4',
+      'anthropic/claude-sonnet-4': 'Claude Sonnet 4',
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
       'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
       'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
+      'anthropic/claude-3.5-haiku': 'Claude 3.5 Haiku',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
 
       // OpenAI Models (2026)
+      'openai/gpt-5.5-pro': 'GPT-5.5 Pro',
+      'openai/gpt-5.5': 'GPT-5.5',
       'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
       'openai/gpt-5.4': 'GPT-5.4',
-      'openai/gpt-5.3-chat-latest': 'GPT-5.3 Chat',
+      'openai/gpt-5.4-mini': 'GPT-5.4 Mini',
+      'openai/gpt-5.4-nano': 'GPT-5.4 Nano',
+      'openai/gpt-5.3-chat': 'GPT-5.3 Chat',
       'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
 
       // OpenAI Models (2025)
@@ -119,10 +130,31 @@ export const AI_PROVIDERS = {
       'openai/gpt-oss-120b': 'GPT OSS 120B',
       'openai/gpt-oss-20b': 'GPT OSS 20B',
 
+      // Google Models (via OpenRouter)
+      'google/gemini-3.5-flash': 'Gemini 3.5 Flash',
+      'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
+      'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
+      'google/gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+      'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
+      'google/gemini-3.1-flash-image-preview': 'Gemini 3.1 Flash Image',
+      'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
+      'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
+      'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
+      'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
+      'google/gemini-2.5-flash-lite-preview-06-17': 'Gemini 2.5 Flash Lite Preview',
+      'google/gemini-2.0-pro': 'Gemini 2.0 Pro',
+      'google/gemma-4-31b-it': 'Gemma 4 31B',
+      'google/gemma-4-26b-a4b-it': 'Gemma 4 26B A4B',
+
       // Meta Models
+      'meta-llama/llama-4-maverick': 'Llama 4 Maverick',
+      'meta-llama/llama-4-scout': 'Llama 4 Scout',
+      'meta-llama/llama-3.3-70b-instruct': 'Llama 3.3 70B',
       'meta-llama/llama-3.1-405b-instruct': 'Llama 3.1 405B',
 
-      // Mistral Models
+      // Mistral Models (source: openrouter.ai/api/v1/models)
+      'mistralai/mistral-medium-3-5': 'Mistral Medium 3.5',
+      'mistralai/mistral-small-2603': 'Mistral Small (2603)',
       'mistralai/mistral-medium-3.1': 'Mistral Medium 3.1',
       'mistralai/mistral-small-3.2-24b-instruct': 'Mistral Small 3.2 24B',
       'mistralai/codestral-2508': 'Codestral 2508',
@@ -136,9 +168,14 @@ export const AI_PROVIDERS = {
       'z-ai/glm-4.5': 'GLM 4.5',
       'z-ai/glm-4.5-air': 'GLM 4.5 Air',
       'z-ai/glm-4-32b': 'GLM 4 32B',
+      'qwen/qwen3.6-max-preview': 'Qwen3.6 Max (Preview)',
+      'qwen/qwen3.6-plus': 'Qwen3.6 Plus',
+      'qwen/qwen3.6-flash': 'Qwen3.6 Flash',
+      'qwen/qwen3.6-35b-a3b': 'Qwen3.6 35B-A3B',
+      'qwen/qwen3.6-27b': 'Qwen3.6 27B',
+      'qwen/qwen3.5-plus-20260420': 'Qwen3.5 Plus',
+      'qwen/qwen3.5-flash-02-23': 'Qwen3.5 Flash',
       'qwen/qwen3.5-397b-a17b': 'Qwen3.5 397B-A17B',
-      'qwen/qwen3.5-plus-2026-02-15': 'Qwen3.5 Plus',
-      'qwen/qwen3.5-flash': 'Qwen3.5 Flash',
       'qwen/qwen3.5-122b-a10b': 'Qwen3.5 122B-A10B',
       'qwen/qwen3.5-35b-a3b': 'Qwen3.5 35B-A3B',
       'qwen/qwen3.5-27b': 'Qwen3.5 27B',
@@ -148,31 +185,29 @@ export const AI_PROVIDERS = {
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
       'qwen/qwen3-coder': 'Qwen3 Coder',
       'moonshotai/kimi-k2': 'Kimi K2',
+      'minimax/minimax-m2.7': 'MiniMax M2.7',
       'minimax/minimax-m2.5': 'MiniMax M2.5',
       'minimax/minimax-m1': 'MiniMax M1',
+      'bytedance-seed/seed-2.0-lite': 'Seed 2.0 Lite',
+      'bytedance-seed/seed-2.0-mini': 'Seed 2.0 Mini',
 
-      // DeepSeek Models (2025)
+      // DeepSeek Models (2025-2026)
+      'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
+      'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
+      'deepseek/deepseek-v3.2': 'DeepSeek V3.2',
       'deepseek/deepseek-v3.1-terminus': 'DeepSeek V3.1 Terminus',
+      'deepseek/deepseek-r1-0528': 'DeepSeek R1',
 
-      // Google Models (via OpenRouter)
-      'google/gemini-3-pro-preview': 'Gemini 3 Pro',
-      'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
-      'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
-      'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
-      'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
-      'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
-      'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
-      'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
-      'google/gemini-2.5-flash-lite-preview-06-17': 'Gemini 2.5 Flash Lite Preview',
-      'google/gemini-2.0-pro': 'Gemini 2.0 Pro',
+      // xAI Models (source: docs.x.ai/docs/models)
+      'x-ai/grok-4.3': 'Grok 4.3',
+      'x-ai/grok-4.20': 'Grok 4.20',
+      'x-ai/grok-4.20-multi-agent': 'Grok 4.20 Multi-Agent',
+      'x-ai/grok-4-fast': 'Grok 4 Fast (2M context)',
+      'x-ai/grok-4': 'Grok 4',
 
       // AI21 Models
       'ai21/jamba-mini-1.7': 'Jamba Mini 1.7',
       'ai21/jamba-large-1.7': 'Jamba Large 1.7',
-
-      // xAI Models (2025)
-      'x-ai/grok-4-fast': 'Grok 4 Fast (2M context)',
-      'x-ai/grok-4': 'Grok 4',
 
       // Other Models
       'inception/mercury-2': 'Mercury 2',
@@ -194,6 +229,7 @@ export const AI_PROVIDERS = {
       'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B',
 
       // Reasoning Models
+      'deepseek/deepseek-v4-flash:free': 'DeepSeek V4 Flash',
       'deepseek/deepseek-r1-0528:free': 'DeepSeek R1',
       'tngtech/deepseek-r1t-chimera:free': 'DeepSeek R1T Chimera',
       'tngtech/tng-r1t-chimera:free': 'TNG R1T Chimera',
@@ -202,6 +238,7 @@ export const AI_PROVIDERS = {
       'allenai/olmo-3-32b-think:free': 'OLMo 3 32B Think',
 
       // Google Models
+      'google/gemma-4-31b-it:free': 'Gemma 4 31B',
       'google/gemini-2.0-flash-exp:free': 'Gemini 2.0 Flash',
       'google/gemma-3-27b-it:free': 'Gemma 3 27B',
       'google/gemma-3-12b-it:free': 'Gemma 3 12B',
@@ -229,6 +266,7 @@ export const AI_PROVIDERS = {
       'openai/gpt-oss-20b:free': 'GPT OSS 20B',
 
       // Other Models
+      'nvidia/nemotron-3-super-120b-a12b:free': 'Nemotron 3 Super 120B',
       'nvidia/nemotron-nano-12b-v2-vl:free': 'Nemotron Nano 12B VL',
       'nvidia/nemotron-3-nano-30b-a3b:free': 'Nemotron 3 Nano 30B',
       'arcee-ai/trinity-mini:free': 'Trinity Mini',
@@ -237,10 +275,12 @@ export const AI_PROVIDERS = {
   google: {
     name: 'Google AI',
     models: {
+      // Gemini 3.5 Series (2026)
+      'gemini-3.5-flash': 'Gemini 3.5 Flash',
       // Gemini 3 Series (2025)
-      'gemini-3-pro': 'Gemini 3 Pro',
       'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
       'gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
+      'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite',
       'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
       'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       // Gemini 2.5 Series (2025)
@@ -313,12 +353,15 @@ export const AI_PROVIDERS = {
   anthropic: {
     name: 'Anthropic',
     models: {
-      // Claude 4.6 Models (2026)
-      'claude-opus-4-6-20260204': 'Claude Opus 4.6',
-      'claude-sonnet-4-6-20260217': 'Claude Sonnet 4.6',
+      // Claude 4.7 Models — current (source: platform.claude.com/docs/about-claude/models)
+      'claude-opus-4-7': 'Claude Opus 4.7',
 
-      // Claude 4.5 Models (2025)
-      'claude-opus-4-5-20251124': 'Claude Opus 4.5',
+      // Claude 4.6 Models
+      'claude-opus-4-6': 'Claude Opus 4.6',
+      'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+
+      // Claude 4.5 Models
+      'claude-opus-4-5-20251101': 'Claude Opus 4.5',
       'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
       'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
 
@@ -442,9 +485,9 @@ export function getDefaultModel(provider: string): string {
     return 'glm-4.7';
   }
 
-  // Always return gemini-2.5-flash for Google provider
+  // Always return gemini-3.5-flash for Google provider
   if (provider === 'google') {
-    return 'gemini-2.5-flash';
+    return 'gemini-3.5-flash';
   }
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
