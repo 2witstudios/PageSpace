@@ -152,7 +152,8 @@ describe('DriveMembers', () => {
     mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
+    // DriveShareLinkSection mounts in a useEffect after currentUserRole resolves — wait for it.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL));
 
     socket.__emit(event, { driveId: 'drive-1' });
     // Socket event only re-triggers fetchMembers() (3 requests); /roles is keyed on driveId, not socket events.
@@ -163,7 +164,7 @@ describe('DriveMembers', () => {
     mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL));
 
     socket.__emit('drive:member_added', { driveId: 'other' });
     await new Promise((r) => setTimeout(r, 20));

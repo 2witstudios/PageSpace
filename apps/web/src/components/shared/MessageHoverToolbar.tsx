@@ -79,15 +79,16 @@ export function MessageHoverToolbar({
   return (
     <div
       className={cn(
-        'absolute -top-3 right-2 z-10',
+        'shrink-0',
         'flex items-center gap-0.5 p-0.5',
         'rounded-md border border-border bg-popover shadow-sm',
         // Hover devices: hidden by default, shown on hover/focus or when picker is open.
         // Touch / no-hover devices: always visible so message actions remain reachable.
         'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100',
-        '[@media(hover:none)]:opacity-100',
+        'pointer-events-none group-hover/msg:pointer-events-auto focus-within:pointer-events-auto',
+        '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto',
         'transition-opacity',
-        pickerOpen && 'opacity-100',
+        pickerOpen && 'opacity-100 pointer-events-auto',
         className,
       )}
     >
