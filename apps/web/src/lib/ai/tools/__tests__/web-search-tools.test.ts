@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock dependencies
-const mockLookupFn = vi.fn();
+const mockLookupFn = vi.hoisted(() => vi.fn());
 vi.mock('dns', () => ({
   default: { promises: { lookup: mockLookupFn } },
   promises: { lookup: mockLookupFn },
