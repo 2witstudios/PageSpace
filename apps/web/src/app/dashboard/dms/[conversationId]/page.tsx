@@ -34,6 +34,7 @@ import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
 import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
+import { cn } from '@/lib/utils';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -619,7 +620,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0">
+                  <div className={cn("flex-1 min-w-0", !isFirst && "[@media(hover:none)]:pr-28")}>
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
