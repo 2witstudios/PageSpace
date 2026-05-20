@@ -636,7 +636,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1">
+                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "group-hover/msg:pr-28 transition-[padding-right] duration-100")}>
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>

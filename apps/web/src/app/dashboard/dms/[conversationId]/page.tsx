@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import { useParams } from 'next/navigation';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -619,7 +620,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0">
+                  <div className={cn("flex-1 min-w-0", !isFirst && "group-hover/msg:pr-28 transition-[padding-right] duration-100")}>
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
