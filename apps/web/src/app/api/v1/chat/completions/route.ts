@@ -19,8 +19,10 @@ import {
   saveMessageToDatabase,
   extractMessageContent,
   isProviderError,
+  convertDbMessageToUIMessage,
 } from '@/lib/ai/core';
 import { incrementUsage } from '@/lib/subscription/usage-service';
+import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
@@ -52,7 +54,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, model: modelName, messages, driveContext: _driveContext } = validation.data;
+  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId } = validation.data;
 
   // 3. MCP drive-scope check
   const scopeError = await checkMCPPageScope(authResult, pageId);
@@ -87,9 +89,20 @@ export async function POST(request: Request): Promise<Response> {
   const systemPrompt = page.systemPrompt
     ?? buildSystemPrompt('page', undefined, false);
 
-  // 8. Save user message (database-first — before streaming starts)
+  // 8. Build message context and save new user message
+  const isThreadMode = incomingConversationId !== undefined;
+  const conversationId = isThreadMode ? incomingConversationId : createId();
+
+  let inferenceMessages = messages;
+
+  if (isThreadMode) {
+    const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
+    const historyMessages = dbMessages.map(convertDbMessageToUIMessage);
+    const newUserMessage = messages[messages.length - 1];
+    inferenceMessages = [...historyMessages, newUserMessage];
+  }
+
   const userMessage = messages[messages.length - 1];
-  const conversationId = createId();
   const userMessageId = userMessage.id;
   if (userMessage && userMessage.role === 'user') {
     await saveMessageToDatabase({
@@ -108,7 +121,7 @@ export async function POST(request: Request): Promise<Response> {
   // 9. Run inference — no UI coupling (no WebSocket, no stream lifecycle, no session ID)
   const startTime = Date.now();
   const providerType = getProviderTier(page.aiProvider ?? 'pagespace', page.aiModel ?? undefined);
-  const sanitized = sanitizeMessagesForModel(messages);
+  const sanitized = sanitizeMessagesForModel(inferenceMessages);
   const aiResult = streamText({
     model: providerResult.model,
     system: systemPrompt,

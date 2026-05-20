@@ -7,6 +7,7 @@ export interface ValidatedInferenceRequest {
   messages: UIMessage[];
   stream: true;
   driveContext?: string;
+  conversationId?: string;
 }
 
 export type ValidationResult =
@@ -86,6 +87,9 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
 
   const driveContext = typeof raw.drive_context === 'string' ? raw.drive_context : undefined;
 
+  const rawConvId = typeof raw.conversation_id === 'string' ? raw.conversation_id.trim() : undefined;
+  const conversationId = rawConvId || undefined;
+
   return {
     ok: true,
     data: {
@@ -94,6 +98,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
       messages: normalized,
       stream: true,
       driveContext,
+      conversationId,
     },
   };
 };
