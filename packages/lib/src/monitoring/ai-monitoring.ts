@@ -473,6 +473,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'claude-3-haiku-20240307': 200000,
 
   // xAI Models
+  'grok-4.3': 1000000,
   'grok-4': 128000,
   'grok-4-fast-reasoning': 2000000,
   'grok-4-fast-non-reasoning': 2000000,
