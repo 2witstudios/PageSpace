@@ -509,10 +509,8 @@
     "electron",
     "core-js",
     "@tensorflow/tfjs-node",
-    "web",
   ],
   "overrides": {
-    "@react-email/preview-server>next": "16.2.6",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "drizzle-orm": "^0.32.2",
