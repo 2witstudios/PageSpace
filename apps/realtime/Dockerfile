@@ -10,8 +10,17 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
-COPY apps/web/package.json ./apps/web/
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/android/package.json ./apps/android/
+COPY apps/atlas/package.json ./apps/atlas/
+COPY apps/control-plane/package.json ./apps/control-plane/
+COPY apps/desktop/package.json ./apps/desktop/
+COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/ios/package.json ./apps/ios/
+COPY apps/marketing/package.json ./apps/marketing/
+COPY apps/processor/package.json ./apps/processor/
 COPY apps/realtime/package.json ./apps/realtime/
+COPY apps/web/package.json ./apps/web/
 
 RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
@@ -36,8 +45,17 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=builder /app/package.json /app/bun.lock ./
 COPY --from=builder /app/packages/db/package.json ./packages/db/
 COPY --from=builder /app/packages/lib/package.json ./packages/lib/
-COPY --from=builder /app/apps/web/package.json ./apps/web/
+COPY --from=builder /app/apps/admin/package.json ./apps/admin/
+COPY --from=builder /app/apps/android/package.json ./apps/android/
+COPY --from=builder /app/apps/atlas/package.json ./apps/atlas/
+COPY --from=builder /app/apps/control-plane/package.json ./apps/control-plane/
+COPY --from=builder /app/apps/desktop/package.json ./apps/desktop/
+COPY --from=builder /app/apps/e2e/package.json ./apps/e2e/
+COPY --from=builder /app/apps/ios/package.json ./apps/ios/
+COPY --from=builder /app/apps/marketing/package.json ./apps/marketing/
+COPY --from=builder /app/apps/processor/package.json ./apps/processor/
 COPY --from=builder /app/apps/realtime/package.json ./apps/realtime/
+COPY --from=builder /app/apps/web/package.json ./apps/web/
 
 # Install production-only dependencies
 RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile --production

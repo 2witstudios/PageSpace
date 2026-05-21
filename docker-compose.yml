@@ -271,7 +271,7 @@ services:
     command: >
       sh -c "
         echo 'Setting up test database schema...' &&
-        cd packages/db && bunx drizzle-kit push --force &&
+        cd packages/db && bun x drizzle-kit push --force &&
         cd ../.. &&
         echo 'Running tests...' &&
         bun run test:unit

@@ -111,9 +111,12 @@ pids/
 # Documentation (not needed in container)
 docs/
 
-# Non-server apps (not needed for these images)
-apps/desktop/
-apps/ios/
+# Non-server apps (not needed for these images) — exclude contents but keep package.json
+# so bun sees a complete workspace during --frozen-lockfile install
+apps/desktop/**
+!apps/desktop/package.json
+apps/ios/**
+!apps/ios/package.json
 
 # Docker files themselves
 Dockerfile*

@@ -1,20 +1,22 @@
 import type { NextConfig } from "next";
-import type { Configuration } from "webpack";
 import path from "path";
+import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
 
-type WebpackExternalItem = NonNullable<Configuration["externals"]>;
+// Guard: only externalize workspace packages if their dist directories exist.
+// On a clean checkout without a prior `bun run build`, dist/ is absent and
+// externalizing would cause Next.js to emit require('@pagespace/...') calls
+// that resolve to missing files. When dist is absent, fall back to
+// transpilePackages so webpack compiles from source — pg is still externalized
+// by the webpack callback below, which prevents the util/types bundling error.
+const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
+const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
+const workspaceDistReady = dbDistExists && libDistExists;
 
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  // @pagespace/db and @pagespace/lib are pre-built CommonJS packages (dist/).
-  // With bun workspaces, keeping them in transpilePackages causes Next.js to
-  // wrap the user externals and prevent those packages from being externalized,
-  // so the server bundle ends up dragging in pg → util/types (a Node built-in),
-  // failing the build. Removing them lets the server externals function below
-  // externalize them by request name before webpack follows bun's symlinks.
-  transpilePackages: [],
+  transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
   // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
   // contains no "node_modules" segment, so Next.js's path-based heuristic
   // fails to auto-externalize it. List it explicitly here as a backstop; the
@@ -22,11 +24,9 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
     if (isServer) {
-      // Externalize @pagespace/db, @pagespace/lib, and pg by intercepting module
-      // requests before webpack resolves them. serverExternalPackages alone
-      // doesn't catch workspace packages with bun because bun symlinks resolve
-      // to packages/db/ and packages/lib/ (outside node_modules), failing
-      // Next.js's path-based detection heuristic.
+      // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
+      // When workspaceDistReady, also externalize @pagespace/db and @pagespace/lib
+      // so Next emits require('@pagespace/...') calls resolved to their dist/.
       const bunWorkspaceExternals = (
         { request }: { context: string; request: string },
         callback: (err?: Error | null, result?: string) => void
@@ -34,8 +34,10 @@ const nextConfig: NextConfig = {
         if (
           request === 'pg' || request === 'pg-pool' || request === 'pg-protocol' ||
           request === 'pg-native' ||
-          request.startsWith('@pagespace/db') ||
-          request.startsWith('@pagespace/lib')
+          (workspaceDistReady && (
+            request.startsWith('@pagespace/db') ||
+            request.startsWith('@pagespace/lib')
+          ))
         ) {
           return callback(null, `commonjs ${request}`);
         }
@@ -45,7 +47,7 @@ const nextConfig: NextConfig = {
       if (Array.isArray(config.externals)) {
         config.externals.push(bunWorkspaceExternals);
       } else if (config.externals) {
-        config.externals = [config.externals as WebpackExternalItem, bunWorkspaceExternals];
+        config.externals = [config.externals as NonNullable<typeof config.externals>, bunWorkspaceExternals];
       } else {
         config.externals = [bunWorkspaceExternals];
       }

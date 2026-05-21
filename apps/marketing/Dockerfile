@@ -11,7 +11,17 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/android/package.json ./apps/android/
+COPY apps/atlas/package.json ./apps/atlas/
+COPY apps/control-plane/package.json ./apps/control-plane/
+COPY apps/desktop/package.json ./apps/desktop/
+COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/ios/package.json ./apps/ios/
 COPY apps/marketing/package.json ./apps/marketing/
+COPY apps/processor/package.json ./apps/processor/
+COPY apps/realtime/package.json ./apps/realtime/
+COPY apps/web/package.json ./apps/web/
 
 # Install all workspace dependencies
 RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
