@@ -13,9 +13,9 @@ import { rateLimitRead } from '../middleware/rate-limit';
 const router = Router();
 
 // Get file metadata (must come before generic preset route)
-router.get<{ contentHash: string }>('/:contentHash/metadata', rateLimitRead, async (req, res) => {
+router.get('/:contentHash/metadata', rateLimitRead, async (req, res) => {
   try {
-    const { contentHash } = req.params;
+    const { contentHash } = req.params as { contentHash: string };
     const auth = req.auth;
 
     if (!auth) {
@@ -67,9 +67,9 @@ router.get<{ contentHash: string }>('/:contentHash/metadata', rateLimitRead, asy
 
 // Serve original files (must come before generic preset route)
 // codeql[js/missing-rate-limiting] Rate limiting is applied via rateLimitRead middleware
-router.get<{ contentHash: string }>('/:contentHash/original', rateLimitRead, async (req, res) => {
+router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
   try {
-    const { contentHash } = req.params;
+    const { contentHash } = req.params as { contentHash: string };
     const auth = req.auth;
 
     if (!auth) {
@@ -181,9 +181,10 @@ router.get<{ contentHash: string }>('/:contentHash/original', rateLimitRead, asy
 });
 
 // Serve cached files (generic route comes after specific routes)
-router.get<{ contentHash: string; preset: string }>('/:contentHash/:preset', rateLimitRead, async (req, res) => {
+router.get('/:contentHash/:preset', rateLimitRead, async (req, res) => {
   try {
-    const { contentHash, preset } = req.params;
+    const contentHash = req.params.contentHash as string;
+    const preset = req.params.preset as string;
     const auth = req.auth;
 
     if (!auth) {

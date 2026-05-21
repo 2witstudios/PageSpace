@@ -3,7 +3,7 @@ import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { hasAuthScope } from '../middleware/auth';
-import { rateLimitUpload } from '../middleware/rate-limit';
+import { rateLimitUpload, rateLimitRead } from '../middleware/rate-limit';
 import { processorLogger } from '../logger';
 import {
   DEFAULT_IMAGE_EXTENSION,
@@ -56,8 +56,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 // No service auth required; avatars are public. This endpoint exists so the
 // web app can proxy avatar reads through the processor when file storage is
 // not co-located (e.g. Fly.io deployments where only the processor has the volume).
-// codeql[js/missing-rate-limiting] Public avatar endpoint — intentionally unauthenticated; rate limiting is enforced upstream by the web proxy
-router.get('/:userId/:filename', async (req: Request<{ userId: string; filename: string }>, res: Response) => {
+router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: string; filename: string }>, res: Response) => {
   const userId = normalizeIdentifier(req.params.userId, IDENTIFIER_PATTERN);
   const rawFilename = req.params.filename;
 
