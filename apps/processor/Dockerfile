@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12 /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy only manifests for dependency install caching
 COPY package.json bun.lock ./

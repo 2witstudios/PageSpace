@@ -3,7 +3,7 @@
 FROM node:22.17.0-alpine AS deps
 WORKDIR /app
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy workspace manifests — marketing depends on @pagespace/lib,
 # which in turn depends on @pagespace/db. bun needs all three
@@ -26,7 +26,7 @@ COPY types ./types
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 COPY --from=deps /app .
 

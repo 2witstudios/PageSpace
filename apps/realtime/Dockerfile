@@ -5,7 +5,7 @@
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
@@ -30,7 +30,7 @@ RUN bun run --filter '@pagespace/db' build && \
 FROM node:22.17.0-alpine AS runner
 WORKDIR /app
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy manifests and lockfile for production install
 COPY --from=builder /app/package.json /app/bun.lock ./

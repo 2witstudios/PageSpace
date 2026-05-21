@@ -9,7 +9,7 @@ WORKDIR /app
 # Install basic tools
 RUN apk add --no-cache git
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy package files first for better Docker layer caching
 COPY package.json bun.lock ./

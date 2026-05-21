@@ -151,7 +151,7 @@ run_test_suite "MCP WebSocket Route Security" "web" "src/app/api/mcp-ws/__tests_
 echo "⚙️ Processor Security"
 echo "---------------------"
 
-run_test_suite "Processor Security Utils" "processor" "tests/security-utils.test.ts"
+run_test_suite "Processor Security Utils" "@pagespace/processor" "tests/security-utils.test.ts"
 
 # =============================================================================
 # Database Transaction Security Tests

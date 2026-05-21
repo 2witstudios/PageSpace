@@ -3,7 +3,7 @@
 FROM node:22.17.0-alpine AS deps
 WORKDIR /app
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy only package files for dependency installation
 COPY package.json bun.lock ./
@@ -25,7 +25,7 @@ COPY types ./types
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
 
-COPY --from=oven/bun:1-alpine /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy the installed dependencies and the entire source code
 COPY --from=deps /app .
