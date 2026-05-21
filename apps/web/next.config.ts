@@ -5,17 +5,16 @@ import CopyPlugin from "copy-webpack-plugin";
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  transpilePackages: ["@pagespace/db", "@pagespace/lib"],
-  serverExternalPackages: ["pg"],
+  // @pagespace/db exports pre-compiled dist/ files and depends on pg (a
+  // Node.js-only package). Keeping it in transpilePackages causes webpack to
+  // bundle pg inline, which fails because pg uses Node.js built-ins
+  // (util/types). Bun workspace symlinks make @pagespace/db resolvable at
+  // node_modules/@pagespace/db, so serverExternalPackages correctly skips
+  // bundling it — webpack emits require('@pagespace/db/…') instead, and
+  // Node.js handles the actual require at runtime.
+  transpilePackages: ["@pagespace/lib"],
+  serverExternalPackages: ["pg", "@pagespace/db"],
   webpack: (config, { isServer }) => {
-    if (isServer) {
-      // pg imports util/types (a Node.js-only built-in) which webpack cannot
-      // resolve when bundling @pagespace/db via transpilePackages. Bun stores
-      // packages at a non-standard path (node_modules/.bun/pg@…) which
-      // serverExternalPackages doesn't detect, so we add pg explicitly here.
-      const existing = Array.isArray(config.externals) ? config.externals : [];
-      config.externals = [...existing, 'pg', 'pg-pool', 'pg-protocol'];
-    }
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
