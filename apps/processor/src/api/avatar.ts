@@ -168,7 +168,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       path: `/avatars/${userId}/${filename}`,
     });
   } catch (error) {
-    processorLogger.error('Avatar upload error', { error });
+    processorLogger.error('Avatar upload error', error instanceof Error ? error : null);
     res.status(500).json({
       error: 'Failed to upload avatar',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -232,7 +232,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
       message: 'Avatar deleted successfully',
     });
   } catch (error) {
-    processorLogger.error('Avatar deletion error', { error });
+    processorLogger.error('Avatar deletion error', error instanceof Error ? error : null);
     res.status(500).json({
       error: 'Failed to delete avatar',
       details: error instanceof Error ? error.message : 'Unknown error'
