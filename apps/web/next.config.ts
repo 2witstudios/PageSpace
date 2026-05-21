@@ -6,15 +6,16 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
   // @pagespace/db and @pagespace/lib are pre-built CommonJS packages (dist/).
-  // Keeping them in transpilePackages causes Next.js to forcibly bundle them,
-  // which bypasses the server externals function and drags pg into the client
-  // bundle. Removing them lets the server externals function below handle them.
+  // With bun workspaces, keeping them in transpilePackages causes Next.js to
+  // wrap the user externals and prevent those packages from being externalized,
+  // so the server bundle ends up dragging in pg → util/types (a Node built-in),
+  // failing the build. Removing them lets the server externals function below
+  // externalize them by request name before webpack follows bun's symlinks.
   transpilePackages: [],
-  // pg is listed here so Next.js skips it in client bundles; the server-side
-  // @pagespace/db and @pagespace/lib externalization is handled in the webpack
-  // function below because bun workspace symlinks resolve to paths outside
-  // node_modules, causing Next.js's serverExternalPackages path-based check
-  // to miss them.
+  // pg is listed here so Next.js skips it in client bundles where pg resolves
+  // via a path that doesn't contain "node_modules" (bun's cache path), causing
+  // the path-based detection to fail. The server-side @pagespace/db and
+  // @pagespace/lib externalization is handled in the webpack function below.
   serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
     if (isServer) {
@@ -82,6 +83,14 @@ const nextConfig: NextConfig = {
         "bun:ffi": bunFfiShim,
         "bun-ffi-structs": path.join(gridlandShims, "bun-ffi-structs.ts"),
         bun: bunFfiShim,
+        // pg is a server-only package. It's transitively imported client-side
+        // via auth-helpers.ts → @pagespace/db → pg, but never executes in
+        // the browser. Aliasing to false makes webpack emit an empty module,
+        // preventing util/types (Node built-in) from failing the client build.
+        pg: false,
+        'pg-pool': false,
+        'pg-protocol': false,
+        'pg-types': false,
       };
     }
 
