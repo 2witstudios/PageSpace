@@ -5,25 +5,33 @@ import CopyPlugin from "copy-webpack-plugin";
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  transpilePackages: ["@pagespace/db", "@pagespace/lib"],
+  // @pagespace/db and @pagespace/lib are pre-built CommonJS packages (dist/).
+  // Keeping them in transpilePackages causes Next.js to forcibly bundle them,
+  // which bypasses the server externals function and drags pg into the client
+  // bundle. Removing them lets the server externals function below handle them.
+  transpilePackages: [],
   // pg is listed here so Next.js skips it in client bundles; the server-side
-  // @pagespace/db and pg externalization is handled in the webpack function
-  // below because bun workspace symlinks resolve to paths outside node_modules,
-  // causing Next.js's serverExternalPackages path-based check to miss them.
+  // @pagespace/db and @pagespace/lib externalization is handled in the webpack
+  // function below because bun workspace symlinks resolve to paths outside
+  // node_modules, causing Next.js's serverExternalPackages path-based check
+  // to miss them.
   serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
     if (isServer) {
-      // Externalize @pagespace/db and pg by intercepting module requests before
-      // webpack resolves them. serverExternalPackages alone doesn't catch these
-      // with bun because bun workspace symlinks resolve to packages/db/ which
-      // has no node_modules in the path, failing Next.js's detection heuristic.
-      const bunDbExternals = (
+      // Externalize @pagespace/db, @pagespace/lib, and pg by intercepting module
+      // requests before webpack resolves them. serverExternalPackages alone
+      // doesn't catch workspace packages with bun because bun symlinks resolve
+      // to packages/db/ and packages/lib/ (outside node_modules), failing
+      // Next.js's path-based detection heuristic.
+      const bunWorkspaceExternals = (
         { request }: { context: string; request: string },
         callback: (err?: Error | null, result?: string) => void
       ) => {
         if (
           request === 'pg' || request === 'pg-pool' || request === 'pg-protocol' ||
-          request === 'pg-native' || request.startsWith('@pagespace/db')
+          request === 'pg-native' ||
+          request.startsWith('@pagespace/db') ||
+          request.startsWith('@pagespace/lib')
         ) {
           return callback(null, `commonjs ${request}`);
         }
@@ -31,11 +39,11 @@ const nextConfig: NextConfig = {
       };
 
       if (Array.isArray(config.externals)) {
-        config.externals.push(bunDbExternals);
+        config.externals.push(bunWorkspaceExternals);
       } else if (config.externals) {
-        config.externals = [config.externals as never, bunDbExternals];
+        config.externals = [config.externals as never, bunWorkspaceExternals];
       } else {
-        config.externals = [bunDbExternals];
+        config.externals = [bunWorkspaceExternals];
       }
     }
     if (!isServer) {
