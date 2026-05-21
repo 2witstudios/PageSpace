@@ -60,6 +60,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@next/eslint-plugin-next": "15.5.18",
     "eslint": "^9",
     "eslint-config-next": "15.5.18",
     "eslint-plugin-react-hooks": "^5.2.0",
