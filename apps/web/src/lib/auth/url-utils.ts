@@ -1,0 +1,90 @@
+function containsProtocol(s: string): boolean {
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] === ':') {
+      const c = s.charCodeAt(i - 1);
+      if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Validates that a return URL is a safe same-origin path.
+ * Prevents open redirect attacks by ensuring the URL:
+ * - Is a relative path starting with /
+ * - Does not contain protocol-relative URLs (//evil.com)
+ * - Does not contain backslash tricks (\/evil.com)
+ * - Does not contain encoded sequences that could bypass validation
+ */
+export function isSafeReturnUrl(url: string | undefined): boolean {
+  if (!url) return true; // undefined/empty falls back to /dashboard
+  if (!url.startsWith('/')) return false;
+  if (url.startsWith('//') || url.startsWith('/\\')) return false;
+  if (containsProtocol(url)) return false;
+  try {
+    const decoded = decodeURIComponent(url);
+    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
+    if (containsProtocol(decoded)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Allowlist for `next=` redirect targets accepted on the signin surface
+ * (passkey login, magic-link send/verify). Single source of truth so the
+ * three boundaries that re-validate (form, send route, verify route) cannot
+ * drift apart and accidentally widen — or narrow — the redirect surface.
+ *
+ * Invite acceptance does NOT use `next=` — it travels server-side as
+ * `inviteToken` bound to the verification token / passed in the auth-route
+ * body, mirroring the OAuth `state.inviteToken` pattern. Adding `/invite/`
+ * here would re-introduce the URL-fragility this allowlist was designed to
+ * mitigate.
+ */
+export const SIGNIN_NEXT_ALLOWED_PREFIXES = ['/dashboard', '/account', '/s/'] as const;
+
+/**
+ * Validates that a `next=` redirect target is both same-origin (composed via
+ * `isSafeReturnUrl`) AND begins with one of the caller's allowed path
+ * prefixes. URL-normalises the path first so `..` segments cannot escape the
+ * allowlist (e.g. `/dashboard/../etc` resolves to `/etc` and is rejected).
+ *
+ * Unlike `isSafeReturnUrl`, undefined/empty input returns false: callers
+ * should fall through to their own default rather than rely on an implicit
+ * one.
+ */
+export function isSafeNextPath(input: {
+  path: string | null | undefined;
+  allowedPrefixes: readonly string[];
+}): boolean {
+  const { path, allowedPrefixes } = input;
+  if (typeof path !== 'string' || path.length === 0) return false;
+  if (!isSafeReturnUrl(path)) return false;
+
+  let normalized: string;
+  try {
+    const u = new URL(path, 'https://pagespace.invalid');
+    if (u.hostname !== 'pagespace.invalid') return false;
+    normalized = `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return false;
+  }
+
+  return allowedPrefixes.some((prefix) => {
+    const p = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+    // A prefix of '/' (which strips to '') means "the root path exactly", not
+    // "any path" — without this guard `normalized.startsWith('/')` matches
+    // every same-origin path and silently degrades the allowlist to a no-op.
+    if (p === '') return normalized === '/';
+    return (
+      normalized === p ||
+      normalized.startsWith(`${p}/`) ||
+      normalized.startsWith(`${p}?`) ||
+      normalized.startsWith(`${p}#`)
+    );
+  });
+}

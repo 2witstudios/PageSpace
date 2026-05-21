@@ -12,10 +12,10 @@ const nextConfig: NextConfig = {
   // failing the build. Removing them lets the server externals function below
   // externalize them by request name before webpack follows bun's symlinks.
   transpilePackages: [],
-  // pg is listed here so Next.js skips it in client bundles where pg resolves
-  // via a path that doesn't contain "node_modules" (bun's cache path), causing
-  // the path-based detection to fail. The server-side @pagespace/db and
-  // @pagespace/lib externalization is handled in the webpack function below.
+  // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
+  // contains no "node_modules" segment, so Next.js's path-based heuristic
+  // fails to auto-externalize it. List it explicitly here as a backstop; the
+  // webpack function below handles @pagespace/db and @pagespace/lib the same way.
   serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
     if (isServer) {

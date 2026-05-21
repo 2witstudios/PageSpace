@@ -517,7 +517,6 @@
     "@types/react-dom": "^19.1.9",
     "drizzle-orm": "^0.32.2",
     "mdast-util-to-hast": "^13.2.1",
-    "pg": ">=8.16.3 <8.21.0",
     "react": "^19.1.2",
     "react-dom": "^19.1.2",
   },
