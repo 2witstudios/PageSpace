@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Sync legacy users (tier set in DB but no Stripe subscription) to Stripe.
  * Creates gift subscriptions with 100% discount coupons.

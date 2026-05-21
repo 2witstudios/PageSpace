@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Setup script to create the first admin user for on-premise PageSpace deployment.
  *

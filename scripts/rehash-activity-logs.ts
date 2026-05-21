@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Migration Script: Reset Activity Log Hash Chain (PII Exclusion)
  *
