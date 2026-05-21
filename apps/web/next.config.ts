@@ -3,15 +3,15 @@ import path from "path";
 import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
 
-// Guard: only externalize workspace packages if their dist directories exist.
-// On a clean checkout without a prior `bun run build`, dist/ is absent and
-// externalizing would cause Next.js to emit require('@pagespace/...') calls
-// that resolve to missing files. When dist is absent, fall back to
-// transpilePackages so webpack compiles from source — pg is still externalized
-// by the webpack callback below, which prevents the util/types bundling error.
+// Guard: only externalize workspace packages when running in production AND
+// their dist directories exist. The production check prevents stale dist/
+// directories from silently overriding source edits during `bun run dev`.
+// Docker builds always run with NODE_ENV=production and pre-build packages
+// before this file is evaluated, so both conditions are satisfied there.
 const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
 const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
-const workspaceDistReady = dbDistExists && libDistExists;
+const workspaceDistReady =
+  process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
 
 const nextConfig: NextConfig = {
   output: "standalone",
