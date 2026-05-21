@@ -5,16 +5,39 @@ import CopyPlugin from "copy-webpack-plugin";
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  // @pagespace/db exports pre-compiled dist/ files and depends on pg (a
-  // Node.js-only package). Keeping it in transpilePackages causes webpack to
-  // bundle pg inline, which fails because pg uses Node.js built-ins
-  // (util/types). Bun workspace symlinks make @pagespace/db resolvable at
-  // node_modules/@pagespace/db, so serverExternalPackages correctly skips
-  // bundling it — webpack emits require('@pagespace/db/…') instead, and
-  // Node.js handles the actual require at runtime.
-  transpilePackages: ["@pagespace/lib"],
-  serverExternalPackages: ["pg", "@pagespace/db"],
+  transpilePackages: ["@pagespace/db", "@pagespace/lib"],
+  // pg is listed here so Next.js skips it in client bundles; the server-side
+  // @pagespace/db and pg externalization is handled in the webpack function
+  // below because bun workspace symlinks resolve to paths outside node_modules,
+  // causing Next.js's serverExternalPackages path-based check to miss them.
+  serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
+    if (isServer) {
+      // Externalize @pagespace/db and pg by intercepting module requests before
+      // webpack resolves them. serverExternalPackages alone doesn't catch these
+      // with bun because bun workspace symlinks resolve to packages/db/ which
+      // has no node_modules in the path, failing Next.js's detection heuristic.
+      const bunDbExternals = (
+        { request }: { context: string; request: string },
+        callback: (err?: Error | null, result?: string) => void
+      ) => {
+        if (
+          request === 'pg' || request === 'pg-pool' || request === 'pg-protocol' ||
+          request === 'pg-native' || request.startsWith('@pagespace/db')
+        ) {
+          return callback(null, `commonjs ${request}`);
+        }
+        callback();
+      };
+
+      if (Array.isArray(config.externals)) {
+        config.externals.push(bunDbExternals);
+      } else if (config.externals) {
+        config.externals = [config.externals as never, bunDbExternals];
+      } else {
+        config.externals = [bunDbExternals];
+      }
+    }
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
