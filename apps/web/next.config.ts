@@ -83,14 +83,6 @@ const nextConfig: NextConfig = {
         "bun:ffi": bunFfiShim,
         "bun-ffi-structs": path.join(gridlandShims, "bun-ffi-structs.ts"),
         bun: bunFfiShim,
-        // pg is a server-only package. It's transitively imported client-side
-        // via auth-helpers.ts → @pagespace/db → pg, but never executes in
-        // the browser. Aliasing to false makes webpack emit an empty module,
-        // preventing util/types (Node built-in) from failing the client build.
-        pg: false,
-        'pg-pool': false,
-        'pg-protocol': false,
-        'pg-types': false,
       };
     }
 
