@@ -168,8 +168,8 @@ const PageMentionNode = Mention.extend({
   },
 
   addNodeView() {
-    return ({ node }: { node: { attrs: { id: string; label: string; driveId: string; driveSlug: string; mentionType: string } } }) => {
-      const { mentionType, id, label, driveId } = node.attrs;
+    return ({ node }: { node: { attrs: { [key: string]: unknown } } }) => {
+      const { mentionType, id, label, driveId } = node.attrs as { id: string; label: string; driveId: string; driveSlug: string; mentionType: string };
       const isGroup = mentionType === 'everyone' || mentionType === 'role';
 
       if (isGroup) {

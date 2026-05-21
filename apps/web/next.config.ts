@@ -8,6 +8,14 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@pagespace/db", "@pagespace/lib"],
   serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
+    if (isServer) {
+      // pg imports util/types (a Node.js-only built-in) which webpack cannot
+      // resolve when bundling @pagespace/db via transpilePackages. Bun stores
+      // packages at a non-standard path (node_modules/.bun/pg@…) which
+      // serverExternalPackages doesn't detect, so we add pg explicitly here.
+      const existing = Array.isArray(config.externals) ? config.externals : [];
+      config.externals = [...existing, 'pg', 'pg-pool', 'pg-protocol'];
+    }
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,

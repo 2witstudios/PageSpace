@@ -111,7 +111,7 @@ jobs:
           bun run --filter '@pagespace/lib' test -- src/__tests__/token-lookup.test.ts
           bun run --filter '@pagespace/lib' test -- src/__tests__/broadcast-auth.test.ts
           bun run --filter '@pagespace/lib' test -- src/__tests__/encryption-utils.test.ts
-          bun run --filter '@pagespace/lib' test -- src/__tests__/device-auth-utils.test.ts
+          bun run --filter '@pagespace/lib' test:db -- src/__tests__/device-auth-utils.test.ts
           bun run --filter '@pagespace/lib' test -- src/__tests__/rate-limit-utils.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
@@ -125,7 +125,7 @@ jobs:
 
       - name: Run permission tests
         run: |
-          bun run --filter '@pagespace/lib' test -- src/__tests__/permissions.test.ts
+          bun run --filter '@pagespace/lib' test:db -- src/__tests__/permissions.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
