@@ -81,7 +81,7 @@ async function start() {
   // Stripe client — optional, only if STRIPE_SECRET_KEY is configured
   const stripeSecretKey = process.env.STRIPE_SECRET_KEY
   const stripe = stripeSecretKey
-    ? new Stripe(stripeSecretKey, { apiVersion: '2026-02-25.clover' })
+    ? new Stripe(stripeSecretKey, { apiVersion: '2025-12-15.clover' })
     : undefined
 
   // Map tier names to real Stripe price IDs from environment
