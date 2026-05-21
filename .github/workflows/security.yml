@@ -155,7 +155,7 @@ jobs:
           NODE_ENV: test
 
       - name: Run processor security tests
-        run: bun run --filter 'processor' test -- tests/security-utils.test.ts
+        run: bun run --filter '@pagespace/processor' test -- tests/security-utils.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
