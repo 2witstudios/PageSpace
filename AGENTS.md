@@ -151,28 +151,28 @@ docker compose up -d        # Alternative
 bun run dev                  # Runs Turbo dev across packages
 
 # Focus a single app
-bun --filter 'web' run dev
-bun --filter 'realtime' run dev
-bun --filter '@pagespace/processor' run dev
+bun run --filter 'web' dev
+bun run --filter 'realtime' dev
+bun run --filter '@pagespace/processor' dev
 
 # Build and quality checks
 bun run build                # Build all apps
 bun run typecheck            # TypeScript checks
 bun run lint                 # ESLint
-bun --filter 'web' run build # Build web app only
-bun --filter 'web' run lint  # Lint web app only
+bun run --filter 'web' build # Build web app only
+bun run --filter 'web' lint  # Lint web app only
 
 # Database tasks
 bun run db:generate          # Create migrations
 bun run db:migrate           # Apply migrations
-bun --filter '@pagespace/db' run db:studio  # Browse schema
+bun run --filter '@pagespace/db' db:studio  # Browse schema
 ```
 
 ### 4.2. Testing Guidelines
 
 - No global test runner is enforced yet. When adding tests:
   - Prefer unit tests for `packages/lib`/`apps/processor` (`*.test.ts` next to source or in `__tests__/`)
-  - Add a `test` script in the target package and run with `bun --filter '<pkg>' run test`
+  - Add a `test` script in the target package and run with `bun run --filter '<pkg>' test`
   - Use `bun run typecheck` and `bun run lint` as gates before PRs
 
 ## 5. PAGESPACE DOMAIN EXPERT AGENTS

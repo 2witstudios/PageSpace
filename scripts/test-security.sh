@@ -34,7 +34,7 @@ run_test_suite() {
     TOTAL=$((TOTAL + 1))
     echo -e "${YELLOW}▶ Running: ${name}${NC}"
 
-    if bun --filter "$filter" run test -- "$path" --reporter=dot 2>&1; then
+    if bun run --filter "$filter" test -- "$path" --reporter=dot 2>&1; then
         echo -e "${GREEN}✓ ${name} passed${NC}"
         echo ""
     else

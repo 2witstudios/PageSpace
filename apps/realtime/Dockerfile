@@ -22,9 +22,9 @@ COPY apps/realtime ./apps/realtime
 COPY tsconfig.json ./
 
 # Build shared packages and the realtime service
-RUN bun --filter '@pagespace/db' run build && \
-    bun --filter '@pagespace/lib' run build && \
-    bun --filter 'realtime' run build
+RUN bun run --filter '@pagespace/db' build && \
+    bun run --filter '@pagespace/lib' build && \
+    bun run --filter 'realtime' build
 
 # Stage 2: Production runner
 FROM node:22.17.0-alpine AS runner

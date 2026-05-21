@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "bun x cap sync android",
-    "build:full": "bun --filter 'web' run build && bun x cap sync android",
+    "build:full": "bun run --filter 'web' build && bun x cap sync android",
     "dev": "bun x cap open android",
     "sync": "bun x cap sync android",
     "update": "bun x cap update android",

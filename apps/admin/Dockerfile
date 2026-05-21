@@ -27,7 +27,7 @@ ARG NEXT_PUBLIC_WEB_APP_URL=""
 ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN bun --filter '@pagespace/db' run build && bun --filter '@pagespace/lib' run build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
 RUN cd apps/admin && NODE_OPTIONS="--max-old-space-size=2048" bun run build
 
 ENV NODE_ENV=production

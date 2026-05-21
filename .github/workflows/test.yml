@@ -50,7 +50,7 @@ jobs:
       - name: Setup test database
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bun --filter '@pagespace/db' run db:migrate
+        run: bun run --filter '@pagespace/db' db:migrate
 
       - name: Run tests with coverage
         env:

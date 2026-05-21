@@ -89,76 +89,76 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
 
       - name: Run core security tests
-        run: bun --filter '@pagespace/lib' run vitest run src/security/
+        run: bun run --filter '@pagespace/lib' vitest run src/security/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run auth module tests
-        run: bun --filter '@pagespace/lib' run vitest run src/auth/
+        run: bun run --filter '@pagespace/lib' vitest run src/auth/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run security utility tests
         run: |
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/secure-compare.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/csrf-utils.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/token-utils.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/token-lookup.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/broadcast-auth.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/encryption-utils.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/device-auth-utils.test.ts
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/rate-limit-utils.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/secure-compare.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/csrf-utils.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/token-utils.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/token-lookup.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/broadcast-auth.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/encryption-utils.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/device-auth-utils.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/rate-limit-utils.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run multi-tenant isolation tests
-        run: bun --filter '@pagespace/lib' run vitest run src/__tests__/multi-tenant-isolation.test.ts
+        run: bun run --filter '@pagespace/lib' vitest run src/__tests__/multi-tenant-isolation.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run permission tests
         run: |
-          bun --filter '@pagespace/lib' run vitest run src/__tests__/permissions.test.ts
+          bun run --filter '@pagespace/lib' vitest run src/__tests__/permissions.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run web app auth route tests
-        run: bun --filter 'web' run vitest run src/app/api/auth/__tests__/
+        run: bun run --filter 'web' vitest run src/app/api/auth/__tests__/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run web app auth library tests
-        run: bun --filter 'web' run vitest run src/lib/auth/__tests__/
+        run: bun run --filter 'web' vitest run src/lib/auth/__tests__/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run security headers tests
-        run: bun --filter 'web' run vitest run src/middleware/__tests__/security-headers.test.ts
+        run: bun run --filter 'web' vitest run src/middleware/__tests__/security-headers.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run database transaction security tests
-        run: bun --filter '@pagespace/db' run vitest run src/transactions/__tests__/auth-transactions.test.ts
+        run: bun run --filter '@pagespace/db' vitest run src/transactions/__tests__/auth-transactions.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run processor security tests
-        run: bun --filter 'processor' run vitest run tests/security-utils.test.ts
+        run: bun run --filter 'processor' vitest run tests/security-utils.test.ts
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
       - name: Run security audit route coverage gate
-        run: bun --filter 'web' run vitest run src/app/api/__tests__/security-audit-coverage.test.ts
+        run: bun run --filter 'web' vitest run src/app/api/__tests__/security-audit-coverage.test.ts
         env:
           NODE_ENV: test
 
@@ -176,7 +176,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run OSV vulnerability scan
-        uses: google/osv-scanner-action@v2
+        uses: google/osv-scanner-action@v1
         with:
           scan-args: |-
             --recursive
@@ -184,7 +184,7 @@ jobs:
         continue-on-error: true
 
       - name: Check for critical vulnerabilities
-        uses: google/osv-scanner-action@v2
+        uses: google/osv-scanner-action@v1
         with:
           scan-args: |-
             --recursive
@@ -226,7 +226,7 @@ jobs:
         run: bun run typecheck
 
       - name: ESLint security rules
-        run: bun --filter 'web' run lint
+        run: bun run --filter 'web' lint
 
   codeql-analysis:
     name: CodeQL Security Analysis

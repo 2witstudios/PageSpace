@@ -48,15 +48,15 @@ jobs:
       - name: Setup test database
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bun --filter '@pagespace/db' run db:migrate
+        run: bun run --filter '@pagespace/db' db:migrate
 
       - name: Start web server
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           NODE_ENV: test
         run: |
-          bun --filter 'web' run build
-          bun --filter 'web' run start &
+          bun run --filter 'web' build
+          bun run --filter 'web' start &
 
           # Health check loop - wait for server to be ready
           MAX_ATTEMPTS=30

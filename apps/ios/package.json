@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "bun x cap sync ios",
-    "build:full": "bun --filter 'web' run build && bun x cap sync ios",
+    "build:full": "bun run --filter 'web' build && bun x cap sync ios",
     "dev": "bun x cap open ios",
     "sync": "bun x cap sync ios",
     "update": "bun x cap update ios",

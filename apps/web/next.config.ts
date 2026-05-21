@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: ["@pagespace/db", "@pagespace/lib"],
+  serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {

@@ -23,7 +23,7 @@ The desktop app is a lightweight Electron wrapper that loads your PageSpace web 
 
 ```bash
 # From the root of the monorepo
-bun --filter 'desktop' run dev
+bun run --filter 'desktop' dev
 ```
 
 This will launch the Electron app pointing to `http://localhost:3000` (make sure the web app is running).
@@ -32,13 +32,13 @@ This will launch the Electron app pointing to `http://localhost:3000` (make sure
 
 ```bash
 # Build TypeScript
-bun --filter 'desktop' run build
+bun run --filter 'desktop' build
 
 # Create distributable packages
-bun --filter 'desktop' run package        # Build for current platform
-bun --filter 'desktop' run package:mac    # Build for macOS
-bun --filter 'desktop' run package:win    # Build for Windows
-bun --filter 'desktop' run package:linux  # Build for Linux
+bun run --filter 'desktop' package        # Build for current platform
+bun run --filter 'desktop' package:mac    # Build for macOS
+bun run --filter 'desktop' package:win    # Build for Windows
+bun run --filter 'desktop' package:linux  # Build for Linux
 ```
 
 ## Configuration

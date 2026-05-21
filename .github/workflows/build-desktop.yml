@@ -43,7 +43,7 @@ jobs:
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: bun --filter 'desktop' run build
+        run: bun run --filter 'desktop' build
 
       - name: Import code signing certificate
         env:
@@ -84,7 +84,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package macOS app (signed and notarized)
-        run: bun --filter 'desktop' run package:mac
+        run: bun run --filter 'desktop' package:mac
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -128,10 +128,10 @@ jobs:
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: bun --filter 'desktop' run build
+        run: bun run --filter 'desktop' build
 
       - name: Package Windows app
-        run: bun --filter 'desktop' run package:win
+        run: bun run --filter 'desktop' package:win
         env:
           CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
@@ -173,10 +173,10 @@ jobs:
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: bun --filter 'desktop' run build
+        run: bun run --filter 'desktop' build
 
       - name: Package Linux app
-        run: bun --filter 'desktop' run package:linux
+        run: bun run --filter 'desktop' package:linux
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7

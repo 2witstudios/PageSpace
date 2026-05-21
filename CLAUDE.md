@@ -91,19 +91,19 @@ When you need to understand a subsystem, read these canonical sources (not docs 
 # Development
 bun run dev                          # Start all services (web, realtime, processor — excludes control-plane)
 bun run dev:services                 # Start Postgres, processor, realtime via Docker
-bun --filter 'web' run dev           # Start web app only
-bun --filter 'realtime' run dev      # Start realtime service only
-bun --filter 'processor' run dev     # Start processor service only
+bun run --filter 'web' dev           # Start web app only
+bun run --filter 'realtime' dev      # Start realtime service only
+bun run --filter 'processor' dev     # Start processor service only
 bun run dev:desktop                  # Start Electron desktop app
 
 # Build
 bun run build                        # Build all apps (Turbo)
-bun --filter 'web' run build         # Build web app only
+bun run --filter 'web' build         # Build web app only
 
 # Database
 bun run db:generate                  # Generate Drizzle migrations from schema changes
 bun run db:migrate                   # Run database migrations
-bun --filter '@pagespace/db' run db:studio  # Open Drizzle Studio
+bun run --filter '@pagespace/db' db:studio  # Open Drizzle Studio
 
 # Testing
 bun run test                         # Run all tests (with DB setup)

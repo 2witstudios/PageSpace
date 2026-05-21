@@ -52,7 +52,7 @@ ENV NEXT_PUBLIC_ADMIN_APP_URL=$NEXT_PUBLIC_ADMIN_APP_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build dependent packages first (db + lib must compile before web)
-RUN bun --filter '@pagespace/db' run build && bun --filter '@pagespace/lib' run build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
 
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies

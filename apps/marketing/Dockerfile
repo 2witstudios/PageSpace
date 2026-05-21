@@ -49,7 +49,7 @@ ENV NODE_ENV=production
 
 # Build workspace deps first so their dist/ output (which marketing
 # consumes via the package.json "exports" map) is available.
-RUN bun --filter '@pagespace/db' run build && bun --filter '@pagespace/lib' run build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
 
 RUN cd apps/marketing && bun run build
 

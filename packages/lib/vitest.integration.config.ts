@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 // Integration-test config: includes the service-level integration tests that
 // the default config excludes because they require a running Postgres.
 // Invoke with:
-//   bun --filter '@pagespace/lib' run vitest run --config vitest.integration.config.ts <file>
+//   bun run --filter '@pagespace/lib' vitest run --config vitest.integration.config.ts <file>
 export default defineConfig({
   test: {
     globals: true,

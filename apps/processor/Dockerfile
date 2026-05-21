@@ -35,8 +35,8 @@ COPY packages ./packages
 COPY apps/processor ./apps/processor
 
 # Build shared workspaces before compiling the processor
-RUN bun --filter '@pagespace/db' run build \
-  && bun --filter '@pagespace/lib' run build
+RUN bun run --filter '@pagespace/db' build \
+  && bun run --filter '@pagespace/lib' build
 
 # Build the processor service
 WORKDIR /app/apps/processor

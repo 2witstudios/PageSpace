@@ -30,21 +30,21 @@ bun run test:e2e                 # End-to-end tests
 bun run test:security            # Security tests only
 
 # By package
-bun --filter '@pagespace/lib' run test
-bun --filter '@pagespace/db' run test
-bun --filter 'web' run test
-bun --filter 'realtime' run test
+bun run --filter '@pagespace/lib' test
+bun run --filter '@pagespace/db' test
+bun run --filter 'web' test
+bun run --filter 'realtime' test
 
 # Specific test files
-bun --filter '@pagespace/lib' run test -- permissions.test.ts
-bun --filter '@pagespace/lib' run test -- auth-utils.test.ts
+bun run --filter '@pagespace/lib' test -- permissions.test.ts
+bun run --filter '@pagespace/lib' test -- auth-utils.test.ts
 ```
 
 **Infrastructure:**
 ```bash
 # Start dependencies
 docker compose up postgres -d
-bun --filter '@pagespace/db' run db:migrate
+bun run --filter '@pagespace/db' db:migrate
 
 # Check status
 docker ps
