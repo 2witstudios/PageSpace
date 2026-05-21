@@ -56,6 +56,7 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 // No service auth required; avatars are public. This endpoint exists so the
 // web app can proxy avatar reads through the processor when file storage is
 // not co-located (e.g. Fly.io deployments where only the processor has the volume).
+// codeql[js/missing-rate-limiting] Rate limiting is applied via rateLimitRead middleware
 router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: string; filename: string }>, res: Response) => {
   const userId = normalizeIdentifier(req.params.userId, IDENTIFIER_PATTERN);
   const rawFilename = req.params.filename;

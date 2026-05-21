@@ -35,6 +35,7 @@ const {
 
 vi.mock('../../middleware/rate-limit', () => ({
   rateLimitUpload: (_req: Request, _res: Response, next: NextFunction) => next(),
+  rateLimitRead: (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
 vi.mock('../../middleware/auth', () => ({
