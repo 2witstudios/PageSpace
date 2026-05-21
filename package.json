@@ -17,7 +17,7 @@
     "db:migrate": "bun --filter '@pagespace/db' run db:migrate",
     "test": "./scripts/test-with-db.sh",
     "test:turbo": "turbo run test",
-    "test:unit": "bun --filter '@pagespace/lib' run test && cd apps/web && npx vitest run",
+    "test:unit": "turbo run test --filter=@pagespace/lib && npx vitest run --config=/dev/null --root apps/web",
     "test:watch": "bun --filter '@pagespace/lib' run test -- --watch",
     "test:ui": "bun --filter '@pagespace/lib' run test -- --ui",
     "test:coverage": "turbo run test:coverage",
@@ -35,7 +35,7 @@
     "test:infra": "cd infrastructure && npx vitest run",
     "test:infra:runtime": "cd infrastructure && npx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
     "test:security": "./scripts/test-security.sh",
-    "setup:admin": "tsx scripts/setup-onprem-admin.ts"
+    "setup:admin": "bun scripts/setup-onprem-admin.ts"
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",
