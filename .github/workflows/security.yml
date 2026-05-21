@@ -179,12 +179,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run OSV vulnerability scan
-        uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2
         with:
           scan-args: |-
             --recursive
             ./
-        continue-on-error: true
 
   secret-scanning:
     name: Secret Scanning
