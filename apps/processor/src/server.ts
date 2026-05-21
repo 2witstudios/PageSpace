@@ -290,13 +290,13 @@ app.get(
 );
 
 // Job status endpoint
-app.get(
+app.get<{ jobId: string }>(
   '/api/job/:jobId',
   authenticateService,
   requireScope('queue:read'),
   async (req, res) => {
     try {
-      const job = await queueManager.getJob(req.params.jobId as string);
+      const job = await queueManager.getJob(req.params.jobId);
       if (!job) {
         return res.status(404).json({ error: 'Job not found' });
       }

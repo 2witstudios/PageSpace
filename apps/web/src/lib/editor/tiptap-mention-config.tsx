@@ -136,10 +136,24 @@ const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListP
   );
 });
 
-/**
- * Dispatch a navigation event for internal links
- * This allows parent React components to handle navigation with router.push()
- */
+interface MentionAttrs {
+  id: string;
+  label: string;
+  driveId: string | null;
+  driveSlug: string | null;
+  mentionType: string;
+}
+
+function getMentionAttrs(attrs: Record<string, unknown>): MentionAttrs {
+  return {
+    id: typeof attrs.id === 'string' ? attrs.id : '',
+    label: typeof attrs.label === 'string' ? attrs.label : '',
+    driveId: typeof attrs.driveId === 'string' ? attrs.driveId : null,
+    driveSlug: typeof attrs.driveSlug === 'string' ? attrs.driveSlug : null,
+    mentionType: typeof attrs.mentionType === 'string' ? attrs.mentionType : 'page',
+  };
+}
+
 function dispatchInternalNavigation(href: string): void {
   const event = new CustomEvent('pagespace:navigate', {
     detail: { href },
@@ -169,7 +183,7 @@ const PageMentionNode = Mention.extend({
 
   addNodeView() {
     return ({ node }: { node: { attrs: { [key: string]: unknown } } }) => {
-      const { mentionType, id, label, driveId } = node.attrs as { id: string; label: string; driveId: string; driveSlug: string; mentionType: string };
+      const { mentionType, id, label, driveId } = getMentionAttrs(node.attrs);
       const isGroup = mentionType === 'everyone' || mentionType === 'role';
 
       if (isGroup) {
@@ -214,7 +228,7 @@ export const PageMention = PageMentionNode.configure({
     contenteditable: 'false',
   },
   renderHTML({ options, node }) {
-    const { mentionType, id, label, driveId } = node.attrs;
+    const { mentionType, id, label, driveId } = getMentionAttrs(node.attrs);
 
     if (mentionType === 'everyone') {
       return [
