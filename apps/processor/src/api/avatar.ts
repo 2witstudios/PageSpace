@@ -78,7 +78,7 @@ router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: st
   }
 
   try {
-    const data = await fs.readFile(filepath); // codeql[js/missing-rate-limiting]
+    const data = await fs.readFile(filepath);
     const extension = filename.split('.').pop()?.toLowerCase() || 'jpeg';
     const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
     res.setHeader('Content-Type', contentType);
