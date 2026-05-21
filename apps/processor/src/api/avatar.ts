@@ -168,7 +168,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       path: `/avatars/${userId}/${filename}`,
     });
   } catch (error) {
-    console.error('Avatar upload error:', error);
+    processorLogger.error('Avatar upload error', { error });
     res.status(500).json({
       error: 'Failed to upload avatar',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -223,9 +223,8 @@ router.delete('/:userId', async (req: Request, res: Response) => {
       }
       // Optionally remove the empty directory
       await fs.rmdir(avatarsDir);
-    } catch (error) {
-      // Directory or files might not exist, that's ok
-      console.log('Avatar deletion - directory not found or already empty');
+    } catch {
+      // Directory or files might not exist — that's fine
     }
 
     res.json({
@@ -233,7 +232,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
       message: 'Avatar deleted successfully',
     });
   } catch (error) {
-    console.error('Avatar deletion error:', error);
+    processorLogger.error('Avatar deletion error', { error });
     res.status(500).json({
       error: 'Failed to delete avatar',
       details: error instanceof Error ? error.message : 'Unknown error'
