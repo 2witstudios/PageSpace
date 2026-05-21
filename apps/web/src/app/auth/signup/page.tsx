@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { isOnPrem } from '@/lib/deployment-mode';
-import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { SignUpClient } from './SignUpClient';
 
 interface SignUpPageProps {

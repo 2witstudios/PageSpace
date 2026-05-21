@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
+import type { Configuration } from "webpack";
 import path from "path";
 import CopyPlugin from "copy-webpack-plugin";
+
+type WebpackExternalItem = NonNullable<Configuration["externals"]>;
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -42,7 +45,7 @@ const nextConfig: NextConfig = {
       if (Array.isArray(config.externals)) {
         config.externals.push(bunWorkspaceExternals);
       } else if (config.externals) {
-        config.externals = [config.externals as never, bunWorkspaceExternals];
+        config.externals = [config.externals as WebpackExternalItem, bunWorkspaceExternals];
       } else {
         config.externals = [bunWorkspaceExternals];
       }

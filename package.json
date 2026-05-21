@@ -17,7 +17,7 @@
     "db:migrate": "bun run --filter '@pagespace/db' db:migrate",
     "test": "./scripts/test-with-db.sh",
     "test:turbo": "turbo run test",
-    "test:unit": "turbo run test --filter=@pagespace/lib && npx vitest run --config=/dev/null --root apps/web",
+    "test:unit": "turbo run test --filter=@pagespace/lib && bun run --filter 'web' test",
     "test:watch": "bun run --filter '@pagespace/lib' test -- --watch",
     "test:ui": "bun run --filter '@pagespace/lib' test -- --ui",
     "test:coverage": "turbo run test:coverage",
@@ -81,7 +81,6 @@
     "msw",
     "sharp",
     "tesseract.js",
-    "unrs-resolver",
-    "web"
+    "unrs-resolver"
   ]
 }
