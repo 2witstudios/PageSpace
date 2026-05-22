@@ -103,12 +103,10 @@ vi.mock('@/components/ai/ui/conversation', () => ({
   ConversationScrollButton: () => null,
 }));
 
-// MessagePartRenderer — render content as plain text for assertions
-vi.mock('@/components/messages/MessagePartRenderer', () => ({
-  renderMessageParts: (parts: Array<{ text?: string }>) =>
-    parts?.[0]?.text ?? null,
-  convertToMessageParts: (content: string) =>
-    content ? [{ type: 'text', text: content }] : [],
+// RichText — render content as plain text for assertions
+vi.mock('@/components/messages/RichText', () => ({
+  RichText: ({ content }: { content: string }) => <span>{content}</span>,
+  addHardLineBreaks: (content: string) => content,
 }));
 
 // MessageAttachment — sentinel for inspection
