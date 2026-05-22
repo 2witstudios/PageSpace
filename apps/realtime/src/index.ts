@@ -372,7 +372,15 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 const httpServer = createServer(requestListener);
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || process.env.WEB_APP_URL,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowed = getAllowedOrigins();
+      if (allowed.length === 0 || allowed.includes(normalizeOrigin(origin))) {
+        callback(null, true);
+      } else {
+        callback(new Error('Origin not allowed'));
+      }
+    },
     credentials: true,
   },
 });
