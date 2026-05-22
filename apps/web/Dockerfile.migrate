@@ -38,5 +38,3 @@ COPY tsconfig.json ./
 
 # Build the database package to ensure latest schema changes are compiled
 RUN bun run --filter '@pagespace/db' build
-
-CMD ["bun", "run", "db:migrate"]
