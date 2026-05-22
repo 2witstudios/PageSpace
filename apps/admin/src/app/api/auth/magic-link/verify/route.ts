@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -80,8 +81,7 @@ export async function GET(req: Request) {
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
-    headers.set('Location', '/');
-    return new Response(null, { status: 302, headers });
+    return NextResponse.redirect(new URL('/', getAdminUrl()), { status: 302, headers });
   } catch (error) {
     loggers.auth.error('Admin magic link verify error', error as Error);
     return redirectWithError('server_error');
