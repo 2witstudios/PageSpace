@@ -399,7 +399,7 @@ describe('verify-token-migration', () => {
 
       expect(mockExit).toHaveBeenCalledWith(1)
       expect(consoleLogCalls.some(call => call.includes('Migration Status: ✗ INCOMPLETE'))).toBe(true)
-      expect(consoleLogCalls.some(call => call.includes('pnpm db:migrate'))).toBe(true)
+      expect(consoleLogCalls.some(call => call.includes('bun run db:migrate'))).toBe(true)
     })
   })
 

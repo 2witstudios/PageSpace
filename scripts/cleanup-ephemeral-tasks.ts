@@ -11,8 +11,8 @@ import { eq, and, isNull, isNotNull, sql } from '@pagespace/db/operators';
  * - page_id IS NULL (not linked to a page)
  * - conversation_id IS NOT NULL (was conversation-scoped)
  *
- * Run with: pnpm tsx scripts/cleanup-ephemeral-tasks.ts
- * Or in Docker: docker exec <container> pnpm tsx scripts/cleanup-ephemeral-tasks.ts
+ * Run with: bun scripts/cleanup-ephemeral-tasks.ts
+ * Or in Docker: docker exec <container> bun scripts/cleanup-ephemeral-tasks.ts
  */
 async function cleanup(): Promise<void> {
   console.log('Starting ephemeral task list cleanup...');

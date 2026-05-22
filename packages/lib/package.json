@@ -6,6 +6,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:db": "vitest run --config vitest.security.config.ts",
     "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails",
     "lint": "eslint src"

@@ -9,7 +9,7 @@ export default defineConfig({
     exclude: [
       // Integration tests that require a running PostgreSQL database.
       // Run via ./scripts/test-with-db.sh, or:
-      //   pnpm --filter @pagespace/db test -- src/__tests__/accessible-page-ids.integration.test.ts
+      //   bun run --filter '@pagespace/db' test -- src/__tests__/accessible-page-ids.integration.test.ts
       'src/__tests__/accessible-page-ids.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],

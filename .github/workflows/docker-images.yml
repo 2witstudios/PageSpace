@@ -8,7 +8,7 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'docker/**'
-      - 'pnpm-lock.yaml'
+      - 'bun.lock'
       - '.github/workflows/docker-images.yml'
 
 env:

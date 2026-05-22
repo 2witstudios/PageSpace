@@ -57,7 +57,7 @@ Introduce `AttachmentTarget = { type: 'page'; pageId; driveId } | { type: 'conve
 
 ## Schema: nullable driveId, fileConversations, DM message attachment fields
 
-Modify `packages/db/src/schema/storage.ts` and `packages/db/src/schema/social.ts`; generate via `pnpm db:generate`.
+Modify `packages/db/src/schema/storage.ts` and `packages/db/src/schema/social.ts`; generate via `bun run db:generate`.
 
 **Requirements**:
 - Given a file uploaded with no drive context, should persist with `driveId = NULL` and a row in `fileConversations`.

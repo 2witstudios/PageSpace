@@ -16,10 +16,10 @@
     "test": "vitest run",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
-    "package": "pnpm build && electron-builder",
-    "package:mac": "pnpm build && electron-builder --mac --publish never",
-    "package:win": "pnpm build && electron-builder --win --publish never",
-    "package:linux": "pnpm build && electron-builder --linux --publish never"
+    "package": "bun run build && electron-builder",
+    "package:mac": "bun run build && electron-builder --mac --publish never",
+    "package:win": "bun run build && electron-builder --win --publish never",
+    "package:linux": "bun run build && electron-builder --linux --publish never"
   },
   "dependencies": {
     "electron-store": "^10.0.0",

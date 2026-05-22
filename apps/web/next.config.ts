@@ -1,11 +1,57 @@
 import type { NextConfig } from "next";
 import path from "path";
+import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
+
+// Guard: only externalize workspace packages when running in production AND
+// their dist directories exist. The production check prevents stale dist/
+// directories from silently overriding source edits during `bun run dev`.
+// Docker builds always run with NODE_ENV=production and pre-build packages
+// before this file is evaluated, so both conditions are satisfied there.
+const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
+const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
+const workspaceDistReady =
+  process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@pagespace/db", "@pagespace/lib"],
+  outputFileTracingRoot: path.join(__dirname, "../.."),
+  transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
+  // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
+  // contains no "node_modules" segment, so Next.js's path-based heuristic
+  // fails to auto-externalize it. List it explicitly here as a backstop; the
+  // webpack function below handles @pagespace/db and @pagespace/lib the same way.
+  serverExternalPackages: ["pg"],
   webpack: (config, { isServer }) => {
+    if (isServer) {
+      // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
+      // When workspaceDistReady, also externalize @pagespace/db and @pagespace/lib
+      // so Next emits require('@pagespace/...') calls resolved to their dist/.
+      const bunWorkspaceExternals = (
+        { request }: { context: string; request: string },
+        callback: (err?: Error | null, result?: string) => void
+      ) => {
+        if (
+          request === 'pg' || request === 'pg-pool' || request === 'pg-protocol' ||
+          request === 'pg-native' ||
+          (workspaceDistReady && (
+            request.startsWith('@pagespace/db') ||
+            request.startsWith('@pagespace/lib')
+          ))
+        ) {
+          return callback(null, `commonjs ${request}`);
+        }
+        callback();
+      };
+
+      if (Array.isArray(config.externals)) {
+        config.externals.push(bunWorkspaceExternals);
+      } else if (config.externals) {
+        config.externals = [config.externals as NonNullable<typeof config.externals>, bunWorkspaceExternals];
+      } else {
+        config.externals = [bunWorkspaceExternals];
+      }
+    }
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,

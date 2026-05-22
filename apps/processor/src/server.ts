@@ -290,7 +290,7 @@ app.get(
 );
 
 // Job status endpoint
-app.get(
+app.get<{ jobId: string }>(
   '/api/job/:jobId',
   authenticateService,
   requireScope('queue:read'),

@@ -5,13 +5,13 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "pnpm exec cap sync android",
-    "build:full": "pnpm --filter web build && pnpm exec cap sync android",
-    "dev": "pnpm exec cap open android",
-    "sync": "pnpm exec cap sync android",
-    "update": "pnpm exec cap update android",
-    "add-platform": "pnpm exec cap add android",
-    "run": "pnpm exec cap run android"
+    "build": "bun x cap sync android",
+    "build:full": "bun run --filter 'web' build && bun x cap sync android",
+    "dev": "bun x cap open android",
+    "sync": "bun x cap sync android",
+    "update": "bun x cap update android",
+    "add-platform": "bun x cap add android",
+    "run": "bun x cap run android"
   },
   "dependencies": {
     "@capacitor/app": "^7.0.3",

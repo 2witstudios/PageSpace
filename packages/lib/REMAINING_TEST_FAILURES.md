@@ -20,7 +20,7 @@ docker compose --profile test run --rm test
 docker compose --profile test run --rm test -- src/__tests__/encryption-utils.test.ts
 ```
 
-**Important**: Tests will fail if run on the host machine (`pnpm test`) because PostgreSQL is on an internal Docker network for security.
+**Important**: Tests will fail if run on the host machine (`bun run test`) because PostgreSQL is on an internal Docker network for security.
 
 ### Test Architecture
 

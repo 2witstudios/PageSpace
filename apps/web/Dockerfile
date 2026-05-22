@@ -3,18 +3,26 @@
 FROM node:22.17.0-alpine AS deps
 WORKDIR /app
 
-# Enable corepack and pin pnpm (with basic retry for transient network issues)
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy only package files for dependency installation
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
-COPY apps/web/package.json ./apps/web/
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/android/package.json ./apps/android/
+COPY apps/atlas/package.json ./apps/atlas/
+COPY apps/control-plane/package.json ./apps/control-plane/
+COPY apps/desktop/package.json ./apps/desktop/
+COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/ios/package.json ./apps/ios/
+COPY apps/marketing/package.json ./apps/marketing/
+COPY apps/processor/package.json ./apps/processor/
 COPY apps/realtime/package.json ./apps/realtime/
+COPY apps/web/package.json ./apps/web/
 
 # Install ALL dependencies for the entire monorepo
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 # Now copy source code AFTER dependencies are installed
 COPY packages ./packages
@@ -25,7 +33,8 @@ COPY types ./types
 # Rebuild the source code only when needed
 FROM node:22.17.0-alpine AS builder
 WORKDIR /app
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy the installed dependencies and the entire source code
 COPY --from=deps /app .
@@ -51,15 +60,12 @@ ENV NEXT_PUBLIC_ADMIN_APP_URL=$NEXT_PUBLIC_ADMIN_APP_URL
 # Learn more here: https://nextjs.org/telemetry
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# We are installing devDependencies via the --prod=false flag, so this is not needed
-# ENV NODE_ENV=development
-
 # Build dependent packages first (db + lib must compile before web)
-RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
 
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" pnpm build
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" bun run build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production
