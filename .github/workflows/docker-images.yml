@@ -129,9 +129,9 @@ jobs:
       - name: Run migrations
         run: |
           docker pull ghcr.io/2witstudios/pagespace-migrate:latest
-          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-migrate:latest
-          docker push registry.fly.io/pagespace-migrate:latest
-          flyctl machine run registry.fly.io/pagespace-migrate:latest \
+          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
+          docker push registry.fly.io/pagespace-web:migrate
+          flyctl machine run registry.fly.io/pagespace-web:migrate \
             --app pagespace-web \
             --name "migrations-${{ github.sha }}" \
             --restart no \
