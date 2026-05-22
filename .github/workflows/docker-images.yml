@@ -61,6 +61,11 @@ jobs:
             dockerfile: docker/cron/Dockerfile
             context: docker/cron
             build_args: ""
+          - service: admin
+            dockerfile: apps/admin/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_WEB_APP_URL=https://pagespace.ai
 
     steps:
       - uses: actions/checkout@v4
