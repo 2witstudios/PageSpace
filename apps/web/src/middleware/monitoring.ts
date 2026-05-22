@@ -73,11 +73,11 @@ class MetricsCollector {
     }, this.flushInterval);
   }
 
-  async track(metric: RequestMetrics): Promise<void> {
+  track(metric: RequestMetrics): void {
     this.metrics.push(metric);
-    
+
     if (this.metrics.length >= this.maxBufferSize) {
-      await this.flush();
+      this.flush().catch(() => {});
     }
   }
 
@@ -369,7 +369,7 @@ export async function monitoringMiddleware(
     const statusCode = response.status;
 
     // Track metrics
-    await metricsCollector.track({
+    metricsCollector.track({
       endpoint: cleanEndpoint,
       method: request.method,
       statusCode,
@@ -433,7 +433,7 @@ export async function monitoringMiddleware(
     const errorStack = error instanceof Error ? error.stack : undefined;
 
     // Track error metrics
-    await metricsCollector.track({
+    metricsCollector.track({
       endpoint: cleanEndpoint,
       method: request.method,
       statusCode: 500,
