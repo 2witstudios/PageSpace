@@ -25,13 +25,13 @@ interface RouterLike {
 }
 
 /**
- * Pre-process content to convert @mentions into markdown links with special protocol
- * Converts @[Label](id:type) format to [mention:@Label](mention://id/type)
- * which Streamdown will render as a link that we handle specially
+ * Pre-process content to convert @mentions into markdown links with a relative path.
+ * Converts @[Label](id:type) format to [mention:Label](/mention/id/type).
+ * Uses a relative path instead of a custom protocol so rehype-harden doesn't block it.
  */
 function preprocessMentions(content: string): string {
   return content.replace(/@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g, (_, label, id, type) => {
-    return `[mention:${label}](mention://${id}/${type})`;
+    return `[mention:${label}](/mention/${id}/${type})`;
   });
 }
 
@@ -290,8 +290,8 @@ function createCustomAnchor(router: RouterLike) {
       }
     };
 
-    // Check if this is a mention link
-    if (typeof href === 'string' && href.startsWith('mention://')) {
+    // Check if this is a mention link (/mention/id/type)
+    if (typeof href === 'string' && href.startsWith('/mention/')) {
       // Extract the label from children (format: "mention:Label")
       const label = typeof children === 'string'
         ? children.replace(/^mention:/, '')
@@ -299,9 +299,11 @@ function createCustomAnchor(router: RouterLike) {
           ? children[0].replace(/^mention:/, '')
           : children;
 
-      // Parse the mention URL: mention://id/type
-      const mentionPath = href.replace('mention://', '');
-      const [id, type] = mentionPath.split('/');
+      // Parse the mention URL: /mention/id/type (id may contain hyphens)
+      const mentionPath = href.slice('/mention/'.length);
+      const lastSlash = mentionPath.lastIndexOf('/');
+      const id = mentionPath.slice(0, lastSlash);
+      const type = mentionPath.slice(lastSlash + 1);
 
       // Only page mentions should be clickable links
       // User and other mention types render as non-clickable badges
