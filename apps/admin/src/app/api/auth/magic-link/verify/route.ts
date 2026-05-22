@@ -17,10 +17,10 @@ function getAdminUrl(): string {
   return process.env.ADMIN_URL;
 }
 
-function redirectWithError(code: string): Response {
+function redirectWithError(code: string): NextResponse {
   const url = new URL('/login', getAdminUrl());
   url.searchParams.set('error', code);
-  return Response.redirect(url, 302);
+  return NextResponse.redirect(url, 302);
 }
 
 export async function GET(req: Request) {
@@ -63,6 +63,8 @@ export async function GET(req: Request) {
       });
       return redirectWithError('not_admin');
     }
+
+    await sessionService.revokeAllUserSessions(userId, 'magic_link_login');
 
     const sessionToken = await sessionService.createSession({
       userId,
