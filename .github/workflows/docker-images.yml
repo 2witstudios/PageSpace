@@ -126,6 +126,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run migrations
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
+          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-migrate:latest
+          docker push registry.fly.io/pagespace-migrate:latest
+          flyctl machine run registry.fly.io/pagespace-migrate:latest \
+            --app pagespace-web \
+            --name "migrations-${{ github.sha }}" \
+            --restart no \
+            --rm \
+            --wait-timeout 120
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Deploy web
         run: |
           docker pull ghcr.io/2witstudios/pagespace-web-fly:latest
