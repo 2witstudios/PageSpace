@@ -4,7 +4,7 @@ import React from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
-import MessagePartRenderer from './MessagePartRenderer';
+import { RichText, addHardLineBreaks } from './RichText';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 
 interface MessageQuoteBlockProps {
@@ -87,11 +87,7 @@ const MessageQuoteBlock: React.FC<MessageQuoteBlockProps> = ({
         </span>
       </div>
       <div className="text-muted-foreground line-clamp-1">
-        <MessagePartRenderer
-          part={{ type: 'text', text: quoted.contentSnippet }}
-          index={0}
-          context="message"
-        />
+        <RichText content={addHardLineBreaks(quoted.contentSnippet ?? '')} />
       </div>
     </div>
   );

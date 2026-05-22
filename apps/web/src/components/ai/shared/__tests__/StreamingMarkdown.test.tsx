@@ -106,7 +106,7 @@ describe('preprocessMentions', () => {
     render(<StreamingMarkdown content="Hello @[User](user123:user) world" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('Hello [mention:User](mention://user123/user) world');
+    expect(streamdown.textContent).toBe('Hello [mention:User](/mention/user123/user) world');
   });
 
   it('should convert multiple mentions', () => {
@@ -116,7 +116,7 @@ describe('preprocessMentions', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      '[mention:Alice](mention://alice/user) and [mention:Bob](mention://bob/user) are here'
+      '[mention:Alice](/mention/alice/user) and [mention:Bob](/mention/bob/user) are here'
     );
   });
 
@@ -127,7 +127,7 @@ describe('preprocessMentions', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      'See [mention:Project](mention://proj123/page) and [mention:Team](mention://team456/agent)'
+      'See [mention:Project](/mention/proj123/page) and [mention:Team](/mention/team456/agent)'
     );
   });
 
@@ -149,24 +149,24 @@ describe('preprocessMentions', () => {
     render(<StreamingMarkdown content="@[SingleMention](id:type)" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('[mention:SingleMention](mention://id/type)');
+    expect(streamdown.textContent).toBe('[mention:SingleMention](/mention/id/type)');
   });
 
   it('should handle mentions with special characters in label', () => {
     render(<StreamingMarkdown content="@[User Name](id:type)" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('[mention:User Name](mention://id/type)');
+    expect(streamdown.textContent).toBe('[mention:User Name](/mention/id/type)');
   });
 
   it('should handle consecutive calls correctly (regex state)', () => {
     // First render
     const { rerender } = render(<StreamingMarkdown content="@[First](id1:type)" />);
-    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:First](mention://id1/type)');
+    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:First](/mention/id1/type)');
 
     // Second render - regex lastIndex should be reset
     rerender(<StreamingMarkdown content="@[Second](id2:type)" />);
-    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](mention://id2/type)');
+    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](/mention/id2/type)');
   });
 });
 
@@ -204,7 +204,7 @@ describe('autoLinkUrls', () => {
       <StreamingMarkdown content="@[User](id:user) see https://example.com" />
     );
     expect(screen.getByTestId('streamdown').textContent).toBe(
-      '[mention:User](mention://id/user) see [https://example.com](https://example.com)'
+      '[mention:User](/mention/id/user) see [https://example.com](https://example.com)'
     );
   });
 
@@ -280,7 +280,7 @@ describe('raw HTML rendering', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      'See <style> and [mention:Project](mention://proj123/page)'
+      'See <style> and [mention:Project](/mention/proj123/page)'
     );
   });
 

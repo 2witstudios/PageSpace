@@ -27,7 +27,7 @@ import useSWR from 'swr';
 import { Bell, BellOff, Check, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
@@ -36,7 +36,6 @@ import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { AttachmentMeta, FileRelation } from '@/lib/attachment-utils';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { cn } from '@/lib/utils';
 
@@ -810,11 +809,7 @@ export function ThreadPanel({
                     <>
                       {reply.content && (
                         <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
-                          {source === 'channel' ? (
-                            <StreamingMarkdown content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)} isStreaming={false} />
-                          ) : (
-                            renderMessageParts(convertToMessageParts(reply.content))
-                          )}
+                          <RichText content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)} isStreaming={false} />
                         </div>
                       )}
                       {(reply.fileId || reply.attachmentMeta) && (
