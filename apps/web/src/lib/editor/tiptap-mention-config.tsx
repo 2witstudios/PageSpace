@@ -199,7 +199,7 @@ const PageMentionNode = Mention.extend({
       }
 
       const dom = document.createElement('a');
-      const href = driveId ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
+      const href = driveId && id ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
 
       // NO target="_blank" - stays in WebView on Capacitor
       dom.href = href;
@@ -257,7 +257,7 @@ export const PageMention = PageMentionNode.configure({
       ];
     }
 
-    const href = driveId ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
+    const href = driveId && id ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
     return [
       'a',
       {

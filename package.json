@@ -32,8 +32,8 @@
     "knip": "knip",
     "knip:fix": "knip --fix",
     "changelog:generate": "npx tsx scripts/changelog/index.ts",
-    "test:infra": "cd infrastructure && npx vitest run",
-    "test:infra:runtime": "cd infrastructure && npx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
+    "test:infra": "cd infrastructure && bunx vitest run",
+    "test:infra:runtime": "cd infrastructure && bunx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
     "test:security": "./scripts/test-security.sh",
     "setup:admin": "bun scripts/setup-onprem-admin.ts"
   },
