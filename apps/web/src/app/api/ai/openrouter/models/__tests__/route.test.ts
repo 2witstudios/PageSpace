@@ -42,16 +42,27 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
+const TOOL_PARAMS = ['tools', 'tool_choice', 'temperature'];
+
 const makeFreeModel = (id: string, name: string) => ({
   id,
   name,
   pricing: { prompt: '0', completion: '0' },
+  supported_parameters: TOOL_PARAMS,
 });
 
 const makePaidModel = (id: string, name: string) => ({
   id,
   name,
   pricing: { prompt: '0.000001', completion: '0.000002' },
+  supported_parameters: TOOL_PARAMS,
+});
+
+const makeNonToolModel = (id: string, name: string) => ({
+  id,
+  name,
+  pricing: { prompt: '0', completion: '0' },
+  // no supported_parameters — model cannot use tools
 });
 
 // ── Pure function tests ───────────────────────────────────────────────────────
@@ -95,6 +106,38 @@ describe('filterFreeModels', () => {
 
   it('should return empty object for empty input', () => {
     expect(filterFreeModels([])).toEqual({});
+  });
+
+  it('should exclude free models with no supported_parameters', () => {
+    const models = [makeNonToolModel('some/model:free', 'No Params')];
+    expect(filterFreeModels(models)).toEqual({});
+  });
+
+  it('should exclude free models that have tools but not tool_choice', () => {
+    const models = [{ id: 'some/model:free', name: 'Partial Tools', pricing: { prompt: '0' }, supported_parameters: ['tools', 'temperature'] }];
+    expect(filterFreeModels(models)).toEqual({});
+  });
+
+  it('should exclude free models that have tool_choice but not tools', () => {
+    const models = [{ id: 'some/model:free', name: 'Partial Tools', pricing: { prompt: '0' }, supported_parameters: ['tool_choice', 'temperature'] }];
+    expect(filterFreeModels(models)).toEqual({});
+  });
+
+  it('should include free models that have both tools and tool_choice', () => {
+    const models = [makeFreeModel('qwen/qwen3-coder:free', 'Qwen3 Coder')];
+    expect(filterFreeModels(models)).toEqual({ 'qwen/qwen3-coder:free': 'Qwen3 Coder' });
+  });
+
+  it('should drop non-tool-capable models from a mixed list', () => {
+    const models = [
+      makeFreeModel('qwen/qwen3-coder:free', 'Qwen3 Coder'),
+      makeNonToolModel('google/gemma-3n-e4b-it:free', 'Gemma 3n'),
+      makeFreeModel('meta-llama/llama-3.3-70b-instruct:free', 'Llama 3.3 70B'),
+    ];
+    expect(filterFreeModels(models)).toEqual({
+      'qwen/qwen3-coder:free': 'Qwen3 Coder',
+      'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B',
+    });
   });
 });
 
