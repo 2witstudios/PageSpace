@@ -668,6 +668,7 @@ export interface AiStreamStartPayload {
 export interface AiStreamCompletePayload {
   messageId: string;
   pageId: string;
+  conversationId?: string;
   aborted?: boolean;
 }
 

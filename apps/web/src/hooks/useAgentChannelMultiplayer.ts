@@ -15,6 +15,7 @@ import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
 } from '@/lib/ai/streams/shouldRefreshOnReconnect';
+import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 
 export interface UseAgentChannelMultiplayerOptions {
   selectedAgent: { id: string } | null;
@@ -112,14 +113,18 @@ export function useAgentChannelMultiplayer({
       if (payload.conversationId !== agentConversationIdRef.current) return;
       setLocalMessagesRef.current((prev) => applyMessageDelete(prev, payload.messageId));
     },
-    onStreamComplete: (messageId) => {
+    onStreamComplete: (messageId, completedConvId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
-      if (!stream || stream.parts.length === 0) return;
-      if (stream.conversationId !== agentConversationIdRef.current) return;
-      setLocalMessagesRef.current((prev) => [
-        ...prev,
-        synthesizeAssistantMessage(messageId, stream.parts),
-      ]);
+      if (stream && stream.parts.length > 0 && stream.conversationId === agentConversationIdRef.current) {
+        setLocalMessagesRef.current((prev) => [
+          ...prev,
+          synthesizeAssistantMessage(messageId, stream.parts),
+        ]);
+        return;
+      }
+      if (shouldReloadOnComountComplete(stream, completedConvId, agentConversationIdRef.current)) {
+        loadConversationRef.current(completedConvId!);
+      }
     },
     onOwnStreamBootstrap: ({ messageId }) => {
       const dashboard = usePageAgentDashboardStore.getState();

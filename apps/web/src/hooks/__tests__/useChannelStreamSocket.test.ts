@@ -88,6 +88,11 @@ vi.mock('@/lib/ai/core/browser-session-id', () => ({
   getBrowserSessionId: mockGetBrowserSessionId,
 }));
 
+vi.mock('@/lib/ai/streams/bootstrapConsumerGuard', () => ({
+  claimBootstrapConsumer: vi.fn(() => true),
+  releaseBootstrapConsumer: vi.fn(),
+}));
+
 import { useChannelStreamSocket } from '../useChannelStreamSocket';
 import type {
   AiStreamStartPayload,
@@ -109,6 +114,7 @@ const START_PAYLOAD: AiStreamStartPayload = {
 const COMPLETE_PAYLOAD: AiStreamCompletePayload = {
   messageId: 'msg-1',
   pageId: 'page-a',
+  conversationId: 'conv-1',
 };
 
 const USER_MESSAGE_PAYLOAD: ChatUserMessagePayload = {
@@ -218,7 +224,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1');
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1');
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (SSE path)', async () => {
@@ -539,7 +545,7 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1');
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1');
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', () => {
@@ -681,7 +687,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(firstCallback).not.toHaveBeenCalled();
-      expect(secondCallback).toHaveBeenCalledWith('msg-1');
+      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1');
     });
   });
 
