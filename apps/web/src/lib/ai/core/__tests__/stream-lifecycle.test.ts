@@ -237,6 +237,7 @@ describe('createStreamLifecycle', () => {
       expect(mockBroadcastComplete).toHaveBeenCalledWith({
         messageId: 'msg-1',
         pageId: 'page-1',
+        conversationId: 'conv-1',
         aborted: false,
       });
     });
@@ -254,6 +255,7 @@ describe('createStreamLifecycle', () => {
       expect(mockBroadcastComplete).toHaveBeenCalledWith({
         messageId: 'msg-1',
         pageId: 'page-1',
+        conversationId: 'conv-1',
         aborted: true,
       });
     });

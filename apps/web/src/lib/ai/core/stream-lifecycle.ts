@@ -117,6 +117,7 @@ export const createStreamLifecycle = async (
     broadcastAiStreamComplete({
       messageId,
       pageId: channelId,
+      conversationId,
       aborted,
     }).catch(() => {});
   };

@@ -38,6 +38,7 @@ import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
+import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -387,14 +388,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onConversationDeleted: () => {
       refreshConversations();
     },
-    onStreamComplete: (messageId) => {
+    onStreamComplete: (messageId, completedConvId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
-      if (!stream || stream.parts.length === 0) return;
 
-      if (stream.conversationId === currentConversationId) {
+      if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationId) {
         setMessages((prev) => [...prev, synthesizeAssistantMessage(messageId, stream.parts)]);
         return;
       }
+
+      if (shouldReloadOnComountComplete(stream, completedConvId, currentConversationId)) {
+        void loadConversation(completedConvId!);
+        return;
+      }
+
+      if (!stream || stream.parts.length === 0) return;
 
       if (currentConversationId === `${page.id}-default`) {
         const { parts, conversationId: streamConvId } = stream;

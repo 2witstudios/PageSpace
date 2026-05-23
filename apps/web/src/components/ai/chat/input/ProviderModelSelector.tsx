@@ -98,9 +98,10 @@ export function ProviderModelSelector({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Dynamic local model state
+  // Dynamic model state
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
+  const [openrouterFreeModels, setOpenrouterFreeModels] = useState<Record<string, string> | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   // Fetch Ollama models dynamically
@@ -147,6 +148,28 @@ export function ProviderModelSelector({
     return {};
   }, [lmstudioModels]);
 
+  // Fetch OpenRouter free models dynamically
+  const fetchOpenRouterFreeModels = useCallback(async () => {
+    if (openrouterFreeModels !== null) return openrouterFreeModels;
+    setIsLoadingModels(true);
+    try {
+      const response = await fetchWithAuth('/api/ai/openrouter/models');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.models) {
+          setOpenrouterFreeModels(data.models);
+          return data.models;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch OpenRouter free models:', error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+    setOpenrouterFreeModels({});
+    return {};
+  }, [openrouterFreeModels]);
+
   // Fetch provider settings
   const fetchSettings = useCallback(async () => {
     setIsLoading(true);
@@ -173,9 +196,10 @@ export function ProviderModelSelector({
   useEffect(() => {
     const handleSettingsUpdate = () => {
       fetchSettings();
-      // Clear cached local models so they get refetched
+      // Clear cached models so they get refetched
       setOllamaModels(null);
       setLmstudioModels(null);
+      setOpenrouterFreeModels(null);
     };
     window.addEventListener('ai-settings-updated', handleSettingsUpdate);
     return () => {
@@ -183,7 +207,7 @@ export function ProviderModelSelector({
     };
   }, [fetchSettings]);
 
-  // Fetch local models when a local provider is selected
+  // Fetch dynamic models when a provider with a live list is selected
   useEffect(() => {
     if (provider === 'ollama' && ollamaModels === null) {
       fetchOllamaModels();
@@ -191,7 +215,10 @@ export function ProviderModelSelector({
     if (provider === 'lmstudio' && lmstudioModels === null) {
       fetchLMStudioModels();
     }
-  }, [provider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
+    if (provider === 'openrouter_free' && openrouterFreeModels === null) {
+      fetchOpenRouterFreeModels();
+    }
+  }, [provider, ollamaModels, lmstudioModels, openrouterFreeModels, fetchOllamaModels, fetchLMStudioModels, fetchOpenRouterFreeModels]);
 
   // Get display names
   const providerDisplayName = useMemo(() => {
@@ -203,16 +230,18 @@ export function ProviderModelSelector({
   const modelDisplayName = useMemo(() => {
     if (!model || !provider) return 'Standard';
 
-    // For local providers, use dynamically fetched model names
     if (provider === 'ollama' && ollamaModels && ollamaModels[model]) {
       return ollamaModels[model];
     }
     if (provider === 'lmstudio' && lmstudioModels && lmstudioModels[model]) {
       return lmstudioModels[model];
     }
+    if (provider === 'openrouter_free' && openrouterFreeModels && openrouterFreeModels[model]) {
+      return openrouterFreeModels[model];
+    }
 
     return getModelDisplayName(provider, model);
-  }, [provider, model, ollamaModels, lmstudioModels]);
+  }, [provider, model, ollamaModels, lmstudioModels, openrouterFreeModels]);
 
   // Check whether the deployment has this provider configured.
   const isProviderAvailable = useCallback(
@@ -227,19 +256,20 @@ export function ProviderModelSelector({
   const availableModels = useMemo(() => {
     if (!provider) return [];
 
-    // Use dynamically fetched models for local providers
     if (provider === 'ollama' && ollamaModels) {
       return Object.entries(ollamaModels);
     }
     if (provider === 'lmstudio' && lmstudioModels) {
       return Object.entries(lmstudioModels);
     }
+    if (provider === 'openrouter_free' && openrouterFreeModels) {
+      return Object.entries(openrouterFreeModels);
+    }
 
-    // Fall back to static config for cloud providers
     const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
     if (!config) return [];
     return Object.entries(config.models);
-  }, [provider, ollamaModels, lmstudioModels]);
+  }, [provider, ollamaModels, lmstudioModels, openrouterFreeModels]);
 
   // Handle provider selection
   const handleProviderSelect = useCallback(
@@ -398,6 +428,8 @@ export function ProviderModelSelector({
                 <div className="text-xs text-muted-foreground px-2 py-2">
                   {provider === 'ollama' || provider === 'lmstudio'
                     ? 'No models found. Start your local server.'
+                    : provider === 'openrouter_free'
+                    ? 'No free models available.'
                     : 'No models available'}
                 </div>
               ) : (
