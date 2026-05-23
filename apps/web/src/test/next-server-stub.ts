@@ -1,17 +1,15 @@
 class NextResponseStub extends Response {
   static json(body: unknown, init?: ResponseInit) {
-    return new NextResponseStub(JSON.stringify(body), {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    });
+    const headers = new Headers(init?.headers);
+    headers.set('Content-Type', 'application/json');
+    return new NextResponseStub(JSON.stringify(body), { ...init, headers });
   }
 
   static redirect(url: string | URL, init?: number | ResponseInit) {
     const status = typeof init === 'number' ? init : (init?.status ?? 307);
-    return new NextResponseStub(null, {
-      status,
-      headers: { Location: url.toString() },
-    });
+    const headers = new Headers(typeof init === 'number' ? undefined : init?.headers);
+    headers.set('Location', url.toString());
+    return new NextResponseStub(null, { status, headers });
   }
 }
 
