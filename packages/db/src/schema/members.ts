@@ -1,6 +1,6 @@
-import { pgTable, text, timestamp, boolean, pgEnum, index, unique, integer, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, pgEnum, index, unique, uniqueIndex, integer, jsonb } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { users } from './auth';
+import { users, mcpTokens } from './auth';
 import { drives, pages } from './core';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -170,4 +170,31 @@ export const driveAgentMembersRelations = relations(driveAgentMembers, ({ one })
     fields: [driveAgentMembers.addedBy],
     references: [users.id],
   }),
+}));
+
+// MCP token drive scopes with RBAC roles — tokens as first-class drive members ("apps")
+export const mcpTokenDrives = pgTable('mcp_token_drives', {
+  id:           text('id').primaryKey().$defaultFn(() => createId()),
+  tokenId:      text('tokenId').notNull().references(() => mcpTokens.id, { onDelete: 'cascade' }),
+  driveId:      text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  role:         memberRole('role').default('MEMBER').notNull(),
+  customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
+  addedBy:      text('addedBy').references(() => users.id, { onDelete: 'set null' }),
+  createdAt:    timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  tokenIdx:         index('mcp_token_drives_token_id_idx').on(table.tokenId),
+  driveIdx:         index('mcp_token_drives_drive_id_idx').on(table.driveId),
+  tokenDriveUnique: uniqueIndex('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
+}));
+
+export const mcpTokensRelations = relations(mcpTokens, ({ one, many }) => ({
+  user:        one(users,         { fields: [mcpTokens.userId], references: [users.id] }),
+  driveScopes: many(mcpTokenDrives),
+}));
+
+export const mcpTokenDrivesRelations = relations(mcpTokenDrives, ({ one }) => ({
+  token:       one(mcpTokens,  { fields: [mcpTokenDrives.tokenId],      references: [mcpTokens.id] }),
+  drive:       one(drives,     { fields: [mcpTokenDrives.driveId],      references: [drives.id] }),
+  customRole:  one(driveRoles, { fields: [mcpTokenDrives.customRoleId], references: [driveRoles.id] }),
+  addedByUser: one(users,      { fields: [mcpTokenDrives.addedBy],      references: [users.id] }),
 }));

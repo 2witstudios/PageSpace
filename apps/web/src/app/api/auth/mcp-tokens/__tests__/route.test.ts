@@ -224,9 +224,9 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         // getDriveAccess should only be called once (deduplication)
         expect(getDriveAccess).toHaveBeenCalledTimes(1);
 
-        // Repository should be called with deduplicated driveIds
+        // Repository should be called with deduplicated drives
         const createArgs = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0][0];
-        expect(createArgs.driveIds).toEqual(['drive-1']);
+        expect(createArgs.drives).toEqual([{ id: 'drive-1', role: 'MEMBER', customRoleId: undefined }]);
       });
     });
 

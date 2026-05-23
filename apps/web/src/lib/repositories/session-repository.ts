@@ -6,7 +6,8 @@
 
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, type InferSelectModel } from '@pagespace/db/operators'
-import { socketTokens, deviceTokens, mcpTokens, mcpTokenDrives } from '@pagespace/db/schema/auth'
+import { socketTokens, deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
+import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
 
 export type DeviceToken = InferSelectModel<typeof deviceTokens>;
@@ -50,7 +51,7 @@ export const sessionRepository = {
     tokenPrefix: string;
     name: string;
     isScoped: boolean;
-    driveIds: string[];
+    drives: { id: string; role: 'ADMIN' | 'MEMBER'; customRoleId?: string }[];
   }): Promise<McpToken> {
     return db.transaction(async (tx) => {
       const [token] = await tx
@@ -64,11 +65,14 @@ export const sessionRepository = {
         })
         .returning();
 
-      if (data.driveIds.length > 0) {
+      if (data.drives.length > 0) {
         await tx.insert(mcpTokenDrives).values(
-          data.driveIds.map((driveId) => ({
+          data.drives.map(({ id: driveId, role, customRoleId }) => ({
             tokenId: token.id,
             driveId,
+            role,
+            customRoleId: customRoleId ?? null,
+            addedBy: data.userId,
           }))
         );
       }
