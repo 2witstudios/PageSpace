@@ -6,6 +6,7 @@ import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
 import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
+import { claimBootstrapConsumer, releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -148,6 +149,7 @@ export function useChannelStreamSocket(
     };
 
     const startConsume = (messageId: string, conversationId?: string) => {
+      if (!claimBootstrapConsumer(messageId)) return;
       const controller = new AbortController();
       controllers.set(messageId, controller);
 
@@ -159,6 +161,7 @@ export function useChannelStreamSocket(
           // asynchronously after controller.abort(); skip post-teardown effects.
           if (cancelled) return;
           controllers.delete(messageId);
+          releaseBootstrapConsumer(messageId);
           try {
             fireComplete(messageId, conversationId);
           } finally {
@@ -169,6 +172,7 @@ export function useChannelStreamSocket(
         .catch((err) => {
           if (cancelled) return;
           controllers.delete(messageId);
+          releaseBootstrapConsumer(messageId);
           // Mark as processed so a subsequent chat:stream_complete event for
           // the same messageId is a no-op for onStreamComplete: the catch
           // path already finalized this stream locally.
@@ -309,8 +313,9 @@ export function useChannelStreamSocket(
       socket.off('chat:conversation_added', handleConversationAdded);
       socket.off('chat:conversation_renamed', handleConversationRenamed);
       socket.off('chat:conversation_deleted', handleConversationDeleted);
-      for (const controller of controllers.values()) {
+      for (const [msgId, controller] of controllers.entries()) {
         controller.abort();
+        releaseBootstrapConsumer(msgId);
       }
       clearPageStreams(channelId);
     };
