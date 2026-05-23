@@ -30,24 +30,6 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
   const [value, setValue] = React.useState('');
   const inputId = React.useId();
 
-  // Bind Mod-K to open the popover from the toolbar instance only — the bubble
-  // menu's instance is unmounted when there's no selection, and we want a
-  // single, predictable handler regardless of selection state.
-  React.useEffect(() => {
-    if (variant !== 'toolbar' || !editor || editor.isDestroyed) return;
-    const root = editor.view.dom as HTMLElement;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {
-        event.preventDefault();
-        const existing = (editor.getAttributes('link').href as string | undefined) ?? '';
-        setValue(existing);
-        setOpen(true);
-      }
-    };
-    root.addEventListener('keydown', onKeyDown);
-    return () => root.removeEventListener('keydown', onKeyDown);
-  }, [editor, variant]);
-
   if (!editor || editor.isDestroyed) return null;
 
   const isActive = editor.isActive('link');
@@ -60,6 +42,25 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
     }
     setOpen(next);
   };
+
+  // Bind Mod-K to open the popover from the toolbar instance only — the bubble
+  // menu's instance is unmounted when there's no selection, and we want a
+  // single, predictable handler regardless of selection state.
+  React.useEffect(() => {
+    if (variant !== 'toolbar') return;
+    if (!editor || editor.isDestroyed) return;
+    const root = editor.view.dom as HTMLElement;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {
+        event.preventDefault();
+        const existing = (editor.getAttributes('link').href as string | undefined) ?? '';
+        setValue(existing);
+        setOpen(true);
+      }
+    };
+    root.addEventListener('keydown', onKeyDown);
+    return () => root.removeEventListener('keydown', onKeyDown);
+  }, [editor, variant]);
 
   const apply = () => {
     const href = normalizeUrl(value);
