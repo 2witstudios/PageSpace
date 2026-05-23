@@ -8,7 +8,7 @@ import {
   getDefaultPageSpaceSettings,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -17,7 +17,9 @@ const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 // Providers exposed to users. Expand this as per-provider billing tiers are set up.
-const USER_VISIBLE_PROVIDERS = new Set(['pagespace']);
+// `openrouter_free` is the OpenRouter free tier — all models carry the `:free` suffix
+// and never count against PageSpace's paid quota, so it is safe to expose alongside pagespace.
+const USER_VISIBLE_PROVIDERS = new Set(['pagespace', 'openrouter_free']);
 
 const GONE_RESPONSE = {
   error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
@@ -127,10 +129,17 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const isLocalProvider = ONPREM_ALLOWED_PROVIDERS.has(provider);
-    if (!isLocalProvider && (!model || typeof model !== 'string')) {
+    const skipModelValidation = ONPREM_ALLOWED_PROVIDERS.has(provider) || DYNAMIC_MODEL_PROVIDERS.has(provider);
+    if (!skipModelValidation && (!model || typeof model !== 'string')) {
       return NextResponse.json(
         { error: 'Model is required' },
+        { status: 400 }
+      );
+    }
+
+    if (provider === 'openrouter_free' && model && !model.endsWith(':free')) {
+      return NextResponse.json(
+        { error: 'openrouter_free only accepts models with the ":free" suffix' },
         { status: 400 }
       );
     }
