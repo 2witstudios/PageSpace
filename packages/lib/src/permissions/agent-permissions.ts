@@ -1,60 +1,33 @@
 import { db } from '@pagespace/db/db';
 import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { resolveRolePermissions } from './resolve-role-permissions';
+import { fetchDriveIdForPage, fetchCustomRolePermissions } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
+
+async function fetchAgentMembership(agentPageId: string, driveId: string) {
+  const rows = await db
+    .select()
+    .from(driveAgentMembers)
+    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
 
 export async function getAgentAccessLevel(
   agentPageId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
-  const page = await db
-    .select({ driveId: pages.driveId })
-    .from(pages)
-    .where(eq(pages.id, targetPageId))
-    .limit(1);
+  const driveId = await fetchDriveIdForPage(targetPageId);
+  const membership = await fetchAgentMembership(agentPageId, driveId);
+  if (!membership) return null;
 
-  // When no page matches, treat targetPageId as a drive ID (drive-as-root-node)
-  const driveId = page.length > 0 ? page[0].driveId : targetPageId;
+  const customPerms = membership.customRoleId
+    ? await fetchCustomRolePermissions(membership.customRoleId, driveId)
+    : null;
 
-  const membership = await db
-    .select()
-    .from(driveAgentMembers)
-    .where(
-      and(
-        eq(driveAgentMembers.agentPageId, agentPageId),
-        eq(driveAgentMembers.driveId, driveId),
-      ),
-    )
-    .limit(1);
-
-  if (membership.length === 0) return null;
-
-  const { role, customRoleId } = membership[0];
-
-  if (role === 'ADMIN') {
-    return { canView: true, canEdit: true, canShare: true, canDelete: true };
-  }
-
-  if (customRoleId) {
-    const driveRole = await db
-      .select({ permissions: driveRoles.permissions })
-      .from(driveRoles)
-      .where(eq(driveRoles.id, customRoleId))
-      .limit(1);
-
-    if (driveRole.length > 0) {
-      const perms = driveRole[0].permissions[targetPageId];
-      return {
-        canView: perms?.canView ?? false,
-        canEdit: perms?.canEdit ?? false,
-        canShare: perms?.canShare ?? false,
-        canDelete: false,
-      };
-    }
-  }
-
-  return { canView: true, canEdit: false, canShare: false, canDelete: false };
+  return resolveRolePermissions(membership.role, customPerms, targetPageId);
 }
 
 export async function hasAgentDriveMembership(agentPageId: string, driveId: string): Promise<boolean> {
@@ -70,20 +43,10 @@ export async function getAgentAccessiblePagesInDrive(
   agentPageId: string,
   driveId: string,
 ): Promise<PageWithPermissions[]> {
-  const membership = await db
-    .select()
-    .from(driveAgentMembers)
-    .where(
-      and(
-        eq(driveAgentMembers.agentPageId, agentPageId),
-        eq(driveAgentMembers.driveId, driveId),
-      ),
-    )
-    .limit(1);
+  const membership = await fetchAgentMembership(agentPageId, driveId);
+  if (!membership) return [];
 
-  if (membership.length === 0) return [];
-
-  const { role, customRoleId } = membership[0];
+  const { role, customRoleId } = membership;
 
   if (role === 'ADMIN') {
     const allPages = await db
@@ -105,15 +68,9 @@ export async function getAgentAccessiblePagesInDrive(
   }
 
   if (customRoleId) {
-    const driveRole = await db
-      .select({ permissions: driveRoles.permissions })
-      .from(driveRoles)
-      .where(eq(driveRoles.id, customRoleId))
-      .limit(1);
-
-    if (driveRole.length > 0) {
-      const rolePerms = driveRole[0].permissions;
-      const visiblePageIds = Object.entries(rolePerms)
+    const customPerms = await fetchCustomRolePermissions(customRoleId, driveId);
+    if (customPerms) {
+      const visiblePageIds = Object.entries(customPerms)
         .filter(([, p]) => p.canView)
         .map(([id]) => id);
 
@@ -129,22 +86,11 @@ export async function getAgentAccessiblePagesInDrive(
           isTrashed: pages.isTrashed,
         })
         .from(pages)
-        .where(
-          and(
-            inArray(pages.id, visiblePageIds),
-            eq(pages.driveId, driveId),
-            eq(pages.isTrashed, false),
-          ),
-        );
+        .where(and(inArray(pages.id, visiblePageIds), eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
 
       return visiblePages.map((p) => ({
         ...p,
-        permissions: {
-          canView: rolePerms[p.id]?.canView ?? false,
-          canEdit: rolePerms[p.id]?.canEdit ?? false,
-          canShare: rolePerms[p.id]?.canShare ?? false,
-          canDelete: false,
-        },
+        permissions: resolveRolePermissions('MEMBER', customPerms, p.id),
       }));
     }
   }

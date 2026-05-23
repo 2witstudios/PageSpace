@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { customRoleBelongsToDrive } from '@pagespace/lib/permissions/membership-queries';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -14,10 +15,15 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
   name: z.string().min(1).max(100),
-  // Optional array of drive IDs to scope this token to
-  // If empty or not provided, token has access to all user's drives
+  // Legacy: plain drive IDs, all get MEMBER role
   driveIds: z.array(z.string()).optional(),
-});
+  // Preferred: per-drive role assignment
+  drives: z.array(z.object({
+    id: z.string(),
+    role: z.enum(['ADMIN', 'MEMBER']).default('MEMBER'),
+    customRoleId: z.string().optional(),
+  })).optional(),
+}).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
 
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {
@@ -27,21 +33,30 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, driveIds: rawDriveIds } = createTokenSchema.parse(body);
+    const { name, driveIds: rawDriveIds, drives: rawDrives } = createTokenSchema.parse(body);
 
-    // Deduplicate drive IDs to prevent unique constraint violations
-    const driveIds = rawDriveIds ? [...new Set(rawDriveIds)] : [];
+    const driveScopes = rawDrives
+      ?? (rawDriveIds ?? []).map(id => ({ id, role: 'MEMBER' as const, customRoleId: undefined }));
+    const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
-    // Zero Trust: Validate that the user has access to each specified drive
-    // Users can scope tokens to any drive they have access to (owned OR member)
-    if (driveIds.length > 0) {
+    if (uniqueDriveScopes.length > 0) {
       const invalidDriveIds: string[] = [];
+      const unauthorizedRoles: string[] = [];
+      const invalidCustomRoles: string[] = [];
 
-      for (const driveId of driveIds) {
-        const access = await getDriveAccess(driveId, userId);
-        // User must be owner, admin, or member to scope a token to this drive
+      for (const scope of uniqueDriveScopes) {
+        const access = await getDriveAccess(scope.id, userId);
         if (!access.isOwner && !access.isMember) {
-          invalidDriveIds.push(driveId);
+          invalidDriveIds.push(scope.id);
+          continue;
+        }
+        // A MEMBER cannot grant ADMIN — cap to caller's actual authority
+        if (scope.role === 'ADMIN' && !access.isAdmin) {
+          unauthorizedRoles.push(scope.id);
+        }
+        // Prevent using a custom role that belongs to a different drive
+        if (scope.customRoleId && !await customRoleBelongsToDrive(scope.customRoleId, scope.id)) {
+          invalidCustomRoles.push(scope.id);
         }
       }
 
@@ -51,30 +66,39 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         );
       }
+      if (unauthorizedRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'You do not have permission to grant ADMIN role in these drives: ' + unauthorizedRoles.join(', ') },
+          { status: 403 }
+        );
+      }
+      if (invalidCustomRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'Custom role does not belong to the specified drive: ' + invalidCustomRoles.join(', ') },
+          { status: 400 }
+        );
+      }
     }
 
-    // P1-T3: Generate token with hash and prefix for secure storage
-    // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
     const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
     // Determine if this token is scoped (fail-closed security)
-    const isScoped = !!(driveIds && driveIds.length > 0);
+    const isScoped = uniqueDriveScopes.length > 0;
 
     // Use transaction to ensure token and drive scopes are created atomically
-    // If drive scope insertion fails, the token should not exist
     const newToken = await sessionRepository.createMcpTokenWithDriveScopes({
       userId,
       tokenHash,
       tokenPrefix,
       name,
       isScoped,
-      driveIds,
+      drives: uniqueDriveScopes,
     });
 
     // Fetch drive names for consistent response format with GET
-    let driveScopes: { id: string; name: string }[] = [];
-    if (driveIds.length > 0) {
-      driveScopes = await sessionRepository.findDrivesByIds(driveIds);
+    let driveScopeNames: { id: string; name: string }[] = [];
+    if (uniqueDriveScopes.length > 0) {
+      driveScopeNames = await sessionRepository.findDrivesByIds(uniqueDriveScopes.map(d => d.id));
     }
 
     // Log activity for audit trail (token creation is a security event)
@@ -94,7 +118,7 @@ export async function POST(req: NextRequest) {
       token: rawToken, // Return the actual token, not the hash
       createdAt: newToken.createdAt,
       lastUsed: null, // New token hasn't been used yet
-      driveScopes, // Consistent format with GET: { id, name }[]
+      driveScopes: driveScopeNames,
     });
   } catch (error) {
     loggers.auth.error('Error creating MCP token:', error as Error);

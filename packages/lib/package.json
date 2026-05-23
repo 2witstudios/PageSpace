@@ -667,6 +667,21 @@
       "import": "./dist/permissions/agent-permissions.js",
       "require": "./dist/permissions/agent-permissions.js"
     },
+    "./permissions/app-permissions": {
+      "types": "./dist/permissions/app-permissions.d.ts",
+      "import": "./dist/permissions/app-permissions.js",
+      "require": "./dist/permissions/app-permissions.js"
+    },
+    "./permissions/membership-queries": {
+      "types": "./dist/permissions/membership-queries.d.ts",
+      "import": "./dist/permissions/membership-queries.js",
+      "require": "./dist/permissions/membership-queries.js"
+    },
+    "./permissions/resolve-role-permissions": {
+      "types": "./dist/permissions/resolve-role-permissions.d.ts",
+      "import": "./dist/permissions/resolve-role-permissions.js",
+      "require": "./dist/permissions/resolve-role-permissions.js"
+    },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
       "import": "./dist/compliance/retention/retention-engine.js",
@@ -1068,6 +1083,15 @@
       ],
       "permissions/agent-permissions": [
         "./dist/permissions/agent-permissions.d.ts"
+      ],
+      "permissions/app-permissions": [
+        "./dist/permissions/app-permissions.d.ts"
+      ],
+      "permissions/membership-queries": [
+        "./dist/permissions/membership-queries.d.ts"
+      ],
+      "permissions/resolve-role-permissions": [
+        "./dist/permissions/resolve-role-permissions.d.ts"
       ],
       "compliance/retention/retention-engine": [
         "./dist/compliance/retention/retention-engine.d.ts"
