@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 
 interface LinkButtonProps {
-  editor: Editor;
+  editor: Editor | null;
   variant?: 'toolbar' | 'bubble';
 }
 
@@ -30,22 +30,11 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
   const [value, setValue] = React.useState('');
   const inputId = React.useId();
 
-  const isActive = editor.isActive('link');
-  const submittable = Boolean(normalizeUrl(value));
-
-  const handleOpenChange = (next: boolean) => {
-    if (next) {
-      const existing = (editor.getAttributes('link').href as string | undefined) ?? '';
-      setValue(existing);
-    }
-    setOpen(next);
-  };
-
   // Bind Mod-K to open the popover from the toolbar instance only — the bubble
   // menu's instance is unmounted when there's no selection, and we want a
   // single, predictable handler regardless of selection state.
   React.useEffect(() => {
-    if (variant !== 'toolbar') return;
+    if (variant !== 'toolbar' || !editor || editor.isDestroyed) return;
     const root = editor.view.dom as HTMLElement;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {
@@ -58,6 +47,19 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
     root.addEventListener('keydown', onKeyDown);
     return () => root.removeEventListener('keydown', onKeyDown);
   }, [editor, variant]);
+
+  if (!editor || editor.isDestroyed) return null;
+
+  const isActive = editor.isActive('link');
+  const submittable = Boolean(normalizeUrl(value));
+
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      const existing = (editor.getAttributes('link').href as string | undefined) ?? '';
+      setValue(existing);
+    }
+    setOpen(next);
+  };
 
   const apply = () => {
     const href = normalizeUrl(value);

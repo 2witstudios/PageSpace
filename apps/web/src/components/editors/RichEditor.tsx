@@ -176,7 +176,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [editor]);
 
   useEffect(() => {
-    if (editor) {
+    if (editor && !editor.isDestroyed) {
       const currentSerialized = serializeEditorContent(editor, isMarkdownMode);
       // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
@@ -254,7 +254,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   useEffect(() => {
     onEditorChange(editor);
     // Blur the editor if it's read-only to prevent focus
-    if (editor && readOnly && isEditorViewMounted) {
+    if (editor && !editor.isDestroyed && readOnly && isEditorViewMounted) {
       editor.commands.blur();
     }
     return () => {
@@ -264,7 +264,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
 
   return (
     <div className="relative flex flex-col w-full h-full">
-      {editor && isEditorViewMounted && !readOnly && (
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
         <BubbleMenu
           editor={editor}
           pluginKey="bubbleMenu"
@@ -285,7 +285,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
         </BubbleMenu>
       )}
-      {editor && isEditorViewMounted && !readOnly && (
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
         <FloatingMenu
           editor={editor}
           pluginKey="floatingMenu"
