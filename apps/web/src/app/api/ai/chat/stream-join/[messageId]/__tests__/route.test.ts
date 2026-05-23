@@ -163,6 +163,27 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
     });
+
+    it('given a global channel pageId owned by the requesting user, should allow without calling canUserViewPage', async () => {
+      const globalMeta = { ...mockMeta, pageId: `user:${mockUserId}:global` };
+      testRegistry.register(mockMessageId, globalMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      testRegistry.finish(mockMessageId);
+
+      expect(response.status).toBe(200);
+      expect(canUserViewPage).not.toHaveBeenCalled();
+    });
+
+    it('given a global channel pageId owned by a different user, should return 403', async () => {
+      const globalMeta = { ...mockMeta, pageId: `user:other-user-999:global` };
+      testRegistry.register(mockMessageId, globalMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(403);
+      expect(canUserViewPage).not.toHaveBeenCalled();
+    });
   });
 
   describe('SSE streaming', () => {
