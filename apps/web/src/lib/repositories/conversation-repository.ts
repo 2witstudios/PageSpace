@@ -281,6 +281,29 @@ export const conversationRepository = {
   },
 
   /**
+   * Get a conversations row by ID. Returns null if no row exists (legacy conversation).
+   */
+  async getConversation(conversationId: string): Promise<typeof conversations.$inferSelect | null> {
+    const result = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+
+    return result[0] || null;
+  },
+
+  /**
+   * Toggle sharing for a conversation.
+   */
+  async setConversationShared(conversationId: string, isShared: boolean): Promise<void> {
+    await db
+      .update(conversations)
+      .set({ isShared, updatedAt: new Date() })
+      .where(eq(conversations.id, conversationId));
+  },
+
+  /**
    * Upsert a conversation title: update if the conversations record exists, insert if not.
    * For page-agent conversations, type='page' and contextId=agentId.
    */
