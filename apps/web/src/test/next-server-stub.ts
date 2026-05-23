@@ -7,7 +7,7 @@ class NextResponseStub extends Response {
   }
 
   static redirect(url: string | URL, init?: number | ResponseInit) {
-    const status = typeof init === 'number' ? init : (init?.status ?? 302);
+    const status = typeof init === 'number' ? init : (init?.status ?? 307);
     return new NextResponseStub(null, {
       status,
       headers: { Location: url.toString() },
