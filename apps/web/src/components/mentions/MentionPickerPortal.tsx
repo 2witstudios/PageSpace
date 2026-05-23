@@ -35,13 +35,18 @@ export function MentionPickerPortal({
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  // Sync initialQuery when popup opens
+  // Sync initialQuery when popup opens; capture element to return focus to on close
   useEffect(() => {
     if (isOpen) {
+      returnFocusRef.current = document.activeElement as HTMLElement;
       setQuery(initialQuery);
       setActiveTab('all');
       setSelectedIndex(0);
+    } else {
+      returnFocusRef.current?.focus();
+      returnFocusRef.current = null;
     }
   }, [isOpen, initialQuery]);
 

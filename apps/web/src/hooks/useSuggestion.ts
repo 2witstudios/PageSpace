@@ -235,7 +235,7 @@ export function useSuggestion({
             context.open(position);
           }
         }
-        suggestion.actions.setQuery(query);
+        // MentionPickerPortal handles its own fetching — no need to drive useSuggestionCore
       } else {
         // This @ is part of an existing mention, close suggestions if open
         if (context.isOpen) {
@@ -316,9 +316,6 @@ export function useSuggestion({
     loading: context.loading,
     error: context.error,
     query: currentQuery,
-    actions: {
-      ...suggestion.actions,
-      close: suggestion.actions.close,
-    },
+    actions: suggestion.actions,
   };
 }
