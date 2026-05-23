@@ -57,6 +57,8 @@ export interface ConversationData {
   createdAt: Date;
   updatedAt: Date;
   messageCount: number;
+  isShared: boolean;
+  isOwner: boolean;
   lastMessage: {
     role: string;
     timestamp: Date;
@@ -73,6 +75,8 @@ export interface RawConversationData {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  isShared?: boolean;
+  isOwner?: boolean;
   lastMessage: {
     role: string;
     timestamp: string;
@@ -115,6 +119,8 @@ export interface AgentConfig {
 export function parseConversationData(raw: RawConversationData): ConversationData {
   return {
     ...raw,
+    isShared: raw.isShared ?? false,
+    isOwner: raw.isOwner ?? false,
     createdAt: new Date(raw.createdAt),
     updatedAt: new Date(raw.updatedAt),
     lastMessage: {

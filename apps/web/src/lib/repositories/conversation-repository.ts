@@ -26,6 +26,8 @@ export interface ConversationStats {
   firstUserMessage: string | null;
   lastMessageRole: string | null;
   lastMessageContent: string | null;
+  conversationUserId: string | null;
+  isShared: boolean | null;
   [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
@@ -85,6 +87,24 @@ export function generateTitle(preview: string): string {
 
 export const conversationRepository = {
   /**
+   * Eagerly create a conversations row when a new conversation session is started.
+   * This establishes ownership (userId) and sets isShared=false (private by default).
+   */
+  async createConversation(conversationId: string, userId: string, agentId: string): Promise<void> {
+    await db
+      .insert(conversations)
+      .values({
+        id: conversationId,
+        userId,
+        type: 'page',
+        contextId: agentId,
+        isShared: false,
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing();
+  },
+
+  /**
    * Get an AI_CHAT agent by ID
    */
   async getAiAgent(agentId: string): Promise<AiAgent | null> {
@@ -106,12 +126,15 @@ export const conversationRepository = {
   },
 
   /**
-   * List conversations for an agent with stats, ordered by most recent
+   * List conversations for an agent with stats, ordered by most recent.
+   * Only returns conversations the user owns, plus any explicitly shared ones.
+   * Legacy conversations (no conversations row) are treated as shared.
    */
   async listConversations(
     agentId: string,
     limit: number,
-    offset: number
+    offset: number,
+    userId: string
   ): Promise<ConversationStats[]> {
     const result = await db.execute<ConversationStats>(sql`
       WITH ranked_messages AS (
@@ -163,10 +186,18 @@ export const conversationRepository = {
         cs.message_count as "messageCount",
         fum.first_user_message as "firstUserMessage",
         lm.last_message_role as "lastMessageRole",
-        lm.last_message_content as "lastMessageContent"
+        lm.last_message_content as "lastMessageContent",
+        conv."userId" as "conversationUserId",
+        conv."isShared" as "isShared"
       FROM conversation_stats cs
       LEFT JOIN first_user_messages fum ON cs."conversationId" = fum."conversationId"
       LEFT JOIN last_messages lm ON cs."conversationId" = lm."conversationId"
+      LEFT JOIN conversations conv ON cs."conversationId" = conv.id
+      WHERE (
+        conv."userId" = ${userId}
+        OR conv."isShared" = true
+        OR conv.id IS NULL
+      )
       ORDER BY cs.last_message_time DESC
       LIMIT ${limit}
       OFFSET ${offset}
@@ -176,20 +207,24 @@ export const conversationRepository = {
   },
 
   /**
-   * Count total conversations for an agent
+   * Count total conversations for an agent visible to userId.
+   * Mirrors the privacy filter in listConversations.
    */
-  async countConversations(agentId: string): Promise<number> {
-    const result = await db
-      .select({
-        count: sql<number>`COUNT(DISTINCT ${chatMessages.conversationId})`,
-      })
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, agentId),
-        eq(chatMessages.isActive, true)
-      ));
+  async countConversations(agentId: string, userId: string): Promise<number> {
+    const result = await db.execute<{ count: string }>(sql`
+      SELECT COUNT(DISTINCT cm."conversationId") as count
+      FROM chat_messages cm
+      LEFT JOIN conversations conv ON cm."conversationId" = conv.id
+      WHERE cm."pageId" = ${agentId}
+        AND cm."isActive" = true
+        AND (
+          conv."userId" = ${userId}
+          OR conv."isShared" = true
+          OR conv.id IS NULL
+        )
+    `);
 
-    return Number(result[0]?.count || 0);
+    return Number(result.rows[0]?.count || 0);
   },
 
   /**
@@ -243,6 +278,29 @@ export const conversationRepository = {
         eq(chatMessages.pageId, agentId),
         eq(chatMessages.conversationId, conversationId)
       ));
+  },
+
+  /**
+   * Get a conversations row by ID. Returns null if no row exists (legacy conversation).
+   */
+  async getConversation(conversationId: string): Promise<typeof conversations.$inferSelect | null> {
+    const result = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+
+    return result[0] || null;
+  },
+
+  /**
+   * Toggle sharing for a conversation.
+   */
+  async setConversationShared(conversationId: string, isShared: boolean): Promise<void> {
+    await db
+      .update(conversations)
+      .set({ isShared, updatedAt: new Date() })
+      .where(eq(conversations.id, conversationId));
   },
 
   /**
