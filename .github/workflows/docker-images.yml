@@ -132,8 +132,8 @@ jobs:
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
           flyctl machine run registry.fly.io/pagespace-web:migrate \
+            sh -c "bun run db:migrate; RESULT=\$?; sleep 10; exit \$RESULT" \
             --app pagespace-web \
-            --name "migrations-${{ github.sha }}" \
             --restart no \
             --rm
         env:
