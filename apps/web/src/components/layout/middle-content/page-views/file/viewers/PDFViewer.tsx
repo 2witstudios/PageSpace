@@ -137,6 +137,10 @@ export default function PDFViewer({ page }: PDFViewerProps) {
           <Document
             file={pdfData}
             onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={(error) => {
+              console.error('PDF load error:', error);
+              setError(error.message || 'Failed to load PDF document');
+            }}
             loading={
               <div className="flex items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
