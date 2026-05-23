@@ -176,7 +176,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [editor]);
 
   useEffect(() => {
-    if (editor) {
+    if (editor && !editor.isDestroyed) {
       const currentSerialized = serializeEditorContent(editor, isMarkdownMode);
       // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
@@ -254,7 +254,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   useEffect(() => {
     onEditorChange(editor);
     // Blur the editor if it's read-only to prevent focus
-    if (editor && readOnly && isEditorViewMounted) {
+    if (editor && !editor.isDestroyed && readOnly && isEditorViewMounted) {
       editor.commands.blur();
     }
     return () => {
