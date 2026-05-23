@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import { GET, filterFreeModels } from '../route';
+import { GET } from '../route';
+import { filterFreeModels } from '../filter-utils';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -177,7 +178,6 @@ describe('GET /api/ai/openrouter/models', () => {
         'https://openrouter.ai/api/v1/models',
         expect.objectContaining({
           headers: expect.objectContaining({ Authorization: `Bearer ${mockApiKey}` }),
-          next: { revalidate: 3600 },
         })
       );
     });

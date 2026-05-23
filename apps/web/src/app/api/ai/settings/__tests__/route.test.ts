@@ -293,6 +293,20 @@ describe('AI settings route', () => {
       expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 
+    it('returns 400 when openrouter_free is used with a non-free model', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openrouter_free',
+        model: 'openai/gpt-4o',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain(':free');
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
+    });
+
     it('allows non-pagespace providers in onprem mode when configured', async () => {
       vi.mocked(isOnPrem).mockReturnValue(true);
       process.env.OLLAMA_BASE_URL = 'http://localhost:11434';

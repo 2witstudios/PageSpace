@@ -2,17 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
-
-type OpenRouterModel = {
-  id: string;
-  name: string;
-  pricing?: { prompt: string };
-};
-
-export const filterFreeModels = (models: OpenRouterModel[]): Record<string, string> =>
-  models
-    .filter(m => m.id.endsWith(':free') && m.pricing?.prompt === '0')
-    .reduce<Record<string, string>>((acc, m) => ({ ...acc, [m.id]: m.name }), {});
+import { filterFreeModels } from './filter-utils';
 
 export async function GET(request: Request) {
   try {
@@ -31,7 +21,6 @@ export async function GET(request: Request) {
     try {
       const response = await fetch('https://openrouter.ai/api/v1/models', {
         headers: { Authorization: `Bearer ${settings.apiKey}` },
-        next: { revalidate: 3600 },
       });
 
       if (!response.ok) {
