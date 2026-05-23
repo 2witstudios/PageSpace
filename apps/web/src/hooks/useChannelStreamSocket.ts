@@ -27,7 +27,7 @@ interface ActiveStreamRow {
 
 export interface UseChannelStreamSocketOptions {
   /** Fires once per messageId on clean finalize (SSE resolve or socket complete); NOT on SSE error. */
-  onStreamComplete?: (messageId: string) => void;
+  onStreamComplete?: (messageId: string, conversationId?: string) => void;
   /** Fires once per messageId when DB bootstrap finds an in-flight stream from this browser session. */
   onOwnStreamBootstrap?: (event: { messageId: string }) => void;
   /** Fires once per own-bootstrapped messageId on any finalize path (resolve, complete, or error). */
@@ -135,10 +135,10 @@ export function useChannelStreamSocket(
     const { addStream, appendPart, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
-    const fireComplete = (messageId: string) => {
+    const fireComplete = (messageId: string, conversationId?: string) => {
       if (processed.has(messageId)) return;
       processed.add(messageId);
-      onStreamCompleteRef.current?.(messageId);
+      onStreamCompleteRef.current?.(messageId, conversationId);
     };
 
     const fireOwnFinalize = (messageId: string) => {
@@ -147,7 +147,7 @@ export function useChannelStreamSocket(
       onOwnStreamFinalizeRef.current?.({ messageId });
     };
 
-    const startConsume = (messageId: string) => {
+    const startConsume = (messageId: string, conversationId?: string) => {
       const controller = new AbortController();
       controllers.set(messageId, controller);
 
@@ -160,7 +160,7 @@ export function useChannelStreamSocket(
           if (cancelled) return;
           controllers.delete(messageId);
           try {
-            fireComplete(messageId);
+            fireComplete(messageId, conversationId);
           } finally {
             removeStream(messageId);
             fireOwnFinalize(messageId);
@@ -207,7 +207,7 @@ export function useChannelStreamSocket(
             ownStreamIds.add(stream.messageId);
             onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
           }
-          startConsume(stream.messageId);
+          startConsume(stream.messageId, stream.conversationId);
         }
       } catch (err) {
         if (cancelled) return;
@@ -228,7 +228,7 @@ export function useChannelStreamSocket(
         isOwn: false,
       });
 
-      startConsume(payload.messageId);
+      startConsume(payload.messageId, payload.conversationId);
     };
 
     const handleStreamComplete = (payload: AiStreamCompletePayload) => {
@@ -239,7 +239,7 @@ export function useChannelStreamSocket(
         controllers.delete(payload.messageId);
       }
       try {
-        fireComplete(payload.messageId);
+        fireComplete(payload.messageId, payload.conversationId);
       } finally {
         removeStream(payload.messageId);
         fireOwnFinalize(payload.messageId);
