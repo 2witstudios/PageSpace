@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -16,10 +17,10 @@ function getAdminUrl(): string {
   return process.env.ADMIN_URL;
 }
 
-function redirectWithError(code: string): Response {
+function redirectWithError(code: string): NextResponse {
   const url = new URL('/login', getAdminUrl());
   url.searchParams.set('error', code);
-  return Response.redirect(url, 302);
+  return NextResponse.redirect(url, 302);
 }
 
 export async function GET(req: Request) {
@@ -63,6 +64,8 @@ export async function GET(req: Request) {
       return redirectWithError('not_admin');
     }
 
+    await sessionService.revokeAllUserSessions(userId, 'magic_link_login');
+
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
@@ -80,8 +83,7 @@ export async function GET(req: Request) {
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
-    headers.set('Location', '/');
-    return new Response(null, { status: 302, headers });
+    return NextResponse.redirect(new URL('/', getAdminUrl()), { status: 302, headers });
   } catch (error) {
     loggers.auth.error('Admin magic link verify error', error as Error);
     return redirectWithError('server_error');
