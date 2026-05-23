@@ -130,8 +130,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Check permissions: app tokens use their own drive role; session auth uses user permissions
-    const accessLevel = isMCPAuthResult(auth)
+    // Scoped tokens use their own drive membership role; unscoped tokens fall back to user permissions.
+    // Unscoped tokens have no mcp_token_drives row, so getAppAccessLevel would return null.
+    const isScoped = isMCPAuthResult(auth) && auth.allowedDriveIds.length > 0;
+    const accessLevel = isScoped
       ? await getAppAccessLevel(auth.tokenId, pageId)
       : await getUserAccessLevel(userId, pageId);
     if (!accessLevel || !accessLevel.canView) {

@@ -39,20 +39,33 @@ export async function POST(req: NextRequest) {
       ?? (rawDriveIds ?? []).map(id => ({ id, role: 'MEMBER' as const, customRoleId: undefined }));
     const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
-    // Zero Trust: Validate that the user has access to each specified drive
+    // Zero Trust: Validate access and cap role to the caller's authority per drive.
+    // A MEMBER cannot grant ADMIN — tokens can only receive roles the caller can grant.
     if (uniqueDriveScopes.length > 0) {
       const invalidDriveIds: string[] = [];
+      const unauthorizedRoles: string[] = [];
 
-      for (const { id: driveId } of uniqueDriveScopes) {
-        const access = await getDriveAccess(driveId, userId);
+      for (const scope of uniqueDriveScopes) {
+        const access = await getDriveAccess(scope.id, userId);
         if (!access.isOwner && !access.isMember) {
-          invalidDriveIds.push(driveId);
+          invalidDriveIds.push(scope.id);
+          continue;
+        }
+        // Cap to MEMBER when caller isn't admin/owner
+        if (scope.role === 'ADMIN' && !access.isAdmin) {
+          unauthorizedRoles.push(scope.id);
         }
       }
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(
           { error: 'You do not have access to these drives: ' + invalidDriveIds.join(', ') },
+          { status: 403 }
+        );
+      }
+      if (unauthorizedRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'You do not have permission to grant ADMIN role in these drives: ' + unauthorizedRoles.join(', ') },
           { status: 403 }
         );
       }
