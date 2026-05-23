@@ -405,6 +405,26 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "role": {
+          "name": "role",
+          "type": "MemberRole",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'MEMBER'"
+        },
+        "customRoleId": {
+          "name": "customRoleId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "addedBy": {
+          "name": "addedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -485,6 +505,32 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "mcp_token_drives_customRoleId_drive_roles_id_fk": {
+          "name": "mcp_token_drives_customRoleId_drive_roles_id_fk",
+          "tableFrom": "mcp_token_drives",
+          "tableTo": "drive_roles",
+          "columnsFrom": [
+            "customRoleId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "mcp_token_drives_addedBy_users_id_fk": {
+          "name": "mcp_token_drives_addedBy_users_id_fk",
+          "tableFrom": "mcp_token_drives",
+          "tableTo": "users",
+          "columnsFrom": [
+            "addedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

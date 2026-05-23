@@ -179,6 +179,27 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     },
   });
 
+  // Toggle share status for a conversation the user owns
+  const toggleConversationShare = useCallback(async (conversationId: string, isShared: boolean) => {
+    try {
+      const response = await fetchWithAuth(
+        `/api/ai/page-agents/${page.id}/conversations/${conversationId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isShared }),
+        }
+      );
+      if (!response.ok) {
+        toast.error('Failed to update conversation sharing');
+        return;
+      }
+      refreshConversations();
+    } catch {
+      toast.error('Failed to update conversation sharing');
+    }
+  }, [page.id, refreshConversations]);
+
   // ============================================
   // CHAT CONFIGURATION
   // ============================================
@@ -848,6 +869,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onSelectConversation={loadConversation}
             onCreateNew={() => createConversation()}
             onDeleteConversation={deleteConversation}
+            onToggleShare={toggleConversationShare}
             isLoading={isLoadingConversations}
           />
         </TabsContent>

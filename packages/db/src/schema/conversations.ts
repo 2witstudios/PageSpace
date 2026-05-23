@@ -17,6 +17,7 @@ export const conversations = pgTable('conversations', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   isActive: boolean('isActive').default(true).notNull(),
+  isShared: boolean('isShared').default(false).notNull(),
 }, (table) => ({
   userIdx: index('conversations_user_id_idx').on(table.userId),
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),

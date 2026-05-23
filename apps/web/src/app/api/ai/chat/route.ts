@@ -78,6 +78,7 @@ import {
 import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -823,12 +824,17 @@ export async function POST(request: Request) {
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
     if (userMessage && userMessage.role === 'user') {
-      broadcastChatUserMessage({
-        message: userMessage,
-        pageId: chatId,
-        conversationId: conversationId!,
-        triggeredBy: { userId: userId!, displayName, browserSessionId },
-      }).catch(() => {});
+      // Only broadcast to the page channel if the conversation is shared (or legacy with no row)
+      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
+      const shouldBroadcast = !convRow || convRow.isShared;
+      if (shouldBroadcast) {
+        broadcastChatUserMessage({
+          message: userMessage,
+          pageId: chatId,
+          conversationId: conversationId!,
+          triggeredBy: { userId: userId!, displayName, browserSessionId },
+        }).catch(() => {});
+      }
     }
 
     lifecycle = await createStreamLifecycle({
