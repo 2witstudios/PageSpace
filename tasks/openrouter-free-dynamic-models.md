@@ -1,17 +1,17 @@
 # OpenRouter Free — Dynamic Model List Epic
 
 **Status**: ✅ COMPLETED (2026-05-23)
-**Goal**: Replace the hardcoded `openrouter_free` model list with a live fetch from the OpenRouter API, following the existing ollama/lmstudio pattern.
+**Goal**: Replace the hardcoded `openrouter_free` model list with a live fetch from the OpenRouter API, following the existing Ollama/LM Studio pattern.
 
 ## Overview
 
-The `openrouter_free` provider has a static model list that drifts out of date as OpenRouter adds and removes free-tier models. Ollama and LM Studio already solve this with a dynamic fetch pattern (`/api/ai/ollama/models`, `/api/ai/lmstudio/models`). This epic applies the same pattern to `openrouter_free`: a server-side route that fetches from `https://openrouter.ai/api/v1/models`, filters for `:free` models with zero pricing, caches for 1 hour via Next.js `fetch` revalidation, and returns the same `{ success, models }` shape the UI already knows how to consume.
+The `openrouter_free` provider has a static model list that drifts out of date as OpenRouter adds and removes free-tier models. Ollama and LM Studio already solve this with a dynamic fetch pattern (`/api/ai/ollama/models`, `/api/ai/lmstudio/models`). This epic applies the same pattern to `openrouter_free`: a server-side route that fetches from `https://openrouter.ai/api/v1/models`, filters for `:free` models with zero pricing, and returns the same `{ success, models }` shape the UI already knows how to consume.
 
 ---
 
 ## Add OpenRouter free models API route
 
-Create `apps/web/src/app/api/ai/openrouter/models/route.ts` mirroring the lmstudio route shape.
+Create `apps/web/src/app/api/ai/openrouter/models/route.ts` mirroring the LM Studio route shape.
 
 **Requirements**:
 - Given a GET request, should authenticate the session before fetching

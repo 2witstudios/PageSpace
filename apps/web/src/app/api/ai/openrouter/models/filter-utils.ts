@@ -5,6 +5,8 @@ export type OpenRouterModel = {
 };
 
 export const filterFreeModels = (models: OpenRouterModel[]): Record<string, string> =>
-  models
-    .filter(m => m.id.endsWith(':free') && m.pricing?.prompt === '0')
-    .reduce<Record<string, string>>((acc, m) => ({ ...acc, [m.id]: m.name }), {});
+  Object.fromEntries(
+    models
+      .filter(m => m.id.endsWith(':free') && m.pricing?.prompt === '0')
+      .map(m => [m.id, m.name])
+  );
