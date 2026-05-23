@@ -7,9 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth';
 
 // Mock db (boundary — direct usage in this route)
 vi.mock('@pagespace/db/db', () => ({
@@ -90,10 +89,6 @@ const mockWebAuth = (userId = mockUserId): SessionAuthResult => ({
   sessionId: 'test-session-id',
   role: 'user',
   adminRoleVersion: 0,
-});
-
-const mockAuthError = (): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
 });
 
 const mockAgent = () => ({
