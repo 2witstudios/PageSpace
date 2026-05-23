@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
-import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 interface FloatingCellEditorProps {
@@ -225,18 +225,14 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
         Press Enter to confirm, Escape to cancel, or Tab to move to next cell
       </div>
 
-      {/* Mention Suggestions Popup */}
-      <SuggestionPopup
+      <MentionPickerPortal
         isOpen={suggestionContext.isOpen}
-        items={suggestionContext.items}
-        selectedIndex={suggestionContext.selectedIndex}
         position={suggestionContext.position}
-        loading={suggestionContext.loading}
-        error={suggestionContext.error}
+        driveId={driveId}
+        allowedTypes={['page']}
+        initialQuery={suggestion.query}
         onSelect={suggestion.actions.selectSuggestion}
-        onSelectionChange={suggestion.actions.selectItem}
-        variant="inline"
-        popupPlacement="bottom"
+        onClose={suggestion.actions.close}
       />
     </div>
   );

@@ -3,7 +3,7 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
-import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
@@ -113,17 +113,14 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
         />
       )}
 
-      <SuggestionPopup
+      <MentionPickerPortal
         isOpen={context.isOpen}
-        items={context.items}
-        selectedIndex={context.selectedIndex}
         position={context.position}
-        loading={context.loading}
-        error={context.error}
+        driveId={driveId}
+        crossDrive={crossDrive}
+        initialQuery={suggestion.query}
         onSelect={suggestion.actions.selectSuggestion}
-        onSelectionChange={suggestion.actions.selectItem}
-        variant="overlay"
-        popupPlacement="top"
+        onClose={suggestion.actions.close}
       />
     </div>
   );

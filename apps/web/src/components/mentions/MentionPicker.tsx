@@ -13,85 +13,70 @@ import {
 import type { MentionSuggestion, MentionType } from '@/types/mentions';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-type TabType = 'all' | 'people' | 'pages' | 'groups';
+export type TabType = 'all' | 'people' | 'pages' | 'groups';
 
-const TAB_TYPES: Record<TabType, MentionType[]> = {
+export const TAB_TYPES: Record<TabType, MentionType[]> = {
   all: ['page', 'user', 'everyone', 'role'],
   people: ['user'],
   pages: ['page'],
   groups: ['everyone', 'role'],
 };
 
-export interface MentionPickerProps {
-  driveId: string;
-  crossDrive?: boolean;
+// ---------------------------------------------------------------------------
+// MentionPickerPanel — pure presentational, no fetching
+// ---------------------------------------------------------------------------
+
+export interface MentionPickerPanelProps {
+  items: MentionSuggestion[];
+  loading: boolean;
+  query: string;
+  onQueryChange: (q: string) => void;
+  activeTab: TabType;
+  onTabChange: (t: TabType) => void;
+  selectedIndex: number;
+  onSelect: (s: MentionSuggestion) => void;
+  onSelectionChange: (i: number) => void;
   allowedTypes?: MentionType[];
-  onMentionSelect: (suggestion: MentionSuggestion) => void;
   className?: string;
 }
 
-export function MentionPicker({
-  driveId,
-  crossDrive = false,
-  allowedTypes = ['page', 'user', 'everyone', 'role'],
-  onMentionSelect,
+export function MentionPickerPanel({
+  items,
+  loading,
+  query,
+  onQueryChange,
+  activeTab,
+  onTabChange,
+  selectedIndex,
+  onSelect,
+  onSelectionChange,
+  allowedTypes,
   className,
-}: MentionPickerProps) {
-  const [query, setQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<TabType>('all');
-  const [items, setItems] = useState<MentionSuggestion[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const fetchSuggestions = useCallback(
-    async (q: string, tab: TabType) => {
-      setLoading(true);
-      const types = TAB_TYPES[tab]
-        .filter((t) => allowedTypes.includes(t))
-        .join(',');
-      const url = `/api/mentions/search?q=${encodeURIComponent(q)}&driveId=${encodeURIComponent(driveId)}&types=${types}${crossDrive ? '&crossDrive=true' : ''}`;
-      try {
-        const response = await fetchWithAuth(url);
-        const data: MentionSuggestion[] = await response.json();
-        setItems(data);
-        setSelectedIndex(0);
-      } catch {
-        setItems([]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [driveId, crossDrive, allowedTypes],
-  );
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      void fetchSuggestions(query, activeTab);
-    }, 200);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [query, activeTab, fetchSuggestions]);
-
+}: MentionPickerPanelProps) {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (items.length === 0) return;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIndex((i) => (i + 1) % items.length);
+        onSelectionChange((selectedIndex + 1) % items.length);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedIndex((i) => (i - 1 + items.length) % items.length);
+        onSelectionChange((selectedIndex - 1 + items.length) % items.length);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const item = items[selectedIndex];
-        if (item) onMentionSelect(item);
+        if (item) onSelect(item);
       }
     },
-    [items, selectedIndex, onMentionSelect],
+    [items, selectedIndex, onSelect, onSelectionChange],
   );
+
+  // Determine which tabs to show based on allowedTypes
+  const visibleTabs: TabType[] = allowedTypes
+    ? (['all', 'people', 'pages', 'groups'] as TabType[]).filter((tab) =>
+        TAB_TYPES[tab].some((t) => allowedTypes.includes(t)),
+      )
+    : ['all', 'people', 'pages', 'groups'];
 
   return (
     <div className={cn('w-80', className)} onKeyDown={handleKeyDown}>
@@ -99,23 +84,25 @@ export function MentionPicker({
         <Input
           autoFocus
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search mentions..."
           className="h-8 text-sm"
         />
       </div>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => setActiveTab(v as TabType)}
-      >
-        <TabsList className="w-full grid grid-cols-4 h-auto p-1 bg-muted/30">
-          <TabsTrigger value="all" className="text-xs">All</TabsTrigger>
-          <TabsTrigger value="people" className="text-xs">People</TabsTrigger>
-          <TabsTrigger value="pages" className="text-xs">Pages</TabsTrigger>
-          <TabsTrigger value="groups" className="text-xs">Groups</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      {visibleTabs.length > 1 && (
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => onTabChange(v as TabType)}
+        >
+          <TabsList className="w-full grid grid-cols-4 h-auto p-1 bg-muted/30">
+            <TabsTrigger value="all" className="text-xs">All</TabsTrigger>
+            <TabsTrigger value="people" className="text-xs">People</TabsTrigger>
+            <TabsTrigger value="pages" className="text-xs">Pages</TabsTrigger>
+            <TabsTrigger value="groups" className="text-xs">Groups</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
 
       <ScrollArea className="max-h-64">
         {loading ? (
@@ -134,8 +121,8 @@ export function MentionPicker({
                   key={`${item.id}-${index}`}
                   role="option"
                   aria-selected={index === selectedIndex}
-                  onClick={() => onMentionSelect(item)}
-                  onMouseEnter={() => setSelectedIndex(index)}
+                  onClick={() => onSelect(item)}
+                  onMouseEnter={() => onSelectionChange(index)}
                   className={cn(
                     'px-3 py-2 cursor-pointer flex items-center gap-2',
                     'hover:bg-muted/50 transition-colors',
@@ -179,6 +166,91 @@ export function MentionPicker({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// MentionPicker — self-fetching wrapper, used for button-triggered popovers
+// ---------------------------------------------------------------------------
+
+export interface MentionPickerProps {
+  driveId: string;
+  crossDrive?: boolean;
+  allowedTypes?: MentionType[];
+  onMentionSelect: (suggestion: MentionSuggestion) => void;
+  className?: string;
+}
+
+export function MentionPicker({
+  driveId,
+  crossDrive = false,
+  allowedTypes = ['page', 'user', 'everyone', 'role'],
+  onMentionSelect,
+  className,
+}: MentionPickerProps) {
+  const [query, setQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<TabType>('all');
+  const [items, setItems] = useState<MentionSuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Use a stable primitive as dep to avoid infinite loop when allowedTypes is
+  // a new array literal on every render (e.g. from a default parameter).
+  const allowedTypesKey = allowedTypes.join(',');
+
+  const fetchSuggestions = useCallback(
+    async (q: string, tab: TabType) => {
+      setLoading(true);
+      const currentAllowed = allowedTypesKey.split(',') as MentionType[];
+      const types = TAB_TYPES[tab]
+        .filter((t) => currentAllowed.includes(t))
+        .join(',');
+      const url = `/api/mentions/search?q=${encodeURIComponent(q)}&driveId=${encodeURIComponent(driveId)}&types=${types}${crossDrive ? '&crossDrive=true' : ''}`;
+      try {
+        const response = await fetchWithAuth(url);
+        const data: MentionSuggestion[] = await response.json();
+        setItems(data);
+        setSelectedIndex(0);
+      } catch {
+        setItems([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [driveId, crossDrive, allowedTypesKey],
+  );
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void fetchSuggestions(query, activeTab);
+    }, 200);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, activeTab, fetchSuggestions]);
+
+  return (
+    <MentionPickerPanel
+      items={items}
+      loading={loading}
+      query={query}
+      onQueryChange={setQuery}
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+      selectedIndex={selectedIndex}
+      onSelect={onMentionSelect}
+      onSelectionChange={setSelectedIndex}
+      allowedTypes={allowedTypes}
+      className={className}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MentionPickerPopover — Radix Popover wrapper (for use cases where the
+// caller manages the trigger element and Popover open state externally)
+// ---------------------------------------------------------------------------
 
 export interface MentionPickerPopoverProps extends MentionPickerProps {
   children: React.ReactNode;

@@ -27,7 +27,7 @@ import { FloatingCellEditor } from './FloatingCellEditor';
 import { useSheetHistory } from './useSheetHistory';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
-import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface SheetViewProps {
@@ -1787,17 +1787,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               )}
               placeholder="Enter value or formula"
             />
-            <SuggestionPopup
+            <MentionPickerPortal
               isOpen={suggestionContext.isOpen}
-              items={suggestionContext.items}
-              selectedIndex={suggestionContext.selectedIndex}
               position={suggestionContext.position}
-              loading={suggestionContext.loading}
-              error={suggestionContext.error}
+              driveId={page.driveId}
+              allowedTypes={['page']}
+              initialQuery={suggestion.query}
               onSelect={suggestion.actions.selectSuggestion}
-              onSelectionChange={suggestion.actions.selectItem}
-              variant="inline"
-              popupPlacement="bottom"
+              onClose={suggestion.actions.close}
             />
           </div>
           {/* Desktop action buttons */}
