@@ -105,30 +105,39 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
   return { ChatTextarea: MockChatTextarea };
 });
 
-// Mock the footer so test queries don't fight popovers/tooltips
+// Mock the footer so test queries don't fight popovers/tooltips.
+// capturedFooterMentionSelect lets tests trigger the onMentionSelect callback.
+const { capturedFooterMentionSelect } = vi.hoisted(() => ({
+  capturedFooterMentionSelect: vi.fn(),
+}));
 vi.mock('../ChannelInputFooter', () => ({
   ChannelInputFooter: ({
     onAttachmentClick,
     attachmentsEnabled,
     disabled,
+    onMentionSelect,
   }: {
     onAttachmentClick?: () => void;
     attachmentsEnabled?: boolean;
     disabled?: boolean;
-  }) => (
-    <div data-testid="channel-input-footer">
-      {attachmentsEnabled && (
-        <button
-          type="button"
-          data-testid="attach-button"
-          onClick={onAttachmentClick}
-          disabled={disabled}
-        >
-          Attach
-        </button>
-      )}
-    </div>
-  ),
+    onMentionSelect?: (s: unknown) => void;
+  }) => {
+    capturedFooterMentionSelect.mockImplementation(onMentionSelect ?? (() => {}));
+    return (
+      <div data-testid="channel-input-footer">
+        {attachmentsEnabled && (
+          <button
+            type="button"
+            data-testid="attach-button"
+            onClick={onAttachmentClick}
+            disabled={disabled}
+          >
+            Attach
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 // Capture useAttachmentUpload args + expose a controllable mock state
@@ -404,5 +413,56 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(last?.driveId).toBe('drive-1');
     expect(last?.crossDrive).toBe(true);
     expect(last?.popupPlacement).toBe('top');
+  });
+});
+
+describe('ChannelInput mention selection', () => {
+  beforeEach(() => {
+    mockAttachment = null;
+    mockIsUploading = false;
+    vi.clearAllMocks();
+  });
+
+  it('should insert a formatted mention into the value when a suggestion is selected', () => {
+    const onChange = vi.fn();
+    render(
+      <ChannelInput
+        value="Hello "
+        onChange={onChange}
+        onSend={vi.fn()}
+        driveId="drive-1"
+      />,
+    );
+
+    capturedFooterMentionSelect({
+      id: 'user-1',
+      label: 'Alice',
+      type: 'user',
+      data: {},
+    });
+
+    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('Alice'));
+  });
+
+  it('should append a space after the inserted mention', () => {
+    const onChange = vi.fn();
+    render(
+      <ChannelInput
+        value=""
+        onChange={onChange}
+        onSend={vi.fn()}
+        driveId="drive-1"
+      />,
+    );
+
+    capturedFooterMentionSelect({
+      id: 'page-1',
+      label: 'Project Alpha Budget',
+      type: 'page',
+      data: { pageType: 'DOCUMENT', driveId: 'drive-1' },
+    });
+
+    const inserted: string = onChange.mock.calls[0][0];
+    expect(inserted.endsWith(' ')).toBe(true);
   });
 });
