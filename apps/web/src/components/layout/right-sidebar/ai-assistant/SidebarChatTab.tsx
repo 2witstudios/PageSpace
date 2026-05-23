@@ -209,7 +209,9 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Agent Chat Configuration
   // ============================================
-  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+  // Namespaced key prevents activeStreams collision when both panels view the same conversationId.
+  const sidebarChatId = agentConversationId ? `sidebar:${agentConversationId}` : null;
+  const agentTransport = useChatTransport(sidebarChatId, '/api/ai/chat');
 
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
