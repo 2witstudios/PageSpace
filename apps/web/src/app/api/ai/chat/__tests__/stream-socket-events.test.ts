@@ -15,12 +15,14 @@ const {
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveMessageToDatabase,
+  mockGetConversation,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  mockGetConversation: vi.fn().mockResolvedValue(null), // default: legacy (no row) → broadcast
 }));
 
 interface MockUIStreamOptions {
@@ -183,6 +185,12 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`),
 }));
 
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    getConversation: mockGetConversation,
+  },
+}));
+
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({ trackFeature: vi.fn() }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -268,7 +276,7 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
+const makeRequest = (overrides: { browserSessionId?: string | null; conversationId?: string } = {}) => {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'content-length': '200',
@@ -282,7 +290,7 @@ const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page-1',
-      conversationId: 'conv-1',
+      conversationId: overrides.conversationId ?? 'conv-1',
       selectedProvider: 'pagespace',
       selectedModel: 'glm-4.5-air',
     }),
@@ -374,6 +382,46 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
 
       await expect(POST(makeRequest())).resolves.toBeDefined();
+    });
+  });
+
+  describe('conversation privacy gate on broadcast', () => {
+    it('should broadcast when conversation has no conversations row (legacy)', async () => {
+      mockGetConversation.mockResolvedValueOnce(null);
+
+      await POST(makeRequest({ conversationId: 'conv-1' }));
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('should broadcast when conversation isShared is true', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: 'conv-1', userId: 'other-user', isShared: true,
+      });
+
+      await POST(makeRequest({ conversationId: 'conv-1' }));
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('should suppress broadcast when user owns a private conversation', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: 'conv-1', userId: 'user-1', isShared: false,
+      });
+
+      await POST(makeRequest({ conversationId: 'conv-1' }));
+
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('should suppress broadcast when private conversation is owned by someone else', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: 'conv-1', userId: 'other-user', isShared: false,
+      });
+
+      await POST(makeRequest({ conversationId: 'conv-1' }));
+
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
   });
 

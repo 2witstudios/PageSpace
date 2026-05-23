@@ -144,6 +144,8 @@ export function useConversations({
         id: e.id,
         title: e.title,
         preview: '',
+        isShared: false,
+        isOwner: true,
         createdAt: new Date(e.createdAt),
         updatedAt: new Date(e.createdAt),
         messageCount: 0,

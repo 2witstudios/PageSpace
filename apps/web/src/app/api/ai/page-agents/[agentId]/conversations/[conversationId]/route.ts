@@ -4,7 +4,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
+import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
 
@@ -59,16 +59,26 @@ export async function PATCH(
 
     // Parse request body
     const body = await request.json();
-    const { title } = body;
+    const { title, isShared } = body;
 
-    if (typeof title !== 'string' || title.trim().length === 0) {
+    const hasTitle = typeof title === 'string';
+    const hasIsShared = typeof isShared === 'boolean';
+
+    if (!hasTitle && !hasIsShared) {
+      return NextResponse.json(
+        { error: 'Request must include title or isShared' },
+        { status: 400 }
+      );
+    }
+
+    if (hasTitle && title.trim().length === 0) {
       return NextResponse.json(
         { error: 'Title is required and must be a non-empty string' },
         { status: 400 }
       );
     }
 
-    if (title.length > 255) {
+    if (hasTitle && title.length > 255) {
       return NextResponse.json(
         { error: 'Title must be 255 characters or fewer' },
         { status: 400 }
@@ -85,13 +95,28 @@ export async function PATCH(
       );
     }
 
-    // Persist the title via upsert into the conversations table
-    const persisted = await conversationRepository.upsertConversationTitle(
-      conversationId,
-      auth.userId,
-      agentId,
-      title
-    );
+    // isShared toggle: only the conversation owner may change sharing
+    if (hasIsShared) {
+      const conversation = await conversationRepository.getConversation(conversationId);
+      if (conversation && conversation.userId !== auth.userId) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'not_conversation_owner', agentId, method: 'PATCH' }, riskScore: 0.5 });
+        return NextResponse.json(
+          { error: 'Only the conversation owner can change sharing' },
+          { status: 403 }
+        );
+      }
+      await conversationRepository.setConversationShared(conversationId, isShared);
+    }
+
+    let persisted: { id: string; title: string | null } = { id: conversationId, title: null };
+    if (hasTitle) {
+      persisted = await conversationRepository.upsertConversationTitle(
+        conversationId,
+        auth.userId,
+        agentId,
+        title
+      );
+    }
 
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: {
       action: 'update_conversation',
@@ -101,9 +126,20 @@ export async function PATCH(
     void (async () => {
       try {
         const triggeredBy = await resolveTriggeredBy(auth.userId, request);
-        await broadcastAiConversationRenamed({ agentId, conversationId, title, triggeredBy });
+        if (hasTitle) {
+          await broadcastAiConversationRenamed({ agentId, conversationId, title, triggeredBy });
+        }
+        if (hasIsShared && isShared) {
+          await broadcastAiConversationAdded({
+            agentId,
+            conversation: { id: conversationId, title: persisted.title || 'New conversation', createdAt: new Date().toISOString() },
+            triggeredBy,
+          });
+        } else if (hasIsShared && !isShared) {
+          await broadcastAiConversationDeleted({ agentId, conversationId, triggeredBy });
+        }
       } catch (broadcastError) {
-        loggers.ai.error('Failed to broadcast chat conversation-renamed', broadcastError as Error, {
+        loggers.ai.error('Failed to broadcast conversation update', broadcastError as Error, {
           agentId: maskIdentifier(agentId),
           conversationId: maskIdentifier(conversationId),
         });
@@ -160,22 +196,26 @@ export async function DELETE(
       return scopeError;
     }
 
-    // Check permissions (need edit to delete conversations)
-    const canEdit = await canUserEditPage(auth.userId, agentId);
-    if (!canEdit) {
-      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'no_edit_permission', agentId, method: 'DELETE' }, riskScore: 0.5 });
-      return NextResponse.json(
-        { error: 'Insufficient permissions to delete this conversation' },
-        { status: 403 }
-      );
-    }
-
     // Verify conversation exists before attempting deletion
     const exists = await conversationRepository.conversationExists(agentId, conversationId);
     if (!exists) {
       return NextResponse.json(
         { error: 'Conversation not found' },
         { status: 404 }
+      );
+    }
+
+    // Owners may always delete their own conversations; editors may delete any
+    const [canEdit, conversationRow] = await Promise.all([
+      canUserEditPage(auth.userId, agentId),
+      conversationRepository.getConversation(conversationId),
+    ]);
+    const isOwner = conversationRow?.userId === auth.userId;
+    if (!isOwner && !canEdit) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'not_owner_or_editor', agentId, method: 'DELETE' }, riskScore: 0.5 });
+      return NextResponse.json(
+        { error: 'Insufficient permissions to delete this conversation' },
+        { status: 403 }
       );
     }
 

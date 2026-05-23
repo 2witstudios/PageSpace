@@ -14,12 +14,29 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getAiAgent: vi.fn(),
+    getConversation: vi.fn(),
     conversationExists: vi.fn(),
     upsertConversationTitle: vi.fn(),
+    setConversationShared: vi.fn(),
     getConversationMetadata: vi.fn(),
     softDeleteConversation: vi.fn(),
     logConversationDeletion: vi.fn(),
   },
+}));
+
+// Mock websocket broadcast (boundary)
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastAiConversationAdded: vi.fn().mockResolvedValue(undefined),
+  broadcastAiConversationRenamed: vi.fn().mockResolvedValue(undefined),
+  broadcastAiConversationDeleted: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi.fn().mockResolvedValue({ userId: 'user_123' }),
+}));
+
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => id),
 }));
 
 // Mock auth (boundary)
@@ -51,6 +68,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { broadcastAiConversationAdded, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -76,6 +94,20 @@ const mockAgent = () => ({
   title: 'Test Agent',
   type: 'AI_CHAT',
   driveId: mockDriveId,
+});
+
+const mockConversationRow = (overrides: Partial<{ userId: string; isShared: boolean }> = {}) => ({
+  id: mockConversationId,
+  userId: mockUserId,
+  type: 'page',
+  contextId: mockAgentId,
+  title: null,
+  isActive: true,
+  isShared: false,
+  lastMessageAt: null,
+  createdAt: new Date('2025-01-01'),
+  updatedAt: new Date('2025-01-02'),
+  ...overrides,
 });
 
 const createRequest = (
@@ -116,11 +148,17 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
     // Default: conversation exists
     vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
 
+    // Default: conversation row exists and is owned by current user
+    vi.mocked(conversationRepository.getConversation).mockResolvedValue(mockConversationRow());
+
     // Default: upsert returns the persisted title
     vi.mocked(conversationRepository.upsertConversationTitle).mockResolvedValue({
       id: mockConversationId,
       title: 'My Custom Title',
     });
+
+    // Default: setConversationShared succeeds
+    vi.mocked(conversationRepository.setConversationShared).mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
@@ -181,7 +219,7 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
   });
 
   describe('title validation', () => {
-    it('should return 400 when title is missing', async () => {
+    it('should return 400 when body has no recognised fields', async () => {
       const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {});
       const context = createContext(mockAgentId, mockConversationId);
 
@@ -189,7 +227,7 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toContain('Title is required');
+      expect(body.error).toMatch(/title|isShared/i);
     });
 
     it('should return 400 when title is empty string', async () => {
@@ -266,6 +304,80 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
     });
   });
 
+  describe('isShared toggle', () => {
+    it('should call setConversationShared when isShared is provided by the owner', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: true });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(conversationRepository.setConversationShared).toHaveBeenCalledWith(
+        mockConversationId,
+        true
+      );
+    });
+
+    it('should call setConversationShared with false to make conversation private', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ isShared: true })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: false });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      expect(conversationRepository.setConversationShared).toHaveBeenCalledWith(
+        mockConversationId,
+        false
+      );
+    });
+
+    it('should return 403 when non-owner tries to toggle isShared', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ userId: 'other_user' })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: true });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('owner');
+      expect(conversationRepository.setConversationShared).not.toHaveBeenCalled();
+    });
+
+    it('should broadcast conversation_added when isShared is set to true', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: true });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      // Give the fire-and-forget async broadcast a tick to run
+      await new Promise(r => setTimeout(r, 0));
+      expect(broadcastAiConversationAdded).toHaveBeenCalled();
+    });
+
+    it('should broadcast conversation_deleted when isShared is set to false', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ isShared: true })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { isShared: false });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      await new Promise(r => setTimeout(r, 0));
+      expect(broadcastAiConversationDeleted).toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
       vi.mocked(conversationRepository.getAiAgent).mockRejectedValue(new Error('Database error'));
@@ -297,7 +409,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     // Default: MCP scope check passes (null = no error)
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
 
-    // Default: permission granted
+    // Default: user has edit permission
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     // Default: agent exists
@@ -305,6 +417,9 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
     // Default: conversation exists
     vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
+
+    // Default: conversation owned by current user
+    vi.mocked(conversationRepository.getConversation).mockResolvedValue(mockConversationRow());
 
     // Default: conversation metadata
     vi.mocked(conversationRepository.getConversationMetadata).mockResolvedValue({
@@ -363,8 +478,11 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
   });
 
   describe('authorization', () => {
-    it('should return 403 when user lacks edit permission', async () => {
+    it('should return 403 when user is neither owner nor editor', async () => {
       vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ userId: 'other_user' })
+      );
 
       const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
       const context = createContext(mockAgentId, mockConversationId);
@@ -401,6 +519,56 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
         mockAgentId,
         mockConversationId
       );
+    });
+  });
+
+  describe('ownership enforcement', () => {
+    it('should allow the conversation owner to delete even without page-edit permission', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ userId: mockUserId })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+    });
+
+    it('should return 403 when user is neither owner nor page editor', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ userId: 'other_user' })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Insufficient permissions');
+    });
+
+    it('should allow page editor to delete any conversation', async () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ userId: 'other_user' })
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
     });
   });
 

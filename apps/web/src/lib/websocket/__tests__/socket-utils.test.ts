@@ -639,6 +639,20 @@ describe('socket-utils', () => {
       expect(requestBody.payload.aborted).toBe(true);
     });
 
+    it('given a conversationId, should include it in the broadcast payload', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-xyz',
+        aborted: false,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(requestBody.payload.conversationId).toBe('conv-xyz');
+    });
+
     it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
       process.env.INTERNAL_REALTIME_URL = '';
 

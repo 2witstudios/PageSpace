@@ -233,4 +233,42 @@ describe('stream-abort-client', () => {
     });
   });
 
+  describe('co-mount collision — same chatId from two surfaces', () => {
+    it('given two surfaces use the same chatId, second setActiveStreamId overwrites the first', async () => {
+      const client = await import('../stream-abort-client');
+
+      // Surface A (middle panel) registers its stream
+      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'middle-stream-A' });
+
+      // Surface B (sidebar) registers with the same chatId — this is the bug
+      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'sidebar-stream-B' });
+
+      // Middle panel's stop lookup now targets the sidebar's stream (wrong!)
+      const storedId = client.getActiveStreamId({ chatId: 'conv-xyz' });
+      expect(storedId).toBe('sidebar-stream-B');
+    });
+
+    it('given two surfaces use distinct chatIds, each surface retains its own entry', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'middle-stream-A' });
+      client.setActiveStreamId({ chatId: 'sidebar:conv-xyz', streamId: 'sidebar-stream-B' });
+
+      expect(client.getActiveStreamId({ chatId: 'conv-xyz' })).toBe('middle-stream-A');
+      expect(client.getActiveStreamId({ chatId: 'sidebar:conv-xyz' })).toBe('sidebar-stream-B');
+    });
+
+    it('given distinct chatIds, clearing sidebar entry does not affect middle panel entry', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'middle-stream-A' });
+      client.setActiveStreamId({ chatId: 'sidebar:conv-xyz', streamId: 'sidebar-stream-B' });
+
+      client.clearActiveStreamId({ chatId: 'sidebar:conv-xyz' });
+
+      expect(client.getActiveStreamId({ chatId: 'conv-xyz' })).toBe('middle-stream-A');
+      expect(client.getActiveStreamId({ chatId: 'sidebar:conv-xyz' })).toBeUndefined();
+    });
+  });
+
 });

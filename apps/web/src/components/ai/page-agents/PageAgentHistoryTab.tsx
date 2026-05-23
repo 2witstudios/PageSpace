@@ -8,6 +8,8 @@ import {
   MessageSquare,
   Clock,
   Hash,
+  Lock,
+  Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
@@ -23,6 +25,8 @@ interface Conversation {
   createdAt: Date | string;
   updatedAt: Date | string;
   messageCount: number;
+  isShared?: boolean;
+  isOwner?: boolean;
   lastMessage: {
     role: string;
     timestamp: Date | string;
@@ -35,6 +39,7 @@ interface PageAgentHistoryTabProps {
   onSelectConversation: (conversationId: string) => void;
   onCreateNew: () => void;
   onDeleteConversation: (conversationId: string) => void;
+  onToggleShare?: (conversationId: string, isShared: boolean) => void;
   isLoading: boolean;
 }
 
@@ -43,11 +48,13 @@ const ConversationCard = memo(function ConversationCard({
   isActive,
   onClick,
   onDelete,
+  onToggleShare,
 }: {
   conversation: Conversation;
   isActive: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onToggleShare?: () => void;
 }) {
   const updatedAt =
     typeof conversation.updatedAt === 'string'
@@ -82,18 +89,35 @@ const ConversationCard = memo(function ConversationCard({
             </span>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="shrink-0"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          title="Delete conversation"
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1 shrink-0">
+          {conversation.isOwner && onToggleShare && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleShare();
+              }}
+              title={conversation.isShared ? 'Make private' : 'Share with drive members'}
+            >
+              {conversation.isShared
+                ? <Users className="h-4 w-4 text-primary" />
+                : <Lock className="h-4 w-4 text-muted-foreground" />
+              }
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete conversation"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </Card>
   );
@@ -133,6 +157,7 @@ export default function PageAgentHistoryTab({
   onSelectConversation,
   onCreateNew,
   onDeleteConversation,
+  onToggleShare,
   isLoading,
 }: PageAgentHistoryTabProps) {
   // Determine if we should virtualize
@@ -146,9 +171,10 @@ export default function PageAgentHistoryTab({
         isActive={conv.id === currentConversationId}
         onClick={() => onSelectConversation(conv.id)}
         onDelete={() => onDeleteConversation(conv.id)}
+        onToggleShare={onToggleShare ? () => onToggleShare(conv.id, !conv.isShared) : undefined}
       />
     </div>
-  ), [currentConversationId, onSelectConversation, onDeleteConversation]);
+  ), [currentConversationId, onSelectConversation, onDeleteConversation, onToggleShare]);
 
   // Get key for virtualization
   const getConversationKey = useCallback((conv: Conversation) => conv.id, []);
@@ -188,6 +214,7 @@ export default function PageAgentHistoryTab({
                   isActive={conv.id === currentConversationId}
                   onClick={() => onSelectConversation(conv.id)}
                   onDelete={() => onDeleteConversation(conv.id)}
+                  onToggleShare={onToggleShare ? () => onToggleShare(conv.id, !conv.isShared) : undefined}
                 />
               ))}
             </div>

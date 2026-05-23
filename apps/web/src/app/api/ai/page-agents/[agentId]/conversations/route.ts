@@ -10,9 +10,6 @@ import {
   generateTitle,
 } from '@/lib/repositories/conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
-import { broadcastAiConversationAdded } from '@/lib/websocket/socket-utils';
-import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { maskIdentifier } from '@/lib/logging/mask';
 
 // Auth options: GET is read-only, POST creates new conversations
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -78,17 +75,20 @@ export async function GET(
     });
     const offset = page * pageSize;
 
-    // Get conversations with stats
+    // Get conversations with stats — scoped to this user (private) + shared ones
     const conversationsData = await conversationRepository.listConversations(
       agentId,
       pageSize,
-      offset
+      offset,
+      auth.userId
     );
 
     // Format conversations for response
     const conversations = conversationsData.map(conv => {
       const preview = extractPreviewText(conv.firstUserMessage);
       const title = generateTitle(preview);
+      const isShared = conv.isShared ?? false;
+      const isOwner = conv.conversationUserId === auth.userId;
 
       return {
         id: conv.conversationId,
@@ -97,6 +97,8 @@ export async function GET(
         createdAt: conv.firstMessageTime,
         updatedAt: conv.lastMessageTime,
         messageCount: Number(conv.messageCount),
+        isShared,
+        isOwner,
         lastMessage: {
           role: conv.lastMessageRole,
           timestamp: conv.lastMessageTime,
@@ -104,8 +106,8 @@ export async function GET(
       };
     });
 
-    // Get total count for pagination
-    const totalCount = await conversationRepository.countConversations(agentId);
+    // Get total count for pagination — same privacy filter
+    const totalCount = await conversationRepository.countConversations(agentId, auth.userId);
 
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: {
       action: 'list_conversations',
@@ -184,34 +186,17 @@ export async function POST(
     // Generate new conversation ID using createId
     const conversationId = createId();
 
+    // Eagerly persist ownership so privacy filtering works immediately.
+    // isShared defaults to false — conversation is private to this user.
+    await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+
     const response = {
       conversationId,
       title: customTitle || 'New conversation',
       createdAt: new Date(),
     };
 
-    // Broadcast to other viewers of this shared agent so their history pane prepends the new
-    // conversation. Note: the conversation row is materialized lazily on first message save —
-    // remote viewers will see the entry appear here and become populated when messages arrive.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(auth.userId, request);
-        await broadcastAiConversationAdded({
-          agentId,
-          conversation: {
-            id: conversationId,
-            title: response.title,
-            createdAt: response.createdAt.toISOString(),
-          },
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.ai.error('Failed to broadcast chat conversation-added', broadcastError as Error, {
-          agentId: maskIdentifier(agentId),
-          conversationId: maskIdentifier(conversationId),
-        });
-      }
-    })();
+    // Private conversations are not broadcast — only the creator sees them.
 
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: {
       action: 'create_conversation',

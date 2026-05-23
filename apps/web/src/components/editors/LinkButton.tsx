@@ -34,7 +34,8 @@ const LinkButton = ({ editor, variant = 'toolbar' }: LinkButtonProps) => {
   // menu's instance is unmounted when there's no selection, and we want a
   // single, predictable handler regardless of selection state.
   React.useEffect(() => {
-    if (variant !== 'toolbar' || !editor || editor.isDestroyed) return;
+    if (variant !== 'toolbar') return;
+    if (!editor || editor.isDestroyed) return;
     const root = editor.view.dom as HTMLElement;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {

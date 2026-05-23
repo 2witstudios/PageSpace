@@ -38,6 +38,7 @@ import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
+import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -177,6 +178,27 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       setMessages([]);
     },
   });
+
+  // Toggle share status for a conversation the user owns
+  const toggleConversationShare = useCallback(async (conversationId: string, isShared: boolean) => {
+    try {
+      const response = await fetchWithAuth(
+        `/api/ai/page-agents/${page.id}/conversations/${conversationId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isShared }),
+        }
+      );
+      if (!response.ok) {
+        toast.error('Failed to update conversation sharing');
+        return;
+      }
+      refreshConversations();
+    } catch {
+      toast.error('Failed to update conversation sharing');
+    }
+  }, [page.id, refreshConversations]);
 
   // ============================================
   // CHAT CONFIGURATION
@@ -387,14 +409,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onConversationDeleted: () => {
       refreshConversations();
     },
-    onStreamComplete: (messageId) => {
+    onStreamComplete: (messageId, completedConvId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
-      if (!stream || stream.parts.length === 0) return;
 
-      if (stream.conversationId === currentConversationId) {
+      if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationId) {
         setMessages((prev) => [...prev, synthesizeAssistantMessage(messageId, stream.parts)]);
         return;
       }
+
+      if (shouldReloadOnComountComplete(stream, completedConvId, currentConversationId)) {
+        void loadConversation(completedConvId!);
+        return;
+      }
+
+      if (!stream || stream.parts.length === 0) return;
 
       if (currentConversationId === `${page.id}-default`) {
         const { parts, conversationId: streamConvId } = stream;
@@ -841,6 +869,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onSelectConversation={loadConversation}
             onCreateNew={() => createConversation()}
             onDeleteConversation={deleteConversation}
+            onToggleShare={toggleConversationShare}
             isLoading={isLoadingConversations}
           />
         </TabsContent>
