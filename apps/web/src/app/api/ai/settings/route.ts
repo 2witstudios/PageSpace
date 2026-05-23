@@ -137,6 +137,13 @@ export async function PATCH(request: Request) {
       );
     }
 
+    if (provider === 'openrouter_free' && model && !model.endsWith(':free')) {
+      return NextResponse.json(
+        { error: 'openrouter_free only accepts models with the ":free" suffix' },
+        { status: 400 }
+      );
+    }
+
     const user = await aiSettingsRepository.getUserSettings(userId);
     if (!user) {
       return NextResponse.json(

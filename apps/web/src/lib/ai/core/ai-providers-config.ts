@@ -217,60 +217,7 @@ export const AI_PROVIDERS = {
   },
   openrouter_free: {
     name: 'OpenRouter (Free)',
-    models: {
-      // Coding Models
-      'qwen/qwen3-coder:free': 'Qwen3 Coder',
-      'kwaipilot/kat-coder-pro:free': 'Kat Coder Pro',
-      'mistralai/devstral-small-2505:free': 'Devstral Small',
-      'mistralai/devstral-2512:free': 'Devstral 2512',
-
-      // Large Models (405B+)
-      'meta-llama/llama-3.1-405b-instruct:free': 'Llama 3.1 405B',
-      'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B',
-
-      // Reasoning Models
-      'deepseek/deepseek-v4-flash:free': 'DeepSeek V4 Flash',
-      'deepseek/deepseek-r1-0528:free': 'DeepSeek R1',
-      'tngtech/deepseek-r1t-chimera:free': 'DeepSeek R1T Chimera',
-      'tngtech/tng-r1t-chimera:free': 'TNG R1T Chimera',
-      'nex-agi/deepseek-v3.1-nex-n1:free': 'DeepSeek V3.1 Nex N1',
-      'allenai/olmo-3.1-32b-think:free': 'OLMo 3.1 32B Think',
-      'allenai/olmo-3-32b-think:free': 'OLMo 3 32B Think',
-
-      // Google Models
-      'google/gemma-4-31b-it:free': 'Gemma 4 31B',
-      'google/gemini-2.0-flash-exp:free': 'Gemini 2.0 Flash',
-      'google/gemma-3-27b-it:free': 'Gemma 3 27B',
-      'google/gemma-3-12b-it:free': 'Gemma 3 12B',
-      'google/gemma-3-4b-it:free': 'Gemma 3 4B',
-
-      // Meta Llama Models
-      'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B',
-      'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B',
-
-      // Mistral Models
-      'mistralai/mistral-small-3.1-24b-instruct:free': 'Mistral Small 3.1 24B',
-      'mistralai/mistral-7b-instruct:free': 'Mistral 7B',
-      'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': 'Dolphin Mistral 24B',
-
-      // Chinese/Asian Models
-      'z-ai/glm-4.5-air:free': 'GLM 4.5 Air',
-      'qwen/qwen3-4b:free': 'Qwen3 4B',
-      'qwen/qwen-2.5-vl-7b-instruct:free': 'Qwen 2.5 VL 7B',
-      'moonshotai/kimi-k2:free': 'Kimi K2',
-      'alibaba/tongyi-deepresearch-30b-a3b:free': 'Tongyi DeepResearch 30B',
-      'xiaomi/mimo-v2-flash:free': 'MiMo V2 Flash',
-
-      // OpenAI OSS Models
-      'openai/gpt-oss-120b:free': 'GPT OSS 120B',
-      'openai/gpt-oss-20b:free': 'GPT OSS 20B',
-
-      // Other Models
-      'nvidia/nemotron-3-super-120b-a12b:free': 'Nemotron 3 Super 120B',
-      'nvidia/nemotron-nano-12b-v2-vl:free': 'Nemotron Nano 12B VL',
-      'nvidia/nemotron-3-nano-30b-a3b:free': 'Nemotron 3 Nano 30B',
-      'arcee-ai/trinity-mini:free': 'Trinity Mini',
-    },
+    models: {},
   },
   google: {
     name: 'Google AI',

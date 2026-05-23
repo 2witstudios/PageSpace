@@ -33,9 +33,14 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-      'server-only': path.resolve(__dirname, 'src/test/server-only-stub.ts'),
-    },
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: 'server-only', replacement: path.resolve(__dirname, 'src/test/server-only-stub.ts') },
+      { find: 'next/server', replacement: path.resolve(__dirname, 'src/test/next-server-stub.ts') },
+      {
+        find: /^@pagespace\/lib\/(.*)$/,
+        replacement: path.resolve(__dirname, '../../packages/lib/src/$1'),
+      },
+    ],
   },
 })
