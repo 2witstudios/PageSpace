@@ -102,6 +102,11 @@ vi.mock('@/lib/ai/core/browser-session-id', () => ({
   getBrowserSessionId: mockGetBrowserSessionId,
 }));
 
+vi.mock('@/lib/ai/streams/bootstrapConsumerGuard', () => ({
+  claimBootstrapConsumer: vi.fn(() => true),
+  releaseBootstrapConsumer: vi.fn(),
+}));
+
 const mockFetchWithAuth = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
