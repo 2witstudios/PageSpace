@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { customRoleBelongsToDrive } from '@pagespace/lib/permissions/membership-queries';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -39,11 +40,11 @@ export async function POST(req: NextRequest) {
       ?? (rawDriveIds ?? []).map(id => ({ id, role: 'MEMBER' as const, customRoleId: undefined }));
     const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
-    // Zero Trust: Validate access and cap role to the caller's authority per drive.
-    // A MEMBER cannot grant ADMIN — tokens can only receive roles the caller can grant.
+    // Zero Trust: Validate access, cap role to caller authority, and verify customRoleId ownership.
     if (uniqueDriveScopes.length > 0) {
       const invalidDriveIds: string[] = [];
       const unauthorizedRoles: string[] = [];
+      const invalidCustomRoles: string[] = [];
 
       for (const scope of uniqueDriveScopes) {
         const access = await getDriveAccess(scope.id, userId);
@@ -51,9 +52,13 @@ export async function POST(req: NextRequest) {
           invalidDriveIds.push(scope.id);
           continue;
         }
-        // Cap to MEMBER when caller isn't admin/owner
+        // A MEMBER cannot grant ADMIN — cap to caller's actual authority
         if (scope.role === 'ADMIN' && !access.isAdmin) {
           unauthorizedRoles.push(scope.id);
+        }
+        // Prevent using a custom role that belongs to a different drive
+        if (scope.customRoleId && !await customRoleBelongsToDrive(scope.customRoleId, scope.id)) {
+          invalidCustomRoles.push(scope.id);
         }
       }
 
@@ -67,6 +72,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { error: 'You do not have permission to grant ADMIN role in these drives: ' + unauthorizedRoles.join(', ') },
           { status: 403 }
+        );
+      }
+      if (invalidCustomRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'Custom role does not belong to the specified drive: ' + invalidCustomRoles.join(', ') },
+          { status: 400 }
         );
       }
     }

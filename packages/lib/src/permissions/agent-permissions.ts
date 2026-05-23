@@ -24,7 +24,7 @@ export async function getAgentAccessLevel(
   if (!membership) return null;
 
   const customPerms = membership.customRoleId
-    ? await fetchCustomRolePermissions(membership.customRoleId)
+    ? await fetchCustomRolePermissions(membership.customRoleId, driveId)
     : null;
 
   return resolveRolePermissions(membership.role, customPerms, targetPageId);
@@ -68,7 +68,7 @@ export async function getAgentAccessiblePagesInDrive(
   }
 
   if (customRoleId) {
-    const customPerms = await fetchCustomRolePermissions(customRoleId);
+    const customPerms = await fetchCustomRolePermissions(customRoleId, driveId);
     if (customPerms) {
       const visiblePageIds = Object.entries(customPerms)
         .filter(([, p]) => p.canView)

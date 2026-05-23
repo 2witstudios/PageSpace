@@ -21,6 +21,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   },
   driveRoles: {
     id: 'id',
+    driveId: 'driveId',
     permissions: 'permissions',
   },
 }));

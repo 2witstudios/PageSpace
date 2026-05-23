@@ -23,7 +23,7 @@ export async function getAppAccessLevel(
   if (!membership) return null;
 
   const customPerms = membership.customRoleId
-    ? await fetchCustomRolePermissions(membership.customRoleId)
+    ? await fetchCustomRolePermissions(membership.customRoleId, driveId)
     : null;
 
   return resolveRolePermissions(membership.role, customPerms, targetPageId);
