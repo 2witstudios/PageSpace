@@ -132,10 +132,10 @@ jobs:
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
           flyctl machine run registry.fly.io/pagespace-web:migrate \
-            sh -c "bun run db:migrate; RESULT=\$?; sleep 10; exit \$RESULT" \
             --app pagespace-web \
             --restart no \
-            --rm
+            --rm \
+            -- sh -c "bun run db:migrate; RESULT=\$?; sleep 15; exit \$RESULT"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
