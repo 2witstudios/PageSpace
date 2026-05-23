@@ -3,7 +3,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
 
-type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+export type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 
 export async function fetchDriveIdForPage(targetPageId: string): Promise<string> {
   const page = await db
@@ -11,6 +11,7 @@ export async function fetchDriveIdForPage(targetPageId: string): Promise<string>
     .from(pages)
     .where(eq(pages.id, targetPageId))
     .limit(1);
+  // If no page exists, treat targetPageId itself as a drive ID (drive-as-root-node pattern).
   return page.length > 0 ? page[0].driveId : targetPageId;
 }
 

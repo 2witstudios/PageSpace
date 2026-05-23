@@ -23,7 +23,7 @@ const createTokenSchema = z.object({
     role: z.enum(['ADMIN', 'MEMBER']).default('MEMBER'),
     customRoleId: z.string().optional(),
   })).optional(),
-});
+}).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
 
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {
@@ -35,12 +35,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { name, driveIds: rawDriveIds, drives: rawDrives } = createTokenSchema.parse(body);
 
-    // Normalize both input formats into a unified shape; deduplicate by drive ID
     const driveScopes = rawDrives
       ?? (rawDriveIds ?? []).map(id => ({ id, role: 'MEMBER' as const, customRoleId: undefined }));
     const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
-    // Zero Trust: Validate access, cap role to caller authority, and verify customRoleId ownership.
     if (uniqueDriveScopes.length > 0) {
       const invalidDriveIds: string[] = [];
       const unauthorizedRoles: string[] = [];
@@ -82,8 +80,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // P1-T3: Generate token with hash and prefix for secure storage
-    // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
     const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
     // Determine if this token is scoped (fail-closed security)

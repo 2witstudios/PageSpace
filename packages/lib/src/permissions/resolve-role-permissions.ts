@@ -1,6 +1,5 @@
 import type { PermissionLevel } from './permissions';
-
-type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+import type { CustomRolePerms } from './membership-queries';
 
 export function resolveRolePermissions(
   role: 'OWNER' | 'ADMIN' | 'MEMBER',
