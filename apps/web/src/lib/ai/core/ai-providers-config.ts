@@ -507,6 +507,13 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
 export const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
 
 /**
+ * Providers whose model list is fetched dynamically at runtime.
+ * These are exempt from the "model is required" validation on provider switch
+ * because the client fetches the model list after selecting the provider.
+ */
+export const DYNAMIC_MODEL_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'openrouter_free']);
+
+/**
  * Returns the provider entries visible in the current deployment mode.
  * On-prem: only local providers and Azure OpenAI.
  * Cloud: all providers.

@@ -8,7 +8,7 @@ import {
   getDefaultPageSpaceSettings,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -129,8 +129,8 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const isLocalProvider = ONPREM_ALLOWED_PROVIDERS.has(provider);
-    if (!isLocalProvider && (!model || typeof model !== 'string')) {
+    const skipModelValidation = ONPREM_ALLOWED_PROVIDERS.has(provider) || DYNAMIC_MODEL_PROVIDERS.has(provider);
+    if (!skipModelValidation && (!model || typeof model !== 'string')) {
       return NextResponse.json(
         { error: 'Model is required' },
         { status: 400 }

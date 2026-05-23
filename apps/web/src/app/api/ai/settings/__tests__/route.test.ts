@@ -307,6 +307,20 @@ describe('AI settings route', () => {
       expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 
+    it('allows openrouter_free without a model (dynamic model list, picked after provider switch)', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', { provider: 'openrouter_free' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'openrouter_free',
+        model: undefined,
+      });
+    });
+
     it('allows non-pagespace providers in onprem mode when configured', async () => {
       vi.mocked(isOnPrem).mockReturnValue(true);
       process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
