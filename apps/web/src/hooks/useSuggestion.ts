@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { useSuggestionCore } from './useSuggestionCore';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
@@ -38,9 +38,12 @@ export interface UseSuggestionResult {
   selectedIndex: number;
   loading: boolean;
   error: string | null;
+  /** The current @ query string (text typed after the @ trigger) */
+  query: string;
   actions: {
     selectSuggestion: (suggestion: MentionSuggestion) => void;
     selectItem: (index: number) => void;
+    close: () => void;
   };
 }
 
@@ -60,6 +63,7 @@ export function useSuggestion({
   onMentionInserted,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
+  const [currentQuery, setCurrentQuery] = useState('');
 
   // Default pattern: @ must be at start or preceded by whitespace (existing behavior)
   // Sheet pattern should allow formula operators like: ( = + - * / , < > ! and whitespace
@@ -201,7 +205,8 @@ export function useSuggestion({
       if (!isPartOfExistingMention) {
         // This is a fresh @ trigger, proceed with suggestion logic
         const query = textAfterTrigger;
-        
+        setCurrentQuery(query);
+
         if (!context.isOpen) {
           // Calculate position based on variant and input type
           let position: Position | null = null;
@@ -230,7 +235,7 @@ export function useSuggestion({
             context.open(position);
           }
         }
-        suggestion.actions.setQuery(query);
+        // MentionPickerPortal handles its own fetching — no need to drive useSuggestionCore
       } else {
         // This @ is part of an existing mention, close suggestions if open
         if (context.isOpen) {
@@ -310,6 +315,7 @@ export function useSuggestion({
     selectedIndex: context.selectedIndex,
     loading: context.loading,
     error: context.error,
+    query: currentQuery,
     actions: suggestion.actions,
   };
 }

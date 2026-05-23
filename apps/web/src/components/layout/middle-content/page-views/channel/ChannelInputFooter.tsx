@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { EmojiPicker } from '@/components/ui/emoji-picker';
-import { MentionPickerPopover } from '@/components/mentions/MentionPicker';
+import { MentionPicker } from '@/components/mentions/MentionPicker';
 import type { MentionSuggestion, MentionType } from '@/types/mentions';
 
 export interface ChannelInputFooterProps {
@@ -90,21 +90,6 @@ export function ChannelInputFooter({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
 
-  const mentionButton = (
-    <Button
-      variant="ghost"
-      size="sm"
-      disabled={disabled}
-      className={cn(
-        'h-8 w-8 p-0',
-        'text-muted-foreground hover:text-foreground',
-        'hover:bg-muted/50',
-      )}
-    >
-      <AtSign className="h-4 w-4" />
-      <span className="sr-only">Mention someone</span>
-    </Button>
-  );
 
   return (
     <div
@@ -177,27 +162,56 @@ export function ChannelInputFooter({
 
         {/* Mention picker */}
         {onMentionSelect && driveId ? (
-          <Tooltip>
-            <MentionPickerPopover
-              driveId={driveId}
-              crossDrive={crossDrive}
-              allowedTypes={allowedMentionTypes}
-              open={mentionPickerOpen}
-              onOpenChange={setMentionPickerOpen}
-              onMentionSelect={(s) => {
-                onMentionSelect(s);
-                setMentionPickerOpen(false);
-              }}
-              side="top"
-              align="start"
-            >
-              <TooltipTrigger asChild>{mentionButton}</TooltipTrigger>
-            </MentionPickerPopover>
-            <TooltipContent side="top">Mention someone</TooltipContent>
-          </Tooltip>
+          <Popover open={mentionPickerOpen} onOpenChange={setMentionPickerOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={disabled}
+                    className={cn(
+                      'h-8 w-8 p-0',
+                      'text-muted-foreground hover:text-foreground',
+                      'hover:bg-muted/50',
+                    )}
+                  >
+                    <AtSign className="h-4 w-4" />
+                    <span className="sr-only">Mention someone</span>
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">Mention someone</TooltipContent>
+            </Tooltip>
+            <PopoverContent side="top" align="start" className="w-auto p-0" sideOffset={8}>
+              <MentionPicker
+                driveId={driveId}
+                crossDrive={crossDrive}
+                allowedTypes={allowedMentionTypes}
+                onMentionSelect={(s) => {
+                  onMentionSelect(s);
+                  setMentionPickerOpen(false);
+                }}
+              />
+            </PopoverContent>
+          </Popover>
         ) : (
           <Tooltip>
-            <TooltipTrigger asChild>{mentionButton}</TooltipTrigger>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={disabled}
+                className={cn(
+                  'h-8 w-8 p-0',
+                  'text-muted-foreground hover:text-foreground',
+                  'hover:bg-muted/50',
+                )}
+              >
+                <AtSign className="h-4 w-4" />
+                <span className="sr-only">Mention someone</span>
+              </Button>
+            </TooltipTrigger>
             <TooltipContent side="top">Mention someone</TooltipContent>
           </Tooltip>
         )}
