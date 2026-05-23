@@ -21,6 +21,29 @@ vi.mock('next/navigation', () => ({
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }))
 
+// jsdom does not implement ResizeObserver or IntersectionObserver.
+// Stub both so components that rely on them (e.g. radix ScrollArea) can mount.
+if (typeof window !== 'undefined') {
+  if (!window.ResizeObserver) {
+    window.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+  if (!window.IntersectionObserver) {
+    window.IntersectionObserver = class IntersectionObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      readonly root = null;
+      readonly rootMargin = '';
+      readonly thresholds: ReadonlyArray<number> = [];
+      takeRecords() { return []; }
+    } as unknown as typeof IntersectionObserver;
+  }
+}
+
 // jsdom does not implement matchMedia. Provide a permissive default that
 // returns false (i.e. desktop, non-touch) so hooks like useMobile / useTouchDevice
 // can boot during component tests without each test re-stubbing it.
