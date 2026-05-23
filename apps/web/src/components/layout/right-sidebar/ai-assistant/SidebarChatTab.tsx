@@ -209,7 +209,10 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Agent Chat Configuration
   // ============================================
-  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+  // Namespace prevents the module-level activeStreams Map from colliding with the
+  // middle panel's entry when both surfaces view the same conversationId.
+  const sidebarChatId = agentConversationId ? `sidebar:${agentConversationId}` : null;
+  const agentTransport = useChatTransport(sidebarChatId, '/api/ai/chat');
 
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
