@@ -130,7 +130,7 @@ describe('/api/auth/mcp-tokens', () => {
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
-          driveIds: [],
+          drives: [],
         });
 
         // Assert - verify activity logging for token creation (boundary contract)
@@ -168,7 +168,7 @@ describe('/api/auth/mcp-tokens', () => {
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
-          driveIds: [],
+          drives: [],
         });
         expect(body.token).toBe('mcp_randomBase64UrlString');
       });
@@ -194,7 +194,7 @@ describe('/api/auth/mcp-tokens', () => {
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
-          driveIds: [],
+          drives: [],
         });
       });
     });
