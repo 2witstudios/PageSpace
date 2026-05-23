@@ -2,6 +2,8 @@
 
 ## Active Epics
 
+- [Agent Conversation Privacy](tasks/agent-conversation-privacy.md) — User-scoped conversation history for AI Chat pages; private by default, opt-in multiplayer sharing.
+
 - [OpenAI API v1 Follow-Up](tasks/openai-api-v1-followup.md) — Token usage tracking in `onFinish` + `GET /api/v1/models` discovery endpoint.
 - [Zoom Transcript Integration](tasks/zoom-transcript-integration.md) — Auto-save Zoom meeting transcripts as Document pages in a user-configured drive; webhook-driven, AI summary + action items, cloud-only.
 

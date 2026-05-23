@@ -10,12 +10,22 @@ import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
+// Mock websocket broadcast (boundary)
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastAiConversationAdded: vi.fn(),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi.fn().mockResolvedValue({ userId: 'user_123' }),
+}));
+
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getAiAgent: vi.fn(),
     listConversations: vi.fn(),
     countConversations: vi.fn(),
+    createConversation: vi.fn().mockResolvedValue(undefined),
   },
   extractPreviewText: vi.fn((content: string | null) => {
     if (!content) return 'New conversation';
@@ -70,6 +80,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { broadcastAiConversationAdded } from '@/lib/websocket/socket-utils';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -203,6 +214,8 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         createdAt: '2025-01-01T00:00:00.000Z',
         updatedAt: '2025-01-02T00:00:00.000Z',
         messageCount: 5,
+        isShared: false,
+        isOwner: false,
         lastMessage: {
           role: 'assistant',
           timestamp: '2025-01-02T00:00:00.000Z',
@@ -244,7 +257,8 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
       expect(conversationRepository.listConversations).toHaveBeenCalledWith(
         mockAgentId,
         20,  // pageSize
-        40   // offset (page 2 * 20)
+        40,  // offset (page 2 * 20)
+        mockUserId
       );
       expect(body.pagination).toEqual({
         page: 2,
@@ -252,6 +266,71 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         totalCount: 100,
         totalPages: 5,
         hasMore: true,
+      });
+    });
+
+    it('should pass userId to listConversations and countConversations for privacy scoping', async () => {
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      await GET(request, context);
+
+      expect(conversationRepository.listConversations).toHaveBeenCalledWith(
+        mockAgentId,
+        expect.any(Number),
+        expect.any(Number),
+        mockUserId
+      );
+      expect(conversationRepository.countConversations).toHaveBeenCalledWith(
+        mockAgentId,
+        mockUserId
+      );
+    });
+
+    it('should include isShared and isOwner in conversation response', async () => {
+      const mockConversations = [
+        {
+          conversationId: 'conv_owned',
+          firstMessageTime: new Date('2025-01-01'),
+          lastMessageTime: new Date('2025-01-02'),
+          messageCount: 3,
+          firstUserMessage: JSON.stringify([{ text: 'My private convo' }]),
+          lastMessageRole: 'user',
+          lastMessageContent: 'Hello',
+          conversationUserId: mockUserId,
+          isShared: false,
+        },
+        {
+          conversationId: 'conv_shared',
+          firstMessageTime: new Date('2025-01-03'),
+          lastMessageTime: new Date('2025-01-04'),
+          messageCount: 5,
+          firstUserMessage: JSON.stringify([{ text: 'Shared convo' }]),
+          lastMessageRole: 'assistant',
+          lastMessageContent: 'Hi',
+          conversationUserId: 'other_user',
+          isShared: true,
+        },
+      ];
+      vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
+      vi.mocked(conversationRepository.countConversations).mockResolvedValue(2);
+
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversations[0]).toMatchObject({
+        id: 'conv_owned',
+        isShared: false,
+        isOwner: true,
+      });
+      expect(body.conversations[1]).toMatchObject({
+        id: 'conv_shared',
+        isShared: true,
+        isOwner: false,
       });
     });
   });
@@ -383,6 +462,28 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(200);
       expect(body.title).toBe('New conversation');
+    });
+
+    it('should call createConversation in repository to eagerly persist ownership', async () => {
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      await POST(request, context);
+
+      expect(conversationRepository.createConversation).toHaveBeenCalledWith(
+        'generated_conv_id',
+        mockUserId,
+        mockAgentId
+      );
+    });
+
+    it('should NOT broadcast conversation_added for private conversations', async () => {
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      await POST(request, context);
+
+      expect(broadcastAiConversationAdded).not.toHaveBeenCalled();
     });
   });
 
