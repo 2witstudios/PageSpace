@@ -131,11 +131,29 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-migrate:latest
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
-          flyctl machine run registry.fly.io/pagespace-web:migrate \
-            --app pagespace-web \
-            --restart no \
-            --rm \
-            -- sh -c "bun run db:migrate; RESULT=\$?; sleep 15; exit \$RESULT"
+
+          # Use the Machines API directly: create a machine with no services (no health
+          # checks), then wait for "stopped" state rather than "started". This avoids
+          # flyctl's requirement that the process reach "started" state before exiting,
+          # which always fails for fast one-shot migration containers.
+          RESPONSE=$(curl -sf -X POST \
+            https://api.machines.dev/v1/apps/pagespace-web/machines \
+            -H "Authorization: Bearer ${FLY_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"config":{"image":"registry.fly.io/pagespace-web:migrate","restart":{"policy":"no"}}}')
+          MACHINE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          INSTANCE_ID=$(echo "$RESPONSE" | jq -r '.instance_id')
+          echo "Migration machine: $MACHINE_ID"
+
+          curl -sf \
+            "https://api.machines.dev/v1/apps/pagespace-web/machines/${MACHINE_ID}/wait?state=stopped&instance_id=${INSTANCE_ID}&timeout=120" \
+            -H "Authorization: Bearer ${FLY_API_TOKEN}"
+
+          curl -sf -X DELETE \
+            "https://api.machines.dev/v1/apps/pagespace-web/machines/${MACHINE_ID}?force=true" \
+            -H "Authorization: Bearer ${FLY_API_TOKEN}"
+
+          echo "Migrations complete"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
