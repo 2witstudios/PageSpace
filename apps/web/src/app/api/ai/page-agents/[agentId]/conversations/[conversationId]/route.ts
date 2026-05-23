@@ -130,7 +130,11 @@ export async function PATCH(
           await broadcastAiConversationRenamed({ agentId, conversationId, title, triggeredBy });
         }
         if (hasIsShared && isShared) {
-          await broadcastAiConversationAdded({ agentId, conversationId, triggeredBy });
+          await broadcastAiConversationAdded({
+            agentId,
+            conversation: { id: conversationId, title: persisted.title || 'New conversation', createdAt: new Date().toISOString() },
+            triggeredBy,
+          });
         } else if (hasIsShared && !isShared) {
           await broadcastAiConversationDeleted({ agentId, conversationId, triggeredBy });
         }

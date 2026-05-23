@@ -194,6 +194,8 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           firstUserMessage: JSON.stringify([{ text: 'Hello' }]),
           lastMessageRole: 'assistant',
           lastMessageContent: 'Hi there!',
+          conversationUserId: 'other_user',
+          isShared: false,
         },
       ];
       vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);

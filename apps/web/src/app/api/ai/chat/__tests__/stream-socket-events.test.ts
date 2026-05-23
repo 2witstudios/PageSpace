@@ -276,7 +276,7 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
+const makeRequest = (overrides: { browserSessionId?: string | null; conversationId?: string } = {}) => {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'content-length': '200',
@@ -290,7 +290,7 @@ const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page-1',
-      conversationId: 'conv-1',
+      conversationId: overrides.conversationId ?? 'conv-1',
       selectedProvider: 'pagespace',
       selectedModel: 'glm-4.5-air',
     }),

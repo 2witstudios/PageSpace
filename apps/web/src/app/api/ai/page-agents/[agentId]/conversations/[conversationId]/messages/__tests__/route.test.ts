@@ -134,7 +134,9 @@ describe('GET /api/ai/page-agents/[agentId]/conversations/[conversationId]/messa
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockAgent());
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(
+      mockAgent() as unknown as Awaited<ReturnType<typeof db.query.pages.findFirst>>
+    );
 
     // Default: user owns conversation
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(mockConversationRow());
