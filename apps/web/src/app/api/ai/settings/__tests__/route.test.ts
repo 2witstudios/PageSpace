@@ -139,7 +139,7 @@ describe('AI settings route', () => {
       expect(body.pageSpaceBackend).toBe('glm');
     });
 
-    it('masks non-pagespace providers as unavailable in cloud mode even when env vars are set', async () => {
+    it('masks non-user-visible providers as unavailable in cloud mode even when env vars are set', async () => {
       process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
       process.env.OPENAI_DEFAULT_API_KEY = 'b';
       process.env.GOOGLE_AI_DEFAULT_API_KEY = 'c';
@@ -149,14 +149,22 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      // Cloud mode: only pagespace is exposed; all others are masked
+      // Cloud mode exposes only the user-visible providers (pagespace + openrouter_free);
+      // everything else is masked even when env keys are present.
       expect(body.providers.anthropic.isAvailable).toBe(false);
       expect(body.providers.openai.isAvailable).toBe(false);
       expect(body.providers.google.isAvailable).toBe(false);
       expect(body.providers.xai.isAvailable).toBe(false);
       expect(body.providers.openrouter.isAvailable).toBe(false);
-      expect(body.providers.openrouter_free.isAvailable).toBe(false);
       expect(body.providers.pagespace.isAvailable).toBe(true);
+      expect(body.providers.openrouter_free.isAvailable).toBe(true);
+    });
+
+    it('marks openrouter_free unavailable in cloud mode when OPENROUTER_DEFAULT_API_KEY is unset', async () => {
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.providers.openrouter_free.isAvailable).toBe(false);
     });
 
     it('masks ollama as unavailable in cloud mode regardless of OLLAMA_BASE_URL', async () => {
@@ -242,7 +250,7 @@ describe('AI settings route', () => {
       });
     });
 
-    it('returns 503 for non-pagespace providers in cloud mode', async () => {
+    it('returns 503 for non-user-visible providers in cloud mode', async () => {
       process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
 
       const response = await PATCH(makeRequest('PATCH', {
@@ -253,6 +261,35 @@ describe('AI settings route', () => {
 
       expect(response.status).toBe(503);
       expect(body.error).toContain('not available on this instance');
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
+    });
+
+    it('accepts openrouter_free in cloud mode when OPENROUTER_DEFAULT_API_KEY is set', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openrouter_free',
+        model: 'qwen/qwen3-coder:free',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'openrouter_free',
+        model: 'qwen/qwen3-coder:free',
+      });
+    });
+
+    it('returns 503 for openrouter_free when OPENROUTER_DEFAULT_API_KEY is not configured', async () => {
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openrouter_free',
+        model: 'qwen/qwen3-coder:free',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body.error).toContain('not configured');
       expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 

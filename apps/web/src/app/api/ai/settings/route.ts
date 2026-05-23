@@ -17,7 +17,9 @@ const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 // Providers exposed to users. Expand this as per-provider billing tiers are set up.
-const USER_VISIBLE_PROVIDERS = new Set(['pagespace']);
+// `openrouter_free` is the OpenRouter free tier — all models carry the `:free` suffix
+// and never count against PageSpace's paid quota, so it is safe to expose alongside pagespace.
+const USER_VISIBLE_PROVIDERS = new Set(['pagespace', 'openrouter_free']);
 
 const GONE_RESPONSE = {
   error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
