@@ -4,44 +4,32 @@ import userEvent from '@testing-library/user-event';
 import React from 'react';
 import type { MentionSuggestion } from '@/types/mentions';
 
-// Stub MentionPickerPopover — we test ChannelInputFooter's wiring, not the picker internals
-const { mockPickerOpen } = vi.hoisted(() => ({ mockPickerOpen: vi.fn() }));
+// Stub MentionPicker — we test ChannelInputFooter's wiring, not the picker internals
 vi.mock('@/components/mentions/MentionPicker', () => ({
-  MentionPickerPopover: ({
-    children,
+  MentionPicker: ({
     onMentionSelect,
-    open,
-    onOpenChange,
   }: {
-    children: React.ReactNode;
     onMentionSelect: (s: MentionSuggestion) => void;
-    open?: boolean;
-    onOpenChange?: (v: boolean) => void;
-  }) => {
-    mockPickerOpen(open);
-    return (
-      <div>
-        <div onClick={() => onOpenChange?.(!open)}>{children}</div>
-        {open && (
-          <div data-testid="mention-picker-popover">
-            <button
-              data-testid="pick-alice"
-              onClick={() =>
-                onMentionSelect({
-                  id: 'user-1',
-                  label: 'Alice',
-                  type: 'user',
-                  data: {},
-                })
-              }
-            >
-              Alice
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  },
+    driveId?: string;
+    crossDrive?: boolean;
+    allowedTypes?: string[];
+  }) => (
+    <div data-testid="mention-picker">
+      <button
+        data-testid="pick-alice"
+        onClick={() =>
+          onMentionSelect({
+            id: 'user-1',
+            label: 'Alice',
+            type: 'user',
+            data: {},
+          })
+        }
+      >
+        Alice
+      </button>
+    </div>
+  ),
 }));
 
 import { ChannelInputFooter } from '../ChannelInputFooter';
@@ -62,7 +50,7 @@ describe('ChannelInputFooter', () => {
       expect(screen.getByRole('button', { name: /mention/i })).toBeInTheDocument();
     });
 
-    it('should open the MentionPickerPopover when the mention button is clicked', async () => {
+    it('should open the MentionPicker when the mention button is clicked', async () => {
       const user = userEvent.setup();
       render(
         <ChannelInputFooter
@@ -73,7 +61,7 @@ describe('ChannelInputFooter', () => {
 
       await user.click(screen.getByRole('button', { name: /mention/i }));
 
-      expect(screen.getByTestId('mention-picker-popover')).toBeInTheDocument();
+      expect(screen.getByTestId('mention-picker')).toBeInTheDocument();
     });
 
     it('should call onMentionSelect with the chosen suggestion', async () => {

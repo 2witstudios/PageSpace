@@ -71,12 +71,10 @@ export function MentionPickerPanel({
     [items, selectedIndex, onSelect, onSelectionChange],
   );
 
-  // Determine which tabs to show based on allowedTypes
-  const visibleTabs: TabType[] = allowedTypes
-    ? (['all', 'people', 'pages', 'groups'] as TabType[]).filter((tab) =>
-        TAB_TYPES[tab].some((t) => allowedTypes.includes(t)),
-      )
-    : ['all', 'people', 'pages', 'groups'];
+  // Show tabs only when multiple content categories are allowed
+  const contentTabCount = (['people', 'pages', 'groups'] as TabType[]).filter((tab) =>
+    TAB_TYPES[tab].some((t) => (allowedTypes ?? TAB_TYPES.all).includes(t)),
+  ).length;
 
   return (
     <div className={cn('w-80', className)} onKeyDown={handleKeyDown}>
@@ -90,7 +88,7 @@ export function MentionPickerPanel({
         />
       </div>
 
-      {visibleTabs.length > 1 && (
+      {contentTabCount > 1 && (
         <Tabs
           value={activeTab}
           onValueChange={(v) => onTabChange(v as TabType)}
