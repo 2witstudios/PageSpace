@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, and, isNull } from '@pagespace/db/operators';
 import { mcpTokenDrives, driveRoles } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 
@@ -43,7 +43,7 @@ export async function GET(
       .from(mcpTokenDrives)
       .leftJoin(mcpTokens, eq(mcpTokenDrives.tokenId, mcpTokens.id))
       .leftJoin(driveRoles, eq(mcpTokenDrives.customRoleId, driveRoles.id))
-      .where(eq(mcpTokenDrives.driveId, driveId));
+      .where(and(eq(mcpTokenDrives.driveId, driveId), isNull(mcpTokens.revokedAt)));
 
     const appMembers = rows.map((row) => ({
       id: row.id,

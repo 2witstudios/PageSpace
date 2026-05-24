@@ -14,6 +14,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
+  and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
+  isNull: vi.fn((col: unknown) => ({ _type: 'isNull', col })),
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   mcpTokenDrives: {
@@ -38,6 +40,7 @@ import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
+import { isNull } from '@pagespace/db/operators';
 
 const MOCK_USER_ID = 'user_abc';
 const MOCK_DRIVE_ID = 'drive_xyz';
@@ -196,6 +199,14 @@ describe('GET /api/drives/[driveId]/apps/members', () => {
         name: 'role-orphan',
         color: null,
       });
+    });
+
+    it('filters out revoked tokens (revokedAt IS NULL in query)', async () => {
+      setupDbChain([]);
+
+      await GET(new Request('https://x.test/api'), createContext(MOCK_DRIVE_ID));
+
+      expect(vi.mocked(isNull)).toHaveBeenCalled();
     });
 
     it('returns ADMIN currentUserRole for admin (non-owner) members', async () => {
