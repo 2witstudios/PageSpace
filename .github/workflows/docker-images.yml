@@ -175,7 +175,7 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-web-fly:latest
           docker tag ghcr.io/2witstudios/pagespace-web-fly:latest registry.fly.io/pagespace-web:latest
           docker push registry.fly.io/pagespace-web:latest
-          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 120
+          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -184,7 +184,7 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-realtime:latest
           docker tag ghcr.io/2witstudios/pagespace-realtime:latest registry.fly.io/pagespace-realtime:latest
           docker push registry.fly.io/pagespace-realtime:latest
-          flyctl deploy --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 120
+          flyctl deploy --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -193,7 +193,7 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-processor:latest
           docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
           docker push registry.fly.io/pagespace-processor:latest
-          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -202,6 +202,6 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-admin:latest
           docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
           docker push registry.fly.io/pagespace-admin:latest
-          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 120
+          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
