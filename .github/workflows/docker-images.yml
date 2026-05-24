@@ -158,14 +158,9 @@ jobs:
           fi
 
           # Wait for machine to reach stopped state. --wait-timeout takes a duration string.
-          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m || true
-
-          # Verify machine is stopped (not stuck starting/failing)
-          STATE=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>/dev/null \
-            | jq -r '.state // "unknown"' 2>/dev/null || echo "unknown")
-          echo "Machine final state: $STATE"
-          if [ "$STATE" != "stopped" ]; then
-            echo "ERROR: machine ended in unexpected state: $STATE"
+          # flyctl machine wait exit code is authoritative: 0 = stopped, non-zero = timed out.
+          if ! flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m; then
+            echo "ERROR: machine did not reach stopped state within 5 minutes"
             flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
