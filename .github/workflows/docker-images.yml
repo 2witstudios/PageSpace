@@ -128,6 +128,8 @@ jobs:
 
       - name: Run migrations
         run: |
+          set -o pipefail
+
           docker pull ghcr.io/2witstudios/pagespace-migrate:latest
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
@@ -135,22 +137,23 @@ jobs:
           # Use --detach so flyctl doesn't wait for "started" state.
           # Migrations exit quickly (before reaching "started"), which causes
           # flyctl machine run without --detach to error with "failed to reach desired start state".
-          MACHINE_OUTPUT=$(flyctl machine run registry.fly.io/pagespace-web:migrate \
+          # Pipe through tee so output is visible in logs even if the command fails.
+          flyctl machine run registry.fly.io/pagespace-web:migrate \
             --app pagespace-web \
             --region iad \
             --restart no \
-            --detach 2>&1)
-          echo "$MACHINE_OUTPUT"
+            --detach 2>&1 | tee /tmp/machine_output.txt
 
-          MACHINE_ID=$(echo "$MACHINE_OUTPUT" | grep -oE '\b[0-9a-f]{14}\b' | head -1)
+          MACHINE_ID=$(grep -oE '[0-9a-f]{14}' /tmp/machine_output.txt | head -1)
           if [ -z "$MACHINE_ID" ]; then
             echo "ERROR: could not parse machine ID from flyctl output"
             exit 1
           fi
           echo "Migration machine: $MACHINE_ID"
 
-          # Wait for migration to complete (stopped = process exited)
-          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m
+          # Wait for migration to complete (stopped = process exited).
+          # --timeout is in seconds; use 300 (5 min).
+          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --timeout 300
 
           flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
           echo "Migrations complete"
