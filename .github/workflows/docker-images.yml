@@ -141,7 +141,7 @@ jobs:
             --restart no \
             2>&1 | tee /tmp/machine_output.txt || true
 
-          MACHINE_ID=$(grep -oE '[0-9a-f]{14}' /tmp/machine_output.txt | head -1)
+          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/machine_output.txt | head -1)
           if [ -z "$MACHINE_ID" ]; then
             echo "ERROR: could not parse machine ID from flyctl output"
             cat /tmp/machine_output.txt
@@ -157,9 +157,8 @@ jobs:
             exit 1
           fi
 
-          # Wait for machine to reach stopped state (migrations may still be running).
-          # --timeout is in seconds; 300 = 5 min.
-          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --timeout 300 || true
+          # Wait for machine to reach stopped state. --wait-timeout takes a duration string.
+          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m || true
 
           # Verify machine is stopped (not stuck starting/failing)
           STATE=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>/dev/null \
