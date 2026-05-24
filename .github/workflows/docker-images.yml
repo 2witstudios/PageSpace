@@ -128,32 +128,48 @@ jobs:
 
       - name: Run migrations
         run: |
-          set -o pipefail
-
           docker pull ghcr.io/2witstudios/pagespace-migrate:latest
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
 
-          # Use --detach so flyctl doesn't wait for "started" state.
-          # Migrations exit quickly (before reaching "started"), which causes
-          # flyctl machine run without --detach to error with "failed to reach desired start state".
-          # Pipe through tee so output is visible in logs even if the command fails.
+          # Migrations exit before reaching "started" state, so flyctl errors with
+          # "failed to reach desired start state" after 60s. This is expected.
+          # Use || true so bash -e doesn't exit; we verify success via machine state below.
           flyctl machine run registry.fly.io/pagespace-web:migrate \
             --app pagespace-web \
             --region iad \
             --restart no \
-            --detach 2>&1 | tee /tmp/machine_output.txt
+            2>&1 | tee /tmp/machine_output.txt || true
 
           MACHINE_ID=$(grep -oE '[0-9a-f]{14}' /tmp/machine_output.txt | head -1)
           if [ -z "$MACHINE_ID" ]; then
             echo "ERROR: could not parse machine ID from flyctl output"
+            cat /tmp/machine_output.txt
             exit 1
           fi
           echo "Migration machine: $MACHINE_ID"
 
-          # Wait for migration to complete (stopped = process exited).
-          # --timeout is in seconds; use 300 (5 min).
-          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --timeout 300
+          # Fail on any unexpected error (not the expected "desired start state" one)
+          if grep -q "Error:" /tmp/machine_output.txt && ! grep -q "desired start state" /tmp/machine_output.txt; then
+            echo "ERROR: unexpected flyctl error:"
+            grep "Error:" /tmp/machine_output.txt
+            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+            exit 1
+          fi
+
+          # Wait for machine to reach stopped state (migrations may still be running).
+          # --timeout is in seconds; 300 = 5 min.
+          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --timeout 300 || true
+
+          # Verify machine is stopped (not stuck starting/failing)
+          STATE=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>/dev/null \
+            | jq -r '.state // "unknown"' 2>/dev/null || echo "unknown")
+          echo "Machine final state: $STATE"
+          if [ "$STATE" != "stopped" ]; then
+            echo "ERROR: machine ended in unexpected state: $STATE"
+            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+            exit 1
+          fi
 
           flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
           echo "Migrations complete"
