@@ -123,12 +123,26 @@ async function getPageIfCanShare(
     };
   }
 
-  // Check if user is the page creator (can share their own page)
+  // Check if user is the page creator AND still has active drive membership
   if (page.createdBy === userId) {
-    return {
-      ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
-    };
+    const creatorMembership = await db
+      .select({ id: driveMembers.id })
+      .from(driveMembers)
+      .where(
+        and(
+          eq(driveMembers.driveId, page.driveId),
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
+        )
+      )
+      .limit(1);
+
+    if (creatorMembership.length > 0) {
+      return {
+        ok: true,
+        page: { pageId: page.id, driveId: page.driveId },
+      };
+    }
   }
 
   // Check if user is drive admin (can share)

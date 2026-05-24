@@ -69,10 +69,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   try {
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
-    const { expectedRevision, changeGroupId, ...updates } = safeBody;
+    const { expectedRevision, changeGroupId, isPrivate: isPrivateUpdate, ...contentUpdates } = safeBody;
 
-    // isPrivate is a visibility-level change — requires share permission
-    if (updates.isPrivate !== undefined) {
+    // isPrivate is a visibility-level change — requires share permission, NOT edit permission.
+    // Apply it through the service with skipPermissionCheck so users with canShare but not
+    // canEdit (e.g. page creator) can still toggle privacy.
+    if (isPrivateUpdate !== undefined) {
       const canShare = await canUserSharePage(userId, pageId);
       if (!canShare) {
         return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
@@ -85,9 +87,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       ? { changeGroupId, metadata: mcpMeta }
       : undefined;
 
+    // Build the full updates object, applying isPrivate with skipPermissionCheck when present
+    const updates = isPrivateUpdate !== undefined
+      ? { ...contentUpdates, isPrivate: isPrivateUpdate }
+      : contentUpdates;
+
     const result = await pageService.updatePage(pageId, userId, updates, {
       expectedRevision,
       context,
+      skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
     });
 
     if (!result.success) {
