@@ -132,26 +132,23 @@ jobs:
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
 
-          # Use the Machines API directly: create a machine with no services (no health
-          # checks), then wait for "stopped" state rather than "started". This avoids
-          # flyctl's requirement that the process reach "started" state before exiting,
-          # which always fails for fast one-shot migration containers.
-          RESPONSE=$(curl -sf -X POST \
+          # Create machine via Machines API (no services = no health checks).
+          # Then use flyctl machine wait for stopped state — avoids the "started state"
+          # requirement that breaks flyctl machine run for fast one-shot containers.
+          RESPONSE=$(curl -s -X POST \
             https://api.machines.dev/v1/apps/pagespace-web/machines \
             -H "Authorization: Bearer ${FLY_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -d '{"config":{"image":"registry.fly.io/pagespace-web:migrate","restart":{"policy":"no"}}}')
+          echo "Create response: $RESPONSE"
           MACHINE_ID=$(echo "$RESPONSE" | jq -r '.id')
-          INSTANCE_ID=$(echo "$RESPONSE" | jq -r '.instance_id')
           echo "Migration machine: $MACHINE_ID"
 
-          curl -sf \
-            "https://api.machines.dev/v1/apps/pagespace-web/machines/${MACHINE_ID}/wait?state=stopped&instance_id=${INSTANCE_ID}&timeout=120" \
-            -H "Authorization: Bearer ${FLY_API_TOKEN}"
+          # Wait for the migration process to finish (stopped = exited)
+          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --timeout 120
 
-          curl -sf -X DELETE \
-            "https://api.machines.dev/v1/apps/pagespace-web/machines/${MACHINE_ID}?force=true" \
-            -H "Authorization: Bearer ${FLY_API_TOKEN}"
+          # Destroy the machine
+          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
 
           echo "Migrations complete"
         env:
