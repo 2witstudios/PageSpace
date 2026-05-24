@@ -112,9 +112,16 @@ export function MentionPickerPortal({
   if (!isOpen || !position) return null;
   if (typeof document === 'undefined') return null;
 
+  const maxHeight =
+    position.bottom !== undefined
+      ? `calc(100vh - ${position.bottom + 8}px)`
+      : `calc(100vh - ${(position.top ?? 0) + 8}px)`;
+
   const style: React.CSSProperties = {
     position: 'fixed',
     zIndex: 50,
+    maxHeight,
+    overflow: 'hidden',
     ...(position.bottom !== undefined
       ? { bottom: position.bottom, left: position.left }
       : { top: position.top, left: position.left }),
