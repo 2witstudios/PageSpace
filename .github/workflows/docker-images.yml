@@ -145,7 +145,7 @@ jobs:
           echo "Migration machine: $MACHINE_ID"
 
           # Wait for the migration process to finish (stopped = exited)
-          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --timeout 120
+          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 3m
 
           # Destroy the machine
           flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
