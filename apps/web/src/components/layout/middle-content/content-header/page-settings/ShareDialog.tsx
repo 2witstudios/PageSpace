@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePageStore } from '@/hooks/usePage';
 import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
@@ -32,11 +32,12 @@ import { useMobile } from '@/hooks/useMobile';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PermissionsList } from './PermissionsList';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import { PageShareLinkSection } from './PageShareLinkSection';
 
 export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } = {}) {
@@ -50,6 +51,12 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   const [isOpen, setIsOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [isTogglingPrivacy, setIsTogglingPrivacy] = useState(false);
+
+  useEffect(() => {
+    if (page) setIsPrivate(!!page.isPrivate);
+  }, [page?.id, page?.isPrivate]);
   const [offPlatformEmail, setOffPlatformEmail] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [permissions, setPermissions] = useState({
@@ -67,6 +74,20 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   const isMobile = useMobile();
 
   if (!page) return null;
+
+  const handlePrivacyToggle = async (newValue: boolean) => {
+    setIsPrivate(newValue);
+    setIsTogglingPrivacy(true);
+    try {
+      await patch(`/api/pages/${page.id}`, { isPrivate: newValue });
+      toast.success(newValue ? 'Page is now private' : 'Page is now visible to all drive members');
+    } catch {
+      setIsPrivate(!newValue);
+      toast.error('Failed to update page visibility');
+    } finally {
+      setIsTogglingPrivacy(false);
+    }
+  };
 
   const handlePermissionChange = (permission: string, checked: boolean) => {
     const newPerms = { ...permissions };
@@ -218,6 +239,23 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
             </AlertDescription>
           </Alert>
         ) : (
+          <>
+            <div className="mt-4 flex items-center justify-between rounded-lg border p-4">
+              <div>
+                <p className="text-sm font-medium">Private page</p>
+                <p className="text-xs text-muted-foreground">
+                  {isPrivate
+                    ? 'Only you and people you\'ve explicitly shared with can see this page'
+                    : 'All drive members can read this page'}
+                </p>
+              </div>
+              <Switch
+                checked={isPrivate}
+                onCheckedChange={handlePrivacyToggle}
+                disabled={isTogglingPrivacy}
+                aria-label="Toggle page privacy"
+              />
+            </div>
           <Tabs defaultValue="share" className="mt-4">
             <TabsList>
               <TabsTrigger value="share">
@@ -388,6 +426,7 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
               <PermissionsList key={permissionsVersion} />
             </TabsContent>
           </Tabs>
+          </>
         )}
       </DialogContent>
     </Dialog>

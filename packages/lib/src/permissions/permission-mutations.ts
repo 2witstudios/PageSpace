@@ -98,6 +98,7 @@ async function getPageIfCanShare(
       id: pages.id,
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
+      createdBy: pages.createdBy,
     })
     .from(pages)
     .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -116,6 +117,14 @@ async function getPageIfCanShare(
 
   // Check if user is drive owner (can share)
   if (page.driveOwnerId === userId) {
+    return {
+      ok: true,
+      page: { pageId: page.id, driveId: page.driveId },
+    };
+  }
+
+  // Check if user is the page creator (can share their own page)
+  if (page.createdBy === userId) {
     return {
       ok: true,
       page: { pageId: page.id, driveId: page.driveId },

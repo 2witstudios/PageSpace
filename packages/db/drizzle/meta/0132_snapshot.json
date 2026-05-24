@@ -1,6 +1,6 @@
 {
-  "id": "09ccafca-c7eb-4974-a58d-8cb70c1624e5",
-  "prevId": "6d611378-aff1-4408-9f9e-bb50654f6d90",
+  "id": "7e38aace-c580-41cc-a793-c83b9fc3bd73",
+  "prevId": "09ccafca-c7eb-4974-a58d-8cb70c1624e5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -376,166 +376,6 @@
           ]
         }
       }
-    },
-    "public.mcp_token_drives": {
-      "name": "mcp_token_drives",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tokenId": {
-          "name": "tokenId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "role": {
-          "name": "role",
-          "type": "MemberRole",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'MEMBER'"
-        },
-        "customRoleId": {
-          "name": "customRoleId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "addedBy": {
-          "name": "addedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "mcp_token_drives_token_id_idx": {
-          "name": "mcp_token_drives_token_id_idx",
-          "columns": [
-            {
-              "expression": "tokenId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "mcp_token_drives_drive_id_idx": {
-          "name": "mcp_token_drives_drive_id_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "mcp_token_drives_token_drive_unique": {
-          "name": "mcp_token_drives_token_drive_unique",
-          "columns": [
-            {
-              "expression": "tokenId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "mcp_token_drives_tokenId_mcp_tokens_id_fk": {
-          "name": "mcp_token_drives_tokenId_mcp_tokens_id_fk",
-          "tableFrom": "mcp_token_drives",
-          "tableTo": "mcp_tokens",
-          "columnsFrom": [
-            "tokenId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "mcp_token_drives_driveId_drives_id_fk": {
-          "name": "mcp_token_drives_driveId_drives_id_fk",
-          "tableFrom": "mcp_token_drives",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "mcp_token_drives_customRoleId_drive_roles_id_fk": {
-          "name": "mcp_token_drives_customRoleId_drive_roles_id_fk",
-          "tableFrom": "mcp_token_drives",
-          "tableTo": "drive_roles",
-          "columnsFrom": [
-            "customRoleId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "mcp_token_drives_addedBy_users_id_fk": {
-          "name": "mcp_token_drives_addedBy_users_id_fk",
-          "tableFrom": "mcp_token_drives",
-          "tableTo": "users",
-          "columnsFrom": [
-            "addedBy"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
     },
     "public.mcp_tokens": {
       "name": "mcp_tokens",
@@ -2335,6 +2175,19 @@
           "notNull": true,
           "default": false
         },
+        "isPrivate": {
+          "name": "isPrivate",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "createdBy": {
+          "name": "createdBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -2467,6 +2320,19 @@
         }
       },
       "foreignKeys": {
+        "pages_createdBy_users_id_fk": {
+          "name": "pages_createdBy_users_id_fk",
+          "tableFrom": "pages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "createdBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "pages_driveId_drives_id_fk": {
           "name": "pages_driveId_drives_id_fk",
           "tableFrom": "pages",
@@ -3361,6 +3227,166 @@
           ]
         }
       }
+    },
+    "public.mcp_token_drives": {
+      "name": "mcp_token_drives",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tokenId": {
+          "name": "tokenId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "MemberRole",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'MEMBER'"
+        },
+        "customRoleId": {
+          "name": "customRoleId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "addedBy": {
+          "name": "addedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "mcp_token_drives_token_id_idx": {
+          "name": "mcp_token_drives_token_id_idx",
+          "columns": [
+            {
+              "expression": "tokenId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mcp_token_drives_drive_id_idx": {
+          "name": "mcp_token_drives_drive_id_idx",
+          "columns": [
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mcp_token_drives_token_drive_unique": {
+          "name": "mcp_token_drives_token_drive_unique",
+          "columns": [
+            {
+              "expression": "tokenId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "mcp_token_drives_tokenId_mcp_tokens_id_fk": {
+          "name": "mcp_token_drives_tokenId_mcp_tokens_id_fk",
+          "tableFrom": "mcp_token_drives",
+          "tableTo": "mcp_tokens",
+          "columnsFrom": [
+            "tokenId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "mcp_token_drives_driveId_drives_id_fk": {
+          "name": "mcp_token_drives_driveId_drives_id_fk",
+          "tableFrom": "mcp_token_drives",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "mcp_token_drives_customRoleId_drive_roles_id_fk": {
+          "name": "mcp_token_drives_customRoleId_drive_roles_id_fk",
+          "tableFrom": "mcp_token_drives",
+          "tableTo": "drive_roles",
+          "columnsFrom": [
+            "customRoleId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "mcp_token_drives_addedBy_users_id_fk": {
+          "name": "mcp_token_drives_addedBy_users_id_fk",
+          "tableFrom": "mcp_token_drives",
+          "tableTo": "users",
+          "columnsFrom": [
+            "addedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     },
     "public.page_permissions": {
       "name": "page_permissions",

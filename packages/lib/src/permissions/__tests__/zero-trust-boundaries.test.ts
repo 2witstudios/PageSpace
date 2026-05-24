@@ -276,16 +276,26 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
     });
   });
 
-  describe('MEMBER role requires explicit page permissions', () => {
-    it('given user with MEMBER role on drive, should NOT auto-access pages', async () => {
+  describe('MEMBER role — open-by-default (Discord @everyone model)', () => {
+    it('given MEMBER and non-private page, should get read-only access', async () => {
+      // testPage defaults to isPrivate: false (non-private)
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
 
       const result = await getUserAccessLevel(otherUser.id, testPage.id);
 
+      expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    });
+
+    it('given MEMBER and private page, should be denied', async () => {
+      const privatePage = await factories.createPage(testDrive.id, { isPrivate: true });
+      await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
+
+      const result = await getUserAccessLevel(otherUser.id, privatePage.id);
+
       expect(result).toBeNull();
     });
 
-    it('given MEMBER with explicit page permission, should have that access level', async () => {
+    it('given MEMBER with explicit edit grant on non-private page, explicit grant wins', async () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
 
       await factories.createPagePermission(testPage.id, otherUser.id, {
@@ -304,10 +314,10 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       expect(result?.canDelete).toBe(false);
     });
 
-    it('given MEMBER, should only access pages with explicit permissions', async () => {
+    it('given MEMBER with explicit grant on one page, can also read other non-private pages', async () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
 
-      const secondPage = await factories.createPage(testDrive.id);
+      const secondPage = await factories.createPage(testDrive.id);  // non-private by default
 
       await factories.createPagePermission(testPage.id, otherUser.id, {
         canView: true,
@@ -317,11 +327,40 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
         grantedBy: testUser.id,
       });
 
+      // testPage: explicit grant → canEdit
       const access1 = await getUserAccessLevel(otherUser.id, testPage.id);
+      // secondPage: MEMBER default → canView only
       const access2 = await getUserAccessLevel(otherUser.id, secondPage.id);
 
       expect(access1?.canView).toBe(true);
-      expect(access2).toBeNull();
+      expect(access1?.canEdit).toBe(true);
+      expect(access2?.canView).toBe(true);
+      expect(access2?.canEdit).toBe(false);
+    });
+
+    it('given MEMBER with explicit grant on private page, can read it', async () => {
+      const privatePage = await factories.createPage(testDrive.id, { isPrivate: true });
+      await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' });
+
+      await factories.createPagePermission(privatePage.id, otherUser.id, {
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+        grantedBy: testUser.id,
+      });
+
+      const result = await getUserAccessLevel(otherUser.id, privatePage.id);
+
+      expect(result?.canView).toBe(true);
+      expect(result?.canEdit).toBe(false);
+    });
+
+    it('given non-member with no permissions, cannot read non-private page', async () => {
+      // otherUser has no drive membership at all
+      const result = await getUserAccessLevel(otherUser.id, testPage.id);
+
+      expect(result).toBeNull();
     });
   });
 

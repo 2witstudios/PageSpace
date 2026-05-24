@@ -7,6 +7,7 @@ import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
+import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -47,6 +48,7 @@ const patchSchema = z.object({
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
+  isPrivate: z.boolean().optional(),
   expectedRevision: z.number().int().min(0).optional(),
   changeGroupId: z.string().optional(), // Groups related edits in activity log
 });
@@ -68,6 +70,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
     const { expectedRevision, changeGroupId, ...updates } = safeBody;
+
+    // isPrivate is a visibility-level change — requires share permission
+    if (updates.isPrivate !== undefined) {
+      const canShare = await canUserSharePage(userId, pageId);
+      if (!canShare) {
+        return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
+      }
+    }
 
     const isMCP = isMCPAuthResult(auth);
     const mcpMeta = isMCP ? { source: 'mcp' as const } : undefined;

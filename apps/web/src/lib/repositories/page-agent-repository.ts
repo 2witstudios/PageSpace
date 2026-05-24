@@ -38,6 +38,7 @@ export interface AgentData {
   enabledTools?: string[] | null;
   aiProvider?: string | null;
   aiModel?: string | null;
+  createdBy?: string | null;
 }
 
 export interface CreatedAgent {

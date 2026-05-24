@@ -256,6 +256,7 @@ export interface UpdatePageParams {
   aiModel?: string;
   parentId?: string | null;
   isPaginated?: boolean;
+  isPrivate?: boolean;
 }
 
 export interface UpdatePageOptions {
@@ -704,6 +705,7 @@ export const pageService = {
         updatedAt: Date;
         revision: number;
         stateHash: string;
+        createdBy: string;
         aiProvider?: string | null;
         aiModel?: string | null;
         systemPrompt?: string | null;
@@ -722,6 +724,7 @@ export const pageService = {
         updatedAt: new Date(),
         revision: 0,
         stateHash: '',
+        createdBy: userId,
       };
 
       if (isAIChatPage(params.type as PageTypeEnum)) {
