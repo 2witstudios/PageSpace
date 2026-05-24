@@ -598,7 +598,7 @@ export const pageWriteTools = {
           revision: 0,
           stateHash,
           updatedAt: new Date(),
-          createdBy: context.userId,
+          createdBy: userId,
         });
 
         // AI_CHAT pages are agents — they need a drive membership to act with

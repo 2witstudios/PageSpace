@@ -120,6 +120,8 @@ type PageLookupResult = {
   originalParentId: string | null;
   contentMode: 'html' | 'markdown';
   excludeFromSearch: boolean;
+  isPrivate: boolean;
+  createdBy: string | null;
 };
 
 const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupResult => ({
@@ -160,6 +162,8 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   originalParentId: null,
   contentMode: 'html',
   excludeFromSearch: false,
+  isPrivate: false,
+  createdBy: null,
   ...overrides,
 });
 

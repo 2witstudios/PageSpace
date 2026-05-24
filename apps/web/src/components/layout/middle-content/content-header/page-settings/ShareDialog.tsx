@@ -56,7 +56,7 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
 
   useEffect(() => {
     if (page) setIsPrivate(!!page.isPrivate);
-  }, [page?.id, page?.isPrivate]);
+  }, [page]);
   const [offPlatformEmail, setOffPlatformEmail] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [permissions, setPermissions] = useState({
