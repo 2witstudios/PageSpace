@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Popover,
@@ -102,7 +101,7 @@ export function MentionPickerPanel({
         </Tabs>
       )}
 
-      <ScrollArea className="max-h-64">
+      <div className="max-h-64 overflow-y-auto overscroll-contain">
         {loading ? (
           <div className="p-3 text-sm text-muted-foreground flex items-center gap-2">
             <span className="animate-spin inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
@@ -160,7 +159,7 @@ export function MentionPickerPanel({
             })}
           </ul>
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }
