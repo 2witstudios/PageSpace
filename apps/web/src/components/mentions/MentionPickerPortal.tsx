@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { MentionPickerPanel, TAB_TYPES, type TabType } from './MentionPicker';
 import type { MentionSuggestion, MentionType } from '@/types/mentions';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import type { Position } from '@/services/positioningService';
+import { getViewportHeight, type Position } from '@/services/positioningService';
 
 export interface MentionPickerPortalProps {
   isOpen: boolean;
@@ -112,16 +112,16 @@ export function MentionPickerPortal({
   if (!isOpen || !position) return null;
   if (typeof document === 'undefined') return null;
 
+  const viewportH = getViewportHeight();
   const maxHeight =
     position.bottom !== undefined
-      ? `calc(100vh - ${position.bottom + 8}px)`
-      : `calc(100vh - ${(position.top ?? 0) + 8}px)`;
+      ? `${viewportH - position.bottom - 8}px`
+      : `${viewportH - (position.top ?? 0) - 8}px`;
 
   const style: React.CSSProperties = {
     position: 'fixed',
     zIndex: 50,
     maxHeight,
-    overflow: 'hidden',
     ...(position.bottom !== undefined
       ? { bottom: position.bottom, left: position.left }
       : { top: position.top, left: position.left }),
