@@ -73,15 +73,21 @@ const okAgentMembers = (currentUserRole = 'OWNER') =>
     json: () => Promise.resolve({ agentMembers: [], currentUserRole }),
   });
 
+const okAppMembers = (currentUserRole = 'OWNER') =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({ appMembers: [], currentUserRole }),
+  });
+
 const okRoles = () =>
   Promise.resolve({
     ok: true,
     json: () => Promise.resolve({ roles: [] }),
   });
 
-// fetchMembers() fires 3 parallel requests on each invocation.
+// fetchMembers() fires 4 parallel requests on each invocation (members, agents/members, apps/members, roles).
 // On initial mount, DriveShareLinkSection adds 1 more for /roles (keyed on driveId, not socket events).
-const MEMBER_FETCHES = 3;
+const MEMBER_FETCHES = 4;
 const FETCHES_PER_CALL = MEMBER_FETCHES + 1;
 
 const urlAwareMock = (
@@ -91,6 +97,7 @@ const urlAwareMock = (
 ) =>
   (url: string) => {
     if (url.endsWith('/agents/members')) return okAgentMembers(currentUserRole);
+    if (url.endsWith('/apps/members')) return okAppMembers(currentUserRole);
     if (url.endsWith('/roles')) return okRoles();
     return okMembers(members, currentUserRole, pendingInvites);
   };
