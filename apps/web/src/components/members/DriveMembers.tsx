@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { AgentMemberRow, type AgentMember } from './AgentMemberRow';
+import { AppMemberRow, type AppMember } from './AppMemberRow';
 import { PendingInvitesSection } from './PendingInvitesSection';
 import { DriveShareLinkSection } from './DriveShareLinkSection';
 import type { PendingInvite } from './PendingInviteRow';
@@ -66,6 +67,7 @@ const DRIVE_MEMBER_EVENTS = [
 export function DriveMembers({ driveId }: DriveMembersProps) {
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [agentMembers, setAgentMembers] = useState<AgentMember[]>([]);
+  const [appMembers, setAppMembers] = useState<AppMember[]>([]);
   const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
@@ -81,9 +83,10 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const fetchMembers = useCallback(async () => {
     const currentSeq = ++requestSeqRef.current;
     try {
-      const [membersRes, agentMembersRes, rolesRes] = await Promise.all([
+      const [membersRes, agentMembersRes, appMembersRes, rolesRes] = await Promise.all([
         fetchWithAuth(`/api/drives/${driveId}/members`),
         fetchWithAuth(`/api/drives/${driveId}/agents/members`),
+        fetchWithAuth(`/api/drives/${driveId}/apps/members`),
         fetchWithAuth(`/api/drives/${driveId}/roles`),
       ]);
       if (!membersRes.ok) throw new Error('Failed to fetch members');
@@ -96,6 +99,10 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
       if (agentMembersRes.ok) {
         const agentData = await agentMembersRes.json();
         setAgentMembers(agentData.agentMembers ?? []);
+      }
+      if (appMembersRes.ok) {
+        const appData = await appMembersRes.json();
+        setAppMembers(appData.appMembers ?? []);
       }
       if (rolesRes.ok) {
         const rolesData = await rolesRes.json();
@@ -168,6 +175,17 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const handleRemoveAgent = (agentPageId: string) => {
     setAgentMembers((prev) => prev.filter((a) => a.agentPageId !== agentPageId));
     toast({ title: 'Agent removed', description: 'Agent member removed successfully' });
+  };
+
+  const handleAppRoleChange = (tokenId: string, updated: Partial<AppMember>) => {
+    setAppMembers((prev) =>
+      prev.map((a) => (a.tokenId === tokenId ? { ...a, ...updated } : a)),
+    );
+  };
+
+  const handleRemoveApp = (tokenId: string) => {
+    setAppMembers((prev) => prev.filter((a) => a.tokenId !== tokenId));
+    toast({ title: 'App removed', description: 'App member removed successfully' });
   };
 
   const handleRevokeInvite = async (inviteId: string) => {
@@ -257,6 +275,34 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
                 driveRoles={driveRoles}
                 onRoleChange={handleAgentRoleChange}
                 onRemove={handleRemoveAgent}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-3">
+          <h2 className="text-lg font-semibold">Apps ({appMembers.length})</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            MCP app tokens with access to this drive
+          </p>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+          {appMembers.length === 0 ? (
+            <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
+              No apps added. MCP keys can be given drive access to read and write pages.
+            </div>
+          ) : (
+            appMembers.map((app) => (
+              <AppMemberRow
+                key={app.id}
+                app={app}
+                driveId={driveId}
+                currentUserRole={currentUserRole}
+                driveRoles={driveRoles}
+                onRoleChange={handleAppRoleChange}
+                onRemove={handleRemoveApp}
               />
             ))
           )}
