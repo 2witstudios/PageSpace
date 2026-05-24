@@ -144,8 +144,13 @@ jobs:
           MACHINE_ID=$(echo "$RESPONSE" | jq -r '.id')
           echo "Migration machine: $MACHINE_ID"
 
+          # Explicitly start the machine (Machines API creates in "created" state, not auto-started)
+          curl -s -X POST \
+            "https://api.machines.dev/v1/apps/pagespace-web/machines/${MACHINE_ID}/start" \
+            -H "Authorization: Bearer ${FLY_API_TOKEN}"
+
           # Wait for the migration process to finish (stopped = exited)
-          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 3m
+          flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m
 
           # Destroy the machine
           flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
