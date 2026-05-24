@@ -24,7 +24,7 @@ export async function GET(): Promise<Response> {
   };
 
   return Response.json(body, {
-    status: dbHealthy ? 200 : 503,
+    status: 200,
     headers: { 'Cache-Control': 'no-store' },
   });
 }

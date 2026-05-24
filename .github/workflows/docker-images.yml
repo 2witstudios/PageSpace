@@ -202,6 +202,6 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-admin:latest
           docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
           docker push registry.fly.io/pagespace-admin:latest
-          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300 --no-health-checks
+          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
