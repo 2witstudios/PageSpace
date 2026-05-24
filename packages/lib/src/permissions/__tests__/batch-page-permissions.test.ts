@@ -69,8 +69,9 @@ const USER = 'user_abc';
 interface Row {
   pageId: string;
   isTrashed: boolean;
+  isPrivate: boolean;
   driveOwnerId: string | null;
-  adminMemberId: string | null;
+  memberRole: string | null;
   explicitCanView: boolean | null;
   explicitCanEdit: boolean | null;
   explicitCanShare: boolean | null;
@@ -79,12 +80,14 @@ interface Row {
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const NONE = { canView: false, canEdit: false, canShare: false, canDelete: false };
+const READ_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
 
 function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
   return {
     isTrashed: false,
+    isPrivate: false,
     driveOwnerId: null,
-    adminMemberId: null,
+    memberRole: null,
     explicitCanView: null,
     explicitCanEdit: null,
     explicitCanShare: null,
@@ -149,21 +152,20 @@ describe('getBatchPagePermissions', () => {
   });
 
   it('given an accepted ADMIN member, should grant all four permissions', async () => {
-    // Invariant from the CTE: the drive_members LEFT JOIN already filters on
-    // role = 'ADMIN' AND acceptedAt IS NOT NULL, so a non-null adminMemberId
-    // here encodes an accepted admin.
-    stubQueryRows([makeRow({ pageId: 'p1', adminMemberId: 'member_x' })]);
+    // drive_members LEFT JOIN filters acceptedAt IS NOT NULL, so memberRole = 'ADMIN'
+    // encodes an accepted admin.
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'ADMIN' })]);
 
     const result = await getBatchPagePermissions(USER, ['p1']);
 
     expect(result.get('p1')).toEqual(FULL);
   });
 
-  it('given an unaccepted ADMIN invite (adminMemberId null), should fall through to explicit-grant check', async () => {
-    // The CTE's acceptedAt IS NOT NULL predicate causes an unaccepted admin
-    // invite to yield adminMemberId = null. With no explicit grant, this
-    // degrades to all-false.
-    stubQueryRows([makeRow({ pageId: 'p1', adminMemberId: null })]);
+  it('given an unaccepted invite (memberRole null), should fall through to explicit-grant check', async () => {
+    // The drive_members LEFT JOIN's acceptedAt IS NOT NULL predicate causes
+    // unaccepted invites to yield memberRole = null. With no explicit grant,
+    // this degrades to all-false.
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: null })]);
 
     const result = await getBatchPagePermissions(USER, ['p1']);
 
@@ -214,8 +216,24 @@ describe('getBatchPagePermissions', () => {
     expect(result.get('p1')).toEqual(NONE);
   });
 
-  it('given an inaccessible pageId (row exists, no grants), should return all four false', async () => {
-    stubQueryRows([makeRow({ pageId: 'p1' })]);
+  it('given an accepted MEMBER on a non-private page, should grant read-only access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER' })]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(READ_ONLY);
+  });
+
+  it('given an accepted MEMBER on a private page, should deny access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER', isPrivate: true })]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
+  });
+
+  it('given an inaccessible pageId (row exists, no grants, private page), should return all four false', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', isPrivate: true })]);
 
     const result = await getBatchPagePermissions(USER, ['p1']);
 
@@ -236,7 +254,7 @@ describe('getBatchPagePermissions', () => {
   it('given a mixed batch, should classify each pageId independently', async () => {
     stubQueryRows([
       makeRow({ pageId: 'owned', driveOwnerId: USER }),
-      makeRow({ pageId: 'admin', adminMemberId: 'member_1' }),
+      makeRow({ pageId: 'admin', memberRole: 'ADMIN' }),
       makeRow({
         pageId: 'granted',
         explicitCanView: true,
@@ -245,7 +263,9 @@ describe('getBatchPagePermissions', () => {
         explicitCanDelete: false,
       }),
       makeRow({ pageId: 'trashed', isTrashed: true, driveOwnerId: USER }),
-      makeRow({ pageId: 'denied' }),
+      makeRow({ pageId: 'member_open', memberRole: 'MEMBER' }),
+      makeRow({ pageId: 'member_private', memberRole: 'MEMBER', isPrivate: true }),
+      makeRow({ pageId: 'denied', isPrivate: true }),
     ]);
 
     const result = await getBatchPagePermissions(USER, [
@@ -253,6 +273,8 @@ describe('getBatchPagePermissions', () => {
       'admin',
       'granted',
       'trashed',
+      'member_open',
+      'member_private',
       'denied',
       'missing',
     ]);
@@ -266,9 +288,11 @@ describe('getBatchPagePermissions', () => {
       canDelete: false,
     });
     expect(result.get('trashed')).toEqual(NONE);
+    expect(result.get('member_open')).toEqual(READ_ONLY);
+    expect(result.get('member_private')).toEqual(NONE);
     expect(result.get('denied')).toEqual(NONE);
     expect(result.get('missing')).toEqual(NONE);
-    expect(result.size).toBe(6);
+    expect(result.size).toBe(8);
   });
 
   it('should filter drive_members join on acceptedAt IS NOT NULL (matches single-page path)', async () => {

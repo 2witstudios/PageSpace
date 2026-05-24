@@ -154,6 +154,8 @@ const createPageFixture = (overrides: Partial<{
   parentId: null,
   originalParentId: null,
   excludeFromSearch: overrides.excludeFromSearch ?? false,
+  isPrivate: false,
+  createdBy: null,
 });
 
 const createTaskListFixture = (overrides: Partial<{

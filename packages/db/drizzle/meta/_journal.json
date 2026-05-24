@@ -925,6 +925,20 @@
       "when": 1779561969627,
       "tag": "0131_big_mentor",
       "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1779582391083,
+      "tag": "0132_gifted_cerise",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1779582461866,
+      "tag": "0133_default_member_read",
+      "breakpoints": true
     }
   ]
 }

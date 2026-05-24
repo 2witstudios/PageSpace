@@ -7,6 +7,7 @@ import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
+import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -47,6 +48,7 @@ const patchSchema = z.object({
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
+  isPrivate: z.boolean().optional(),
   expectedRevision: z.number().int().min(0).optional(),
   changeGroupId: z.string().optional(), // Groups related edits in activity log
 });
@@ -67,7 +69,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   try {
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
-    const { expectedRevision, changeGroupId, ...updates } = safeBody;
+    const { expectedRevision, changeGroupId, isPrivate: isPrivateUpdate, ...contentUpdates } = safeBody;
+
+    // isPrivate is a visibility-level change — requires share permission, NOT edit permission.
+    // Apply it through the service with skipPermissionCheck so users with canShare but not
+    // canEdit (e.g. page creator) can still toggle privacy.
+    if (isPrivateUpdate !== undefined) {
+      const canShare = await canUserSharePage(userId, pageId);
+      if (!canShare) {
+        return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
+      }
+    }
 
     const isMCP = isMCPAuthResult(auth);
     const mcpMeta = isMCP ? { source: 'mcp' as const } : undefined;
@@ -75,9 +87,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       ? { changeGroupId, metadata: mcpMeta }
       : undefined;
 
+    // Build the full updates object, applying isPrivate with skipPermissionCheck when present
+    const updates = isPrivateUpdate !== undefined
+      ? { ...contentUpdates, isPrivate: isPrivateUpdate }
+      : contentUpdates;
+
     const result = await pageService.updatePage(pageId, userId, updates, {
       expectedRevision,
       context,
+      skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
     });
 
     if (!result.success) {

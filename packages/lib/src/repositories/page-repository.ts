@@ -53,6 +53,7 @@ export interface CreatePageInput {
   extractionMethod?: string;
   extractionMetadata?: Record<string, unknown>;
   contentHash?: string;
+  createdBy?: string | null;
 }
 
 export interface UpdatePageInput {
@@ -179,6 +180,7 @@ export const pageRepository = {
         revision: data.revision ?? 0,
         stateHash: data.stateHash ?? null,
         updatedAt: data.updatedAt ?? new Date(),
+        createdBy: data.createdBy ?? null,
         ...(data.extractionMethod && { extractionMethod: data.extractionMethod }),
         ...(data.extractionMetadata && { extractionMetadata: data.extractionMetadata }),
         ...(data.contentHash && { contentHash: data.contentHash }),
