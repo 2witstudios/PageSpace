@@ -1,6 +1,42 @@
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
 
+const DOCS_HINT_MAP: Record<string, string> = {
+  // task tools
+  update_task: 'task-lists',
+  get_assigned_tasks: 'task-lists',
+  // calendar tools
+  create_calendar_event: 'calendar',
+  update_calendar_event: 'calendar',
+  delete_calendar_event: 'calendar',
+  rsvp_calendar_event: 'calendar',
+  invite_calendar_attendees: 'calendar',
+  remove_calendar_attendee: 'calendar',
+  list_calendar_events: 'calendar',
+  get_calendar_event: 'calendar',
+  check_calendar_availability: 'calendar',
+  // sheet tools
+  edit_sheet_cells: 'sheets',
+  // agent tools
+  update_agent_config: 'agents',
+  list_agents: 'agents',
+  multi_drive_list_agents: 'agents',
+  ask_agent: 'agents',
+  // page tools
+  create_page: 'pages',
+  rename_page: 'pages',
+  trash: 'pages',
+  restore: 'pages',
+  move_page: 'pages',
+  list_trash: 'pages',
+  // channel tools
+  send_channel_message: 'channels',
+  // drive tools
+  create_drive: 'drives',
+  rename_drive: 'drives',
+  update_drive_context: 'drives',
+};
+
 export function createToolSearchTool(fullTools: ToolSet): Tool {
   return {
     description:
@@ -12,11 +48,18 @@ export function createToolSearchTool(fullTools: ToolSet): Tool {
     }),
     execute: async ({ query }: { query: string }) => {
       const matches = resolveMatches(fullTools, query);
-      const result = Object.entries(matches).map(([name, t]) => ({
-        name,
-        description: t.description,
-        inputSchema: z.toJSONSchema(t.inputSchema as z.ZodType),
-      }));
+      const result = Object.entries(matches).map(([name, t]) => {
+        const docsCategory = DOCS_HINT_MAP[name];
+        return {
+          name,
+          description: t.description,
+          inputSchema: z.toJSONSchema(t.inputSchema as z.ZodType),
+          ...(docsCategory && {
+            docs_available: true,
+            docs_hint: `Call tool_docs({category:"${docsCategory}"}) for usage guidance before calling this tool.`,
+          }),
+        };
+      });
       return { tools: result };
     },
   };

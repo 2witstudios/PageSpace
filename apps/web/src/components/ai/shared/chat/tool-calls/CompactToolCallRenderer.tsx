@@ -826,7 +826,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
   let toolName = part.toolName || part.type?.replace('tool-', '') || '';
   let resolvedPart = part;
 
-  if (toolName === 'tool_search') return null;
+  if (toolName === 'tool_search' || toolName === 'tool_docs') return null;
 
   if (toolName === 'execute_tool') {
     const raw = safeJsonParse(part.input);
@@ -837,7 +837,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
     }
   }
 
-  if (toolName === 'tool_search') return null;
+  if (toolName === 'tool_search' || toolName === 'tool_docs') return null;
 
   if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
   return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} />;

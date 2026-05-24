@@ -69,6 +69,7 @@ import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-uti
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
+import { createToolDocsTool } from '@/lib/ai/tools/tool-docs-tool';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -717,6 +718,7 @@ MENTION PROCESSING:
     let finalTools: ToolSet = {
       ...coreTools,
       tool_search: createToolSearchTool(filteredAllTools),
+      tool_docs: createToolDocsTool(),
       execute_tool: createExecuteTool(nonCoreTools),
     };
 

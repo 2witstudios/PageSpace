@@ -817,7 +817,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
   let toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
   let resolvedPart = part;
 
-  if (toolName === 'tool_search') return null;
+  if (toolName === 'tool_search' || toolName === 'tool_docs') return null;
 
   if (toolName === 'execute_tool') {
     const raw = safeJsonParse(part.input);
@@ -828,7 +828,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
     }
   }
 
-  if (toolName === 'tool_search') return null;
+  if (toolName === 'tool_search' || toolName === 'tool_docs') return null;
 
   if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
