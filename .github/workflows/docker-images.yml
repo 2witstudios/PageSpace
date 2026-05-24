@@ -132,29 +132,27 @@ jobs:
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
           docker push registry.fly.io/pagespace-web:migrate
 
-          # Create machine via Machines API (no services = no health checks).
-          # Then use flyctl machine wait for stopped state — avoids the "started state"
-          # requirement that breaks flyctl machine run for fast one-shot containers.
-          RESPONSE=$(curl -s -X POST \
-            https://api.machines.dev/v1/apps/pagespace-web/machines \
-            -H "Authorization: Bearer ${FLY_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{"config":{"image":"registry.fly.io/pagespace-web:migrate","restart":{"policy":"no"}}}')
-          echo "Create response: $RESPONSE"
-          MACHINE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          # Use --detach so flyctl doesn't wait for "started" state.
+          # Migrations exit quickly (before reaching "started"), which causes
+          # flyctl machine run without --detach to error with "failed to reach desired start state".
+          MACHINE_OUTPUT=$(flyctl machine run registry.fly.io/pagespace-web:migrate \
+            --app pagespace-web \
+            --region iad \
+            --restart no \
+            --detach 2>&1)
+          echo "$MACHINE_OUTPUT"
+
+          MACHINE_ID=$(echo "$MACHINE_OUTPUT" | grep -oE '\b[0-9a-f]{14}\b' | head -1)
+          if [ -z "$MACHINE_ID" ]; then
+            echo "ERROR: could not parse machine ID from flyctl output"
+            exit 1
+          fi
           echo "Migration machine: $MACHINE_ID"
 
-          # Explicitly start the machine (Machines API creates in "created" state, not auto-started)
-          curl -s -X POST \
-            "https://api.machines.dev/v1/apps/pagespace-web/machines/${MACHINE_ID}/start" \
-            -H "Authorization: Bearer ${FLY_API_TOKEN}"
-
-          # Wait for the migration process to finish (stopped = exited)
+          # Wait for migration to complete (stopped = process exited)
           flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m
 
-          # Destroy the machine
           flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
-
           echo "Migrations complete"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
