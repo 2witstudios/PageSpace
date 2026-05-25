@@ -41,11 +41,12 @@ Core tools (list/read drives and pages, search, create, edit content) can be cal
 All other tools are listed below — call execute_tool({tool_name, parameters}) to run them. Use tool_search("select:tool_name") to get parameter schemas first. Use tool_docs({category}) to get usage guidance (concept, data model, workflows, common mistakes) before using unfamiliar tools.`;
 
 const CATEGORY_MAP: Record<string, string> = {
-  create_drive: 'drive', rename_drive: 'drive', update_drive_context: 'drive',
+  create_drive: 'drives', rename_drive: 'drives', update_drive_context: 'drives',
   list_trash: 'pages', list_conversations: 'pages', read_conversation: 'pages',
-  rename_page: 'pages', trash: 'pages', restore: 'pages', move_page: 'pages', edit_sheet_cells: 'pages',
+  rename_page: 'pages', trash: 'pages', restore: 'pages', move_page: 'pages',
+  edit_sheet_cells: 'sheets',
   glob_search: 'search',
-  update_task: 'tasks', get_assigned_tasks: 'tasks',
+  update_task: 'task-lists', get_assigned_tasks: 'task-lists',
   update_agent_config: 'agents', list_agents: 'agents', multi_drive_list_agents: 'agents', ask_agent: 'agents',
   web_search: 'search',
   get_activity: 'activity',
