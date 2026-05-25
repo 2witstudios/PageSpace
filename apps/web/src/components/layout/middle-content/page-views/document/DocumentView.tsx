@@ -259,20 +259,25 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       return;
     }
 
-    const syncFindState = () => {
-      dispatchFind(editor.view, findQuery, findIndex);
-      const matches = getPluginMatches(editor.state);
-      reportMatches(matches.length);
-      const activeMatch = matches[Math.min(findIndex, Math.max(matches.length - 1, 0))];
-      if (activeMatch) {
-        editor.commands.setTextSelection(activeMatch);
-        editor.commands.scrollIntoView();
-      }
-    };
+    // Initial sync: dispatch query/index to plugin and scroll to active match
+    dispatchFind(editor.view, findQuery, findIndex);
+    const initialMatches = getPluginMatches(editor.state);
+    reportMatches(initialMatches.length);
+    const initialMatch = initialMatches[Math.min(findIndex, Math.max(initialMatches.length - 1, 0))];
+    if (initialMatch) {
+      editor.commands.setTextSelection(initialMatch);
+      editor.commands.scrollIntoView();
+    }
 
-    syncFindState();
-    editor.on('update', syncFindState);
-    return () => { editor.off('update', syncFindState); };
+    // Re-read match count when document changes while find is open.
+    // The plugin auto-recomputes matches on docChanged — we only need to
+    // report the new count without re-dispatching (which would loop).
+    const handleDocUpdate = ({ transaction }: { transaction: { docChanged: boolean } }) => {
+      if (!transaction.docChanged) return;
+      reportMatches(getPluginMatches(editor.state).length);
+    };
+    editor.on('update', handleDocUpdate);
+    return () => { editor.off('update', handleDocUpdate); };
   }, [isFindOpen, findQuery, findIndex, editor, activeView, reportMatches]);
 
   // Auto-save on window blur
