@@ -25,9 +25,22 @@ function findMatches(doc: Node, query: string): { from: number; to: number }[] {
   doc.descendants((node, pos) => {
     if (!node.isBlock || !node.inlineContent) return;
 
-    // Build a buffer of all text within this block and a parallel doc-position map
-    const docPositions: number[] = [];
+    // Build a buffer of all text within this block and a parallel doc-position map.
+    // Flush the buffer on non-text inline nodes (e.g. mentions, images) so that
+    // `foo[mention]bar` cannot match a query like `foobar` across the boundary.
+    let docPositions: number[] = [];
     let buffer = '';
+
+    const flushBuffer = () => {
+      let idx = buffer.indexOf(queryLower);
+      while (idx !== -1) {
+        matches.push({ from: docPositions[idx], to: docPositions[idx + queryLen - 1] + 1 });
+        idx = buffer.indexOf(queryLower, idx + 1);
+      }
+      buffer = '';
+      docPositions = [];
+    };
+
     node.forEach((child, offset) => {
       if (child.isText && child.text) {
         buffer += child.text.toLowerCase();
@@ -35,14 +48,11 @@ function findMatches(doc: Node, query: string): { from: number; to: number }[] {
         for (let i = 0; i < child.text.length; i++) {
           docPositions.push(childPos + i);
         }
+      } else if (buffer) {
+        flushBuffer();
       }
     });
-
-    let idx = buffer.indexOf(queryLower);
-    while (idx !== -1) {
-      matches.push({ from: docPositions[idx], to: docPositions[idx + queryLen - 1] + 1 });
-      idx = buffer.indexOf(queryLower, idx + 1);
-    }
+    flushBuffer();
 
     return false; // don't descend into inline children — we've handled them above
   });

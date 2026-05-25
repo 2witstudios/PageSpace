@@ -24,7 +24,7 @@ export const useFindStore = create<FindStore>((set, get) => ({
 
   close: () => set({ isOpen: false, query: '', currentIndex: 0, totalMatches: 0 }),
 
-  setQuery: (query) => set({ query, currentIndex: 0 }),
+  setQuery: (query) => set({ query, currentIndex: 0, totalMatches: 0 }),
 
   next: () => {
     const { currentIndex, totalMatches } = get();

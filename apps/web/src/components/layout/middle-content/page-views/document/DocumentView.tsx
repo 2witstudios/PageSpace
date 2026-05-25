@@ -258,14 +258,21 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       reportMatches(0);
       return;
     }
-    dispatchFind(editor.view, findQuery, findIndex);
-    const matches = getPluginMatches(editor.state);
-    reportMatches(matches.length);
-    if (matches[findIndex]) {
-      const { from, to } = matches[findIndex];
-      editor.commands.setTextSelection({ from, to });
-      editor.commands.scrollIntoView();
-    }
+
+    const syncFindState = () => {
+      dispatchFind(editor.view, findQuery, findIndex);
+      const matches = getPluginMatches(editor.state);
+      reportMatches(matches.length);
+      const activeMatch = matches[Math.min(findIndex, Math.max(matches.length - 1, 0))];
+      if (activeMatch) {
+        editor.commands.setTextSelection(activeMatch);
+        editor.commands.scrollIntoView();
+      }
+    };
+
+    syncFindState();
+    editor.on('update', syncFindState);
+    return () => { editor.off('update', syncFindState); };
   }, [isFindOpen, findQuery, findIndex, editor, activeView, reportMatches]);
 
   // Auto-save on window blur

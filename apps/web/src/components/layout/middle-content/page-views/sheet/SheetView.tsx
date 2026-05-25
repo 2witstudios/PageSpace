@@ -583,22 +583,13 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
     const q = findQuery.toLowerCase();
     const matches: string[] = [];
-    const matchSet = new Set<string>();
-    for (const [addr, raw] of Object.entries(sheet.cells)) {
-      if (raw.toLowerCase().includes(q)) {
-        matches.push(addr);
-        matchSet.add(addr);
-      }
-    }
     for (let r = 0; r < sheet.rowCount; r++) {
       for (let c = 0; c < sheet.columnCount; c++) {
         const addr = encodeCellAddress(r, c);
-        if (!matchSet.has(addr)) {
-          const display = evaluation.display[r]?.[c] ?? '';
-          if (display.toLowerCase().includes(q)) {
-            matches.push(addr);
-            matchSet.add(addr);
-          }
+        const raw = sheet.cells[addr] ?? '';
+        const display = evaluation.display[r]?.[c] ?? '';
+        if (raw.toLowerCase().includes(q) || display.toLowerCase().includes(q)) {
+          matches.push(addr);
         }
       }
     }
