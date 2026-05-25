@@ -78,7 +78,7 @@ Team Updates (CHANNEL)
 A **TASK_LIST** page contains structured tasks, each with a status, priority, due date, and assignees. Tasks are not nested within themselves — instead, organize multi-phase work by grouping multiple TASK_LIST pages inside a FOLDER.
 
 **Critical first step:** Before adding or updating tasks, always call read_page on the TASK_LIST to get:
-- The task list's \`taskListId\`
+- The page's own \`id\` — this is the \`pageId\` to pass to update_task when creating tasks
 - \`availableStatuses\` — the valid status slugs for this list
 - Existing tasks and their IDs
 
@@ -98,8 +98,8 @@ When filtering tasks, use the group (active/completed) not individual status slu
 
 \`\`\`
 Task:
-  id           — use when calling update_task
-  title        — display name
+  id           — use as taskId when calling update_task to update or delete
+  title        — display name (lives on linked DOCUMENT page)
   status       — slug from availableStatuses (e.g., "pending", "in_progress")
   priority     — "low" | "medium" | "high"
   dueDate      — ISO timestamp
@@ -111,11 +111,15 @@ Task:
 ## Common Workflows
 
 **Add a task to a task list:**
-1. read_page on the TASK_LIST page → get taskListId and availableStatuses
-2. execute_tool("update_task", { taskListId, title: "...", status: "pending", priority: "medium" })
+1. read_page on the TASK_LIST page → note the page \`id\` and \`availableStatuses\`
+2. execute_tool("update_task", { pageId: "<TASK_LIST page id>", title: "...", status: "pending", priority: "medium" })
 
 **Mark a task complete:**
-execute_tool("update_task", { taskId: "<id>", status: "completed" })
+execute_tool("update_task", { taskId: "<task id>", status: "completed" })
+
+**Add a custom status before using it:**
+execute_tool("create_task_status", { pageId: "<TASK_LIST page id>", name: "In Review", group: "in_progress" })
+→ returns the new slug (e.g., "in_review") to use in subsequent update_task calls
 
 **Build a multi-phase project:**
 \`\`\`
@@ -140,7 +144,7 @@ execute_tool("get_assigned_tasks") — returns tasks where the agent is the assi
 
 - Using a status slug that's not in availableStatuses — always read_page first to confirm valid slugs
 - Trying to create subtasks inside a task — not supported; use nested TASK_LIST pages in a FOLDER instead
-- Forgetting taskListId when creating a new task — required to know which list the task belongs to
+- Passing taskListId instead of pageId when creating a task — update_task takes pageId (the TASK_LIST page's own ID), not the internal taskListId
 - Passing a group name ("active") as a status slug — statuses are slugs like "in_progress", not group names
 `,
 
