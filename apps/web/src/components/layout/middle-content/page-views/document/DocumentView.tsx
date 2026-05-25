@@ -14,6 +14,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
+import { useFindStore } from '@/stores/useFindStore';
+import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
@@ -239,6 +241,32 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       }
     };
   }, []); // ✅ Empty deps - uses ref for latest forceSave
+
+  // Connect find store to TipTap find plugin
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || activeView !== 'rich') {
+      reportMatches(0);
+      return;
+    }
+    if (!isFindOpen || !findQuery) {
+      dispatchFind(editor.view, '', 0);
+      reportMatches(0);
+      return;
+    }
+    dispatchFind(editor.view, findQuery, findIndex);
+    const matches = getPluginMatches(editor.state);
+    reportMatches(matches.length);
+    if (matches[findIndex]) {
+      const { from, to } = matches[findIndex];
+      editor.commands.setTextSelection({ from, to });
+      editor.commands.scrollIntoView();
+    }
+  }, [isFindOpen, findQuery, findIndex, editor, activeView, reportMatches]);
 
   // Auto-save on window blur
   useEffect(() => {

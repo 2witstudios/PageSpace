@@ -66,6 +66,7 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { useFindStore } from '@/stores/useFindStore';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -227,6 +228,40 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Find in page
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+  const [findMatchIds, setFindMatchIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) {
+      setFindMatchIds([]);
+      reportMatches(0);
+      return;
+    }
+    const q = findQuery.toLowerCase();
+    const ids = messages
+      .filter((m) => {
+        const text = (m.parts ?? [])
+          .filter((p) => p.type === 'text')
+          .map((p) => (p as { type: 'text'; text: string }).text)
+          .join(' ');
+        return text.toLowerCase().includes(q);
+      })
+      .map((m) => m.id);
+    setFindMatchIds(ids);
+    reportMatches(ids.length);
+  }, [isFindOpen, findQuery, messages, reportMatches]);
+
+  useEffect(() => {
+    const id = findMatchIds[findIndex];
+    if (!id) return;
+    const el = document.querySelector(`[data-message-id="${id}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [findIndex, findMatchIds]);
   const { wrapSend } = useSendHandoff(currentConversationId, status);
   const stop = useChatStop(streamTrackingId, chatStop);
 
