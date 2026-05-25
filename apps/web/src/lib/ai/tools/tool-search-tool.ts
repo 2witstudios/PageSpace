@@ -5,6 +5,7 @@ const DOCS_HINT_MAP: Record<string, string> = {
   // task tools
   update_task: 'task-lists',
   get_assigned_tasks: 'task-lists',
+  create_task_status: 'task-lists',
   // calendar tools
   create_calendar_event: 'calendar',
   update_calendar_event: 'calendar',
