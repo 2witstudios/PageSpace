@@ -152,7 +152,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
 
   const page: TreePage = pageResult
     ? pageResult.node
-    : { ...fallbackPage!, children: [], aiChat: null };
+    : { ...fallbackPage!, aiChat: null };
 
   // Dynamic component selection using centralized config
   const componentMap = {
