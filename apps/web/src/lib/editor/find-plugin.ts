@@ -20,14 +20,31 @@ function findMatches(doc: Node, query: string): { from: number; to: number }[] {
   const queryLower = query.toLowerCase();
   const queryLen = query.length;
 
+  // Process each inline-content block, coalescing adjacent text nodes so that
+  // queries spanning marks (e.g. "hel**lo**" searched as "hello") are found.
   doc.descendants((node, pos) => {
-    if (!node.isText || !node.text) return;
-    const text = node.text.toLowerCase();
-    let idx = text.indexOf(queryLower);
+    if (!node.isBlock || !node.inlineContent) return;
+
+    // Build a buffer of all text within this block and a parallel doc-position map
+    const docPositions: number[] = [];
+    let buffer = '';
+    node.forEach((child, offset) => {
+      if (child.isText && child.text) {
+        buffer += child.text.toLowerCase();
+        const childPos = pos + 1 + offset;
+        for (let i = 0; i < child.text.length; i++) {
+          docPositions.push(childPos + i);
+        }
+      }
+    });
+
+    let idx = buffer.indexOf(queryLower);
     while (idx !== -1) {
-      matches.push({ from: pos + idx, to: pos + idx + queryLen });
-      idx = text.indexOf(queryLower, idx + 1);
+      matches.push({ from: docPositions[idx], to: docPositions[idx + queryLen - 1] + 1 });
+      idx = buffer.indexOf(queryLower, idx + 1);
     }
+
+    return false; // don't descend into inline children — we've handled them above
   });
 
   return matches;
