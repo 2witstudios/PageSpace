@@ -49,7 +49,7 @@ export function FindBar() {
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Find..."
-        className="h-7 w-44 border-0 shadow-none focus-visible:ring-0 px-1 text-sm"
+        className="find-bar-input h-7 w-44 border-0 shadow-none focus-visible:ring-0 px-1 text-sm"
       />
       <span className="text-xs text-muted-foreground whitespace-nowrap w-16 text-center">
         {matchLabel}

@@ -255,6 +255,7 @@ export default function CenterPanel() {
   const { updateNode } = usePageTree(activeDriveId);
   const updateNodeRef = useRef(updateNode);
   const openFind = useFindStore((s) => s.open);
+  const isFindOpen = useFindStore((s) => s.isOpen);
   const resetFind = useFindStore((s) => s.reset);
 
   // Get page refresh configuration for pull-to-refresh
@@ -281,12 +282,18 @@ export default function CenterPanel() {
         const monacoFocused = document.activeElement?.closest('.monaco-editor');
         if (monacoFocused) return;
         e.preventDefault();
-        openFind();
+        if (isFindOpen) {
+          const findInput = document.querySelector<HTMLInputElement>('.find-bar-input');
+          findInput?.focus();
+          findInput?.select();
+        } else {
+          openFind();
+        }
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [openFind]);
+  }, [openFind, isFindOpen]);
 
   // Track page views for recents and clear "has changes" once viewed.
   // This lives in CenterPanel because dashboard route pages intentionally return null.

@@ -22,32 +22,11 @@ export default function FolderView({ page }: FolderViewProps) {
   const [sortKey, setSortKey] = useState<SortKey>('title');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
-  // Find in page
+  // Find in page — subscriptions only; match IDs computed after sortedChildren
   const findQuery = useFindStore((s) => s.query);
   const findIndex = useFindStore((s) => s.currentIndex);
   const isFindOpen = useFindStore((s) => s.isOpen);
   const reportMatches = useFindStore((s) => s.reportMatches);
-
-  const findMatchIds = useMemo(() => {
-    if (!isFindOpen || !findQuery) return [];
-    const q = findQuery.toLowerCase();
-    return (page.children ?? [])
-      .filter((child) => child.title.toLowerCase().includes(q))
-      .map((child) => child.id);
-  }, [isFindOpen, findQuery, page.children]);
-
-  useEffect(() => {
-    reportMatches(findMatchIds.length);
-  }, [findMatchIds, reportMatches]);
-
-  useEffect(() => {
-    const id = findMatchIds[findIndex];
-    if (!id) return;
-    document.querySelector(`[data-item-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
-  }, [findIndex, findMatchIds]);
-
-  const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
-  const currentFindId = findMatchIds[findIndex] ?? null;
 
   useEffect(() => {
     if (isFolderPage(page.type as PageType) && !page.children) {
@@ -75,6 +54,28 @@ export default function FolderView({ page }: FolderViewProps) {
       return 0;
     });
   }, [page.children, sortKey, sortDirection]);
+
+  // Derived from sortedChildren so navigation order matches rendered order
+  const findMatchIds = useMemo(() => {
+    if (!isFindOpen || !findQuery) return [];
+    const q = findQuery.toLowerCase();
+    return sortedChildren
+      .filter((child) => child.title.toLowerCase().includes(q))
+      .map((child) => child.id);
+  }, [isFindOpen, findQuery, sortedChildren]);
+
+  useEffect(() => {
+    reportMatches(findMatchIds.length);
+  }, [findMatchIds, reportMatches]);
+
+  useEffect(() => {
+    const id = findMatchIds[findIndex];
+    if (!id) return;
+    document.querySelector(`[data-item-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [findIndex, findMatchIds]);
+
+  const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
+  const currentFindId = findMatchIds[findIndex] ?? null;
 
   return (
     <div className="p-4">

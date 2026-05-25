@@ -235,51 +235,12 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [announcement]);
 
-  // Find in page
+  // Find in page — store subscriptions and state (effects moved after `evaluation` declaration)
   const findQuery = useFindStore((s) => s.query);
   const findIndex = useFindStore((s) => s.currentIndex);
   const isFindOpen = useFindStore((s) => s.isOpen);
   const reportMatches = useFindStore((s) => s.reportMatches);
   const [findAddresses, setFindAddresses] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!isFindOpen || !findQuery) {
-      setFindAddresses([]);
-      reportMatches(0);
-      return;
-    }
-    const q = findQuery.toLowerCase();
-    const matches: string[] = [];
-    for (const [addr, raw] of Object.entries(sheet.cells)) {
-      if (raw.toLowerCase().includes(q)) {
-        matches.push(addr);
-      }
-    }
-    // Also check display values for computed cells not in raw cells
-    for (let r = 0; r < sheet.rowCount; r++) {
-      for (let c = 0; c < sheet.columnCount; c++) {
-        const addr = encodeCellAddress(r, c);
-        if (!matches.includes(addr)) {
-          const display = evaluation.display[r]?.[c] ?? '';
-          if (display.toLowerCase().includes(q)) {
-            matches.push(addr);
-          }
-        }
-      }
-    }
-    setFindAddresses(matches);
-    reportMatches(matches.length);
-  }, [isFindOpen, findQuery, sheet.cells, sheet.rowCount, sheet.columnCount, evaluation.display, reportMatches]);
-
-  useEffect(() => {
-    const addr = findAddresses[findIndex];
-    if (!addr || !gridRef.current) return;
-    const el = gridRef.current.querySelector(`[data-cell="${addr}"]`);
-    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [findIndex, findAddresses]);
-
-  const findAddressSet = useMemo(() => new Set(findAddresses), [findAddresses]);
-  const currentFindAddress = findAddresses[findIndex] ?? null;
 
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -612,6 +573,49 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   );
 
   const evaluation = useMemo(() => evaluateSheet(sheet, evaluationOptions), [sheet, evaluationOptions]);
+
+  // Find effects must live after `evaluation` is declared
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) {
+      setFindAddresses([]);
+      reportMatches(0);
+      return;
+    }
+    const q = findQuery.toLowerCase();
+    const matches: string[] = [];
+    const matchSet = new Set<string>();
+    for (const [addr, raw] of Object.entries(sheet.cells)) {
+      if (raw.toLowerCase().includes(q)) {
+        matches.push(addr);
+        matchSet.add(addr);
+      }
+    }
+    for (let r = 0; r < sheet.rowCount; r++) {
+      for (let c = 0; c < sheet.columnCount; c++) {
+        const addr = encodeCellAddress(r, c);
+        if (!matchSet.has(addr)) {
+          const display = evaluation.display[r]?.[c] ?? '';
+          if (display.toLowerCase().includes(q)) {
+            matches.push(addr);
+            matchSet.add(addr);
+          }
+        }
+      }
+    }
+    setFindAddresses(matches);
+    reportMatches(matches.length);
+  }, [isFindOpen, findQuery, sheet.cells, sheet.rowCount, sheet.columnCount, evaluation.display, reportMatches]);
+
+  useEffect(() => {
+    const addr = findAddresses[findIndex];
+    if (!addr || !gridRef.current) return;
+    const el = gridRef.current.querySelector(`[data-cell="${addr}"]`);
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [findIndex, findAddresses]);
+
+  const findAddressSet = useMemo(() => new Set(findAddresses), [findAddresses]);
+  const currentFindAddress = findAddresses[findIndex] ?? null;
+
   const currentSelection = selection.type === 'single'
     ? clampSelection(selection.cell, sheet)
     : clampSelection(selection.range.start, sheet);

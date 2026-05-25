@@ -509,8 +509,8 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Report filtered task count to find store when search is active
   useEffect(() => {
-    if (isFindOpen && search) {
-      reportMatches(filteredTasks.length);
+    if (isFindOpen) {
+      reportMatches(search ? filteredTasks.length : 0);
     }
   }, [isFindOpen, search, filteredTasks.length, reportMatches]);
 
