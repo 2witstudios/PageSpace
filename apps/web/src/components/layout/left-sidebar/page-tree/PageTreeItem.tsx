@@ -252,7 +252,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
     try {
       await patch(`/api/pages/${item.id}`, { isPrivate: nextPrivate });
       await mutate();
-      toast.success(nextPrivate ? "Page is now private." : "Page is now accessible to all members.", { id: toastId });
+      toast.success(nextPrivate ? "Page is now private" : "Page is now visible to all drive members", { id: toastId });
     } catch {
       toast.error("Error updating page privacy.", { id: toastId });
     }
