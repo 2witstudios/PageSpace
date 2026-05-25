@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, GripVertical, Star, Shield } from 'lucide-react';
+import { Plus, Pencil, Trash2, GripVertical, Star, Shield, Users, Eye } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { useSocket } from '@/hooks/useSocket';
 import type { DriveEventPayload } from '@/lib/websocket';
@@ -182,6 +182,33 @@ export function RolesManager({ driveId }: RolesManagerProps) {
                 </div>
                 <p className="text-sm text-muted-foreground">
                   Full access to all pages and settings. Cannot be modified.
+                </p>
+              </div>
+
+              <div className="w-[72px]" /> {/* Spacer for action buttons alignment */}
+            </div>
+
+            {/* Built-in Member role - default for all drive members */}
+            <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20">
+              <div className="w-4 h-4 flex items-center justify-center">
+                <Users className="w-4 h-4 text-muted-foreground" />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge variant="secondary">
+                    Member
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    Built-in
+                  </Badge>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Eye className="w-3 h-3" />
+                    View only
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Default role for all members. Read-only access to non-private pages. Cannot be modified.
                 </p>
               </div>
 
