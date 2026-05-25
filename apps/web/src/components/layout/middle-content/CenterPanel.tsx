@@ -55,7 +55,8 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // or deep links), fetch it directly so rendering isn't blocked on tree revalidation.
   const { data: fallbackPage, isLoading: fallbackLoading, error: fallbackError } = useSWR<TreePage>(
     (!isLoading && !!pageId && !pageResult) ? `/api/pages/${pageId}` : null,
-    fetcher
+    fetcher,
+    { errorRetryCount: 3 }
   );
 
   const handleRetry = useCallback(() => {
