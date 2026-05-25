@@ -27,9 +27,16 @@ import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
-import { post } from '@/lib/auth/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import useSWR from 'swr';
 
 const LOADING_TIMEOUT_MS = 12000; // Show retry hint after 12 seconds
+
+const fetcher = (url: string) =>
+  fetchWithAuth(url).then(r => {
+    if (!r.ok) throw new Error('Failed to fetch');
+    return r.json();
+  });
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -40,6 +47,16 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
   const retryCount = useRef(0);
   const [timerKey, setTimerKey] = useState(0);
+
+  // Compute tree lookup before early returns — pure recursive search, safe on empty tree.
+  const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
+
+  // If the tree has loaded but doesn't have this page yet (race condition on fresh creation
+  // or deep links), fetch it directly so rendering isn't blocked on tree revalidation.
+  const { data: fallbackPage, isLoading: fallbackLoading, error: fallbackError } = useSWR<TreePage>(
+    (!isLoading && !!pageId && !pageResult) ? `/api/pages/${pageId}` : null,
+    fetcher
+  );
 
   const handleRetry = useCallback(() => {
     setLoadingTimedOut(false);
@@ -122,17 +139,20 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     );
   }
 
-  const pageResult = findNodeAndParent(tree, pageId);
-
   if (!pageResult) {
-    return (
-      <div className="p-4 text-center text-muted-foreground">
-        Page not found in the current tree.
-      </div>
-    );
+    if (fallbackLoading) return <Skeleton className="h-full w-full" />;
+    if (fallbackError || !fallbackPage) {
+      return (
+        <div className="p-4 text-center text-muted-foreground">
+          Page not found.
+        </div>
+      );
+    }
   }
 
-  const { node: page } = pageResult;
+  const page: TreePage = pageResult
+    ? pageResult.node
+    : { ...fallbackPage!, children: [], aiChat: null };
 
   // Dynamic component selection using centralized config
   const componentMap = {
