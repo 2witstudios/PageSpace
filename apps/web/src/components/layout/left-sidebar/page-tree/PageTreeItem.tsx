@@ -17,6 +17,8 @@ import {
   CheckSquare,
   FolderInput,
   Copy,
+  Lock,
+  LockOpen,
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useCapacitor } from "@/hooks/useCapacitor";
@@ -244,6 +246,18 @@ export const PageTreeItem = React.memo(function PageTreeItem({
     }
   };
 
+  const handlePrivacyToggle = async () => {
+    const nextPrivate = !item.isPrivate;
+    const toastId = toast.loading(nextPrivate ? "Protecting page..." : "Unprotecting page...");
+    try {
+      await patch(`/api/pages/${item.id}`, { isPrivate: nextPrivate });
+      await mutate();
+      toast.success(nextPrivate ? "Page is now private." : "Page is now accessible to all members.", { id: toastId });
+    } catch {
+      toast.error("Error updating page privacy.", { id: toastId });
+    }
+  };
+
   return (
     <>
       <div
@@ -353,6 +367,11 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 {item.title}
               </Link>
 
+              {/* Private page indicator */}
+              {item.isPrivate && (
+                <Lock className="h-3 w-3 flex-shrink-0 text-muted-foreground ml-1" aria-label="Private page" />
+              )}
+
               {/* Currently viewing indicators */}
               <PageViewersInline pageId={item.id} />
 
@@ -423,6 +442,14 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                     )}
                   />
                   <span>{isFavorite(item.id) ? "Unfavorite" : "Favorite"}</span>
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={handlePrivacyToggle}>
+                  {item.isPrivate ? (
+                    <LockOpen className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Lock className="mr-2 h-4 w-4" />
+                  )}
+                  <span>{item.isPrivate ? "Unprotect page" : "Protect page"}</span>
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem onSelect={handleEnterMultiSelect}>
