@@ -21,28 +21,35 @@ vi.mock('next/navigation', () => ({
   useParams: vi.fn(() => ({ driveId: 'test-drive-id' })),
 }));
 
-vi.mock('@ai-sdk/react', () => ({
-  useChat: vi.fn(() => ({
-    messages: [],
+vi.mock('@ai-sdk/react', () => {
+  const chatState = {
+    messages: [] as unknown[],
     sendMessage: vi.fn(),
-    status: 'idle',
-    error: undefined,
+    status: 'idle' as const,
+    error: undefined as Error | undefined,
     regenerate: vi.fn(),
     setMessages: mockSetMessages,
     stop: vi.fn(),
-  })),
-}));
+  };
+  return { useChat: vi.fn(() => chatState) };
+});
 
-vi.mock('swr', () => ({
-  default: vi.fn(() => ({ data: undefined, error: undefined })),
-  useSWRConfig: vi.fn(() => ({ cache: { get: vi.fn(() => undefined) } })),
-}));
+vi.mock('swr', () => {
+  const swrCache = { get: vi.fn(() => undefined) };
+  return {
+    default: vi.fn(() => ({ data: undefined, error: undefined })),
+    useSWRConfig: vi.fn(() => ({ cache: swrCache })),
+  };
+});
 
-vi.mock('@/hooks/useDrive', () => ({
-  useDriveStore: vi.fn((selector: (state: { drives: unknown[] }) => unknown) =>
-    selector({ drives: [] })
-  ),
-}));
+vi.mock('@/hooks/useDrive', () => {
+  const driveState = { drives: [] as unknown[] };
+  return {
+    useDriveStore: vi.fn((selector: (state: typeof driveState) => unknown) =>
+      selector(driveState)
+    ),
+  };
+});
 
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: vi.fn(() => ({ user: { id: 'user-1', name: 'Test User' } })),
@@ -54,12 +61,14 @@ vi.mock('@/stores/useAssistantSettingsStore', () => ({
   ),
 }));
 
-vi.mock('@/stores/useVoiceModeStore', () => ({
-  useVoiceModeStore: vi.fn(
-    (selector: (state: { isEnabled: boolean; owner: null; enable: () => void; disable: () => void }) => unknown) =>
-      selector({ isEnabled: false, owner: null, enable: vi.fn(), disable: vi.fn() })
-  ),
-}));
+vi.mock('@/stores/useVoiceModeStore', () => {
+  const voiceState = { isEnabled: false, owner: null as null, enable: vi.fn(), disable: vi.fn() };
+  return {
+    useVoiceModeStore: vi.fn(
+      (selector: (state: typeof voiceState) => unknown) => selector(voiceState)
+    ),
+  };
+});
 
 vi.mock('@/stores/useEditingStore', () => ({
   useEditingStore: vi.fn(() => ({ register: vi.fn(), unregister: vi.fn() })),
@@ -132,15 +141,16 @@ vi.mock('@/lib/ai/shared', () => ({
   useSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()) })),
 }));
 
-vi.mock('@/lib/ai/shared/hooks/useImageAttachments', () => ({
-  useImageAttachments: vi.fn(() => ({
-    attachments: [],
+vi.mock('@/lib/ai/shared/hooks/useImageAttachments', () => {
+  const imageAttachState = {
+    attachments: [] as unknown[],
     addFiles: vi.fn(),
     removeFile: vi.fn(),
     clearFiles: vi.fn(),
-    getFilesForSend: vi.fn(() => []),
-  })),
-}));
+    getFilesForSend: vi.fn(() => [] as unknown[]),
+  };
+  return { useImageAttachments: vi.fn(() => imageAttachState) };
+});
 
 vi.mock('@/lib/tree/tree-utils', () => ({ buildPagePath: vi.fn(() => null) }));
 vi.mock('@/components/ai/page-agents', () => ({
