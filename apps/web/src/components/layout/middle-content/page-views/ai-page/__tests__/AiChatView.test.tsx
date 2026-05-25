@@ -189,6 +189,18 @@ vi.mock('@/components/ai/chat/input', () => ({ ChatInput: vi.fn(() => null) }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('zustand/react/shallow', () => ({ useShallow: vi.fn((fn: unknown) => fn) }));
 
+vi.mock('@/stores/useFindStore', () => ({
+  useFindStore: vi.fn((selector: (s: {
+    isOpen: boolean; query: string; currentIndex: number; totalMatches: number;
+    open: () => void; close: () => void; setQuery: () => void;
+    next: () => void; prev: () => void; reportMatches: () => void; reset: () => void;
+  }) => unknown) => selector({
+    isOpen: false, query: '', currentIndex: 0, totalMatches: 0,
+    open: vi.fn(), close: vi.fn(), setQuery: vi.fn(),
+    next: vi.fn(), prev: vi.fn(), reportMatches: vi.fn(), reset: vi.fn(),
+  })),
+}));
+
 import AiChatView from '../AiChatView';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
