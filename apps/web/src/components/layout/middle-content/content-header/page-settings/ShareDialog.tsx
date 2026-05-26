@@ -582,7 +582,7 @@ export function ShareDialog({
                 </div>
               </TabsContent>
               <TabsContent value="permissions" className="mt-4">
-                <PermissionsList key={permissionsVersion} />
+                <PermissionsList key={permissionsVersion} pageId={pageId} />
               </TabsContent>
             </Tabs>
           </>

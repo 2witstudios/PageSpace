@@ -36,8 +36,9 @@ type PermissionsData = {
   roles: RoleGrant[];
 };
 
-export function PermissionsList() {
-  const pageId = usePageStore((state) => state.pageId);
+export function PermissionsList({ pageId: propPageId }: { pageId?: string | null } = {}) {
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId ?? storePageId;
   const [data, setData] = useState<PermissionsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [updatingPermissions, setUpdatingPermissions] = useState<Set<string>>(new Set());
@@ -264,9 +265,9 @@ export function PermissionsList() {
               <div className="flex items-center space-x-3">
                 <div
                   className="h-8 w-8 rounded-full flex items-center justify-center"
-                  style={{ backgroundColor: role.color ?? undefined }}
+                  style={{ backgroundColor: role.color ?? 'hsl(var(--muted))' }}
                 >
-                  <Users className="h-4 w-4 text-white" />
+                  <Users className={`h-4 w-4 ${role.color ? 'text-white' : 'text-muted-foreground'}`} />
                 </div>
                 <div>
                   <p className="text-sm font-medium">{role.name}</p>
