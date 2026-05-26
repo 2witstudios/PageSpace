@@ -7,6 +7,7 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, lt } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 
 // Types for repository operations
 export interface ChatMessage {
@@ -22,6 +23,8 @@ export interface ChatMessage {
   editedAt: Date | null;
   toolCalls: unknown | null;
   toolResults: unknown | null;
+  userName?: string | null;
+  userImage?: string | null;
 }
 
 /**
@@ -55,8 +58,24 @@ export const chatMessageRepository = {
     conversationId?: string
   ): Promise<ChatMessage[]> {
     const messages = await db
-      .select()
+      .select({
+        id: chatMessages.id,
+        pageId: chatMessages.pageId,
+        conversationId: chatMessages.conversationId,
+        userId: chatMessages.userId,
+        role: chatMessages.role,
+        content: chatMessages.content,
+        messageType: chatMessages.messageType,
+        isActive: chatMessages.isActive,
+        createdAt: chatMessages.createdAt,
+        editedAt: chatMessages.editedAt,
+        toolCalls: chatMessages.toolCalls,
+        toolResults: chatMessages.toolResults,
+        userName: users.name,
+        userImage: users.image,
+      })
       .from(chatMessages)
+      .leftJoin(users, eq(chatMessages.userId, users.id))
       .where(
         conversationId
           ? and(

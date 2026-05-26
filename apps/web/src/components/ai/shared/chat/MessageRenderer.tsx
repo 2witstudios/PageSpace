@@ -8,6 +8,7 @@ import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
+import { useAuth } from '@/hooks/useAuth';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
@@ -18,6 +19,7 @@ import { ImageMessageContent } from './ImageMessageContent';
 interface TextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
+  senderName?: string;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
@@ -37,6 +39,7 @@ interface TextBlockProps {
 const TextBlock: React.FC<TextBlockProps> = React.memo(({
   parts,
   role,
+  senderName,
   createdAt,
   editedAt,
   onEdit,
@@ -62,7 +65,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
       {role === 'user' && (
         <div className="flex items-center mb-1">
           <div className="text-sm font-medium text-primary dark:text-primary">
-            You
+            {senderName}
           </div>
         </div>
       )}
@@ -144,6 +147,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   isHighlighted = false,
   isCurrentMatch = false,
 }) => {
+  const { user } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -356,6 +360,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 key={`${message.id}-text-${index}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
+                senderName={message.userName ?? user?.name ?? 'Unknown'}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
