@@ -79,6 +79,7 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
+import { TaskListDescription } from './TaskListDescription';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -774,6 +775,11 @@ function TaskListView({ page }: TaskListViewProps) {
 
   return (
     <div className="flex flex-col h-full min-w-0">
+      <TaskListDescription
+        pageId={page.id}
+        canEdit={canEdit}
+        initialContent={page.content}
+      />
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
