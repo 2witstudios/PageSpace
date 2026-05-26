@@ -90,19 +90,26 @@ const ConversationCard = memo(function ConversationCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {conversation.isShared && !conversation.isOwner && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground px-1">
+              <Users className="h-3 w-3" />
+              Shared
+            </span>
+          )}
           {conversation.isOwner && onToggleShare && (
             <Button
-              variant="ghost"
-              size="icon"
+              variant={conversation.isShared ? 'secondary' : 'ghost'}
+              size="sm"
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleShare();
               }}
-              title={conversation.isShared ? 'Make private' : 'Share with drive members'}
+              title={conversation.isShared ? 'Make private' : 'Share with everyone on this page'}
+              className="h-7 px-2 gap-1 text-xs"
             >
               {conversation.isShared
-                ? <Users className="h-4 w-4 text-primary" />
-                : <Lock className="h-4 w-4 text-muted-foreground" />
+                ? <><Users className="h-3 w-3" />Shared</>
+                : <><Lock className="h-3 w-3" />Private</>
               }
             </Button>
           )}
