@@ -169,10 +169,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
       updatedRole[field] = value;
     }
 
-    setData({
-      ...data,
-      roles: data.roles.map(r => r.roleId === roleId ? updatedRole : r),
-    });
+    setData(prev => prev ? { ...prev, roles: prev.roles.map(r => r.roleId === roleId ? updatedRole : r) } : prev);
 
     setUpdatingRoles(prev => new Set(prev).add(roleId));
 
@@ -186,10 +183,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
     } catch (error) {
       console.error(error);
       toast.error('Failed to update role permission.');
-      setData({
-        ...data,
-        roles: data.roles.map(r => r.roleId === roleId ? currentRole : r),
-      });
+      setData(prev => prev ? { ...prev, roles: prev.roles.map(r => r.roleId === roleId ? currentRole : r) } : prev);
     } finally {
       setUpdatingRoles(prev => {
         const newSet = new Set(prev);
@@ -204,10 +198,7 @@ export function PermissionsList({ pageId: propPageId }: { pageId?: string | null
 
     const originalData = data;
 
-    setData({
-      ...data,
-      roles: data.roles.filter(r => r.roleId !== roleId),
-    });
+    setData(prev => prev ? { ...prev, roles: prev.roles.filter(r => r.roleId !== roleId) } : prev);
 
     try {
       await del(`/api/pages/${pageId}/role-permissions`, { roleId });

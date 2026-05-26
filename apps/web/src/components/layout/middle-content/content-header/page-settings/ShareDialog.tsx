@@ -70,9 +70,14 @@ export function ShareDialog({
   const page = pageResult?.node;
 
   const [internalOpen, setInternalOpen] = useState(false);
-  const isControlled = controlledOpen !== undefined;
+  const isControlled = controlledOpen !== undefined && typeof controlledOnOpenChange === 'function';
   const isOpen = isControlled ? controlledOpen! : internalOpen;
   const setIsOpen = isControlled ? controlledOnOpenChange! : setInternalOpen;
+
+  const [activeTab, setActiveTab] = useState<'share' | 'permissions'>(defaultTab);
+  useEffect(() => {
+    if (isOpen) setActiveTab(defaultTab);
+  }, [isOpen, defaultTab]);
 
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -109,17 +114,21 @@ export function ShareDialog({
     if (!isOpen || !pageId || !driveId) return;
 
     const fetchRoleData = async () => {
-      const [rolesRes, grantsRes] = await Promise.all([
-        fetchWithAuth(`/api/drives/${driveId}/roles`),
-        fetchWithAuth(`/api/pages/${pageId}/role-permissions`),
-      ]);
-      if (rolesRes.ok) {
-        const { roles } = await rolesRes.json() as { roles: DriveRole[] };
-        setDriveRoles(roles);
-      }
-      if (grantsRes.ok) {
-        const { roles } = await grantsRes.json() as { roles: RoleGrant[] };
-        setGrantedRoles(roles);
+      try {
+        const [rolesRes, grantsRes] = await Promise.all([
+          fetchWithAuth(`/api/drives/${driveId}/roles`),
+          fetchWithAuth(`/api/pages/${pageId}/role-permissions`),
+        ]);
+        if (rolesRes.ok) {
+          const { roles } = await rolesRes.json() as { roles: DriveRole[] };
+          setDriveRoles(roles);
+        }
+        if (grantsRes.ok) {
+          const { roles } = await grantsRes.json() as { roles: RoleGrant[] };
+          setGrantedRoles(roles);
+        }
+      } catch {
+        toast.error('Failed to load role permissions.');
       }
     };
 
@@ -333,7 +342,7 @@ export function ShareDialog({
                 aria-label="Toggle page privacy"
               />
             </div>
-            <Tabs defaultValue={defaultTab} className="mt-4">
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'share' | 'permissions')} className="mt-4">
               <TabsList>
                 <TabsTrigger value="share">
                   <Users className="mr-2 h-4 w-4" />

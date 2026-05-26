@@ -325,6 +325,10 @@ export const rolePermissionService = {
     roleId: string,
     permissions: RolePermissionFlags,
   ): Promise<RolePermResult> {
+    if ((permissions.canEdit || permissions.canShare) && !permissions.canView) {
+      return { success: false, error: 'canView must be true when canEdit or canShare is set', status: 400 };
+    }
+
     const canManage = await permissionManagementService.canUserManagePermissions(actorUserId, pageId);
     if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
 
