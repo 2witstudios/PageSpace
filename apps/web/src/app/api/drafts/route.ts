@@ -47,7 +47,12 @@ export async function PUT(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    const body = await request.json();
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     }
