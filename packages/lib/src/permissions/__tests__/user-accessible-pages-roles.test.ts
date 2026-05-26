@@ -126,11 +126,36 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
       .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
-      // 6. explicit permissions
+      // 6. DB validation of canView=true IDs (filters stale/trashed/wrong-drive pages)
+      .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'private-page' }]))
+      // 7. explicit permissions
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
     const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
     expect(result).toContain('private-page');
+  });
+
+  it('given MEMBER with custom role granting canView on a stale/trashed page, should NOT include it', async () => {
+    const rolePerms = { 'stale-page': { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      // 1. drive lookup (not owner)
+      .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
+      // 2. admin check (not admin)
+      .mockReturnValueOnce(mockChainWhere([]))
+      // 3. member check → has custom role
+      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 4. non-private pages (none)
+      .mockReturnValueOnce(mockChainWhereNoLimit([]))
+      // 5. fetchCustomRolePermissions internal call
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      // 6. DB validation — stale-page doesn't pass (e.g., trashed or wrong drive)
+      .mockReturnValueOnce(mockChainWhereNoLimit([]))
+      // 7. explicit permissions (none)
+      .mockReturnValueOnce(mockChainLeftJoinWhere([]));
+
+    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    expect(result).not.toContain('stale-page');
+    expect(result).toHaveLength(0);
   });
 
   it('given MEMBER with custom role with NO canView entry for private page, should NOT include it', async () => {
