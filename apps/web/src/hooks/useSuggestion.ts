@@ -97,7 +97,9 @@ export function useSuggestion({
   // Track when we're temporarily disabling mention detection after insertion
   const suppressMentionDetection = useRef(false);
 
-  // Track which @ trigger index was explicitly dismissed via ESC (-1 = none)
+  // Index of the @ that opened the current popup (updated on open, read on dismiss)
+  const openTriggerIndexRef = useRef<number>(-1);
+  // Index of the @ trigger the user explicitly dismissed via ESC (-1 = none)
   const dismissedTriggerRef = useRef<number>(-1);
 
   const suggestion = useSuggestionCore({
@@ -170,13 +172,10 @@ export function useSuggestion({
   });
 
   const dismiss = useCallback(() => {
-    const value = getValue();
-    const cursorPos = getSelectionStart();
-    const textBeforeCursor = value.substring(0, cursorPos);
-    dismissedTriggerRef.current = textBeforeCursor.lastIndexOf(trigger);
+    dismissedTriggerRef.current = openTriggerIndexRef.current;
     suggestion.actions.close();
     context.close();
-  }, [getValue, getSelectionStart, trigger, suggestion.actions, context]);
+  }, [suggestion.actions, context]);
 
   const handleValueChange = useCallback((newValue: string) => {
     onValueChange(newValue); // Propagate change immediately
@@ -245,6 +244,7 @@ export function useSuggestion({
             }
 
             if (position) {
+              openTriggerIndexRef.current = mentionTriggerIndex;
               context.open(position);
             }
           }
