@@ -21,11 +21,15 @@ export const useDraft = (contextKey: string) => {
 
   // On mount (or key change): fetch from server for cross-device restore.
   // localStorage value wins if already present; server fills the gap otherwise.
+  // Capture the key at effect time to guard against stale closures if the
+  // contextKey changes before the async fetch resolves.
   useEffect(() => {
     if (!contextKey) return;
-    setValue(readLocal(contextKey));
-    fetchDraft(contextKey).then((server) => {
-      if (server) setValue((local: string) => mergeDrafts(local, server));
+    const activeKey = contextKey;
+    setValue(readLocal(activeKey));
+    fetchDraft(activeKey).then((server) => {
+      if (server && activeKey === contextKey)
+        setValue((local: string) => mergeDrafts(local, server));
     });
   }, [contextKey]);
 
@@ -37,6 +41,8 @@ export const useDraft = (contextKey: string) => {
       clearTimeout(debounceRef.current);
       if (shouldPersist(v)) {
         debounceRef.current = setTimeout(() => saveDraft(contextKey, v), DEBOUNCE_MS);
+      } else {
+        deleteDraft(contextKey);
       }
     },
     [contextKey],
