@@ -16,6 +16,7 @@ import { CodeBlockShiki } from '@/lib/editor/code-block';
 import { FontFormatting } from '@/lib/editor/font-formatting';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 import LinkButton from './LinkButton';
+import { FindExtension } from '@/lib/editor/find-plugin';
 
 interface RichEditorProps {
   value: string;
@@ -88,6 +89,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       TableKit,
       CharacterCount,
       PageMention,
+      FindExtension,
       // Conditionally add pagination based on isPaginated flag
       ...(isPaginated ? [
         PaginationPlus.configure({

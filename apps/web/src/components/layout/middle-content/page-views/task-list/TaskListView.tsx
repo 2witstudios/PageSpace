@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useFindStore } from '@/stores/useFindStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useTaskListPageFilter } from './useTaskListPageFilter';
@@ -386,6 +387,18 @@ function TaskListView({ page }: TaskListViewProps) {
   const [filter, setFilter] = useTaskListPageFilter(page.id);
   const [search, setSearch] = useState('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Connect Cmd+F to existing search input
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (isFindOpen) {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }
+  }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [triggerDialogTask, setTriggerDialogTask] = useState<TaskItem | null>(null);
@@ -493,6 +506,13 @@ function TaskListView({ page }: TaskListViewProps) {
 
     return true;
   }) || [];
+
+  // Report filtered task count to find store when search is active
+  useEffect(() => {
+    if (isFindOpen) {
+      reportMatches(search ? filteredTasks.length : 0);
+    }
+  }, [isFindOpen, search, filteredTasks.length, reportMatches]);
 
   // Create new task (with optional status for kanban)
   const handleCreateTask = async (title?: string, status?: string) => {
@@ -764,6 +784,7 @@ function TaskListView({ page }: TaskListViewProps) {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
+              ref={searchInputRef}
               placeholder="Filter tasks..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}

@@ -14,6 +14,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { openExternalUrl } from '@/lib/navigation/app-navigation';
+import { useFindStore } from '@/stores/useFindStore';
 
 interface CanvasPageViewProps {
   pageId: string;
@@ -41,6 +42,29 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   } = useDocument(pageId);
 
   const content = documentState?.content ?? '';
+
+  // Find in page (view tab only; code tab uses Monaco's built-in find)
+  const findQuery = useFindStore((s) => s.query);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (!isFindOpen || !findQuery || activeTab !== 'view') {
+      reportMatches(0);
+      return;
+    }
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content, 'text/html');
+    const text = (doc.body.textContent ?? '').toLowerCase();
+    const q = findQuery.toLowerCase();
+    let count = 0;
+    let idx = text.indexOf(q);
+    while (idx !== -1) {
+      count++;
+      idx = text.indexOf(q, idx + 1);
+    }
+    reportMatches(count);
+  }, [isFindOpen, findQuery, content, activeTab, reportMatches]);
 
   // Store forceSave in ref to prevent cleanup effects from re-running
   const forceSaveRef = useRef(forceSave);

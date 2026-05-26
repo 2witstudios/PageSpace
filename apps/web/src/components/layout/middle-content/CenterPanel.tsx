@@ -29,6 +29,8 @@ import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
+import { FindBar } from '@/components/find/FindBar';
+import { useFindStore } from '@/stores/useFindStore';
 
 const LOADING_TIMEOUT_MS = 12000; // Show retry hint after 12 seconds
 
@@ -252,6 +254,9 @@ export default function CenterPanel() {
   const setPageId = usePageStore(state => state.setPageId);
   const { updateNode } = usePageTree(activeDriveId);
   const updateNodeRef = useRef(updateNode);
+  const openFind = useFindStore((s) => s.open);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const resetFind = useFindStore((s) => s.reset);
 
   // Get page refresh configuration for pull-to-refresh
   const pageRefresh = usePageRefresh();
@@ -264,6 +269,31 @@ export default function CenterPanel() {
   useEffect(() => {
     setPageId(activePageId);
   }, [activePageId, setPageId]);
+
+  // Reset find state when navigating to a different page
+  useEffect(() => {
+    resetFind();
+  }, [activePageId, resetFind]);
+
+  // Global Cmd+F / Ctrl+F handler — skip when Monaco has focus (CODE pages, CANVAS code tab)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        const monacoFocused = document.activeElement?.closest('.monaco-editor');
+        if (monacoFocused) return;
+        e.preventDefault();
+        if (isFindOpen) {
+          const findInput = document.querySelector<HTMLInputElement>('.find-bar-input');
+          findInput?.focus();
+          findInput?.select();
+        } else {
+          openFind();
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [openFind, isFindOpen]);
 
   // Track page views for recents and clear "has changes" once viewed.
   // This lives in CenterPanel because dashboard route pages intentionally return null.
@@ -326,6 +356,7 @@ export default function CenterPanel() {
       >
         <OptimizedViewHeader pageId={activePageId} />
         <div className="flex-1 min-h-0 relative overflow-hidden">
+          <FindBar />
           <PullToRefresh
             direction="top"
             onRefresh={pageRefresh.refresh}
