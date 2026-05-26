@@ -154,6 +154,27 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
     expect(result).toHaveLength(0);
   });
 
+  it('given MEMBER with custom role entry {canView:false} on a NON-PRIVATE page, should remove it from accessible set', async () => {
+    const rolePerms = { 'non-private-page': { canView: false, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      // 1. drive lookup (not owner)
+      .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
+      // 2. admin check (not admin)
+      .mockReturnValueOnce(mockChainWhere([]))
+      // 3. member check → has custom role
+      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 4. non-private pages (includes page that role will deny)
+      .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'non-private-page' }]))
+      // 5. fetchCustomRolePermissions internal call
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      // 6. explicit permissions (none)
+      .mockReturnValueOnce(mockChainLeftJoinWhere([]));
+
+    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    expect(result).not.toContain('non-private-page');
+    expect(result).toHaveLength(0);
+  });
+
   it('given MEMBER with NO custom role, should behave unchanged (non-private + explicit only)', async () => {
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
@@ -203,6 +224,31 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
     const page = result.find(p => p.id === 'page-1');
     expect(page).toBeDefined();
     expect(page?.permissions).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role entry {canView:false} on a NON-PRIVATE page, should remove it from the page map', async () => {
+    const rolePerms = { 'non-private-page': { canView: false, canEdit: false, canShare: false } };
+    const nonPrivatePage = [
+      { id: 'non-private-page', title: 'Public', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+    ];
+    vi.mocked(db.select)
+      // 1. drive lookup (not owner)
+      .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
+      // 2. admin check (not admin)
+      .mockReturnValueOnce(mockChainWhere([]))
+      // 3. member check → has custom role
+      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 4. non-private pages (includes page that role will deny)
+      .mockReturnValueOnce(mockChainWhereNoLimit(nonPrivatePage))
+      // 5. fetchCustomRolePermissions internal call
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      // no role pages query — no canView=true entries
+      // 6. explicit pages (none)
+      .mockReturnValueOnce(mockChainInnerJoinWhere([]));
+
+    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    expect(result.find(p => p.id === 'non-private-page')).toBeUndefined();
+    expect(result).toHaveLength(0);
   });
 
   it('given MEMBER with custom role granting canView on a PRIVATE page, should include it with role perms', async () => {

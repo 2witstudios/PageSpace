@@ -423,10 +423,14 @@ export async function getUserAccessiblePagesInDrive(
     if (memberRow.customRoleId) {
       const rolePerms = await fetchCustomRolePermissions(memberRow.customRoleId, driveId);
       if (rolePerms) {
-        const visiblePageIds = Object.entries(rolePerms)
-          .filter(([, p]) => p.canView)
-          .map(([id]) => id);
-        for (const id of visiblePageIds) pageIdSet.add(id);
+        for (const [id, p] of Object.entries(rolePerms)) {
+          if (p.canView) {
+            pageIdSet.add(id);
+          } else {
+            // Explicit deny beats Rule 4 for non-private pages already in the set
+            pageIdSet.delete(id);
+          }
+        }
       }
     }
   }
@@ -587,6 +591,13 @@ export async function getUserAccessiblePagesInDriveWithDetails(
             ...page,
             permissions: resolveRolePermissions('MEMBER', rolePerms, page.id),
           });
+        }
+      }
+
+      // Explicit deny beats Rule 4: remove non-private pages the role disallows
+      for (const [id, p] of Object.entries(rolePerms)) {
+        if (!p.canView) {
+          pageMap.delete(id);
         }
       }
     }
