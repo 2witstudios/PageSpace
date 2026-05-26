@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
@@ -494,7 +494,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const activeSearch = isFindOpen ? findQuery : search;
 
   // Filter tasks
-  const filteredTasks = data?.tasks.filter(task => {
+  const filteredTasks = useMemo(() => data?.tasks.filter(task => {
     // Status filter - use group-based completion detection
     const isDone = isCompletedStatus(task.status, statusConfigs);
     if (filter === 'active' && isDone) return false;
@@ -510,7 +510,7 @@ function TaskListView({ page }: TaskListViewProps) {
     }
 
     return true;
-  }) || [];
+  }) ?? [], [data?.tasks, filter, statusConfigs, activeSearch]);
 
   // Report filtered task count to find store when search is active
   useEffect(() => {
