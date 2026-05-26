@@ -18,6 +18,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
     userId: 'userId',
     role: 'role',
     acceptedAt: 'acceptedAt',
+    customRoleId: 'customRoleId',
   },
   pagePermissions: {
     pageId: 'pageId',
@@ -27,6 +28,11 @@ vi.mock('@pagespace/db/schema/members', () => ({
     canShare: 'canShare',
     canDelete: 'canDelete',
     expiresAt: 'expiresAt',
+  },
+  driveRoles: {
+    id: 'id',
+    driveId: 'driveId',
+    permissions: 'permissions',
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -50,7 +56,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-vi.mock('../../validators', () => ({
+vi.mock('../../validators/id-validators', () => ({
   parseUserId: vi.fn(),
   parsePageId: vi.fn(),
 }));
@@ -76,6 +82,7 @@ interface Row {
   explicitCanEdit: boolean | null;
   explicitCanShare: boolean | null;
   explicitCanDelete: boolean | null;
+  customRolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> | null;
 }
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
@@ -92,6 +99,7 @@ function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
     explicitCanEdit: null,
     explicitCanShare: null,
     explicitCanDelete: null,
+    customRolePerms: null,
     ...overrides,
   };
 }
@@ -103,13 +111,15 @@ function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
  *     .leftJoin(drives, ...)
  *     .leftJoin(driveMembers, ...)
  *     .leftJoin(pagePermissions, ...)
+ *     .leftJoin(driveRoles, ...)
  *     .where(...)
  *
  * The terminal `.where(...)` resolves to the provided rows.
  */
 function stubQueryRows(rows: Row[]) {
   const where = vi.fn().mockResolvedValue(rows);
-  const leftJoin3 = vi.fn().mockReturnValue({ where });
+  const leftJoin4 = vi.fn().mockReturnValue({ where });
+  const leftJoin3 = vi.fn().mockReturnValue({ leftJoin: leftJoin4, where });
   const leftJoin2 = vi.fn().mockReturnValue({ leftJoin: leftJoin3, where });
   const leftJoin1 = vi.fn().mockReturnValue({ leftJoin: leftJoin2, where });
   const from = vi.fn().mockReturnValue({ leftJoin: leftJoin1, where });
@@ -303,9 +313,85 @@ describe('getBatchPagePermissions', () => {
     expect(vi.mocked(isNotNull)).toHaveBeenCalledWith('acceptedAt');
   });
 
+  it('given MEMBER with custom role entry {canView:true, canEdit:true} on a PRIVATE page, should grant custom role permissions', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: { 'p1': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role entry {canView:true, canEdit:true} on a NON-PRIVATE page, should grant custom role permissions instead of read-only', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: false,
+        customRolePerms: { 'p1': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role but NO entry for this page on a non-private page, should fall through to Rule 4', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: false,
+        customRolePerms: { 'other-page': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role but NO entry for this page on a private page, should deny access', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: { 'other-page': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role entry {canView:false} on a non-private page, should deny access (explicit deny beats Rule 4)', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: false,
+        customRolePerms: { 'p1': { canView: false, canEdit: false, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
   it('given a DB failure, should return the pre-seeded deny map (fail-closed) and log', async () => {
     const where = vi.fn().mockRejectedValue(new Error('DB down'));
-    const leftJoin3 = vi.fn().mockReturnValue({ where });
+    const leftJoin4 = vi.fn().mockReturnValue({ where });
+    const leftJoin3 = vi.fn().mockReturnValue({ leftJoin: leftJoin4, where });
     const leftJoin2 = vi.fn().mockReturnValue({ leftJoin: leftJoin3, where });
     const leftJoin1 = vi.fn().mockReturnValue({ leftJoin: leftJoin2, where });
     const from = vi.fn().mockReturnValue({ leftJoin: leftJoin1, where });
