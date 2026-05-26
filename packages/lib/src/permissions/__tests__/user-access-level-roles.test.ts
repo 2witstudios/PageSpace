@@ -6,7 +6,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate' },
+  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate', type: 'type' },
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -66,8 +66,8 @@ function mockValidators() {
   vi.mocked(parsePageId).mockReturnValue({ success: true, data: VALID_PAGE });
 }
 
-function makePageRow(isPrivate = false) {
-  return [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner', isPrivate }];
+function makePageRow(isPrivate = false, type = 'DOCUMENT') {
+  return [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner', isPrivate, type }];
 }
 
 function mockSelectChain(rows: unknown[]) {
@@ -202,6 +202,26 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('given MEMBER with NO custom role on NON-PRIVATE CHANNEL page, returns canEdit:true', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(false, 'CHANNEL')))
+      .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: null }]))
+      .mockReturnValueOnce(mockSelectChain([]));
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with NO custom role on NON-PRIVATE non-CHANNEL page, returns canEdit:false', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(false, 'DOCUMENT')))
+      .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: null }]))
+      .mockReturnValueOnce(mockSelectChain([]));
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
   it('given explicit pagePermissions row, it beats custom role', async () => {
