@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { z } from 'zod/v4';
-import { rolePermissionService } from '@/services/api';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { permissionManagementService, rolePermissionService } from '@/services/api';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -12,8 +14,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const { pageId } = await params;
 
-  const roles = await rolePermissionService.getPageRoleGrants(pageId);
-  return NextResponse.json({ roles });
+  try {
+    const canView = await permissionManagementService.canUserViewPermissions(auth.userId, pageId);
+    if (!canView) {
+      return NextResponse.json(
+        { error: 'You need share permission to view role access for this page' },
+        { status: 403 }
+      );
+    }
+
+    const roles = await rolePermissionService.getPageRoleGrants(pageId);
+    return NextResponse.json({ roles });
+  } catch (error) {
+    loggers.api.error('Error fetching role permissions:', error as Error);
+    return NextResponse.json({ error: 'Failed to fetch role permissions' }, { status: 500 });
+  }
 }
 
 const putSchema = z.object({
@@ -29,25 +44,38 @@ export async function PUT(req: Request, { params }: { params: Promise<{ pageId: 
 
   const { pageId } = await params;
 
-  const body = await req.json();
-  const parsed = putSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues }, { status: 400 });
+  try {
+    const body = await req.json();
+    const parsed = putSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues }, { status: 400 });
+    }
+    const { roleId, canView, canEdit, canShare } = parsed.data;
+
+    const result = await rolePermissionService.setRolePagePermission(
+      auth.userId,
+      pageId,
+      roleId,
+      { canView, canEdit, canShare },
+    );
+
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
+    }
+
+    auditRequest(req, {
+      eventType: 'authz.role_permission.granted',
+      userId: auth.userId,
+      resourceType: 'page',
+      resourceId: pageId,
+      details: { roleId, canView, canEdit, canShare },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    loggers.api.error('Error setting role permission:', error as Error);
+    return NextResponse.json({ error: 'Failed to set role permission' }, { status: 500 });
   }
-  const { roleId, canView, canEdit, canShare } = parsed.data;
-
-  const result = await rolePermissionService.setRolePagePermission(
-    auth.userId,
-    pageId,
-    roleId,
-    { canView, canEdit, canShare },
-  );
-
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
-  }
-
-  return NextResponse.json({ success: true });
 }
 
 const deleteSchema = z.object({
@@ -60,21 +88,34 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
   const { pageId } = await params;
 
-  const body = await req.json();
-  const parsed = deleteSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues }, { status: 400 });
+  try {
+    const body = await req.json();
+    const parsed = deleteSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues }, { status: 400 });
+    }
+
+    const result = await rolePermissionService.removeRolePagePermission(
+      auth.userId,
+      pageId,
+      parsed.data.roleId,
+    );
+
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
+    }
+
+    auditRequest(req, {
+      eventType: 'authz.role_permission.revoked',
+      userId: auth.userId,
+      resourceType: 'page',
+      resourceId: pageId,
+      details: { roleId: parsed.data.roleId },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    loggers.api.error('Error removing role permission:', error as Error);
+    return NextResponse.json({ error: 'Failed to remove role permission' }, { status: 500 });
   }
-
-  const result = await rolePermissionService.removeRolePagePermission(
-    auth.userId,
-    pageId,
-    parsed.data.roleId,
-  );
-
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
-  }
-
-  return NextResponse.json({ success: true });
 }
