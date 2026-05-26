@@ -1,5 +1,5 @@
-import { describe, it, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { describe, it, vi, beforeEach, afterEach, expect } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { assert } from './riteway';
 import { isRichContentEmpty, isDirty, usePageContent } from '../usePageContent';
 
@@ -160,8 +160,8 @@ describe('usePageContent', () => {
 
     const { result } = renderHook(() => usePageContent({ pageId: 'page-1' }));
 
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(result.current.content).toEqual('<p>task description</p>');
     });
 
     assert({
@@ -177,8 +177,8 @@ describe('usePageContent', () => {
 
     const { result } = renderHook(() => usePageContent({ pageId: 'page-1' }));
 
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(result.current.isLoading).toEqual(false);
     });
 
     assert({
