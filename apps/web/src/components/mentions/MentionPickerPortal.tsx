@@ -120,7 +120,7 @@ export function MentionPickerPortal({
       : `${viewportH - (position.top ?? 0) - 8}px`;
 
   const actualWidth = Math.min(Math.max(position.width ?? 256, 256), 320);
-  const clampedLeft = Math.min(Math.max(position.left, 8), viewportW - actualWidth - 8);
+  const clampedLeft = Math.max(8, Math.min(position.left, viewportW - actualWidth - 8));
 
   const style: React.CSSProperties = {
     position: 'fixed',
