@@ -76,7 +76,7 @@ export function MentionPickerPanel({
   ).length;
 
   return (
-    <div className={cn('w-80', className)} onKeyDown={handleKeyDown}>
+    <div className={cn('w-full', className)} onKeyDown={handleKeyDown}>
       <div className="p-2 border-b border-border/50">
         <Input
           autoFocus
