@@ -245,11 +245,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const q = findQuery.toLowerCase();
     const ids = messages
       .filter((m) => {
-        const partsText = (m.parts ?? [])
+        const text = (m.parts ?? [])
           .filter((p) => p.type === 'text')
           .map((p) => (p as { type: 'text'; text: string }).text)
           .join(' ');
-        const text = partsText || (typeof m.content === 'string' ? m.content : '');
         return text.toLowerCase().includes(q);
       })
       .map((m) => m.id);
