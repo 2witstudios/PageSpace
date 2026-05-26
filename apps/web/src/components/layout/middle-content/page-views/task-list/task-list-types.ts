@@ -71,6 +71,7 @@ export interface TaskItem {
   } | null;
   page?: {
     id: string;
+    type: string;
     isTrashed: boolean;
     position: number;
   } | null;

@@ -163,6 +163,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         columns: {
           id: true,
           title: true,
+          type: true,
           isTrashed: true,
           position: true,
         },

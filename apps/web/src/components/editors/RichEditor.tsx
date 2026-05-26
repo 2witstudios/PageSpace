@@ -20,7 +20,7 @@ import { FindExtension } from '@/lib/editor/find-plugin';
 
 interface RichEditorProps {
   value: string;
-  onChange: (value: string) => void;
+  onChange?: (value: string) => void;
   onEditorChange?: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
@@ -120,7 +120,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     onUpdate: ({ editor }) => {
       if (!readOnly) {
         const serialized = serializeEditorContent(editor, isMarkdownMode);
-        onChange(serialized);
+        onChange?.(serialized);
       }
     },
     editorProps: {

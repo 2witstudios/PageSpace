@@ -383,7 +383,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, 
   const expansionRow = (
     <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
       <td colSpan={8} className="px-4 py-2 border-b bg-muted/20">
-        {isExpanded && <TaskRowDescription task={task} canEdit={canEdit} />}
+        {isExpanded && <TaskRowDescription task={task} />}
       </td>
     </tr>
   );
