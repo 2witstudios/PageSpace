@@ -102,7 +102,7 @@ function ChannelView({ page }: ChannelViewProps) {
     const id = findMatchIds[findIndex];
     if (!id) return;
     const el = document.querySelector(`[data-message-id="${id}"]`);
-    el?.scrollIntoView({ block: 'nearest' });
+    el?.scrollIntoView({ block: 'center' });
   }, [findIndex, findMatchIds]);
 
   const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);

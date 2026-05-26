@@ -344,6 +344,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: 
     <TableRow
       ref={setNodeRef}
       style={style}
+      data-task-id={task.id}
       className={cn(
         isCompleted && 'opacity-60',
         isDragging && 'opacity-50 bg-muted'
@@ -391,12 +392,16 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Connect Cmd+F to existing search input
   const isFindOpen = useFindStore((s) => s.isOpen);
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
   const reportMatches = useFindStore((s) => s.reportMatches);
 
   useEffect(() => {
     if (isFindOpen) {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
+    } else {
+      setSearch('');
     }
   }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -488,6 +493,8 @@ function TaskListView({ page }: TaskListViewProps) {
   const statusConfigMap = buildStatusConfig(statusConfigs);
   const statusOrder = getStatusOrder(statusConfigs);
 
+  const activeSearch = isFindOpen ? findQuery : search;
+
   // Filter tasks
   const filteredTasks = data?.tasks.filter(task => {
     // Status filter - use group-based completion detection
@@ -496,8 +503,8 @@ function TaskListView({ page }: TaskListViewProps) {
     if (filter === 'completed' && !isDone) return false;
 
     // Search filter
-    if (search) {
-      const searchLower = search.toLowerCase();
+    if (activeSearch) {
+      const searchLower = activeSearch.toLowerCase();
       return (
         task.title.toLowerCase().includes(searchLower) ||
         task.description?.toLowerCase().includes(searchLower)
@@ -510,9 +517,18 @@ function TaskListView({ page }: TaskListViewProps) {
   // Report filtered task count to find store when search is active
   useEffect(() => {
     if (isFindOpen) {
-      reportMatches(search ? filteredTasks.length : 0);
+      reportMatches(findQuery ? filteredTasks.length : 0);
     }
-  }, [isFindOpen, search, filteredTasks.length, reportMatches]);
+  }, [isFindOpen, findQuery, filteredTasks.length, reportMatches]);
+
+  // Scroll to current find match
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) return;
+    const task = filteredTasks[findIndex];
+    if (!task) return;
+    document.querySelector(`[data-task-id="${task.id}"]`)
+      ?.scrollIntoView({ block: 'center' });
+  }, [findIndex, filteredTasks, isFindOpen, findQuery]);
 
   // Create new task (with optional status for kanban)
   const handleCreateTask = async (title?: string, status?: string) => {
@@ -869,8 +885,8 @@ function TaskListView({ page }: TaskListViewProps) {
       {/* Mobile Card View */}
       <div className="flex-1 overflow-auto md:hidden p-4 space-y-3">
         {filteredTasks.map((task) => (
+          <div key={task.id} data-task-id={task.id}>
           <MobileTaskCard
-            key={task.id}
             task={task}
             canEdit={canEdit}
             onToggleComplete={handleToggleComplete}
@@ -896,6 +912,7 @@ function TaskListView({ page }: TaskListViewProps) {
             statusOrder={statusOrder}
             statusConfigs={statusConfigs}
           />
+          </div>
         ))}
 
         {/* Mobile new task input */}

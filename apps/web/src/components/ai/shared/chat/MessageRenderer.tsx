@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { cn } from '@/lib/utils';
 import { ToolCallRenderer } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
@@ -121,6 +122,8 @@ interface MessageRendererProps {
   isLastUserMessage?: boolean;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  isHighlighted?: boolean;
+  isCurrentMatch?: boolean;
 }
 
 /**
@@ -137,7 +140,9 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   onTaskUpdate,
   isLastAssistantMessage = false,
   isLastUserMessage = false,
-  isStreaming = false
+  isStreaming = false,
+  isHighlighted = false,
+  isCurrentMatch = false,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -341,7 +346,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} data-message-id={message.id} className="mb-2">
+      <div key={message.id} data-message-id={message.id} className={cn("mb-2", isHighlighted && "find-highlight", isCurrentMatch && "find-highlight-current")}>
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
