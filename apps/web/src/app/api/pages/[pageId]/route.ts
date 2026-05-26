@@ -9,7 +9,7 @@ import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull, ne, not, exists } from '@pagespace/db/operators';
+import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 
@@ -165,13 +165,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
             eq(driveMembers.driveId, result.driveId),
             isNotNull(driveMembers.acceptedAt),
             ne(driveMembers.userId, drive.ownerId),
-            ne(driveMembers.role, 'ADMIN'),
+            not(inArray(driveMembers.role, ['OWNER', 'ADMIN'])),
             not(exists(
               db.select({ id: pagePermissions.id })
                 .from(pagePermissions)
                 .where(and(
                   eq(pagePermissions.pageId, pageId),
-                  eq(pagePermissions.userId, driveMembers.userId)
+                  eq(pagePermissions.userId, driveMembers.userId),
+                  eq(pagePermissions.canView, true),
+                  or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
                 ))
             ))
           ));
