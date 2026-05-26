@@ -282,8 +282,10 @@ describe('extractText', () => {
   });
 
   it('throws when PDF processing fails', async () => {
+    const pdfError = Promise.reject(new Error('PDF parse error'));
+    pdfError.catch(() => {}); // suppress unhandledRejection — consumed when extractText awaits it
     (pdfjsLib.getDocument as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      promise: Promise.reject(new Error('PDF parse error')),
+      promise: pdfError,
     });
 
     await expect(
