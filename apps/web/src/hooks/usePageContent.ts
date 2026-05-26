@@ -12,11 +12,9 @@ export interface UsePageContentOptions {
   initialContent?: string | null;
 }
 
-// isRichContentEmpty is used only for emptiness checks, not for rendering HTML.
-// The regex strips tags to measure visible text length — no output is produced.
 export const isRichContentEmpty = (html: string | null): boolean => {
   if (!html) return true;
-  return html.replace(/<[^>]*>/g, '').trim().length === 0;
+  return (new DOMParser().parseFromString(html, 'text/html').body.textContent ?? '').trim().length === 0;
 };
 
 export const isDirty = (pending: string | null): boolean => pending !== null;
