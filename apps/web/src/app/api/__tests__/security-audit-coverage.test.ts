@@ -65,6 +65,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
   ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
 
+  // --- Draft persistence (personal, ephemeral, own-user-only) ---
+  ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],
+
   // --- Read receipts (low-risk, high-frequency) ---
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],
   ['notifications/[id]/read', 'Notification read receipt, low-risk'],
