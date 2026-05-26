@@ -17,7 +17,7 @@ export const useDraft = (contextKey: string) => {
   const [value, setValue] = useState<string>(() =>
     contextKey ? readLocal(contextKey) : '',
   );
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // On mount (or key change): fetch from server for cross-device restore.
   // localStorage value wins if already present; server fills the gap otherwise.
