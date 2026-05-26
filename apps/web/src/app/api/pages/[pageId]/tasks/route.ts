@@ -11,7 +11,7 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/per
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
-import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
+
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -130,7 +130,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       assigneeId: true,
       assigneeAgentId: true,
       pageId: true,
-      description: true,
+
       status: true,
       priority: true,
       position: true,
@@ -207,8 +207,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (search) {
     const searchLower = search.toLowerCase();
     tasks = tasks.filter(task =>
-      (task.page?.title.toLowerCase().includes(searchLower)) ||
-      (task.description?.toLowerCase().includes(searchLower))
+      task.page?.title.toLowerCase().includes(searchLower)
     );
   }
 
@@ -277,7 +276,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const body = await req.json();
   const {
     title,
-    description,
     status,
     priority,
     assigneeId,
@@ -401,7 +399,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       taskListId: taskList.id,
       userId,
       pageId: taskPage.id,
-      description: description?.trim() || null,
       status: status || 'pending',
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
@@ -520,30 +517,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       }),
     ),
   ]);
-
-  if (description) {
-    try {
-      const mentionedIds = await expandMentionsToUserIds(description, taskListPage.driveId!);
-      const candidates = mentionedIds.filter((id) => id !== userId);
-      if (candidates.length > 0) {
-        const taskPageId = result.page.id;
-        const viewChecks = await Promise.all(
-          candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, taskPageId) }))
-        );
-        await Promise.all(
-          viewChecks
-            .filter((e) => e.canView)
-            .map((e) =>
-              createMentionNotification(e.id, taskPageId, userId).catch((err) =>
-                loggers.api.error('Failed to send mention notification', err as Error)
-              )
-            )
-        );
-      }
-    } catch (err) {
-      loggers.api.error('Failed to resolve mention targets', err as Error);
-    }
-  }
 
   // Log task creation for compliance (fire-and-forget)
   const actorInfo = await getActorInfo(userId);

@@ -539,10 +539,7 @@ function TaskListView({ page }: TaskListViewProps) {
     // Search filter
     if (activeSearch) {
       const searchLower = activeSearch.toLowerCase();
-      return (
-        task.title.toLowerCase().includes(searchLower) ||
-        task.description?.toLowerCase().includes(searchLower)
-      );
+      return task.title.toLowerCase().includes(searchLower);
     }
 
     return true;

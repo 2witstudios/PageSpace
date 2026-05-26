@@ -58,9 +58,6 @@ export function aggregateStatuses(
   return [...seen.values()].sort((a, b) => a.position - b.position);
 }
 
-export const allRowsNull = (rows: { description: string | null }[]): boolean =>
-  rows.every(r => r.description === null);
-
 export function getAssigneeText(task: Task): string | null {
   if (task.assignees && task.assignees.length > 0) {
     return task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ') || null;

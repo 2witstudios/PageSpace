@@ -233,7 +233,6 @@ export const pageReadTools = {
             .select({
               id: taskItems.id,
               title: pages.title,
-              description: taskItems.description,
               status: taskItems.status,
               priority: taskItems.priority,
               position: taskItems.position,
