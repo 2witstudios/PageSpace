@@ -128,7 +128,6 @@ export const conversationRepository = {
   /**
    * List conversations for an agent with stats, ordered by most recent.
    * Only returns conversations the user owns, plus any explicitly shared ones.
-   * Legacy conversations (no conversations row) are treated as shared.
    */
   async listConversations(
     agentId: string,
@@ -196,7 +195,6 @@ export const conversationRepository = {
       WHERE (
         conv."userId" = ${userId}
         OR conv."isShared" = true
-        OR conv.id IS NULL
       )
       ORDER BY cs.last_message_time DESC
       LIMIT ${limit}
@@ -220,7 +218,6 @@ export const conversationRepository = {
         AND (
           conv."userId" = ${userId}
           OR conv."isShared" = true
-          OR conv.id IS NULL
         )
     `);
 
