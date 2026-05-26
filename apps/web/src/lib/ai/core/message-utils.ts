@@ -83,7 +83,7 @@ interface ToolPart {
 }
 
 /** Extended UIMessage with extra fields stored in our database */
-type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date };
+type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null };
 
 interface DatabaseMessage {
   id: string;
@@ -97,6 +97,7 @@ interface DatabaseMessage {
   isActive: boolean;
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
+  userName?: string | null;
 }
 
 
@@ -256,7 +257,8 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
           totalPartsCount: parsed.partsOrder.length
         });
 
-        return reconstructMessageFromStructuredContent(dbMessage, parsed);
+        const structured = reconstructMessageFromStructuredContent(dbMessage, parsed);
+        return { ...structured, userName: dbMessage.userName } as ExtendedUIMessage;
       }
     } catch {
       // Content is plain text, not structured
@@ -272,6 +274,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
+    userName: dbMessage.userName,
   } as ExtendedUIMessage;
 }
 
