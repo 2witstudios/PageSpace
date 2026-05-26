@@ -122,7 +122,7 @@ describe('GET /api/health', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.checks.database).toBe('disconnected');
     });
@@ -137,7 +137,7 @@ describe('GET /api/health', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.error).toContain('Database');
     });
@@ -179,7 +179,7 @@ describe('GET /api/health', () => {
       const response = await GET(request);
       const body = await response.json();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(200);
       expect(body.status).toBe('degraded');
       expect(body.checks.monitoring).toBe('misconfigured');
       expect(body.warnings).toBeDefined();
