@@ -487,9 +487,9 @@ function TaskListView({ page }: TaskListViewProps) {
   }, [socket, connectionStatus, page.id]);
 
   // Derive dynamic status config from API response
-  const statusConfigs: TaskStatusConfig[] = data?.statusConfigs || [];
-  const statusConfigMap = buildStatusConfig(statusConfigs);
-  const statusOrder = getStatusOrder(statusConfigs);
+  const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
+  const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
+  const statusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
 
   const activeSearch = isFindOpen ? findQuery : search;
 
