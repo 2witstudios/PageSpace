@@ -252,6 +252,7 @@ export function useSuggestion({
         // MentionPickerPortal handles its own fetching — no need to drive useSuggestionCore
       } else {
         // This @ is part of an existing mention, close suggestions if open
+        dismissedTriggerRef.current = -1;
         if (context.isOpen) {
           suggestion.actions.close();
         }
