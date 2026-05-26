@@ -355,7 +355,17 @@ export const PageMention = PageMentionNode.configure({
           });
 
           const rect = props.clientRect ? props.clientRect() : null;
-          if (popup && rect) {
+          if (!popup && rect) {
+            popup = tippy(document.body, {
+              getReferenceClientRect: () => rect,
+              appendTo: () => document.body,
+              content: component.element,
+              showOnCreate: true,
+              interactive: true,
+              trigger: 'manual',
+              placement: 'bottom-start',
+            }) as Instance;
+          } else if (popup && rect) {
             popup.setProps({ getReferenceClientRect: () => rect });
           }
         },
