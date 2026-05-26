@@ -524,8 +524,9 @@ function TaskListView({ page }: TaskListViewProps) {
     if (!isFindOpen || !findQuery) return;
     const task = filteredTasks[findIndex];
     if (!task) return;
-    document.querySelector(`[data-task-id="${task.id}"]`)
-      ?.scrollIntoView({ block: 'center' });
+    const els = document.querySelectorAll(`[data-task-id="${task.id}"]`);
+    const visibleEl = Array.from(els).find(el => (el as HTMLElement).offsetParent !== null);
+    visibleEl?.scrollIntoView({ block: 'center' });
   }, [findIndex, filteredTasks, isFindOpen, findQuery]);
 
   // Create new task (with optional status for kanban)
