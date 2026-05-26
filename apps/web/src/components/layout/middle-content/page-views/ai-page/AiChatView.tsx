@@ -256,12 +256,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     reportMatches(ids.length);
   }, [isFindOpen, findQuery, messages, reportMatches]);
 
-  useEffect(() => {
-    const id = findMatchIds[findIndex];
-    if (!id) return;
-    const el = document.querySelector(`[data-message-id="${id}"]`);
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [findIndex, findMatchIds]);
+  const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
+  const currentFindMsgId = findMatchIds[findIndex] ?? null;
   const { wrapSend } = useSendHandoff(currentConversationId, status);
   const stop = useChatStop(streamTrackingId, chatStop);
 
@@ -844,6 +840,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onMcpServerToggle={setServerEnabled}
             showMcp={isDesktop}
             remoteStreams={remoteStreams}
+            findMatchSet={findMatchSet}
+            findCurrentMessageId={currentFindMsgId}
             renderInput={(props) => (
               <>
                 {isVoiceModeActive && (
