@@ -64,7 +64,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ pageId: 
     }
 
     auditRequest(req, {
-      eventType: 'authz.role_permission.granted',
+      eventType: 'authz.permission.granted',
       userId: auth.userId,
       resourceType: 'page',
       resourceId: pageId,
@@ -106,7 +106,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     }
 
     auditRequest(req, {
-      eventType: 'authz.role_permission.revoked',
+      eventType: 'authz.permission.revoked',
       userId: auth.userId,
       resourceType: 'page',
       resourceId: pageId,
