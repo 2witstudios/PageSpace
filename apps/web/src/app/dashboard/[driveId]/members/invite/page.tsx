@@ -171,10 +171,10 @@ export default function InviteMemberPage() {
           canShare: perms.canShare,
         }));
 
-      if (permissionArray.length === 0) {
+      if (permissionArray.length === 0 && !backendCustomRoleId) {
         toast({
           title: 'No permissions selected',
-          description: 'Please select at least one permission to grant',
+          description: 'Please assign a role or select at least one page permission',
           variant: 'destructive',
         });
         return;
