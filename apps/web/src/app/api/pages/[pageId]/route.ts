@@ -9,9 +9,9 @@ import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray } from '@pagespace/db/operators';
+import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -174,6 +174,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
                   eq(pagePermissions.userId, driveMembers.userId),
                   eq(pagePermissions.canView, true),
                   or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
+                ))
+            )),
+            not(exists(
+              db.select({ id: driveRoles.id })
+                .from(driveRoles)
+                .where(and(
+                  eq(driveRoles.id, driveMembers.customRoleId),
+                  sql`${driveRoles.permissions} -> ${pageId} ->> 'canView' = 'true'`
                 ))
             ))
           ));

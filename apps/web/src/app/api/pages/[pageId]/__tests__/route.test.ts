@@ -71,14 +71,16 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn((a: unknown) => ({ isNull: a })),
   gt: vi.fn((a: unknown, b: unknown) => ({ gt: [a, b] })),
   inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
+  sql: vi.fn((...args: unknown[]) => ({ sql: args })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', isPrivate: 'pages.isPrivate' },
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role' },
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role', customRoleId: 'driveMembers.customRoleId' },
   pagePermissions: { id: 'pagePermissions.id', pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId', canView: 'pagePermissions.canView', expiresAt: 'pagePermissions.expiresAt' },
+  driveRoles: { id: 'driveRoles.id', permissions: 'driveRoles.permissions' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -616,6 +618,24 @@ describe('PATCH /api/pages/[pageId]', () => {
       expect(kickUserFromPage).toHaveBeenCalledWith(mockPageId, 'member_2', 'page_private');
       expect(kickUserFromPageActivity).toHaveBeenCalledWith(mockPageId, 'member_1', 'page_private');
       expect(kickUserFromPageActivity).toHaveBeenCalledWith(mockPageId, 'member_2', 'page_private');
+    });
+
+    it('does not kick members who retain access via custom role when page transitions false→true', async () => {
+      // The DB query excludes members with custom role access — they return [] from the kick query
+      // @ts-expect-error - partial mock: page was public
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      // @ts-expect-error - partial mock chain: empty result means all members with implicit access
+      // are already excluded by the NOT EXISTS subqueries (explicit perms + custom role)
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      });
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(kickUserFromPage).not.toHaveBeenCalled();
+      expect(kickUserFromPageActivity).not.toHaveBeenCalled();
     });
 
     it('does not kick anyone when page is already private (no transition)', async () => {
