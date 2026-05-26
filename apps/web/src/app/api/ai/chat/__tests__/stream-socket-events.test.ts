@@ -362,6 +362,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
   describe('user-message broadcast', () => {
     it('given a POST with a user message, should broadcast chat:user_message after the DB save resolves with the saved message and full envelope', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: 'conv-1', userId: 'user-1', isShared: true });
       await POST(makeRequest({ browserSessionId: 'session-7' }));
 
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
