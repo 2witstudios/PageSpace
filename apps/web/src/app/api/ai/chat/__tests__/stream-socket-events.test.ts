@@ -389,12 +389,13 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
   });
 
   describe('conversation privacy gate on broadcast', () => {
-    it('should broadcast when conversation has no conversations row (legacy)', async () => {
+    it('should NOT broadcast when conversation row is missing (fail closed)', async () => {
+      mockCreateConversation.mockRejectedValueOnce(new Error('db down'));
       mockGetConversation.mockResolvedValueOnce(null);
 
       await POST(makeRequest({ conversationId: 'conv-1' }));
 
-      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
 
     it('should broadcast when conversation isShared is true', async () => {

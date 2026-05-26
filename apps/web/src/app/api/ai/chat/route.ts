@@ -324,7 +324,9 @@ export async function POST(request: Request) {
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent
     // via onConflictDoNothing, so safe for every message in a conversation.
-    conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
+    // Awaited so the row is visible to the broadcast gate below; errors are
+    // swallowed (non-fatal) and the gate falls back to no-broadcast on failure.
+    await conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -829,9 +831,10 @@ export async function POST(request: Request) {
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
     if (userMessage && userMessage.role === 'user') {
-      // Only broadcast to the page channel if the conversation is shared (or legacy with no row)
+      // Only broadcast to the page channel if the conversation is explicitly shared.
+      // Fail closed: no broadcast if the row is missing or private.
       const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
-      const shouldBroadcast = !convRow || convRow.isShared;
+      const shouldBroadcast = convRow?.isShared === true;
       if (shouldBroadcast) {
         broadcastChatUserMessage({
           message: userMessage,
