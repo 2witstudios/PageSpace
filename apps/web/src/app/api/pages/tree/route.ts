@@ -8,6 +8,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -78,9 +79,17 @@ export async function POST(request: Request) {
       orderBy: [asc(pages.position)],
     });
 
-    const pageTree = buildTree(pageResults);
+    // Non-owners must not see private pages they don't have explicit access to.
+    // getUserAccessiblePagesInDrive handles owner/admin (returns all) vs member (non-private + explicit).
+    let visiblePages = pageResults;
+    if (!isOwner) {
+      const accessibleIds = new Set(await getUserAccessiblePagesInDrive(userId, driveId));
+      visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
+    }
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'build_page_tree', pageCount: pageResults.length } });
+    const pageTree = buildTree(visiblePages);
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'build_page_tree', pageCount: visiblePages.length } });
 
     return NextResponse.json({ tree: pageTree });
   } catch (error) {

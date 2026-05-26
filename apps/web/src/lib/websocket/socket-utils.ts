@@ -18,7 +18,7 @@ export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'mem
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
 export type UsageOperation = 'updated';
 export type ActivityOperation = 'logged';
-export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
+export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
 export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed' | 'thread_updated';
 
 export interface ActivityEventPayload {
@@ -39,6 +39,7 @@ export interface PageEventPayload {
   operation: PageOperation;
   title?: string;
   type?: string;
+  isPrivate?: boolean;
   socketId?: string; // Socket ID of the user who triggered this event (to prevent self-refetch)
 }
 
@@ -408,6 +409,7 @@ export function createPageEventPayload(
     parentId?: string | null;
     title?: string;
     type?: string;
+    isPrivate?: boolean;
     socketId?: string;
   } = {}
 ): PageEventPayload {

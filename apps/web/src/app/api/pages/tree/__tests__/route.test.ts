@@ -60,10 +60,15 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt' },
 }));
 
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserAccessiblePagesInDrive: vi.fn(),
+}));
+
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -104,6 +109,8 @@ describe('POST /api/pages/tree', () => {
       { id: 'page_1', parentId: null, position: 0 },
     ]);
     vi.mocked(buildTree).mockReturnValue([{ id: 'page_1', children: [] }] as never);
+    // Default: all pages accessible (used for non-owner path)
+    vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_1']);
   });
 
   describe('authentication', () => {
@@ -244,6 +251,70 @@ describe('POST /api/pages/tree', () => {
       ]);
       expect(body.tree[0].id).toBe('page_1');
       expect(buildTree).toHaveBeenCalledWith(mockPages);
+    });
+
+    it('does not call getUserAccessiblePagesInDrive for the drive owner', async () => {
+      // owner set in beforeEach (ownerId: mockUserId)
+      await POST(createRequest({ driveId: mockDriveId }));
+
+      expect(getUserAccessiblePagesInDrive).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('private page filtering', () => {
+    const otherOwnerId = 'other_owner';
+
+    beforeEach(() => {
+      // Switch to non-owner so filtering kicks in
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        id: mockDriveId,
+        ownerId: otherOwnerId,
+      });
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
+        driveId: mockDriveId,
+        userId: mockUserId,
+      });
+    });
+
+    it('filters out pages not in the accessible set for non-owners', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        { id: 'public_page', parentId: null, position: 0 },
+        { id: 'private_page', parentId: null, position: 1 },
+      ] as never);
+      // Only public_page is accessible to this member
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['public_page']);
+
+      await POST(createRequest({ driveId: mockDriveId }));
+
+      // buildTree should only receive the accessible page
+      expect(buildTree).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ id: 'public_page' })])
+      );
+      const callArg = vi.mocked(buildTree).mock.calls[0][0] as { id: string }[];
+      expect(callArg.some(p => p.id === 'private_page')).toBe(false);
+    });
+
+    it('calls getUserAccessiblePagesInDrive with correct userId and driveId for non-owners', async () => {
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_1']);
+
+      await POST(createRequest({ driveId: mockDriveId }));
+
+      expect(getUserAccessiblePagesInDrive).toHaveBeenCalledWith(mockUserId, mockDriveId);
+    });
+
+    it('shows all pages when all are in the accessible set', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        { id: 'page_a', parentId: null, position: 0 },
+        { id: 'page_b', parentId: null, position: 1 },
+      ] as never);
+      vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_a', 'page_b']);
+
+      await POST(createRequest({ driveId: mockDriveId }));
+
+      const callArg = vi.mocked(buildTree).mock.calls[0][0] as { id: string }[];
+      expect(callArg).toHaveLength(2);
     });
   });
 

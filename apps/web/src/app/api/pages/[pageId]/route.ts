@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
@@ -8,6 +8,10 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAu
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
+import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray } from '@pagespace/db/operators';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -87,6 +91,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       ? { changeGroupId, metadata: mcpMeta }
       : undefined;
 
+    // Capture current isPrivate before the update so we can detect false→true transitions
+    let previousIsPrivate: boolean | undefined;
+    if (isPrivateUpdate !== undefined) {
+      const currentPage = await db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { isPrivate: true },
+      });
+      previousIsPrivate = currentPage?.isPrivate;
+    }
+
     // Build the full updates object, applying isPrivate with skipPermissionCheck when present
     const updates = isPrivateUpdate !== undefined
       ? { ...contentUpdates, isPrivate: isPrivateUpdate }
@@ -132,6 +146,53 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
           title: result.page.title ?? undefined,
           parentId: result.page.parentId ?? undefined,
           socketId
+        })
+      );
+    }
+
+    // Instant revocation: kick members who lose implicit access when page becomes private
+    if (isPrivateUpdate === true && previousIsPrivate === false) {
+      const drive = await db.query.drives.findFirst({
+        where: eq(drives.id, result.driveId),
+        columns: { ownerId: true },
+      });
+
+      if (drive) {
+        const membersLosingAccess: { userId: string }[] = await db
+          .select({ userId: driveMembers.userId })
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, result.driveId),
+            isNotNull(driveMembers.acceptedAt),
+            ne(driveMembers.userId, drive.ownerId),
+            not(inArray(driveMembers.role, ['OWNER', 'ADMIN'])),
+            not(exists(
+              db.select({ id: pagePermissions.id })
+                .from(pagePermissions)
+                .where(and(
+                  eq(pagePermissions.pageId, pageId),
+                  eq(pagePermissions.userId, driveMembers.userId),
+                  eq(pagePermissions.canView, true),
+                  or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
+                ))
+            ))
+          ));
+
+        await Promise.all(
+          membersLosingAccess.flatMap(({ userId: memberId }) => [
+            kickUserFromPage(pageId, memberId, 'page_private'),
+            kickUserFromPageActivity(pageId, memberId, 'page_private'),
+          ])
+        );
+      }
+    }
+
+    // Broadcast privacy change so connected clients revalidate their tree
+    if (isPrivateUpdate !== undefined) {
+      await broadcastPageEvent(
+        createPageEventPayload(result.driveId, pageId, 'updated', {
+          isPrivate: isPrivateUpdate,
+          socketId,
         })
       );
     }
