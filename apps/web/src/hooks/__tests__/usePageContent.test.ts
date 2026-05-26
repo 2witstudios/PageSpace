@@ -1,5 +1,5 @@
 import { describe, it, vi, beforeEach, afterEach, expect } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { assert } from './riteway';
 import { isRichContentEmpty, isDirty, usePageContent } from '../usePageContent';
 
