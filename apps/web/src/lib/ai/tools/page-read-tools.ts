@@ -299,7 +299,6 @@ export const pageReadTools = {
             tasks: tasks.map(t => ({
               id: t.id,
               title: t.title,
-              description: t.description,
               status: t.status,
               priority: t.priority,
               position: t.position,
