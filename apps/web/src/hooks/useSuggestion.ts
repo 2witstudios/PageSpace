@@ -97,6 +97,11 @@ export function useSuggestion({
   // Track when we're temporarily disabling mention detection after insertion
   const suppressMentionDetection = useRef(false);
 
+  // Index of the @ that opened the current popup (updated on open, read on dismiss)
+  const openTriggerIndexRef = useRef<number>(-1);
+  // Index of the @ trigger the user explicitly dismissed via ESC (-1 = none)
+  const dismissedTriggerRef = useRef<number>(-1);
+
   const suggestion = useSuggestionCore({
     driveId: driveId || null,
     allowedTypes,
@@ -166,6 +171,12 @@ export function useSuggestion({
     }
   });
 
+  const dismiss = useCallback(() => {
+    dismissedTriggerRef.current = openTriggerIndexRef.current;
+    suggestion.actions.close();
+    context.close();
+  }, [suggestion.actions, context]);
+
   const handleValueChange = useCallback((newValue: string) => {
     onValueChange(newValue); // Propagate change immediately
 
@@ -208,41 +219,46 @@ export function useSuggestion({
         setCurrentQuery(query);
 
         if (!context.isOpen) {
-          // Calculate position based on variant and input type
-          let position: Position | null = null;
+          if (dismissedTriggerRef.current !== mentionTriggerIndex) {
+            // Calculate position based on variant and input type
+            let position: Position | null = null;
 
-          if (variant === 'document') {
-            if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+            if (variant === 'document') {
+              if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+                position = positioningService.calculateTextareaPosition({
+                  element,
+                  textBeforeCursor,
+                  placement: popupPlacement,
+                });
+              } else {
+                position = positioningService.calculateInlinePosition({
+                  element,
+                });
+              }
+            } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
               position = positioningService.calculateTextareaPosition({
                 element,
                 textBeforeCursor,
                 placement: popupPlacement,
               });
-            } else {
-              position = positioningService.calculateInlinePosition({
-                element,
-              });
             }
-          } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
-            position = positioningService.calculateTextareaPosition({
-              element,
-              textBeforeCursor,
-              placement: popupPlacement,
-            });
-          }
 
-          if (position) {
-            context.open(position);
+            if (position) {
+              openTriggerIndexRef.current = mentionTriggerIndex;
+              context.open(position);
+            }
           }
         }
         // MentionPickerPortal handles its own fetching — no need to drive useSuggestionCore
       } else {
         // This @ is part of an existing mention, close suggestions if open
+        dismissedTriggerRef.current = -1;
         if (context.isOpen) {
           suggestion.actions.close();
         }
       }
     } else {
+      dismissedTriggerRef.current = -1;
       if (context.isOpen) {
         suggestion.actions.close();
       }
@@ -264,7 +280,7 @@ export function useSuggestion({
     if (!context.isOpen || context.items.length === 0) return;
 
     const { items, selectedIndex } = context;
-    const { selectItem, selectSuggestion, close } = suggestion.actions;
+    const { selectItem, selectSuggestion } = suggestion.actions;
 
     switch (e.key) {
       case 'ArrowUp':
@@ -298,13 +314,13 @@ export function useSuggestion({
       case 'Escape':
         e.preventDefault();
         e.stopPropagation();
-        close();
+        dismiss();
         break;
 
       default:
         break;
     }
-  }, [context, suggestion.actions, popupPlacement]);
+  }, [context, suggestion.actions, popupPlacement, dismiss]);
 
   return {
     handleKeyDown,
@@ -316,6 +332,9 @@ export function useSuggestion({
     loading: context.loading,
     error: context.error,
     query: currentQuery,
-    actions: suggestion.actions,
+    actions: {
+      ...suggestion.actions,
+      close: dismiss,
+    },
   };
 }
