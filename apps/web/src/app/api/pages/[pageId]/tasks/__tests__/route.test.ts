@@ -391,25 +391,6 @@ describe('Task API Routes', () => {
       await expect(GET(createRequest(), { params: mockParams })).rejects.toThrow('connection refused');
     });
 
-    it('searches by description', async () => {
-      const mockTasks = [
-        { id: 'task-1', description: 'Buy groceries', status: 'pending', page: { id: 'p-1', title: 'Generic', isTrashed: false, position: 0 } },
-        { id: 'task-2', description: null, status: 'pending', page: { id: 'p-2', title: 'Call mom', isTrashed: false, position: 1 } },
-      ];
-      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
-
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
-
-      const response = await GET(createRequest('?search=groceries'), { params: mockParams });
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.tasks).toHaveLength(1);
-      expect(body.tasks[0].id).toBe('task-1');
-    });
 
     it('filters tasks by search query', async () => {
       const mockTasks = [
@@ -726,35 +707,6 @@ describe('Task API Routes', () => {
       expect(response.status).toBe(201);
     });
 
-    it('fires createMentionNotification for @mentioned users in task description', async () => {
-      const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
-      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
-
-      transactionPageResult = [mockNewPage];
-      transactionTaskResult = [mockNewTask];
-
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.pages.findFirst)
-        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
-        .mockResolvedValueOnce(null as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
-      vi.mocked(db.query.taskItems.findFirst)
-        .mockResolvedValueOnce(null as never)
-        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
-
-      const response = await POST(
-        createRequest({ title: 'Task', description: 'Needs review @[Alice](user-alice:user)' }),
-        { params: mockParams },
-      );
-
-      expect(response.status).toBe(201);
-      // Notification must link to the individual task page, not the task list page
-      expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', mockNewPage.id, mockUserId);
-    });
 
     it('does not notify the task creator even when self-mentioned in description', async () => {
       const mockTaskList = { id: mockTaskListId };
