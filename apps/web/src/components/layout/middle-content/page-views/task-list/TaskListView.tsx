@@ -59,6 +59,8 @@ import {
   Kanban,
   Zap,
   Bell,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
 import {
   DndContext,
@@ -79,6 +81,8 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
+import { TaskListDescription } from './TaskListDescription';
+import { TaskRowDescription } from './TaskRowDescription';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -316,16 +320,26 @@ function MobileTaskCard({
   );
 }
 
+export const getExpansionRowClass = (isExpanded: boolean): string =>
+  isExpanded ? '' : 'hidden';
+
+export const toggleSet = (set: Set<string>, id: string): Set<string> => {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  return next;
+};
+
 // Sortable row component for drag-and-drop
 interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
+  isExpanded: boolean;
   contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, children }: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -366,14 +380,33 @@ function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: 
     </TableRow>
   );
 
-  if (!contextMenu) return row;
+  const expansionRow = (
+    <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
+      <td colSpan={8} className="px-4 py-2 border-b bg-muted/20">
+        {isExpanded && <TaskRowDescription task={task} />}
+      </td>
+    </tr>
+  );
+
+  if (!contextMenu) {
+    return (
+      <>
+        {row}
+        {expansionRow}
+      </>
+    );
+  }
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      {contextMenu}
-    </ContextMenu>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        {contextMenu}
+      </ContextMenu>
+      {expansionRow}
+    </>
   );
+
 }
 
 function TaskListView({ page }: TaskListViewProps) {
@@ -406,6 +439,8 @@ function TaskListView({ page }: TaskListViewProps) {
   const [editingTitle, setEditingTitle] = useState('');
   const [triggerDialogTask, setTriggerDialogTask] = useState<TaskItem | null>(null);
   const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+  const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   const hasLoadedRef = useRef(false);
@@ -503,10 +538,7 @@ function TaskListView({ page }: TaskListViewProps) {
     // Search filter
     if (activeSearch) {
       const searchLower = activeSearch.toLowerCase();
-      return (
-        task.title.toLowerCase().includes(searchLower) ||
-        task.description?.toLowerCase().includes(searchLower)
-      );
+      return task.title.toLowerCase().includes(searchLower);
     }
 
     return true;
@@ -677,6 +709,7 @@ function TaskListView({ page }: TaskListViewProps) {
   // Handle drag end - reorder pages (page position is source of truth)
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
+    setExpandedTaskIds(new Set()); // collapse all rows before reorder
     if (!over || active.id === over.id || !canEdit) return;
 
     const tasks = filteredTasks;
@@ -774,6 +807,11 @@ function TaskListView({ page }: TaskListViewProps) {
 
   return (
     <div className="flex flex-col h-full min-w-0">
+      <TaskListDescription
+        pageId={page.id}
+        canEdit={canEdit}
+        initialContent={page.content}
+      />
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
@@ -985,6 +1023,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         task={task}
                         canEdit={canEdit}
                         isCompleted={isCompletedStatus(task.status, statusConfigs)}
+                        isExpanded={expandedTaskIds.has(task.id)}
                         contextMenu={
                           <ContextMenuContent>
                             {task.pageId && (
@@ -1036,7 +1075,17 @@ function TaskListView({ page }: TaskListViewProps) {
                               className="h-8"
                             />
                           ) : (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
+                                onClick={() => toggleTaskExpand(task.id)}
+                                className="text-muted-foreground hover:text-foreground shrink-0"
+                              >
+                                {expandedTaskIds.has(task.id)
+                                  ? <ChevronDown className="h-3.5 w-3.5" />
+                                  : <ChevronRight className="h-3.5 w-3.5" />}
+                              </button>
                               <span
                                 className={cn(
                                   'cursor-pointer hover:text-primary hover:underline',

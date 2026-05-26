@@ -121,7 +121,6 @@ Agent Triggers:
       pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
       delete: z.boolean().optional().describe('When true (with taskId), hard-deletes the task and trashes its linked DOCUMENT page. Field updates passed in the same call are ignored.'),
       title: z.string().optional().describe('Task title (required when creating)'),
-      description: z.string().optional().describe('Task description'),
       status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
       assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user). Legacy single-assignee field.'),
@@ -145,7 +144,7 @@ Agent Triggers:
       ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, delete: deleteTask, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
+      const { taskId, pageId, delete: deleteTask, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
@@ -341,7 +340,6 @@ Agent Triggers:
               tasks: remainingTasks.map(t => ({
                 id: t.id,
                 title: t.page?.title ?? '',
-                description: t.description,
                 status: t.status,
                 priority: t.priority,
                 assigneeId: t.assigneeId,
@@ -416,7 +414,6 @@ Agent Triggers:
             }
             trimmedTitle = title.trim();
           }
-          if (description !== undefined) updateData.description = description;
           if (status !== undefined) {
             if (validConfigs.length > 0) {
               const matched = validConfigs.find(c => c.slug === status);
@@ -750,7 +747,6 @@ Agent Triggers:
               taskListId: taskList!.id,
               userId,
               pageId: taskPage.id,
-              description: description || null,
               status: resolvedStatus,
               priority: priority || 'medium',
               assigneeId: primaryUserId,
@@ -891,7 +887,6 @@ Agent Triggers:
           task: {
             id: resultTask.id,
             title: resultTitle,
-            description: resultTask.description,
             status: resultTask.status,
             priority: resultTask.priority,
             assigneeId: resultTask.assigneeId,
@@ -912,7 +907,6 @@ Agent Triggers:
           tasks: allTasks.map(t => ({
             id: t.id,
             title: t.page?.title ?? '',
-            description: t.description,
             status: t.status,
             priority: t.priority,
             assigneeId: t.assigneeId,
@@ -1108,7 +1102,6 @@ This helps agents understand their responsibilities and coordinate work with oth
           tasks: filteredTasks.map(t => ({
             id: t.id,
             title: t.page?.title ?? '',
-            description: t.description,
             status: t.status,
             priority: t.priority,
             dueDate: t.dueDate,

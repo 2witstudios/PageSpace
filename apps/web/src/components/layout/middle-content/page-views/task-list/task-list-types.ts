@@ -39,7 +39,6 @@ export interface TaskItem {
   assigneeAgentId: string | null;
   pageId: string | null;
   title: string;
-  description: string | null;
   status: string;
   priority: 'low' | 'medium' | 'high';
   position: number;
@@ -72,6 +71,7 @@ export interface TaskItem {
   } | null;
   page?: {
     id: string;
+    type: string;
     isTrashed: boolean;
     position: number;
   } | null;

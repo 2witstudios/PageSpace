@@ -4,15 +4,14 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
-import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
-import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
-import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
+
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -67,7 +66,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position } = body;
+  const { title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -78,10 +77,6 @@ export async function PATCH(
       return NextResponse.json({ error: 'Title cannot be empty' }, { status: 400 });
     }
     trimmedTitle = title.trim();
-  }
-
-  if (description !== undefined) {
-    updates.description = description?.trim() || null;
   }
 
   let statusMovedToDone = false;
@@ -383,31 +378,6 @@ export async function PATCH(
         pageId,
         userId
       );
-    }
-  }
-
-  if (description !== undefined) {
-    try {
-      const oldMentionIds = new Set(extractMentionedUserIds(existingTask.description ?? ''));
-      const newMentionIds = extractMentionedUserIds(updates.description ?? '');
-      const newlyAdded = newMentionIds.filter((id) => id !== userId && !oldMentionIds.has(id));
-      if (newlyAdded.length > 0) {
-        const taskPageId = existingTask.pageId;
-        const viewChecks = await Promise.all(
-          newlyAdded.map(async (id) => ({ id, canView: await canUserViewPage(id, taskPageId) }))
-        );
-        await Promise.all(
-          viewChecks
-            .filter((e) => e.canView)
-            .map((e) =>
-              createMentionNotification(e.id, taskPageId, userId).catch((err) =>
-                loggers.api.error('Failed to send mention notification', err as Error)
-              )
-            )
-        );
-      }
-    } catch (err) {
-      loggers.api.error('Failed to resolve mention targets', err as Error);
     }
   }
 
