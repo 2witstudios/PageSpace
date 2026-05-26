@@ -15,7 +15,7 @@ import { useSocketStore } from '@/stores/useSocketStore';
 
 interface AccessRevokedPayload {
   room: string;
-  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
+  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
   metadata?: {
     driveId?: string;
     pageId?: string;
@@ -74,6 +74,9 @@ function getRevocationMessage(payload: AccessRevokedPayload): string {
 
     case 'permission_revoked':
       return 'Your access to this page has been revoked';
+
+    case 'page_private':
+      return 'This page has been made private';
 
     case 'session_revoked':
       return 'Your session has been revoked. Please log in again.';
