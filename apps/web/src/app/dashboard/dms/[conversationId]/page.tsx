@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { useDraft } from '@/hooks/useDraft';
+import { buildDraftKey } from '@/lib/draft/draft';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Conversation,
@@ -108,7 +110,9 @@ export default function InboxDMPage() {
   const conversationId = params.conversationId as string;
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputValue, setInputValue] = useState('');
+  const { draft: inputValue, setDraft: setInputValue, clearDraft: clearInputDraft } = useDraft(
+    conversationId ? buildDraftKey('dm', conversationId) : '',
+  );
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   // Active inline quote-reply target. The snapshot is captured at quote-start time
@@ -400,7 +404,7 @@ export default function InboxDMPage() {
 
     const activeQuoteId = quotedMessageId;
     const activeQuoteSnapshot = activeQuotedSnapshot;
-    setInputValue('');
+    clearInputDraft();
     clearQuote();
 
     const attachmentMeta: AttachmentMeta | null = attachment
