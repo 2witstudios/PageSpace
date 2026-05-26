@@ -23,6 +23,9 @@ vi.mock('@/services/api', () => ({
     canUserViewPermissions: vi.fn(),
     getPagePermissions: vi.fn(),
   },
+  rolePermissionService: {
+    getPageRoleGrants: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 // Mock auth boundary - different auth for GET vs POST/DELETE

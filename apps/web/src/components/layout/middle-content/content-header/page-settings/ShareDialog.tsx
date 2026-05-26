@@ -120,12 +120,12 @@ export function ShareDialog({
           fetchWithAuth(`/api/pages/${pageId}/role-permissions`),
         ]);
         if (rolesRes.ok) {
-          const { roles } = await rolesRes.json() as { roles: DriveRole[] };
-          setDriveRoles(roles);
+          const parsed = await rolesRes.json() as { roles?: DriveRole[] };
+          setDriveRoles(parsed.roles ?? []);
         }
         if (grantsRes.ok) {
-          const { roles } = await grantsRes.json() as { roles: RoleGrant[] };
-          setGrantedRoles(roles);
+          const parsed = await grantsRes.json() as { roles?: RoleGrant[] };
+          setGrantedRoles(parsed.roles ?? []);
         }
       } catch {
         toast.error('Failed to load role permissions.');
