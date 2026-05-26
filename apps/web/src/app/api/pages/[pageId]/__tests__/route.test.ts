@@ -332,8 +332,8 @@ describe('PATCH /api/pages/[pageId]', () => {
     // @ts-expect-error - partial mock
     vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'owner_user' });
     // Default: no members lose access
+    // @ts-expect-error - partial mock chain
     vi.mocked(db.select).mockReturnValue({
-      // @ts-expect-error - partial mock chain
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([]),
       }),
@@ -600,8 +600,8 @@ describe('PATCH /api/pages/[pageId]', () => {
     it('kicks members who lose implicit access when page transitions false→true', async () => {
       // @ts-expect-error - partial mock: page was public
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      // @ts-expect-error - partial mock chain
       vi.mocked(db.select).mockReturnValue({
-        // @ts-expect-error - partial mock: two members lose access
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([
             { userId: 'member_1' },
