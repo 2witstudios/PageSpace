@@ -39,6 +39,46 @@ vi.mock('@/lib/websocket', () => ({
     type,
     ...data,
   })),
+  kickUserFromPage: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
+  kickUserFromPageActivity: vi.fn().mockResolvedValue({ success: true, kickedCount: 0, rooms: [] }),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserSharePage: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      pages: { findFirst: vi.fn() },
+      drives: { findFirst: vi.fn() },
+    },
+    select: vi.fn().mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    }),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn((...args: unknown[]) => args),
+  eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  isNotNull: vi.fn((a: unknown) => ({ _isNotNull: true, col: a })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ ne: [a, b] })),
+  not: vi.fn((a: unknown) => ({ not: a })),
+  exists: vi.fn((a: unknown) => ({ exists: a })),
+  or: vi.fn((...args: unknown[]) => args),
+  isNull: vi.fn((a: unknown) => ({ isNull: a })),
+  gt: vi.fn((a: unknown, b: unknown) => ({ gt: [a, b] })),
+  inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id', isPrivate: 'pages.isPrivate' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role' },
+  pagePermissions: { id: 'pagePermissions.id', pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId', canView: 'pagePermissions.canView', expiresAt: 'pagePermissions.expiresAt' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -74,10 +114,12 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
-import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
+import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
+import { db } from '@pagespace/db/db';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -284,6 +326,20 @@ describe('PATCH /api/pages/[pageId]', () => {
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));
+    vi.mocked(canUserSharePage).mockResolvedValue(true);
+    // @ts-expect-error - partial mock: page is not private by default
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+    // @ts-expect-error - partial mock
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'owner_user' });
+    // Default: no members lose access
+    vi.mocked(db.select).mockReturnValue({
+      // @ts-expect-error - partial mock chain
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    vi.mocked(kickUserFromPage).mockResolvedValue({ success: true, kickedCount: 0, rooms: [] });
+    vi.mocked(kickUserFromPageActivity).mockResolvedValue({ success: true, kickedCount: 0, rooms: [] });
   });
 
   describe('authentication', () => {
@@ -511,6 +567,75 @@ describe('PATCH /api/pages/[pageId]', () => {
           socketId: 'socket_abc',
         })
       );
+    });
+  });
+
+  describe('privacy change side effects', () => {
+    it('broadcasts page:updated event when isPrivate changes to true', async () => {
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'updated',
+        expect.objectContaining({ isPrivate: true })
+      );
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('broadcasts page:updated event when isPrivate changes to false', async () => {
+      // @ts-expect-error - partial mock: page was private
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+
+      await PATCH(createRequest({ isPrivate: false }), { params: mockParams });
+
+      expect(createPageEventPayload).toHaveBeenCalledWith(
+        mockDriveId,
+        mockPageId,
+        'updated',
+        expect.objectContaining({ isPrivate: false })
+      );
+    });
+
+    it('kicks members who lose implicit access when page transitions false→true', async () => {
+      // @ts-expect-error - partial mock: page was public
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
+      vi.mocked(db.select).mockReturnValue({
+        // @ts-expect-error - partial mock: two members lose access
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { userId: 'member_1' },
+            { userId: 'member_2' },
+          ]),
+        }),
+      });
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(kickUserFromPage).toHaveBeenCalledWith(mockPageId, 'member_1', 'page_private');
+      expect(kickUserFromPage).toHaveBeenCalledWith(mockPageId, 'member_2', 'page_private');
+      expect(kickUserFromPageActivity).toHaveBeenCalledWith(mockPageId, 'member_1', 'page_private');
+      expect(kickUserFromPageActivity).toHaveBeenCalledWith(mockPageId, 'member_2', 'page_private');
+    });
+
+    it('does not kick anyone when page is already private (no transition)', async () => {
+      // @ts-expect-error - partial mock: page was already private
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: true });
+
+      await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+
+      expect(kickUserFromPage).not.toHaveBeenCalled();
+      expect(kickUserFromPageActivity).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when user lacks share permission to change privacy', async () => {
+      vi.mocked(canUserSharePage).mockResolvedValue(false);
+
+      const response = await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/owner.*admin|admin.*owner|visibility/i);
     });
   });
 
