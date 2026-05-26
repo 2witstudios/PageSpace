@@ -321,6 +321,11 @@ export async function POST(request: Request) {
       isNewConversation: !requestConversationId
     });
 
+    // Eagerly ensure a conversations row exists so the creator can always see
+    // their own conversation. isShared defaults to false (private). Idempotent
+    // via onConflictDoNothing, so safe for every message in a conversation.
+    conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
+
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
