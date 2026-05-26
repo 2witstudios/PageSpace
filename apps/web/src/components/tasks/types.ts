@@ -45,7 +45,6 @@ export interface Task {
   assigneeAgentId: string | null;
   pageId: string | null;
   title: string;
-  description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   position: number;

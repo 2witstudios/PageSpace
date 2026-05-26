@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { Editor } from '@tiptap/react';
 import {
   Bell,
   ExternalLink,
@@ -9,6 +11,10 @@ import {
   FileText,
   Zap,
 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import { usePageContent } from '@/hooks/usePageContent';
+
+const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -58,6 +64,11 @@ export interface TaskDetailSheetProps {
   onTriggersSaved?: () => void;
 }
 
+export const shouldFetchDescription = (
+  open: boolean,
+  pageId: string | null | undefined
+): boolean => open && !!pageId;
+
 export function TaskDetailSheet({
   task,
   statusConfigs,
@@ -77,6 +88,14 @@ export function TaskDetailSheet({
   const [editingTitle, setEditingTitle] = useState('');
   const [triggersDialogOpen, setTriggersDialogOpen] = useState(false);
   const cancelTriggeredRef = useRef(false);
+
+  const { content: descriptionContent, isLoading: descriptionLoading, save: saveDescription } =
+    usePageContent({
+      pageId: task?.pageId ?? null,
+      enabled: shouldFetchDescription(open, task?.pageId),
+    });
+
+  const handleEditorChange = useCallback((_editor: Editor | null) => {}, []);
 
   // Permission gate mirrors the row-level Task List badge: edit on the parent
   // task list page is what authorizes configuring triggers on its tasks.
@@ -302,18 +321,28 @@ export function TaskDetailSheet({
             </div>
           )}
 
+          {/* Inline description */}
+          {shouldFetchDescription(open, task.pageId) && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Description</label>
+              <div className="min-h-[120px] max-h-[300px] overflow-y-auto border rounded-md p-1">
+                {descriptionLoading && descriptionContent === null ? (
+                  <Skeleton className="h-24 w-full" />
+                ) : (
+                  <RichEditor
+                    value={descriptionContent ?? ''}
+                    onChange={saveDescription}
+                    onEditorChange={handleEditorChange}
+                    readOnly={!canEdit}
+                    contentMode="html"
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="flex gap-2 pt-1">
-            {hasLinkedPage && (
-              <Button
-                variant="outline"
-                className="flex-1 h-11"
-                onClick={handleNavigate}
-              >
-                <FileText className="h-4 w-4 mr-2" />
-                Open Page
-              </Button>
-            )}
             {canConfigureTriggers && (
               <Button
                 variant="outline"
@@ -324,6 +353,18 @@ export function TaskDetailSheet({
               >
                 <Zap className="h-4 w-4 mr-2" />
                 Triggers
+              </Button>
+            )}
+            {hasLinkedPage && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-11 text-muted-foreground"
+                onClick={handleNavigate}
+                title="Open full page"
+                aria-label="Open full page"
+              >
+                <FileText className="h-4 w-4" />
               </Button>
             )}
             <Button
