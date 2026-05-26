@@ -1,8 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { Editor } from '@tiptap/react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePageContent } from '@/hooks/usePageContent';
 import { TaskItem } from './task-list-types';
@@ -25,9 +23,6 @@ export function TaskRowDescription({ task, canEdit }: TaskRowDescriptionProps) {
     enabled: !!task.pageId,
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleEditorChange = useCallback((_editor: Editor | null) => {}, []);
-
   if (shouldShowPlaceholder(task.pageId)) {
     return (
       <p className="text-sm text-muted-foreground italic px-1">No linked page</p>
@@ -43,7 +38,6 @@ export function TaskRowDescription({ task, canEdit }: TaskRowDescriptionProps) {
       <RichEditor
         value={content ?? ''}
         onChange={save}
-        onEditorChange={handleEditorChange}
         readOnly={!canEdit}
         contentMode="html"
       />

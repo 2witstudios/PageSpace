@@ -1,10 +1,6 @@
 import { describe, it } from 'vitest';
-import { expect } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
 import { getExpansionRowClass } from '../TaskListView';
-
-const assert = ({ given, should, actual, expected }: {
-  given: string; should: string; actual: unknown; expected: unknown;
-}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
 describe('getExpansionRowClass', () => {
   it('collapsed row is hidden', () => {

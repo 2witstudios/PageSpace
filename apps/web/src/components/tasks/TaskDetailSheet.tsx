@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { Editor } from '@tiptap/react';
 import {
   Bell,
   ExternalLink,
@@ -94,8 +93,6 @@ export function TaskDetailSheet({
       pageId: task?.pageId ?? null,
       enabled: shouldFetchDescription(open, task?.pageId),
     });
-
-  const handleEditorChange = useCallback((_editor: Editor | null) => {}, []);
 
   // Permission gate mirrors the row-level Task List badge: edit on the parent
   // task list page is what authorizes configuring triggers on its tasks.
@@ -332,7 +329,6 @@ export function TaskDetailSheet({
                   <RichEditor
                     value={descriptionContent ?? ''}
                     onChange={saveDescription}
-                    onEditorChange={handleEditorChange}
                     readOnly={!canEdit}
                     contentMode="html"
                   />

@@ -10,8 +10,6 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
-
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -207,7 +205,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (search) {
     const searchLower = search.toLowerCase();
     tasks = tasks.filter(task =>
-      task.page?.title.toLowerCase().includes(searchLower)
+      (task.page?.title ?? '').toLowerCase().includes(searchLower)
     );
   }
 

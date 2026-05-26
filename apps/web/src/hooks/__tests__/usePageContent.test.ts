@@ -58,49 +58,51 @@ describe('isRichContentEmpty', () => {
     });
   });
 
-  it('whitespace only', () => {
-    assert({
-      given: 'a string of only whitespace',
-      should: 'be considered empty',
-      actual: isRichContentEmpty('   '),
-      expected: true,
-    });
-  });
-
   it('paragraph with text', () => {
     assert({
-      given: 'a paragraph containing text',
+      given: 'a paragraph with text content',
       should: 'not be considered empty',
       actual: isRichContentEmpty('<p>hello</p>'),
       expected: false,
     });
   });
+
+  it('whitespace only', () => {
+    assert({
+      given: 'only whitespace after stripping tags',
+      should: 'be considered empty',
+      actual: isRichContentEmpty('<p>   </p>'),
+      expected: true,
+    });
+  });
 });
 
+// ─── isDirty ─────────────────────────────────────────────────────────────────
+
 describe('isDirty', () => {
-  it('null pending', () => {
+  it('null is not dirty', () => {
     assert({
-      given: 'no pending content',
+      given: 'null pending content',
       should: 'not be dirty',
       actual: isDirty(null),
       expected: false,
     });
   });
 
-  it('string pending', () => {
-    assert({
-      given: 'pending content waiting to be saved',
-      should: 'be dirty',
-      actual: isDirty('<p>unsaved</p>'),
-      expected: true,
-    });
-  });
-
-  it('empty string pending', () => {
+  it('empty string is dirty', () => {
     assert({
       given: 'an empty string queued as a write',
       should: 'be dirty since a write is pending',
       actual: isDirty(''),
+      expected: true,
+    });
+  });
+
+  it('non-empty string is dirty', () => {
+    assert({
+      given: 'a non-empty string queued as a write',
+      should: 'be dirty',
+      actual: isDirty('<p>content</p>'),
       expected: true,
     });
   });
@@ -184,6 +186,46 @@ describe('usePageContent', () => {
       should: 'return null content without throwing',
       actual: result.current.content,
       expected: null,
+    });
+  });
+
+  it('initialContent seeds state without fetching', () => {
+    const { result } = renderHook(() =>
+      usePageContent({ pageId: 'page-1', initialContent: '<p>seeded</p>' })
+    );
+
+    assert({
+      given: 'initialContent is provided',
+      should: 'return seeded content immediately',
+      actual: result.current.content,
+      expected: '<p>seeded</p>',
+    });
+
+    assert({
+      given: 'initialContent is provided',
+      should: 'not call the network',
+      actual: mockFetch.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('initialContent null seeds state without fetching', () => {
+    const { result } = renderHook(() =>
+      usePageContent({ pageId: 'page-1', initialContent: null })
+    );
+
+    assert({
+      given: 'initialContent is explicitly null',
+      should: 'return null content without fetching',
+      actual: result.current.content,
+      expected: null,
+    });
+
+    assert({
+      given: 'initialContent is explicitly null',
+      should: 'not call the network on first render',
+      actual: mockFetch.mock.calls.length,
+      expected: 0,
     });
   });
 });

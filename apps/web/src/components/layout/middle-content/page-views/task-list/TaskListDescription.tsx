@@ -1,14 +1,10 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Editor } from '@tiptap/react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { patch } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
-import { isRichContentEmpty } from '@/hooks/usePageContent';
-import { createId } from '@paralleldrive/cuid2';
+import { isRichContentEmpty, usePageContent } from '@/hooks/usePageContent';
 
 const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 
@@ -23,28 +19,7 @@ export const getInitialOpenState = (content: string | null): boolean =>
 
 export function TaskListDescription({ pageId, canEdit, initialContent }: TaskListDescriptionProps) {
   const [open, setOpen] = useState(() => getInitialOpenState(initialContent));
-  const [content, setContent] = useState(initialContent ?? '');
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [sessionId] = useState(() => createId());
-
-  const handleChange = useCallback(
-    (html: string) => {
-      setContent(html);
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      useEditingStore.getState().startEditing(sessionId, 'document', { pageId });
-      saveTimeoutRef.current = setTimeout(async () => {
-        try {
-          await patch(`/api/pages/${pageId}`, { content: html });
-        } finally {
-          useEditingStore.getState().endEditing(sessionId);
-        }
-      }, 1000);
-    },
-    [pageId, sessionId]
-  );
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleEditorChange = useCallback((_editor: Editor | null) => {}, []);
+  const { content, save } = usePageContent({ pageId, initialContent });
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -64,9 +39,8 @@ export function TaskListDescription({ pageId, canEdit, initialContent }: TaskLis
       <CollapsibleContent>
         <div className="px-4 pb-3">
           <RichEditor
-            value={content}
-            onChange={handleChange}
-            onEditorChange={handleEditorChange}
+            value={content ?? ''}
+            onChange={save}
             readOnly={!canEdit}
             contentMode="html"
           />

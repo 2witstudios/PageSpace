@@ -10,7 +10,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
-import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';

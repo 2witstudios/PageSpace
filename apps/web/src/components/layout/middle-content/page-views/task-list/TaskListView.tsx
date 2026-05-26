@@ -335,12 +335,11 @@ interface SortableTaskRowProps {
   canEdit: boolean;
   isCompleted: boolean;
   isExpanded: boolean;
-  onToggleExpand: (id: string) => void;
   contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, onToggleExpand, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, children }: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -1025,7 +1024,6 @@ function TaskListView({ page }: TaskListViewProps) {
                         canEdit={canEdit}
                         isCompleted={isCompletedStatus(task.status, statusConfigs)}
                         isExpanded={expandedTaskIds.has(task.id)}
-                        onToggleExpand={toggleTaskExpand}
                         contextMenu={
                           <ContextMenuContent>
                             {task.pageId && (
