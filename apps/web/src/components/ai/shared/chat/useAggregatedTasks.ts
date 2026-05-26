@@ -4,7 +4,6 @@ import { UIMessage } from 'ai';
 export interface Task {
   id: string;
   title: string;
-  description?: string;
   status: 'pending' | 'in_progress' | 'completed' | 'blocked';
   priority: 'low' | 'medium' | 'high';
   position: number;
@@ -50,7 +49,6 @@ interface TaskManagementToolOutput {
   taskList?: TaskList;
   taskListId?: string;
   title?: string;
-  description?: string;
   tasks?: Task[];
   task?: {
     id: string;

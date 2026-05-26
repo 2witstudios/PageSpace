@@ -448,7 +448,6 @@ async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'c
 
   const parts: string[] = ['<task-context>'];
   parts.push(`Title: ${task.page?.title ?? ''}`);
-  if (task.description) parts.push(`Description: ${task.description}`);
   parts.push(`Status: ${task.status}`);
   parts.push(`Priority: ${task.priority}`);
   if (task.dueDate) parts.push(`Due Date: ${task.dueDate.toISOString()}`);

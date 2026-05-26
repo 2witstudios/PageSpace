@@ -76,7 +76,6 @@ export const taskItems = pgTable('task_items', {
   assigneeId: text('assigneeId').references(() => users.id, { onDelete: 'set null' }),
   assigneeAgentId: text('assigneeAgentId').references(() => pages.id, { onDelete: 'set null' }),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  description: text('description'),
   status: text('status').notNull().default('pending'),
   priority: text('priority', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),
   position: integer('position').notNull().default(0),
