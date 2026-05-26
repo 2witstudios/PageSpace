@@ -6,9 +6,10 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Trash2, Shield } from 'lucide-react';
+import { Trash2, Shield, Users } from 'lucide-react';
 import { toast } from 'sonner';
-import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, del, put, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { RoleGrant } from '@/services/api';
 
 type User = {
   id: string;
@@ -32,13 +33,16 @@ type Permission = {
 type PermissionsData = {
   owner: User;
   permissions: Permission[];
+  roles: RoleGrant[];
 };
 
-export function PermissionsList() {
-  const pageId = usePageStore((state) => state.pageId);
+export function PermissionsList({ pageId: propPageId }: { pageId?: string | null } = {}) {
+  const storePageId = usePageStore((state) => state.pageId);
+  const pageId = propPageId ?? storePageId;
   const [data, setData] = useState<PermissionsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [updatingPermissions, setUpdatingPermissions] = useState<Set<string>>(new Set());
+  const [updatingRoles, setUpdatingRoles] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!pageId) return;
@@ -70,32 +74,26 @@ export function PermissionsList() {
   ) => {
     if (!data || !pageId) return;
 
-    // Find current permission
     const currentPerm = data.permissions.find(p => p.userId === userId);
     if (!currentPerm) return;
 
-    // Create updated permission object
     const updatedPerm = { ...currentPerm };
-    
-    // Handle permission dependencies
+
     if (field === 'canView' && !value) {
-      // If removing view, remove all permissions
       updatedPerm.canView = false;
       updatedPerm.canEdit = false;
       updatedPerm.canShare = false;
       updatedPerm.canDelete = false;
     } else if ((field === 'canEdit' || field === 'canShare' || field === 'canDelete') && value) {
-      // If granting other permissions, ensure view is granted
       updatedPerm.canView = true;
       updatedPerm[field] = value;
     } else {
       updatedPerm[field] = value;
     }
 
-    // Optimistic update
     setData({
       ...data,
-      permissions: data.permissions.map(p => 
+      permissions: data.permissions.map(p =>
         p.userId === userId ? updatedPerm : p
       )
     });
@@ -113,10 +111,9 @@ export function PermissionsList() {
     } catch (error) {
       console.error(error);
       toast.error('Failed to update permission.');
-      // Revert optimistic update
       setData({
         ...data,
-        permissions: data.permissions.map(p => 
+        permissions: data.permissions.map(p =>
           p.userId === userId ? currentPerm : p
         )
       });
@@ -133,8 +130,7 @@ export function PermissionsList() {
     if (!data || !pageId) return;
 
     const originalData = data;
-    
-    // Optimistic update
+
     setData({
       ...data,
       permissions: data.permissions.filter(p => p.userId !== userId)
@@ -142,12 +138,74 @@ export function PermissionsList() {
 
     try {
       await del(`/api/pages/${pageId}/permissions`, { userId });
-
       toast.success('Permission removed.');
     } catch (error) {
       console.error(error);
       toast.error('Failed to remove permission.');
-      // Revert optimistic update
+      setData(originalData);
+    }
+  };
+
+  const handleRolePermissionUpdate = async (
+    roleId: string,
+    field: 'canView' | 'canEdit' | 'canShare',
+    value: boolean
+  ) => {
+    if (!data || !pageId) return;
+
+    const currentRole = data.roles.find(r => r.roleId === roleId);
+    if (!currentRole) return;
+
+    const updatedRole = { ...currentRole };
+
+    if (field === 'canView' && !value) {
+      updatedRole.canView = false;
+      updatedRole.canEdit = false;
+      updatedRole.canShare = false;
+    } else if ((field === 'canEdit' || field === 'canShare') && value) {
+      updatedRole.canView = true;
+      updatedRole[field] = value;
+    } else {
+      updatedRole[field] = value;
+    }
+
+    setData(prev => prev ? { ...prev, roles: prev.roles.map(r => r.roleId === roleId ? updatedRole : r) } : prev);
+
+    setUpdatingRoles(prev => new Set(prev).add(roleId));
+
+    try {
+      await put(`/api/pages/${pageId}/role-permissions`, {
+        roleId,
+        canView: updatedRole.canView,
+        canEdit: updatedRole.canEdit,
+        canShare: updatedRole.canShare,
+      });
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to update role permission.');
+      setData(prev => prev ? { ...prev, roles: prev.roles.map(r => r.roleId === roleId ? currentRole : r) } : prev);
+    } finally {
+      setUpdatingRoles(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(roleId);
+        return newSet;
+      });
+    }
+  };
+
+  const handleRemoveRolePermission = async (roleId: string) => {
+    if (!data || !pageId) return;
+
+    const originalData = data;
+
+    setData(prev => prev ? { ...prev, roles: prev.roles.filter(r => r.roleId !== roleId) } : prev);
+
+    try {
+      await del(`/api/pages/${pageId}/role-permissions`, { roleId });
+      toast.success('Role access removed.');
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to remove role access.');
       setData(originalData);
     }
   };
@@ -162,7 +220,7 @@ export function PermissionsList() {
     );
   }
 
-  const { owner, permissions } = data;
+  const { owner, permissions, roles } = data;
 
   return (
     <div className="space-y-4">
@@ -186,96 +244,171 @@ export function PermissionsList() {
         </div>
       </div>
 
+      {/* Role Access */}
+      {roles.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Roles</p>
+          {roles.map((role) => (
+            <div
+              key={role.roleId}
+              className="flex items-center justify-between p-3 border rounded-lg"
+            >
+              <div className="flex items-center space-x-3">
+                <div
+                  className="h-8 w-8 rounded-full flex items-center justify-center"
+                  style={{ backgroundColor: role.color ?? 'hsl(var(--muted))' }}
+                >
+                  <Users className={`h-4 w-4 ${role.color ? 'text-white' : 'text-muted-foreground'}`} />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">{role.name}</p>
+                  <p className="text-xs text-muted-foreground">Role</p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-3">
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={role.canView}
+                      disabled={updatingRoles.has(role.roleId)}
+                      onCheckedChange={(checked) =>
+                        handleRolePermissionUpdate(role.roleId, 'canView', !!checked)
+                      }
+                    />
+                    <span className="text-xs">View</span>
+                  </label>
+
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={role.canEdit}
+                      disabled={!role.canView || updatingRoles.has(role.roleId)}
+                      onCheckedChange={(checked) =>
+                        handleRolePermissionUpdate(role.roleId, 'canEdit', !!checked)
+                      }
+                    />
+                    <span className="text-xs">Edit</span>
+                  </label>
+
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={role.canShare}
+                      disabled={!role.canView || updatingRoles.has(role.roleId)}
+                      onCheckedChange={(checked) =>
+                        handleRolePermissionUpdate(role.roleId, 'canShare', !!checked)
+                      }
+                    />
+                    <span className="text-xs">Share</span>
+                  </label>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleRemoveRolePermission(role.roleId)}
+                  className="text-red-600 hover:text-red-700"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Shared Users */}
-      {permissions.length === 0 ? (
+      {permissions.length === 0 && roles.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-4">
           This page hasn&apos;t been shared with anyone yet.
         </p>
-      ) : (
-        permissions.map((permission) => (
-          <div
-            key={permission.id}
-            className="flex items-center justify-between p-3 border rounded-lg"
-          >
-            <div className="flex items-center space-x-3">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src={permission.user?.image || undefined} />
-                <AvatarFallback>
-                  {permission.user?.name?.[0]?.toUpperCase() || 
-                   permission.user?.email?.[0]?.toUpperCase() || '?'}
-                </AvatarFallback>
-              </Avatar>
-              <div>
-                <p className="text-sm font-medium">
-                  {permission.user?.name || permission.user?.email || 'Unknown User'}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {permission.user?.email}
-                </p>
-              </div>
-            </div>
-            
-            <div className="flex items-center space-x-4">
-              {/* Permission Checkboxes */}
+      ) : permissions.length > 0 ? (
+        <div className="space-y-2">
+          {roles.length > 0 && (
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">People</p>
+          )}
+          {permissions.map((permission) => (
+            <div
+              key={permission.id}
+              className="flex items-center justify-between p-3 border rounded-lg"
+            >
               <div className="flex items-center space-x-3">
-                <label className="flex items-center space-x-1">
-                  <Checkbox
-                    checked={permission.canView}
-                    disabled={updatingPermissions.has(permission.userId)}
-                    onCheckedChange={(checked) => 
-                      handlePermissionUpdate(permission.userId, 'canView', !!checked)
-                    }
-                  />
-                  <span className="text-xs">View</span>
-                </label>
-                
-                <label className="flex items-center space-x-1">
-                  <Checkbox
-                    checked={permission.canEdit}
-                    disabled={!permission.canView || updatingPermissions.has(permission.userId)}
-                    onCheckedChange={(checked) => 
-                      handlePermissionUpdate(permission.userId, 'canEdit', !!checked)
-                    }
-                  />
-                  <span className="text-xs">Edit</span>
-                </label>
-                
-                <label className="flex items-center space-x-1">
-                  <Checkbox
-                    checked={permission.canShare}
-                    disabled={!permission.canView || updatingPermissions.has(permission.userId)}
-                    onCheckedChange={(checked) => 
-                      handlePermissionUpdate(permission.userId, 'canShare', !!checked)
-                    }
-                  />
-                  <span className="text-xs">Share</span>
-                </label>
-                
-                <label className="flex items-center space-x-1">
-                  <Checkbox
-                    checked={permission.canDelete}
-                    disabled={!permission.canView || updatingPermissions.has(permission.userId)}
-                    onCheckedChange={(checked) => 
-                      handlePermissionUpdate(permission.userId, 'canDelete', !!checked)
-                    }
-                  />
-                  <span className="text-xs">Delete</span>
-                </label>
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={permission.user?.image || undefined} />
+                  <AvatarFallback>
+                    {permission.user?.name?.[0]?.toUpperCase() ||
+                     permission.user?.email?.[0]?.toUpperCase() || '?'}
+                  </AvatarFallback>
+                </Avatar>
+                <div>
+                  <p className="text-sm font-medium">
+                    {permission.user?.name || permission.user?.email || 'Unknown User'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {permission.user?.email}
+                  </p>
+                </div>
               </div>
-              
-              {/* Remove Button */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleRemovePermission(permission.userId)}
-                className="text-red-600 hover:text-red-700"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-3">
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={permission.canView}
+                      disabled={updatingPermissions.has(permission.userId)}
+                      onCheckedChange={(checked) =>
+                        handlePermissionUpdate(permission.userId, 'canView', !!checked)
+                      }
+                    />
+                    <span className="text-xs">View</span>
+                  </label>
+
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={permission.canEdit}
+                      disabled={!permission.canView || updatingPermissions.has(permission.userId)}
+                      onCheckedChange={(checked) =>
+                        handlePermissionUpdate(permission.userId, 'canEdit', !!checked)
+                      }
+                    />
+                    <span className="text-xs">Edit</span>
+                  </label>
+
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={permission.canShare}
+                      disabled={!permission.canView || updatingPermissions.has(permission.userId)}
+                      onCheckedChange={(checked) =>
+                        handlePermissionUpdate(permission.userId, 'canShare', !!checked)
+                      }
+                    />
+                    <span className="text-xs">Share</span>
+                  </label>
+
+                  <label className="flex items-center space-x-1">
+                    <Checkbox
+                      checked={permission.canDelete}
+                      disabled={!permission.canView || updatingPermissions.has(permission.userId)}
+                      onCheckedChange={(checked) =>
+                        handlePermissionUpdate(permission.userId, 'canDelete', !!checked)
+                      }
+                    />
+                    <span className="text-xs">Delete</span>
+                  </label>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleRemovePermission(permission.userId)}
+                  className="text-red-600 hover:text-red-700"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-          </div>
-        ))
-      )}
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

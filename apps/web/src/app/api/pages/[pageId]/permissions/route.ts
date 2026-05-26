@@ -10,7 +10,7 @@ import { createPermissionNotification } from '@pagespace/lib/notifications/notif
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
-import { permissionManagementService } from '@/services/api';
+import { permissionManagementService, rolePermissionService } from '@/services/api';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
@@ -41,7 +41,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
 
     // Get permissions
-    const result = await permissionManagementService.getPagePermissions(pageId);
+    const [result, roles] = await Promise.all([
+      permissionManagementService.getPagePermissions(pageId),
+      rolePermissionService.getPageRoleGrants(pageId),
+    ]);
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
@@ -49,6 +52,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return NextResponse.json({
       owner: result.owner,
       permissions: result.permissions,
+      roles,
     });
   } catch (error) {
     loggers.api.error('Error fetching permissions:', error as Error);

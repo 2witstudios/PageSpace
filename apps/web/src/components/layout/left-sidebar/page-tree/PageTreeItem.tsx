@@ -19,6 +19,7 @@ import {
   Copy,
   Lock,
   LockOpen,
+  Users,
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useCapacitor } from "@/hooks/useCapacitor";
@@ -39,6 +40,7 @@ import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { MovePageDialog } from "@/components/dialogs/MovePageDialog";
 import { CopyPageDialog } from "@/components/dialogs/CopyPageDialog";
+import { ShareDialog } from "@/components/layout/middle-content/content-header/page-settings/ShareDialog";
 import { patch, del, post } from "@/lib/auth/auth-fetch";
 import { Projection } from "@/lib/tree/sortable-tree";
 import { cn } from "@/lib/utils";
@@ -109,6 +111,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
   const [isRenameOpen, setRenameOpen] = useState(false);
   const [isMoveOpen, setMoveOpen] = useState(false);
   const [isCopyOpen, setCopyOpen] = useState(false);
+  const [isPermissionsOpen, setPermissionsOpen] = useState(false);
   const params = useParams();
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const createTab = useTabsStore((state) => state.createTab);
@@ -451,6 +454,10 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                   )}
                   <span>{item.isPrivate ? "Unprotect page" : "Protect page"}</span>
                 </ContextMenuItem>
+                <ContextMenuItem onSelect={() => setPermissionsOpen(true)}>
+                  <Users className="mr-2 h-4 w-4" />
+                  <span>Permissions</span>
+                </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem onSelect={handleEnterMultiSelect}>
                   <CheckSquare className="mr-2 h-4 w-4" />
@@ -517,6 +524,13 @@ export const PageTreeItem = React.memo(function PageTreeItem({
         onClose={() => setCopyOpen(false)}
         pages={[pageInfo]}
         onSuccess={() => mutate()}
+      />
+
+      <ShareDialog
+        pageId={item.id}
+        defaultTab="permissions"
+        open={isPermissionsOpen}
+        onOpenChange={setPermissionsOpen}
       />
     </>
   );
