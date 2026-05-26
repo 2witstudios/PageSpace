@@ -12,6 +12,8 @@ export interface FolderViewProps {
 
 export interface GridViewProps {
   items: TreePage[];
+  findMatchSet?: Set<string>;
+  currentFindId?: string | null;
 }
 
 export interface ListViewProps {
@@ -19,4 +21,6 @@ export interface ListViewProps {
   sortKey: SortKey;
   sortDirection: SortDirection;
   onSort: (key: SortKey) => void;
+  findMatchSet?: Set<string>;
+  currentFindId?: string | null;
 }

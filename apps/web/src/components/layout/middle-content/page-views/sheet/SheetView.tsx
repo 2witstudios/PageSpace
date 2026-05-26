@@ -29,6 +29,7 @@ import { useSuggestion } from '@/hooks/useSuggestion';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useFindStore } from '@/stores/useFindStore';
 
 interface SheetViewProps {
   page: TreePage;
@@ -233,6 +234,13 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       return () => clearTimeout(timer);
     }
   }, [announcement]);
+
+  // Find in page — store subscriptions and state (effects moved after `evaluation` declaration)
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+  const [findAddresses, setFindAddresses] = useState<string[]>([]);
 
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -565,6 +573,40 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   );
 
   const evaluation = useMemo(() => evaluateSheet(sheet, evaluationOptions), [sheet, evaluationOptions]);
+
+  // Find effects must live after `evaluation` is declared
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) {
+      setFindAddresses([]);
+      reportMatches(0);
+      return;
+    }
+    const q = findQuery.toLowerCase();
+    const matches: string[] = [];
+    for (let r = 0; r < sheet.rowCount; r++) {
+      for (let c = 0; c < sheet.columnCount; c++) {
+        const addr = encodeCellAddress(r, c);
+        const raw = sheet.cells[addr] ?? '';
+        const display = evaluation.display[r]?.[c] ?? '';
+        if (raw.toLowerCase().includes(q) || display.toLowerCase().includes(q)) {
+          matches.push(addr);
+        }
+      }
+    }
+    setFindAddresses(matches);
+    reportMatches(matches.length);
+  }, [isFindOpen, findQuery, sheet.cells, sheet.rowCount, sheet.columnCount, evaluation.display, reportMatches]);
+
+  useEffect(() => {
+    const addr = findAddresses[findIndex];
+    if (!addr || !gridRef.current) return;
+    const el = gridRef.current.querySelector(`[data-cell="${addr}"]`);
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [findIndex, findAddresses]);
+
+  const findAddressSet = useMemo(() => new Set(findAddresses), [findAddresses]);
+  const currentFindAddress = findAddresses[findIndex] ?? null;
+
   const currentSelection = selection.type === 'single'
     ? clampSelection(selection.cell, sheet)
     : clampSelection(selection.range.start, sheet);
@@ -1914,7 +1956,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                         isPrimaryCell && 'outline outline-2 outline-offset-[-2px] outline-primary',
                         cellError && 'bg-destructive/10 text-destructive',
                         editingCell && editingCell.row === rowIndex && editingCell.column === columnIndex && 'opacity-50',
-                        isDragging && 'select-none'
+                        isDragging && 'select-none',
+                        findAddressSet.has(cellAddress) && 'find-highlight',
+                        currentFindAddress === cellAddress && 'find-highlight-current'
                       )}
                       onMouseDown={(e) => handleCellMouseDown(rowIndex, columnIndex, e)}
                       onMouseEnter={() => handleCellMouseEnter(rowIndex, columnIndex)}
