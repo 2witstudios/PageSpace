@@ -67,6 +67,8 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useFindStore } from '@/stores/useFindStore';
+import { useDraft } from '@/hooks/useDraft';
+import { buildDraftKey } from '@/lib/draft/draft';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -89,7 +91,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // LOCAL STATE
   // ============================================
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
-  const [input, setInput] = useState<string>('');
+  const { draft: input, setDraft: setInput, clearDraft: clearInputDraft } = useDraft(
+    buildDraftKey('ai', page.id),
+  );
   const [activeTab, setActiveTab] = useState<string>('chat');
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [showError, setShowError] = useState(true);
@@ -619,7 +623,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessageWithContext(input));
-    setInput('');
+    clearInputDraft();
     clearFiles();
     inputRef.current?.clear();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned

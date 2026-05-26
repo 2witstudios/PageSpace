@@ -38,6 +38,8 @@ import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { AttachmentMeta, FileRelation } from '@/lib/attachment-utils';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { cn } from '@/lib/utils';
+import { useDraft } from '@/hooks/useDraft';
+import { buildDraftKey } from '@/lib/draft/draft';
 
 export type ThreadSource = 'channel' | 'dm';
 
@@ -166,7 +168,9 @@ export function ThreadPanel({
   onClose,
   fetcher,
 }: ThreadPanelProps) {
-  const [draft, setDraft] = useState('');
+  const { draft, setDraft, clearDraft } = useDraft(
+    buildDraftKey(source, contextId, parentId),
+  );
   const [optimisticReplies, setOptimisticReplies] = useState<ThreadReply[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Optimistic follow state: starts undefined until SWR returns. Once we have
@@ -203,7 +207,6 @@ export function ThreadPanel({
   // Reset optimistic state when the open thread switches.
   useEffect(() => {
     setOptimisticReplies([]);
-    setDraft('');
     setSubmitError(null);
     setOptimisticFollowing(undefined);
     setFollowError(null);
@@ -422,7 +425,7 @@ export function ThreadPanel({
         parentId,
       };
       setOptimisticReplies((prev) => [...prev, optimistic]);
-      setDraft('');
+      clearDraft();
       setSubmitError(null);
 
       try {
