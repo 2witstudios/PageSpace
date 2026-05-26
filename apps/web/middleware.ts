@@ -109,7 +109,8 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/cron/') ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
-      pathname === '/api/integrations/zoom/webhook'
+      pathname === '/api/integrations/zoom/webhook' ||
+      pathname === '/api/health'
     ) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
       return response;
