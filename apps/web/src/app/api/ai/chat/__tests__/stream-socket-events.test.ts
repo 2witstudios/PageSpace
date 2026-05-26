@@ -16,6 +16,7 @@ const {
   mockBroadcastChatUserMessage,
   mockSaveMessageToDatabase,
   mockGetConversation,
+  mockCreateConversation,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   mockGetConversation: vi.fn().mockResolvedValue(null), // default: legacy (no row) → broadcast
+  mockCreateConversation: vi.fn().mockResolvedValue(undefined),
 }));
 
 interface MockUIStreamOptions {
@@ -188,6 +190,7 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: mockGetConversation,
+    createConversation: mockCreateConversation,
   },
 }));
 
