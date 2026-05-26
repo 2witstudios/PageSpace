@@ -400,8 +400,6 @@ function TaskListView({ page }: TaskListViewProps) {
     if (isFindOpen) {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
-    } else {
-      setSearch('');
     }
   }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);

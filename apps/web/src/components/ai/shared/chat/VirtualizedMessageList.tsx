@@ -47,7 +47,7 @@ const VirtualizedMessageListInner = forwardRef<VirtualizedMessageListRef, Virtua
       scrollToIndex: (index, options) => {
         virtualizer.scrollToIndex(index, options);
       },
-    }));
+    }), [virtualizer]);
 
     const items = virtualizer.getVirtualItems();
 
