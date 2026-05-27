@@ -51,12 +51,15 @@ export async function GET(
       const mimeType = page.mimeType || 'application/octet-stream';
       const ttl = getPresignedUrlTtl(mimeType);
       const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);
-      const disposition = isDangerousMimeType(mimeType) ? `attachment; filename="${filename}"` : undefined;
+      const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
+      const disposition = isDangerousMimeType(mimeType)
+        ? `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+        : undefined;
       const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition, mimeType);
 
       auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'view', mimeType } });
 
-      return NextResponse.redirect(presignedUrl, 302);
+      return NextResponse.redirect(presignedUrl, 307);
     }
 
     // Fall back to files table (channel/DM attachments)
@@ -81,7 +84,7 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'view', mimeType } });
 
-    return NextResponse.redirect(presignedUrl, 302);
+    return NextResponse.redirect(presignedUrl, 307);
 
   } catch (error) {
     console.error('View error:', error);

@@ -52,13 +52,14 @@ export async function GET(
       const contentHash = page.filePath;
       const mimeType = page.mimeType || 'application/octet-stream';
       const filename = sanitizeFilenameForHeader(page.originalFileName || page.title);
-      const disposition = `attachment; filename="${filename}"`;
+      const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
+      const disposition = `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
       const ttl = getPresignedUrlTtl(mimeType);
       const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition);
 
       auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'download', mimeType } });
 
-      return NextResponse.redirect(presignedUrl, 302);
+      return NextResponse.redirect(presignedUrl, 307);
     }
 
     // Fall back to files table (channel/DM attachments)
@@ -78,13 +79,14 @@ export async function GET(
     const contentHash = file.storagePath || file.id;
     const mimeType = file.mimeType || 'application/octet-stream';
     const filename = sanitizeFilenameForHeader(filenameParam || contentHash);
-    const disposition = `attachment; filename="${filename}"`;
+    const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
+    const disposition = `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
     const ttl = getPresignedUrlTtl(mimeType);
     const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'download', mimeType } });
 
-    return NextResponse.redirect(presignedUrl, 302);
+    return NextResponse.redirect(presignedUrl, 307);
 
   } catch (error) {
     console.error('Download error:', error);
