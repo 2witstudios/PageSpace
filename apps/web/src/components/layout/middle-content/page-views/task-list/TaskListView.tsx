@@ -54,6 +54,7 @@ import {
   Pencil,
   Trash2,
   FileText,
+  BookOpen,
   GripVertical,
   LayoutList,
   Kanban,
@@ -81,7 +82,7 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
-import { TaskListDescription } from './TaskListDescription';
+import { getInitialOpenState, TaskListDescriptionHeader, TaskListDescriptionContent } from './TaskListDescription';
 import { TaskRowDescription } from './TaskRowDescription';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
@@ -444,6 +445,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
+  const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content ?? null));
   const hasLoadedRef = useRef(false);
 
   // Use centralized socket store for proper authentication
@@ -790,6 +792,56 @@ function TaskListView({ page }: TaskListViewProps) {
     onConfigureTriggers: setTriggerDialogTask,
   };
 
+  if (viewMode === 'editor') {
+    return (
+      <div className="flex flex-col h-full min-w-0">
+        <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0">
+          <span className="text-sm font-medium text-muted-foreground">Description</span>
+          <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+            <button
+              onClick={() => setViewMode('editor')}
+              className={cn('p-1.5 rounded transition-colors', 'bg-background text-foreground shadow-sm')}
+              title="Editor view"
+              aria-label="Editor view"
+            >
+              <BookOpen className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={cn('p-1.5 rounded transition-colors', 'text-muted-foreground hover:text-foreground')}
+              title="Table view"
+              aria-label="Table view"
+            >
+              <LayoutList className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={cn('p-1.5 rounded transition-colors', 'text-muted-foreground hover:text-foreground')}
+              title="Kanban view"
+              aria-label="Kanban view"
+            >
+              <Kanban className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <TaskListDescriptionContent
+          pageId={page.id}
+          canEdit={canEdit}
+          initialContent={page.content}
+          className="flex-1 overflow-auto px-4 py-3"
+        />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground shrink-0">
+          <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
+          <span className="text-xs sm:text-sm">
+            Updated {data?.taskList.updatedAt
+              ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
+              : 'never'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -808,11 +860,18 @@ function TaskListView({ page }: TaskListViewProps) {
 
   return (
     <div className="flex flex-col h-full min-w-0">
-      <TaskListDescription
-        pageId={page.id}
-        canEdit={canEdit}
-        initialContent={page.content}
+      <TaskListDescriptionHeader
+        open={descriptionOpen}
+        onToggle={() => setDescriptionOpen(prev => !prev)}
       />
+      {descriptionOpen && (
+        <TaskListDescriptionContent
+          pageId={page.id}
+          canEdit={canEdit}
+          initialContent={page.content}
+          className="h-[40%] shrink-0 overflow-auto px-4 py-3 border-b"
+        />
+      )}
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
@@ -851,6 +910,19 @@ function TaskListView({ page }: TaskListViewProps) {
           <div className="flex items-center gap-2 sm:contents">
             {/* View toggle (desktop only) */}
             <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+              <button
+                onClick={() => setViewMode('editor')}
+                className={cn(
+                  'p-1.5 rounded transition-colors',
+                  viewMode === 'editor'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                title="Editor view"
+                aria-label="Editor view"
+              >
+                <BookOpen className="h-4 w-4" />
+              </button>
               <button
                 onClick={() => setViewMode('table')}
                 className={cn(
