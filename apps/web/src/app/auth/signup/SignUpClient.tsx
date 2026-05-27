@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'motion/react';
@@ -14,9 +14,11 @@ import {
   MagicLinkForm,
   ExternalAuthWaiting,
 } from '@/components/auth';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
 import { useOAuthSignIn } from '@/hooks/useOAuthSignIn';
 import type { InviteContextData } from '@/lib/auth/invite-resolver';
+import { detectInAppBrowser, getPreferredBrowserName } from '@/lib/auth/browser-detection';
 
 interface SignUpClientProps {
   inviteToken?: string;
@@ -27,6 +29,7 @@ interface SignUpClientProps {
 export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
+  const [inAppInfo, setInAppInfo] = useState<{ isInApp: boolean; appName: string | undefined }>({ isInApp: false, appName: undefined });
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
@@ -47,6 +50,17 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
 
+  useEffect(() => {
+    const result = detectInAppBrowser();
+    if (result.isInApp) {
+      setInAppInfo({ isInApp: true, appName: result.appName });
+      setShowMagicLink(true);
+    }
+  }, []);
+
+  const browserName = getPreferredBrowserName() ?? 'your browser';
+  const appLabel = inAppInfo.appName ?? 'this app';
+
   return (
     <AuthShell>
       <GoogleOneTap
@@ -55,6 +69,22 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
         context="signup"
         {...(inviteToken && { inviteToken })}
       />
+
+      {inAppInfo.isInApp && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="mb-6"
+        >
+          <Alert variant="warning">
+            <AlertTitle>Google sign-in is blocked in {appLabel}</AlertTitle>
+            <AlertDescription>
+              Use a magic link below, or open this page in {browserName} to sign in with Google.
+            </AlertDescription>
+          </Alert>
+        </motion.div>
+      )}
 
       {inviteContext && (
         <motion.div

@@ -173,9 +173,9 @@ function SignInForm() {
           className="mb-6"
         >
           <Alert variant="warning">
-            <AlertTitle>Google sign-in won&apos;t work in {appLabel}</AlertTitle>
+            <AlertTitle>Google sign-in is blocked in {appLabel}</AlertTitle>
             <AlertDescription>
-              Tap &#8943; and choose &ldquo;Open in {browserName}&rdquo;, or use a magic link below.
+              Use a magic link below, or open this page in {browserName} to sign in with Google.
             </AlertDescription>
           </Alert>
         </motion.div>
