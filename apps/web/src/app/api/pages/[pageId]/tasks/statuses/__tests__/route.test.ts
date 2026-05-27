@@ -589,18 +589,18 @@ describe('PUT /api/pages/[pageId]/tasks/statuses', () => {
 });
 
 describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
-  const makeEmptySelectChain = () => {
+  const makeEmptySelectChain = (result: unknown[] = []) => {
     const chain: Record<string, unknown> = {
       then: (resolve: (v: unknown[]) => unknown, reject?: (e: unknown) => unknown) =>
-        Promise.resolve([]).then(resolve, reject),
-      catch: (reject: (e: unknown) => unknown) => Promise.resolve([]).catch(reject),
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
     };
     chain.from = vi.fn(() => chain);
     chain.where = vi.fn(() => chain);
     chain.innerJoin = vi.fn(() => chain);
     chain.orderBy = vi.fn(() => chain);
-    chain.groupBy = vi.fn().mockResolvedValue([]);
-    chain.limit = vi.fn().mockResolvedValue([]);
+    chain.groupBy = vi.fn().mockResolvedValue(result);
+    chain.limit = vi.fn().mockResolvedValue(result);
     return chain;
   };
 
@@ -673,10 +673,7 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
       id: 'cfg-1', slug: 'review', group: 'in_progress',
     } as never);
     const taskRows = [{ id: 'task-1' }, { id: 'task-2' }];
-    const chain = makeEmptySelectChain();
-    (chain as { then: (r: (v: unknown) => unknown) => Promise<unknown> }).then = (resolve, reject) =>
-      Promise.resolve(taskRows).then(resolve, reject);
-    vi.mocked(db.select).mockReturnValueOnce(chain as never);
+    vi.mocked(db.select).mockReturnValueOnce(makeEmptySelectChain(taskRows) as never);
 
     const response = await DELETE(createDeleteRequest({ statusId: 'cfg-1' }), context);
     expect(response.status).toBe(400);
@@ -760,10 +757,7 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
       .mockResolvedValueOnce({ id: 'cfg-1', slug: 'review', group: 'in_progress' } as never) // statusToDelete
       .mockResolvedValueOnce({ id: 'cfg-2', slug: 'wip', group: 'in_progress' } as never); // migration target
     const taskRows = [{ id: 'task-1' }, { id: 'task-2' }];
-    const chain = makeEmptySelectChain();
-    (chain as { then: (r: (v: unknown) => unknown) => Promise<unknown> }).then = (resolve, reject) =>
-      Promise.resolve(taskRows).then(resolve, reject);
-    vi.mocked(db.select).mockReturnValueOnce(chain as never);
+    vi.mocked(db.select).mockReturnValueOnce(makeEmptySelectChain(taskRows) as never);
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
       { id: 'cfg-1', slug: 'review', group: 'in_progress' },
       { id: 'cfg-2', slug: 'wip', group: 'in_progress' },
