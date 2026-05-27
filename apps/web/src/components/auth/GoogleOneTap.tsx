@@ -3,6 +3,7 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { CredentialResponse } from '@/types/google-identity';
+import { detectInAppBrowser } from '@/lib/auth/browser-detection';
 
 interface GoogleOneTapProps {
   /** Called when sign-in is successful */
@@ -179,30 +180,11 @@ export function GoogleOneTap({
       return;
     }
 
-    // Don't run on mobile browsers or in-app browsers (social media webviews)
-    // Google One Tap (FedCM) has limited support and causes login loops
-    if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
-      const userAgent = navigator.userAgent;
-      // Standard mobile browsers
-      const isMobileBrowser =
-        /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(
-          userAgent
-        );
-      // In-app browsers from social media apps (Facebook, Instagram, TikTok, etc.)
-      const isInAppBrowser =
-        /FBAN|FBAV|FB_IAB|Instagram|Twitter|TikTok|Snapchat|Pinterest|LinkedIn|Line\/|KAKAOTALK|MicroMessenger|WeChat|QQ\//i.test(
-          userAgent
-        );
-      // Generic WebView detection
-      const isWebView = /\bwv\b|WebView/i.test(userAgent);
-
-      if (isMobileBrowser || isInAppBrowser || isWebView) {
-        console.debug(
-          'Google One Tap: Skipping on mobile/in-app browser',
-          { isMobileBrowser, isInAppBrowser, isWebView }
-        );
-        return;
-      }
+    // Don't run on mobile browsers or in-app browsers — FedCM/One Tap causes login loops there
+    if (typeof navigator !== 'undefined') {
+      const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(navigator.userAgent);
+      const isWebView = /\bwv\b|WebView/i.test(navigator.userAgent);
+      if (isMobile || isWebView || detectInAppBrowser().isInApp) return;
     }
 
     const clientId = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;

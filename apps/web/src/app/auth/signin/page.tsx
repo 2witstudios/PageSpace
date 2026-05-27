@@ -15,13 +15,16 @@ import {
   PasskeyLoginButton,
   ExternalAuthWaiting,
 } from "@/components/auth";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from "@/lib/auth/url-utils";
+import { detectInAppBrowser, getPreferredBrowserName } from "@/lib/auth/browser-detection";
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
+  const [inAppInfo, setInAppInfo] = useState<{ isInApp: boolean; appName: string | undefined }>({ isInApp: false, appName: undefined });
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const inviteToken = searchParams.get('invite') ?? undefined;
@@ -99,6 +102,14 @@ function SignInForm() {
     }
   }, [searchParams]);
 
+  useEffect(() => {
+    const result = detectInAppBrowser();
+    if (result.isInApp) {
+      setInAppInfo({ isInApp: true, appName: result.appName });
+      setShowMagicLink(true);
+    }
+  }, []);
+
   // On-prem: passkey + magic link sign-in (no OAuth)
   if (onPrem) {
     return (
@@ -142,6 +153,9 @@ function SignInForm() {
     );
   }
 
+  const browserName = getPreferredBrowserName() ?? 'your browser';
+  const appLabel = inAppInfo.appName ?? 'this app';
+
   return (
     <AuthShell>
       <GoogleOneTap
@@ -150,6 +164,22 @@ function SignInForm() {
         context="signin"
         {...(inviteToken && { inviteToken })}
       />
+
+      {inAppInfo.isInApp && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="mb-6"
+        >
+          <Alert variant="warning">
+            <AlertTitle>Google sign-in won&apos;t work in {appLabel}</AlertTitle>
+            <AlertDescription>
+              Tap &#8943; and choose &ldquo;Open in {browserName}&rdquo;, or use a magic link below.
+            </AlertDescription>
+          </Alert>
+        </motion.div>
+      )}
 
       {/* Heading */}
       <motion.div
