@@ -1,9 +1,9 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import path from 'path';
 import fs from 'fs/promises';
 import { contentStore } from '../server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { resolvePathWithin } from '../utils/security';
 import type { VideoProcessJobData, VideoProcessResult } from '../types';
 
 const execFileAsync = promisify(execFile);
@@ -17,8 +17,10 @@ export async function processVideo(data: VideoProcessJobData): Promise<VideoProc
 
   loggers.processor.info('Video processing started', { contentHash, fileId });
 
-  const inputPath = path.join(TEMP_ROOT, `video-${fileId}`);
-  const thumbPath = path.join(TEMP_ROOT, `video-${fileId}-thumb.webp`);
+  const inputPath = resolvePathWithin(TEMP_ROOT, `video-${fileId}`);
+  if (!inputPath) throw new Error(`Unsafe video temp path for fileId: ${fileId}`);
+  const thumbPath = resolvePathWithin(TEMP_ROOT, `video-${fileId}-thumb.webp`);
+  if (!thumbPath) throw new Error(`Unsafe video thumb temp path for fileId: ${fileId}`);
 
   try {
     await contentStore.streamOriginalToFile(contentHash, inputPath);

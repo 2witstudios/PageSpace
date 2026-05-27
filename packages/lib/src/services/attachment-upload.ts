@@ -297,6 +297,7 @@ async function uploadOneFile(
       userId,
       resourceType: target.type === 'page' ? 'channel_upload' : 'dm_upload',
       resourceId: contentHash,
+      details: { targetId: target.type === 'page' ? target.pageId : target.conversationId },
     });
 
     const actorInfo = await getActorInfo(userId);
@@ -314,17 +315,7 @@ async function uploadOneFile(
       actorInfo
     );
 
-    releaseSlot();
-
     const updatedQuota = await getUserStorageQuota(userId);
-
-    auditRequest(request, {
-      eventType: 'data.write',
-      userId,
-      resourceType: 'file',
-      resourceId: target.type === 'page' ? target.pageId : target.conversationId,
-      details: { source: target.type === 'page' ? 'channel-upload' : 'dm-upload' },
-    });
 
     return {
       ok: true,
@@ -347,7 +338,6 @@ async function uploadOneFile(
     };
   } catch (error) {
     loggers.api.error('Attachment upload error', error as Error);
-    releaseSlot();
     return { ok: false, error: 'Failed to upload file', status: 500 };
   } finally {
     releaseSlot();
