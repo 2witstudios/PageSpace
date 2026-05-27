@@ -20,7 +20,7 @@ function getS3Client(): S3Client {
 }
 
 function getS3Bucket(): string {
-  return process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
+  return process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
 }
 
 export function getPresignedUrlTtl(mimeType: string): number {

@@ -15,5 +15,5 @@ export function createS3Client(): S3Client {
 }
 
 export function getS3Bucket(): string {
-  return process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
+  return process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
 }
