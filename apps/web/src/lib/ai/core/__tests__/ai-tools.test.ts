@@ -98,8 +98,16 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/member-tools', () => ({
+  memberTools: {
+    list_drive_members: { name: 'list_drive_members', description: 'List drive members' },
+    list_collaborators: { name: 'list_collaborators', description: 'List collaborators' },
+  },
+}));
+
 import { pageSpaceTools, corePageSpaceTools } from '../ai-tools';
 import { CORE_TOOL_NAMES } from '../stub-tools';
+import { memberTools } from '../../tools/member-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
@@ -121,6 +129,7 @@ describe('ai-tools', () => {
 
     it('equals the merged object of all tool modules', () => {
       expect(pageSpaceTools).toEqual({
+        ...memberTools,
         ...driveTools,
         ...pageReadTools,
         ...pageWriteTools,
@@ -138,6 +147,7 @@ describe('ai-tools', () => {
 
     it('has no key collisions between tool modules', () => {
       const moduleKeysets = [
+        Object.keys(memberTools),
         Object.keys(driveTools),
         Object.keys(pageReadTools),
         Object.keys(pageWriteTools),
