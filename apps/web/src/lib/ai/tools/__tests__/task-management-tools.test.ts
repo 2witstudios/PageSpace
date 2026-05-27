@@ -89,6 +89,17 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(),
 }));
 
+vi.mock('@/lib/tasks/completion-guard', () => ({
+  assertSubTasksComplete: vi.fn().mockResolvedValue(undefined),
+  SubtasksIncompleteError: class SubtasksIncompleteError extends Error {
+    readonly code = 'SUBTASKS_INCOMPLETE' as const;
+    constructor(public readonly pending: number, public readonly total: number) {
+      super(`Complete all sub-tasks first (${pending} of ${total} remaining)`);
+      this.name = 'SubtasksIncompleteError';
+    }
+  },
+}));
+
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
