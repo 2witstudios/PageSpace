@@ -61,14 +61,25 @@ vi.mock('@pagespace/db/db', () => {
       returning: vi.fn(),
     })),
   }));
-  // Active-trigger-count lookup: db.select(...).from(workflows).where(...).groupBy(...)
-  const mockSelect = vi.fn(() => ({
-    from: vi.fn(() => ({
-      where: vi.fn(() => ({
-        groupBy: vi.fn().mockResolvedValue([]),
-      })),
-    })),
-  }));
+  // Supports three select patterns in the route:
+  // 1. childPages: await db.select().from(pages).where(...)           — thenable chain
+  // 2. triggerRows: await db.select().from(triggers).where().groupBy()
+  // 3. subTaskRows: await db.select().from(items).innerJoin().where().groupBy()
+  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id' }]) => {
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+    };
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.groupBy = vi.fn().mockResolvedValue([]);
+    chain.limit = vi.fn().mockResolvedValue([]);
+    return chain;
+  };
+  const mockSelect = vi.fn(() => makeSelectChain());
   return {
     db: {
       query: {
@@ -200,14 +211,22 @@ describe('Task API Routes', () => {
         returning: vi.fn(),
       })),
     } as never);
-    // Re-set up db.select default for active-trigger-count lookup
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          groupBy: vi.fn().mockResolvedValue([]),
-        })),
-      })),
-    } as never);
+    // Re-set up db.select to support all three select patterns in the route
+    vi.mocked(db.select).mockImplementation(() => {
+      const result = [{ id: 'child-page-id' }];
+      const chain: Record<string, unknown> = {
+        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(result).then(resolve, reject),
+        catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+      };
+      chain.from = vi.fn(() => chain);
+      chain.where = vi.fn(() => chain);
+      chain.innerJoin = vi.fn(() => chain);
+      chain.orderBy = vi.fn(() => chain);
+      chain.groupBy = vi.fn().mockResolvedValue([]);
+      chain.limit = vi.fn().mockResolvedValue([]);
+      return chain as never;
+    });
     // Re-set up db.transaction
     // @ts-expect-error - partial mock data
     vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {

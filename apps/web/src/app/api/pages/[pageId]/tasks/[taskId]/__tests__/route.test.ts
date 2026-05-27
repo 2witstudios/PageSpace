@@ -271,15 +271,16 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.error).toBe('You need edit permission to update tasks');
   });
 
-  it('returns 404 when task list is not found', async () => {
+  it('returns 404 when task not found (task list absent)', async () => {
     setupAuth();
     setupCanEdit(true);
     vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue(null as never);
 
     const response = await PATCH(createPatchRequest({ title: 'x' }), context);
     expect(response.status).toBe(404);
     const body = await response.json();
-    expect(body.error).toBe('Task list not found');
+    expect(body.error).toBe('Task not found');
   });
 
   it('returns 404 when task is not found', async () => {
@@ -699,7 +700,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     });
 
     vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);
-    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title' }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title', parentId: mockPageId }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(200);
@@ -1098,15 +1099,16 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.error).toBe('You need edit permission to delete tasks');
   });
 
-  it('returns 404 when task list not found', async () => {
+  it('returns 404 when task not found (task list absent)', async () => {
     setupAuth();
     setupCanEdit(true);
     vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue(null as never);
 
     const response = await DELETE(createDeleteRequest(), context);
     expect(response.status).toBe(404);
     const body = await response.json();
-    expect(body.error).toBe('Task list not found');
+    expect(body.error).toBe('Task not found');
   });
 
   it('returns 404 when task not found', async () => {

@@ -137,16 +137,14 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(body.error).toBe('You need edit permission to reorder tasks');
   });
 
-  it('returns 404 when task list not found', async () => {
+  it('succeeds when task list row is absent (membership is derived from pages.parentId)', async () => {
     setupAuth();
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
     vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
 
     const response = await PATCH(createRequest({ tasks: [] }), context);
-    expect(response.status).toBe(404);
-    const body = await response.json();
-    expect(body.error).toBe('Task list not found');
+    expect(response.status).toBe(200);
   });
 
   it('returns 400 when tasks is not an array', async () => {

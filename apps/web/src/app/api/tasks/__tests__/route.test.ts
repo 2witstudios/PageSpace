@@ -404,10 +404,13 @@ describe('GET /api/tasks', () => {
         createTaskFixture({ id: 'task_1' }),
       ]);
 
-      // Mock count query to return more than returned tasks
+      // Mock count query to return more than returned tasks.
+      // Use mockResolvedValue (not Once) because db.select is called multiple times
+      // (validTaskPageSubquery + count query) and we need the terminal .where() to
+      // always return data, not just on the first call.
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValueOnce([{ total: 10 }]),
+          where: vi.fn().mockResolvedValue([{ total: 10 }]),
         }),
       } as any);
 
