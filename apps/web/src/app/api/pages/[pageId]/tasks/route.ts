@@ -381,13 +381,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
-    // Create document page for the task
+    // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
       title: title.trim(),
-      type: 'DOCUMENT',
+      type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,
-      content: getDefaultContent(PageType.DOCUMENT),
+      content: '',
       position: nextPagePosition,
       updatedAt: new Date(),
     }).returning();
@@ -511,7 +511,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       createPageEventPayload(taskListPage.driveId, result.page.id, 'created', {
         parentId: pageId,
         title: createdTitle,
-        type: 'DOCUMENT',
+        type: 'TASK_LIST',
       }),
     ),
   ]);
