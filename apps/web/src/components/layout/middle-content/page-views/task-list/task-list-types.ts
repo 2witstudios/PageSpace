@@ -48,6 +48,8 @@ export interface TaskItem {
   // /api/pages/[pageId]/tasks). The DB row also carries metadata.hasTrigger/triggerTypes
   // written by recomputeTaskTriggerMetadata, but no UI path reads them.
   activeTriggerCount?: number;
+  hasContent?: boolean;
+  subTaskCount?: number;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -121,6 +123,9 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: strin
   medium: { label: 'Medium', color: 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400' },
   high: { label: 'High', color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400' },
 };
+
+export const canExpandTask = (task: Pick<TaskItem, 'hasContent' | 'subTaskCount' | 'pageId'>): boolean =>
+  !!task.pageId && (!!task.hasContent || (task.subTaskCount ?? 0) > 0);
 
 // Backward-compatible aliases
 export type TaskStatus = string;

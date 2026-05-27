@@ -10,10 +10,9 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
-import { PageType } from '@pagespace/lib/utils/enums';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
+import { computeHasContent } from './task-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -166,6 +165,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           type: true,
           isTrashed: true,
           position: true,
+          content: true,
         },
       },
       assignees: {
@@ -228,10 +228,28 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
   }
 
-  const enrichedTasks = tasks.map((t) => ({
+  // Batch-count sub-tasks for each task's linked page
+  const subTaskCountByPageId = new Map<string, number>();
+  const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
+  if (linkedPageIds.length > 0) {
+    const subTaskRows = await db
+      .select({ pageId: taskLists.pageId, total: count() })
+      .from(taskLists)
+      .innerJoin(taskItems, eq(taskItems.taskListId, taskLists.id))
+      .where(inArray(taskLists.pageId, linkedPageIds))
+      .groupBy(taskLists.pageId);
+    for (const row of subTaskRows) {
+      if (row.pageId) subTaskCountByPageId.set(row.pageId, Number(row.total));
+    }
+  }
+
+  const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
-    title: t.page?.title ?? '',
+    title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
+    hasContent: computeHasContent(page?.content),
+    subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
+    page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
   }));
 
   return NextResponse.json({
@@ -381,13 +399,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
-    // Create document page for the task
+    // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
       title: title.trim(),
-      type: 'DOCUMENT',
+      type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,
-      content: getDefaultContent(PageType.DOCUMENT),
+      content: '',
       position: nextPagePosition,
       updatedAt: new Date(),
     }).returning();
@@ -511,7 +529,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       createPageEventPayload(taskListPage.driveId, result.page.id, 'created', {
         parentId: pageId,
         title: createdTitle,
-        type: 'DOCUMENT',
+        type: 'TASK_LIST',
       }),
     ),
   ]);

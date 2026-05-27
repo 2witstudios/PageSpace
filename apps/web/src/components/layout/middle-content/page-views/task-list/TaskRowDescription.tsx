@@ -23,7 +23,7 @@ export function TaskRowDescription({ task }: TaskRowDescriptionProps) {
     enabled: !!task.pageId,
   });
 
-  const hasSubTasks = task.page?.type === 'TASK_LIST';
+  const subTaskCount = task.subTaskCount ?? 0;
 
   if (shouldShowPlaceholder(task.pageId)) {
     return (
@@ -33,10 +33,10 @@ export function TaskRowDescription({ task }: TaskRowDescriptionProps) {
 
   return (
     <div className="space-y-1.5">
-      {hasSubTasks && (
+      {subTaskCount > 0 && (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-1">
           <LayoutList className="h-3 w-3" />
-          <span>Has sub-tasks</span>
+          <span>{subTaskCount} sub-task{subTaskCount !== 1 ? 's' : ''}</span>
         </div>
       )}
       {shouldShowSkeleton(isLoading, content) ? (

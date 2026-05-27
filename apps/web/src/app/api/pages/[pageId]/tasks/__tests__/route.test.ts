@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
+import { computeHasContent } from '../task-utils';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies
@@ -149,6 +150,34 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/per
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
+
+const assert = ({ given, should, actual, expected }: {
+  given: string; should: string; actual: unknown; expected: unknown;
+}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
+
+describe('computeHasContent', () => {
+  it('null content', () => {
+    assert({ given: 'null', should: 'return false', actual: computeHasContent(null), expected: false });
+  });
+  it('undefined content', () => {
+    assert({ given: 'undefined', should: 'return false', actual: computeHasContent(undefined), expected: false });
+  });
+  it('empty string', () => {
+    assert({ given: 'empty string', should: 'return false', actual: computeHasContent(''), expected: false });
+  });
+  it('HTML with no visible text', () => {
+    assert({ given: '<p></p>', should: 'return false', actual: computeHasContent('<p></p>'), expected: false });
+  });
+  it('HTML with whitespace only', () => {
+    assert({ given: '<p>   </p>', should: 'return false', actual: computeHasContent('<p>   </p>'), expected: false });
+  });
+  it('HTML with real text content', () => {
+    assert({ given: '<p>Hello</p>', should: 'return true', actual: computeHasContent('<p>Hello</p>'), expected: true });
+  });
+  it('nested HTML with text', () => {
+    assert({ given: '<h1>Title</h1><p>Body</p>', should: 'return true', actual: computeHasContent('<h1>Title</h1><p>Body</p>'), expected: true });
+  });
+});
 
 describe('Task API Routes', () => {
   const mockUserId = 'user-123';
@@ -797,6 +826,53 @@ describe('Task API Routes', () => {
       );
 
       expect(response.status).toBe(201);
+    });
+
+    it('creates task page as TASK_LIST type with empty content', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', title: 'New Task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'New Task', type: 'TASK_LIST' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      let capturedPageInsert: Record<string, unknown> | null = null;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+        let insertCallCount = 0;
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn((vals: Record<string, unknown>) => {
+              insertCallCount++;
+              if (insertCallCount === 1) capturedPageInsert = vals;
+              return {
+                returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
+              };
+            }),
+          })),
+        };
+        return callback(tx);
+      });
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
+
+      expect(response.status).toBe(201);
+      expect(capturedPageInsert).toMatchObject({
+        type: 'TASK_LIST',
+        content: '',
+      });
     });
   });
 });

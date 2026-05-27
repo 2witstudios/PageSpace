@@ -67,7 +67,7 @@ export async function populateUserDrive(
       const taskPageId = await insertPage({
         id: createId(),
         title: task.title,
-        type: 'DOCUMENT',
+        type: 'TASK_LIST',
         content: `
 # ${task.title}
 
