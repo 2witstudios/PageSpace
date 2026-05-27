@@ -475,6 +475,7 @@ describe('page-read-tools', () => {
         } as unknown as typeof mockDb.query.taskStatusConfigs;
 
         // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
+        // db.select().from().innerJoin().where().groupBy() for sub-task count aggregates
         mockDb.select = vi.fn(() => ({
           from: vi.fn().mockReturnThis(),
           innerJoin: vi.fn().mockReturnThis(),
@@ -493,6 +494,7 @@ describe('page-read-tools', () => {
               pageId: `page-task-${i}`,
             }))
           ),
+          groupBy: vi.fn().mockResolvedValue([]),
         })) as unknown as typeof mockDb.select;
 
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
