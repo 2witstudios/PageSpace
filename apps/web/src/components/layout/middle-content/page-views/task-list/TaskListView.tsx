@@ -448,6 +448,9 @@ function TaskListView({ page }: TaskListViewProps) {
   const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content));
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const hasLoadedRef = useRef(false);
+  // Stable ref so the page:moved socket handler always sees the latest task list
+  // without needing data in the socket effect's dependency array.
+  const tasksRef = useRef(data?.tasks);
 
   // Use centralized socket store for proper authentication
   const socket = useSocketStore((state) => state.socket);
@@ -478,6 +481,10 @@ function TaskListView({ page }: TaskListViewProps) {
       refreshInterval: 300000, // 5 minutes
     }
   );
+
+  // Keep tasksRef current so the page:moved handler detects moved-out tasks
+  // even when the socket effect hasn't re-run since the SWR load completed.
+  useEffect(() => { tasksRef.current = data?.tasks; }, [data?.tasks]);
 
   // Connect to socket store when user is available
   useEffect(() => {
@@ -514,10 +521,12 @@ function TaskListView({ page }: TaskListViewProps) {
 
     // Handle tasks moved between lists via drag-and-drop. The reorder API emits
     // page:moved on the drive room (joined by usePageTreeSocket). We need to
-    // refetch when a task enters or leaves this list.
+    // refetch when a task enters or leaves this list. tasksRef (not data) is
+    // used so the handler always sees the current task list regardless of when
+    // this effect was installed relative to the SWR load.
     const handlePageMoved = (payload: { pageId: string; parentId: string | null }) => {
       const movedIn  = payload.parentId === page.id;
-      const movedOut = data?.tasks.some(t => t.pageId === payload.pageId);
+      const movedOut = tasksRef.current?.some(t => t.pageId === payload.pageId);
       if (movedIn || movedOut) mutate(`/api/pages/${page.id}/tasks`);
     };
 
@@ -534,7 +543,7 @@ function TaskListView({ page }: TaskListViewProps) {
       socket.off('task:tasks_reordered', handleTasksReordered);
       socket.off('page:moved', handlePageMoved);
     };
-  }, [socket, connectionStatus, page.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [socket, connectionStatus, page.id]);
 
   // Derive dynamic status config from API response
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
