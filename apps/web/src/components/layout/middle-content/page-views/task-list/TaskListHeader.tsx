@@ -51,6 +51,7 @@ export function TaskListHeader({
       </div>
       <div className="flex items-center bg-muted rounded-md p-0.5">
         <button
+          type="button"
           onClick={() => onViewModeChange('editor')}
           className={cn(
             'p-1.5 rounded transition-colors',
@@ -64,6 +65,7 @@ export function TaskListHeader({
           <BookOpen className="h-4 w-4" />
         </button>
         <button
+          type="button"
           onClick={() => onViewModeChange('table')}
           className={cn(
             'p-1.5 rounded transition-colors',
@@ -77,6 +79,7 @@ export function TaskListHeader({
           <LayoutList className="h-4 w-4" />
         </button>
         <button
+          type="button"
           onClick={() => onViewModeChange('kanban')}
           className={cn(
             'p-1.5 rounded transition-colors',

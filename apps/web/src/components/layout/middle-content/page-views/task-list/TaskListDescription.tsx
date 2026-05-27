@@ -6,13 +6,11 @@ import { type Editor } from '@tiptap/react';
 import { useDocument } from '@/hooks/useDocument';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { isRichContentEmpty } from '@/hooks/usePageContent';
 
 const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 
-export const isRichContentEmpty = (html: string | null): boolean => {
-  if (!html) return true;
-  return (new DOMParser().parseFromString(html, 'text/html').body.textContent ?? '').trim().length === 0;
-};
+export { isRichContentEmpty };
 
 export const getInitialOpenState = (content: string | null): boolean =>
   !isRichContentEmpty(content);
@@ -20,7 +18,7 @@ export const getInitialOpenState = (content: string | null): boolean =>
 interface TaskListDescriptionContentProps {
   pageId: string;
   canEdit: boolean;
-  initialContent: string | null;
+  initialContent?: string | null;
   className?: string;
   onEditorChange?: (editor: Editor | null) => void;
 }
