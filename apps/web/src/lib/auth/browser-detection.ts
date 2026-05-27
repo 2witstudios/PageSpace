@@ -2,7 +2,9 @@ import InAppSpy from 'inapp-spy';
 
 export function detectInAppBrowser() {
   if (typeof navigator === 'undefined') return { isInApp: false, appName: undefined };
-  return InAppSpy({ ua: navigator.userAgent });
+  // Don't pass ua — lets inapp-spy use all detection methods including
+  // non-UA signals (e.g. Telegram detects via window.TelegramWebviewProxy)
+  return InAppSpy();
 }
 
 export function getPreferredBrowserName(): 'Safari' | 'Chrome' | null {
