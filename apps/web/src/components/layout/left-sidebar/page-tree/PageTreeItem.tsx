@@ -295,7 +295,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 params.pageId === item.id && "bg-gray-200 dark:bg-gray-700",
                 isInMultiSelectMode && isPageSelected && "bg-primary/10 dark:bg-primary/20 ring-1 ring-primary/50"
               )}
-              style={{ paddingLeft: `${depth * 8 + 20}px` }}
+              style={{ paddingLeft: `${depth * 8 + 16}px` }}
             >
               {/* Multi-select Checkbox */}
               {isInMultiSelectMode && (
@@ -323,7 +323,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                   aria-expanded={isExpanded}
                   aria-label={isExpanded ? "Collapse" : "Expand"}
                   className="absolute flex items-center justify-center w-4 h-4 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
-                  style={{ left: `${depth * 8 + 2}px` }}
+                  style={{ left: `${depth * 8}px` }}
                 >
                   <ChevronRight
                     className={cn(
