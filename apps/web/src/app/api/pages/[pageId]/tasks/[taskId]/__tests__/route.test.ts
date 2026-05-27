@@ -1030,6 +1030,23 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.total).toBe(3);
   });
 
+  it('returns 422 in fallback mode when completing a task with incomplete sub-tasks', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    vi.mocked(assertSubTasksComplete).mockRejectedValueOnce(
+      new SubtasksIncompleteError(1, 2)
+    );
+
+    const response = await PATCH(createPatchRequest({ status: 'completed' }), context);
+    expect(response.status).toBe(422);
+    const body = await response.json();
+    expect(body.error).toContain('Complete all sub-tasks first');
+    expect(body.pending).toBe(1);
+    expect(body.total).toBe(2);
+  });
+
   it('does not call assertSubTasksComplete when status is not done-group', async () => {
     setupAuth();
     setupCanEdit(true);
