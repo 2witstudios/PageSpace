@@ -275,6 +275,52 @@ export const pageReadTools = {
 
           const slugToGroup = new Map(availableStatuses.map(s => [s.slug, s.group]));
 
+          // Resolve parent task list (if this list is nested under another task)
+          let parentTaskList: { pageId: string; title: string; taskListId: string } | null = null;
+          if (page.parentId) {
+            const parentPage = await db.query.pages.findFirst({
+              where: and(eq(pages.id, page.parentId), eq(pages.isTrashed, false)),
+              columns: { id: true, title: true, type: true },
+            });
+            if (parentPage?.type === 'TASK_LIST') {
+              const parentList = await db.query.taskLists.findFirst({
+                where: eq(taskLists.pageId, parentPage.id),
+                columns: { id: true },
+              });
+              if (parentList) {
+                parentTaskList = { pageId: parentPage.id, title: parentPage.title, taskListId: parentList.id };
+              }
+            }
+          }
+
+          // Batch sub-task counts (total + completed) per task page
+          const taskPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
+          const subTaskCountMap = new Map<string, number>();
+          const subTaskCompletedMap = new Map<string, number>();
+          if (taskPageIds.length > 0) {
+            const baseWhere = and(inArray(pages.parentId, taskPageIds), eq(pages.isTrashed, false));
+            const [subTaskRows, completedRows] = await Promise.all([
+              db
+                .select({ parentId: pages.parentId, total: count() })
+                .from(taskItems)
+                .innerJoin(pages, eq(pages.id, taskItems.pageId))
+                .where(baseWhere)
+                .groupBy(pages.parentId),
+              db
+                .select({ parentId: pages.parentId, total: count() })
+                .from(taskItems)
+                .innerJoin(pages, eq(pages.id, taskItems.pageId))
+                .where(and(baseWhere, isNotNull(taskItems.completedAt)))
+                .groupBy(pages.parentId),
+            ]);
+            for (const row of subTaskRows) {
+              if (row.parentId) subTaskCountMap.set(row.parentId, Number(row.total));
+            }
+            for (const row of completedRows) {
+              if (row.parentId) subTaskCompletedMap.set(row.parentId, Number(row.total));
+            }
+          }
+
           // Dynamic progress breakdown — keyed by both group and slug so
           // custom statuses surface alongside the standard groups.
           const totalTasks = tasks.length;
@@ -294,8 +340,10 @@ export const pageReadTools = {
           return {
             success: true,
             title: page.title,
+            description: page.content || null,
             type: 'TASK_LIST',
             taskListId: taskList.id,
+            parentTaskList,
             tasks: tasks.map(t => ({
               id: t.id,
               title: t.title,
@@ -306,6 +354,8 @@ export const pageReadTools = {
               dueDate: t.dueDate,
               completedAt: t.completedAt,
               linkedPageId: t.pageId,
+              subTaskCount: subTaskCountMap.get(t.pageId ?? '') ?? 0,
+              subTaskCompletedCount: subTaskCompletedMap.get(t.pageId ?? '') ?? 0,
             })),
             availableStatuses,
             progress: {
