@@ -167,6 +167,7 @@
     "apps/e2e": {
       "name": "@pagespace/e2e",
       "devDependencies": {
+        "@aws-sdk/client-s3": "^3.1045.0",
         "@pagespace/db": "workspace:*",
         "@playwright/test": "^1.52.0",
         "@types/node": "^24.0.0",
