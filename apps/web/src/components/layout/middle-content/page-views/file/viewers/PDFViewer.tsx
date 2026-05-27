@@ -53,6 +53,7 @@ export default function PDFViewer({ page }: PDFViewerProps) {
       try {
         setIsLoading(true);
         setError(null);
+        setPdfData(null);
         const res = await fetchWithAuth(`/api/files/${page.id}/view`, {
           headers: { Accept: 'application/json' },
         });

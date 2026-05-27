@@ -562,7 +562,7 @@ export class ContentStore {
       await this.s3.send(
         new DeleteObjectsCommand({
           Bucket: this.bucket,
-          Delete: { Objects: objects.map((obj) => ({ Key: obj.Key! })) },
+          Delete: { Objects: objects.flatMap((obj) => obj.Key ? [{ Key: obj.Key }] : []) },
         }),
       );
       return true;
