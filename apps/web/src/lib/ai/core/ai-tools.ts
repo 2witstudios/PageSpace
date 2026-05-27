@@ -1,3 +1,4 @@
+import { memberTools } from '../tools/member-tools';
 import { driveTools } from '../tools/drive-tools';
 import { pageReadTools } from '../tools/page-read-tools';
 import { pageWriteTools } from '../tools/page-write-tools';
@@ -13,6 +14,7 @@ import { channelTools } from '../tools/channel-tools';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
 export const pageSpaceTools = {
+  ...memberTools,
   ...driveTools,
   ...pageReadTools,
   ...pageWriteTools,
