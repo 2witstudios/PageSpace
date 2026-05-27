@@ -1,5 +1,5 @@
 {
-  "id": "4b4b1210-9f10-4c3c-ad63-da5a70399c71",
+  "id": "3dd8cdf2-97cc-4277-ba83-cbf7e038e994",
   "prevId": "f2a59d28-e85b-4531-9f24-9a7e93254204",
   "version": "7",
   "dialect": "postgresql",
@@ -10045,12 +10045,6 @@
           "primaryKey": true,
           "notNull": true
         },
-        "taskListId": {
-          "name": "taskListId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "userId": {
           "name": "userId",
           "type": "text",
@@ -10074,12 +10068,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "status": {
           "name": "status",
@@ -10136,42 +10124,6 @@
         }
       },
       "indexes": {
-        "task_items_task_list_id_idx": {
-          "name": "task_items_task_list_id_idx",
-          "columns": [
-            {
-              "expression": "taskListId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "task_items_task_list_status_idx": {
-          "name": "task_items_task_list_status_idx",
-          "columns": [
-            {
-              "expression": "taskListId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "task_items_assignee_id_idx": {
           "name": "task_items_assignee_id_idx",
           "columns": [
@@ -10234,19 +10186,6 @@
         }
       },
       "foreignKeys": {
-        "task_items_taskListId_task_lists_id_fk": {
-          "name": "task_items_taskListId_task_lists_id_fk",
-          "tableFrom": "task_items",
-          "tableTo": "task_lists",
-          "columnsFrom": [
-            "taskListId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "task_items_userId_users_id_fk": {
           "name": "task_items_userId_users_id_fk",
           "tableFrom": "task_items",
@@ -10301,7 +10240,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {
+        "task_items_pageId_unique": {
+          "name": "task_items_pageId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "pageId"
+          ]
+        }
+      }
     },
     "public.task_lists": {
       "name": "task_lists",
@@ -15069,6 +15016,104 @@
           ]
         }
       }
+    },
+    "public.message_drafts": {
+      "name": "message_drafts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contextKey": {
+          "name": "contextKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "message_drafts_user_context_key": {
+          "name": "message_drafts_user_context_key",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "contextKey",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "message_drafts_expires_at_idx": {
+          "name": "message_drafts_expires_at_idx",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "message_drafts_userId_users_id_fk": {
+          "name": "message_drafts_userId_users_id_fk",
+          "tableFrom": "message_drafts",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     }
   },
   "enums": {
