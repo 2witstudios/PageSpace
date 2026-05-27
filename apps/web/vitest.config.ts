@@ -5,6 +5,7 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   test: {
+    moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
     css: true,
@@ -33,8 +34,10 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: 'server-only', replacement: path.resolve(__dirname, 'src/test/server-only-stub.ts') },
+      { find: 'next/server', replacement: path.resolve(__dirname, 'src/test/next-server-stub.ts') },
+    ],
   },
 })

@@ -80,7 +80,6 @@ describe('Schema definitions', () => {
       expect(auth.users).toBeDefined();
       expect(auth.deviceTokens).toBeDefined();
       expect(auth.mcpTokens).toBeDefined();
-      expect(auth.mcpTokenDrives).toBeDefined();
       expect(auth.verificationTokens).toBeDefined();
       expect(auth.socketTokens).toBeDefined();
       expect(auth.passkeys).toBeDefined();
@@ -90,8 +89,6 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(auth.usersRelations).toBeDefined();
       expect(auth.deviceTokensRelations).toBeDefined();
-      expect(auth.mcpTokensRelations).toBeDefined();
-      expect(auth.mcpTokenDrivesRelations).toBeDefined();
       expect(auth.verificationTokensRelations).toBeDefined();
       expect(auth.socketTokensRelations).toBeDefined();
       expect(auth.passkeysRelations).toBeDefined();
@@ -165,6 +162,12 @@ describe('Schema definitions', () => {
       expect(members.userProfiles).toBeDefined();
       expect(members.driveMembers).toBeDefined();
       expect(members.pagePermissions).toBeDefined();
+      expect(members.mcpTokenDrives).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(members.mcpTokensRelations).toBeDefined();
+      expect(members.mcpTokenDrivesRelations).toBeDefined();
     });
   });
 

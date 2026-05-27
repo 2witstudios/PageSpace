@@ -78,6 +78,7 @@ import {
 import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -319,6 +320,13 @@ export async function POST(request: Request) {
       conversationId,
       isNewConversation: !requestConversationId
     });
+
+    // Eagerly ensure a conversations row exists so the creator can always see
+    // their own conversation. isShared defaults to false (private). Idempotent
+    // via onConflictDoNothing, so safe for every message in a conversation.
+    // Awaited so the row is visible to the broadcast gate below; errors are
+    // swallowed (non-fatal) and the gate falls back to no-broadcast on failure.
+    await conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -823,12 +831,18 @@ export async function POST(request: Request) {
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
     if (userMessage && userMessage.role === 'user') {
-      broadcastChatUserMessage({
-        message: userMessage,
-        pageId: chatId,
-        conversationId: conversationId!,
-        triggeredBy: { userId: userId!, displayName, browserSessionId },
-      }).catch(() => {});
+      // Only broadcast to the page channel if the conversation is explicitly shared.
+      // Fail closed: no broadcast if the row is missing or private.
+      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
+      const shouldBroadcast = convRow?.isShared === true;
+      if (shouldBroadcast) {
+        broadcastChatUserMessage({
+          message: userMessage,
+          pageId: chatId,
+          conversationId: conversationId!,
+          triggeredBy: { userId: userId!, displayName, browserSessionId },
+        }).catch(() => {});
+      }
     }
 
     lifecycle = await createStreamLifecycle({

@@ -16,7 +16,7 @@ Create `packages/db/src/schema/zoom.ts` with the `zoom_connections` table and ex
 **Requirements**:
 - Given a new file `packages/db/src/schema/zoom.ts`, should define `zoomConnectionStatus` pgEnum and `zoomConnections` pgTable with fields: `id`, `userId` (unique FK → users, cascade delete), encrypted `accessToken`, optional `refreshToken`, `tokenExpiresAt`, `status`, `zoomUserId`, `zoomAccountId`, `zoomEmail`, `targetDriveId` (FK → drives, set null), `targetFolderId` (soft ref, no FK), `includeAiSummary` (default true), `includeActionItems` (default true), `includeTranscript` (default true), `createdAt`, `updatedAt`
 - Given the schema file exists, should be exported from `packages/db/src/schema/index.ts`
-- Given schema changes, should run `pnpm db:generate` to produce a migration and `pnpm db:migrate` to apply it
+- Given schema changes, should run `bun run db:generate` to produce a migration and `bun run db:migrate` to apply it
 
 ---
 

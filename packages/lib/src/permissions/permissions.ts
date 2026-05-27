@@ -1,9 +1,11 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, or, isNull, isNotNull, gt, inArray } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
+import { fetchCustomRolePermissions, type CustomRolePerms } from './membership-queries';
+import { resolveRolePermissions } from './resolve-role-permissions';
 
 /**
  * Permission level for a single page.
@@ -122,6 +124,8 @@ export async function getUserAccessLevel(
       id: pages.id,
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
+      isPrivate: pages.isPrivate,
+      type: pages.type,
     })
     .from(pages)
     .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -186,27 +190,29 @@ export async function getUserAccessLevel(
       };
     }
 
+    let memberRole: string | null = null;
+    let memberCustomRoleId: string | null = null;
+
     if (pageData.driveId) {
-      const adminMembership = await db.select()
+      const memberRow = await db.select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, pageData.driveId),
           eq(driveMembers.userId, validUserId),
-          eq(driveMembers.role, 'ADMIN'),
           isNotNull(driveMembers.acceptedAt)
         ))
         .limit(1);
 
-      if (adminMembership.length > 0) {
-        if (!silent) {
-          loggers.api.debug(`[PERMISSIONS] User is drive admin - granting full access`);
+      if (memberRow.length > 0) {
+        memberRole = memberRow[0].role;
+        memberCustomRoleId = memberRow[0].customRoleId;
+
+        if (memberRole === 'ADMIN') {
+          if (!silent) {
+            loggers.api.debug(`[PERMISSIONS] User is drive admin - granting full access`);
+          }
+          return { canView: true, canEdit: true, canShare: true, canDelete: true };
         }
-        return {
-          canView: true,
-          canEdit: true,
-          canShare: true,
-          canDelete: true,
-        };
       }
     }
 
@@ -224,6 +230,22 @@ export async function getUserAccessLevel(
       .limit(1);
 
     if (permission.length === 0) {
+      if (memberCustomRoleId && pageData.driveId) {
+        const rolePerms = await fetchCustomRolePermissions(memberCustomRoleId, pageData.driveId);
+        if (rolePerms && (rolePerms as CustomRolePerms)[validPageId] !== undefined) {
+          const resolved = resolveRolePermissions('MEMBER', rolePerms as CustomRolePerms, validPageId);
+          return resolved.canView ? resolved : null;
+        }
+      }
+
+      if (memberRole !== null && pageData.driveId && !pageData.isPrivate) {
+        if (!silent) {
+          loggers.api.debug(`[PERMISSIONS] User is drive member, page is not private - granting read access`);
+        }
+        const canEdit = pageData.type === 'CHANNEL';
+        return { canView: true, canEdit, canShare: false, canDelete: false };
+      }
+
       if (!silent) {
         loggers.api.debug(`[PERMISSIONS] No explicit permissions found (or expired) - denying access`);
       }
@@ -377,7 +399,57 @@ export async function getUserAccessiblePagesInDrive(
     return allPages.map((page: { id: string }) => page.id);
   }
 
-  const permissions = await db.select({ pageId: pagePermissions.pageId })
+  const memberCheck = await db.select({ id: driveMembers.id, customRoleId: driveMembers.customRoleId })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
+    ))
+    .limit(1);
+
+  const memberRow = memberCheck[0] ?? null;
+
+  const pageIdSet = new Set<string>();
+
+  if (memberRow) {
+    const nonPrivatePages = await db.select({ id: pages.id })
+      .from(pages)
+      .where(and(
+        eq(pages.driveId, driveId),
+        eq(pages.isPrivate, false),
+        eq(pages.isTrashed, false)
+      ));
+    for (const p of nonPrivatePages) pageIdSet.add(p.id);
+
+    if (memberRow.customRoleId) {
+      const rolePerms = await fetchCustomRolePermissions(memberRow.customRoleId, driveId);
+      if (rolePerms) {
+        const visiblePageIds = Object.entries(rolePerms)
+          .filter(([, p]) => p.canView)
+          .map(([id]) => id);
+
+        if (visiblePageIds.length > 0) {
+          // Validate IDs against the DB to exclude stale, trashed, or out-of-drive pages
+          const validRolePages = await db.select({ id: pages.id })
+            .from(pages)
+            .where(and(
+              inArray(pages.id, visiblePageIds),
+              eq(pages.driveId, driveId),
+              eq(pages.isTrashed, false)
+            ));
+          for (const page of validRolePages) pageIdSet.add(page.id);
+        }
+
+        // Explicit deny beats Rule 4: remove non-private pages the role disallows
+        for (const [id, p] of Object.entries(rolePerms)) {
+          if (!p.canView) pageIdSet.delete(id);
+        }
+      }
+    }
+  }
+
+  const explicitPermissions = await db.select({ pageId: pagePermissions.pageId })
     .from(pagePermissions)
     .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
     .where(and(
@@ -387,7 +459,9 @@ export async function getUserAccessiblePagesInDrive(
       or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
     ));
 
-  return permissions.map((entry: { pageId: string }) => entry.pageId);
+  for (const entry of explicitPermissions) pageIdSet.add(entry.pageId);
+
+  return Array.from(pageIdSet);
 }
 
 /**
@@ -468,7 +542,83 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     }));
   }
 
-  const pagesWithPermissions = await db.select({
+  const memberCheck = await db.select({ id: driveMembers.id, customRoleId: driveMembers.customRoleId })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
+    ))
+    .limit(1);
+
+  const isMember = memberCheck.length > 0;
+
+  const pageMap = new Map<string, PageWithPermissions>();
+
+  // Rule 4: MEMBER gets implicit canView on non-private pages
+  if (isMember) {
+    const nonPrivatePages = await db.select({
+      id: pages.id,
+      title: pages.title,
+      type: pages.type,
+      parentId: pages.parentId,
+      position: pages.position,
+      isTrashed: pages.isTrashed,
+    })
+    .from(pages)
+    .where(and(
+      eq(pages.driveId, driveId),
+      eq(pages.isTrashed, false),
+      eq(pages.isPrivate, false)
+    ));
+
+    for (const page of nonPrivatePages) {
+      pageMap.set(page.id, {
+        ...page,
+        permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+      });
+    }
+  }
+
+  const memberCustomRoleId = memberCheck[0]?.customRoleId ?? null;
+  if (memberCustomRoleId) {
+    const rolePerms = await fetchCustomRolePermissions(memberCustomRoleId, driveId);
+    if (rolePerms) {
+      const visiblePageIds = Object.entries(rolePerms)
+        .filter(([, p]) => p.canView)
+        .map(([id]) => id);
+
+      if (visiblePageIds.length > 0) {
+        const rolePages = await db.select({
+          id: pages.id,
+          title: pages.title,
+          type: pages.type,
+          parentId: pages.parentId,
+          position: pages.position,
+          isTrashed: pages.isTrashed,
+        })
+        .from(pages)
+        .where(and(inArray(pages.id, visiblePageIds), eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+
+        for (const page of rolePages) {
+          pageMap.set(page.id, {
+            ...page,
+            permissions: resolveRolePermissions('MEMBER', rolePerms, page.id),
+          });
+        }
+      }
+
+      // Explicit deny beats Rule 4: remove non-private pages the role disallows
+      for (const [id, p] of Object.entries(rolePerms)) {
+        if (!p.canView) {
+          pageMap.delete(id);
+        }
+      }
+    }
+  }
+
+  // Explicit pagePermissions override the defaults
+  const explicitPages = await db.select({
     id: pages.id,
     title: pages.title,
     type: pages.type,
@@ -490,20 +640,24 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
   ));
 
-  return pagesWithPermissions.map((page): PageWithPermissions => ({
-    id: page.id,
-    title: page.title,
-    type: page.type,
-    parentId: page.parentId,
-    position: page.position,
-    isTrashed: page.isTrashed,
-    permissions: {
-      canView: page.canView,
-      canEdit: page.canEdit,
-      canShare: page.canShare,
-      canDelete: page.canDelete,
-    }
-  }));
+  for (const page of explicitPages) {
+    pageMap.set(page.id, {
+      id: page.id,
+      title: page.title,
+      type: page.type,
+      parentId: page.parentId,
+      position: page.position,
+      isTrashed: page.isTrashed,
+      permissions: {
+        canView: page.canView,
+        canEdit: page.canEdit,
+        canShare: page.canShare,
+        canDelete: page.canDelete,
+      },
+    });
+  }
+
+  return Array.from(pageMap.values());
 }
 
 /**
@@ -803,12 +957,15 @@ export async function getBatchPagePermissions(
       .select({
         pageId: pages.id,
         isTrashed: pages.isTrashed,
+        isPrivate: pages.isPrivate,
+        pageType: pages.type,
         driveOwnerId: drives.ownerId,
-        adminMemberId: driveMembers.id,
+        memberRole: driveMembers.role,
         explicitCanView: pagePermissions.canView,
         explicitCanEdit: pagePermissions.canEdit,
         explicitCanShare: pagePermissions.canShare,
         explicitCanDelete: pagePermissions.canDelete,
+        customRolePerms: driveRoles.permissions,
       })
       .from(pages)
       .leftJoin(drives, eq(drives.id, pages.driveId))
@@ -817,7 +974,6 @@ export async function getBatchPagePermissions(
         and(
           eq(driveMembers.driveId, pages.driveId),
           eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN'),
           isNotNull(driveMembers.acceptedAt)
         )
       )
@@ -832,6 +988,13 @@ export async function getBatchPagePermissions(
           )
         )
       )
+      .leftJoin(
+        driveRoles,
+        and(
+          eq(driveRoles.id, driveMembers.customRoleId),
+          eq(driveRoles.driveId, pages.driveId)
+        )
+      )
       .where(inArray(pages.id, pageIds));
 
     for (const row of rows) {
@@ -840,7 +1003,8 @@ export async function getBatchPagePermissions(
       }
 
       const isOwner = row.driveOwnerId === userId;
-      const isAdmin = row.adminMemberId !== null;
+      const isAdmin = row.memberRole === 'ADMIN';
+      const isMember = row.memberRole !== null;
 
       if (isOwner || isAdmin) {
         results.set(row.pageId, {
@@ -858,6 +1022,28 @@ export async function getBatchPagePermissions(
           canEdit: row.explicitCanEdit ?? false,
           canShare: row.explicitCanShare ?? false,
           canDelete: row.explicitCanDelete ?? false,
+        });
+        continue;
+      }
+
+      if (row.customRolePerms) {
+        const perms = row.customRolePerms as CustomRolePerms;
+        const entry = perms[row.pageId];
+        if (entry !== undefined) {
+          results.set(row.pageId, resolveRolePermissions('MEMBER', perms, row.pageId));
+          continue;
+        }
+      }
+
+      // Rule 4: any accepted drive member gets access to non-private pages.
+      // Channels grant canEdit so members can post messages (Discord/Slack semantics).
+      if (isMember && !row.isPrivate) {
+        const canEdit = row.pageType === 'CHANNEL';
+        results.set(row.pageId, {
+          canView: true,
+          canEdit,
+          canShare: false,
+          canDelete: false,
         });
       }
     }

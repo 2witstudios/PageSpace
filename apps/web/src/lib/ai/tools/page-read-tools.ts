@@ -233,7 +233,6 @@ export const pageReadTools = {
             .select({
               id: taskItems.id,
               title: pages.title,
-              description: taskItems.description,
               status: taskItems.status,
               priority: taskItems.priority,
               position: taskItems.position,
@@ -300,7 +299,6 @@ export const pageReadTools = {
             tasks: tasks.map(t => ({
               id: t.id,
               title: t.title,
-              description: t.description,
               status: t.status,
               priority: t.priority,
               position: t.position,

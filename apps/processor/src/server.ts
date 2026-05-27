@@ -170,6 +170,10 @@ app.use('/api/upload', authenticateService, requireScope('files:write'), uploadR
 app.use('/api/optimize', authenticateService, requireScope('files:optimize'), requireResourceBinding('body'), imageRouter);
 app.use('/api/ingest', authenticateService, requireScope('files:ingest'), requirePageBinding(), ingestRouter);
 app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
+// Public avatar reads — no auth required; avatars are public images.
+// Web app proxies GET /api/avatar/:userId/:filename here when it doesn't have
+// direct volume access (e.g. Fly.io deployments).
+app.use('/avatars', avatarRouter);
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/cache', authenticateService, requireScope('files:read'), requireResourceBinding('params'), cacheRouter);
 
@@ -283,7 +287,7 @@ app.get(
 );
 
 // Job status endpoint
-app.get(
+app.get<{ jobId: string }>(
   '/api/job/:jobId',
   authenticateService,
   requireScope('queue:read'),

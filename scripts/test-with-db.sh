@@ -2,8 +2,8 @@
 # Start a dedicated test postgres container, run migrations, run tests, cleanup
 #
 # Usage:
-#   pnpm test              # Run all tests with database
-#   pnpm test -- --watch   # Run tests in watch mode
+#   bun run test              # Run all tests with database
+#   bun run test -- --watch   # Run tests in watch mode
 
 COMPOSE_FILE="docker-compose.test.yml"
 TEST_DB_URL="postgresql://user:password@localhost:5433/pagespace_test"
@@ -26,11 +26,11 @@ until docker compose -f "$COMPOSE_FILE" exec -T postgres-test pg_isready -U user
 done
 
 echo "Running database migrations..."
-DATABASE_URL="$TEST_DB_URL" pnpm db:migrate || exit 1
+DATABASE_URL="$TEST_DB_URL" bun run db:migrate || exit 1
 
 echo "Running tests..."
 DATABASE_URL="$TEST_DB_URL" \
 CSRF_SECRET=test-csrf-secret-minimum-32-characters-long-for-testing-purposes \
 ENCRYPTION_KEY=test-encryption-key-32-chars-minimum-required-length \
 REALTIME_BROADCAST_SECRET=test-realtime-broadcast-secret-32-chars-minimum-length \
-pnpm test:turbo --concurrency=1 --continue "$@"
+bun run test:turbo --concurrency=1 --continue "$@"

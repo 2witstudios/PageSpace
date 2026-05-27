@@ -10,6 +10,8 @@ import { ChannelInputFooter } from './ChannelInputFooter';
 import { useAttachmentUpload, type FileAttachment } from '@/hooks/useAttachmentUpload';
 import { formatFileSize } from '@/lib/attachment-utils';
 import { useEditingSession } from '@/stores/useEditingSession';
+import { MentionFormatter } from '@/lib/mentions/mentionConfig';
+import type { MentionSuggestion } from '@/types/mentions';
 
 export type { FileAttachment };
 
@@ -216,9 +218,14 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       textareaRef.current?.focus();
     };
 
-    // Handle mention button - insert @ to trigger mention popup
-    const handleMentionClick = () => {
-      onChange(value + '@');
+    const handleMentionSelect = (suggestion: MentionSuggestion) => {
+      const text = MentionFormatter.format(
+        suggestion.label,
+        suggestion.id,
+        suggestion.type,
+        'markdown-typed',
+      );
+      onChange(value + text + ' ');
       textareaRef.current?.focus();
     };
 
@@ -389,7 +396,9 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
           {/* Footer with formatting actions */}
           <ChannelInputFooter
             onFormatClick={handleFormatClick}
-            onMentionClick={handleMentionClick}
+            onMentionSelect={driveId ? handleMentionSelect : undefined}
+            driveId={driveId}
+            crossDrive={crossDrive}
             onEmojiSelect={handleEmojiSelect}
             onAttachmentClick={handleAttachmentClick}
             attachmentsEnabled={attachmentsEnabled && hasUploadTarget}

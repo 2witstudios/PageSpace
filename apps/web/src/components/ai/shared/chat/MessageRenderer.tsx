@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { cn } from '@/lib/utils';
 import { ToolCallRenderer } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
@@ -7,6 +8,7 @@ import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { TodoListMessage } from './TodoListMessage';
 import { useSocket } from '@/hooks/useSocket';
+import { useAuth } from '@/hooks/useAuth';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
@@ -17,6 +19,7 @@ import { ImageMessageContent } from './ImageMessageContent';
 interface TextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
+  senderName?: string;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
@@ -36,6 +39,7 @@ interface TextBlockProps {
 const TextBlock: React.FC<TextBlockProps> = React.memo(({
   parts,
   role,
+  senderName,
   createdAt,
   editedAt,
   onEdit,
@@ -61,7 +65,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
       {role === 'user' && (
         <div className="flex items-center mb-1">
           <div className="text-sm font-medium text-primary dark:text-primary">
-            You
+            {senderName}
           </div>
         </div>
       )}
@@ -121,6 +125,8 @@ interface MessageRendererProps {
   isLastUserMessage?: boolean;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  isHighlighted?: boolean;
+  isCurrentMatch?: boolean;
 }
 
 /**
@@ -137,8 +143,11 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   onTaskUpdate,
   isLastAssistantMessage = false,
   isLastUserMessage = false,
-  isStreaming = false
+  isStreaming = false,
+  isHighlighted = false,
+  isCurrentMatch = false,
 }) => {
+  const { user } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -341,7 +350,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-2">
+      <div key={message.id} data-message-id={message.id} className={cn("mb-2", isHighlighted && "find-highlight", isCurrentMatch && "find-highlight-current")}>
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
@@ -351,6 +360,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 key={`${message.id}-text-${index}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
+                senderName={message.userName ?? user?.name ?? 'Unknown'}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}

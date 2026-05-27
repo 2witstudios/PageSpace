@@ -8,6 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -95,6 +96,16 @@ export async function GET(
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'no_view_permission', agentId, method: 'GET' }, riskScore: 0.5 });
       return NextResponse.json(
         { error: 'Insufficient permissions to view this agent\'s conversations' },
+        { status: 403 }
+      );
+    }
+
+    // Conversation access gate: private conversations are only visible to their owner
+    const conversationRow = await conversationRepository.getConversation(conversationId);
+    if (conversationRow && conversationRow.userId !== auth.userId && !conversationRow.isShared) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'private_conversation', agentId, method: 'GET' }, riskScore: 0.5 });
+      return NextResponse.json(
+        { error: 'Insufficient permissions to access this conversation' },
         { status: 403 }
       );
     }

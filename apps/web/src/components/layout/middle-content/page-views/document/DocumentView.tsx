@@ -14,6 +14,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
+import { useFindStore } from '@/stores/useFindStore';
+import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
@@ -239,6 +241,44 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       }
     };
   }, []); // ✅ Empty deps - uses ref for latest forceSave
+
+  // Connect find store to TipTap find plugin
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || activeView !== 'rich') {
+      reportMatches(0);
+      return;
+    }
+    if (!isFindOpen || !findQuery) {
+      dispatchFind(editor.view, '', 0);
+      reportMatches(0);
+      return;
+    }
+
+    // Initial sync: dispatch query/index to plugin and scroll to active match
+    dispatchFind(editor.view, findQuery, findIndex);
+    const initialMatches = getPluginMatches(editor.state);
+    reportMatches(initialMatches.length);
+    const initialMatch = initialMatches[Math.min(findIndex, Math.max(initialMatches.length - 1, 0))];
+    if (initialMatch) {
+      editor.commands.setTextSelection(initialMatch);
+      editor.commands.scrollIntoView();
+    }
+
+    // Re-read match count when document changes while find is open.
+    // The plugin auto-recomputes matches on docChanged — we only need to
+    // report the new count without re-dispatching (which would loop).
+    const handleDocUpdate = ({ transaction }: { transaction: { docChanged: boolean } }) => {
+      if (!transaction.docChanged) return;
+      reportMatches(getPluginMatches(editor.state).length);
+    };
+    editor.on('update', handleDocUpdate);
+    return () => { editor.off('update', handleDocUpdate); };
+  }, [isFindOpen, findQuery, findIndex, editor, activeView, reportMatches]);
 
   // Auto-save on window blur
   useEffect(() => {

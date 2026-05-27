@@ -103,6 +103,8 @@ export interface ChatLayoutProps {
   showMcp?: boolean;
   /** Remote in-progress streams from other users (or other tabs) — rendered inline as assistant messages */
   remoteStreams?: PendingStream[];
+  findMatchSet?: Set<string>;
+  findCurrentMessageId?: string | null;
 }
 
 export interface ChatLayoutRef {
@@ -154,6 +156,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       onMcpServerToggle,
       showMcp = false,
       remoteStreams = [],
+      findMatchSet,
+      findCurrentMessageId,
     },
     ref
   ) => {
@@ -259,6 +263,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 onUndoSuccess={onUndoSuccess}
                 onPullUpRefresh={onPullUpRefresh}
                 remoteStreams={remoteStreams}
+                findMatchSet={findMatchSet}
+                findCurrentMessageId={findCurrentMessageId}
               />
             </motion.div>
           )}

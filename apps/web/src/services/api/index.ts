@@ -1,7 +1,7 @@
 export { pageReorderService } from './page-reorder-service';
 export type { ReorderParams, ReorderResult, ReorderSuccess, ReorderError, PageReorderService } from './page-reorder-service';
 
-export { permissionManagementService } from './permission-management-service';
+export { permissionManagementService, rolePermissionService } from './permission-management-service';
 export type {
   PermissionFlags,
   PermissionUser,
@@ -16,6 +16,8 @@ export type {
   RevokePermissionSuccess,
   RevokePermissionError,
   PermissionManagementService,
+  RolePermissionFlags,
+  RoleGrant,
 } from './permission-management-service';
 
 export { pageService } from './page-service';

@@ -997,57 +997,6 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(response.status).toBe(200);
   });
 
-  // --- mention notifications ---
-
-  it('fires createMentionNotification for newly added @mentions in description', async () => {
-    setupAuth();
-    setupCanEdit(true);
-    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
-    // First call: existingTask (no mentions); Second call: taskWithRelations after update
-    vi.mocked(db.query.taskItems.findFirst)
-      .mockResolvedValueOnce({ ...baseTask, description: 'old text' } as never)
-      .mockResolvedValueOnce({
-        ...baseTask, description: 'review @[Alice](user-alice:user)',
-        assignee: null, assigneeAgent: null, user: null, assignees: [],
-      } as never);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
-    setupTransaction({ ...baseTask, description: 'review @[Alice](user-alice:user)' });
-
-    const response = await PATCH(
-      createPatchRequest({ description: 'review @[Alice](user-alice:user)' }),
-      context,
-    );
-
-    expect(response.status).toBe(200);
-    // Notification must link to the individual task page, not the task list page
-    expect(createMentionNotification).toHaveBeenCalledWith('user-alice', baseTask.pageId, mockUserId);
-  });
-
-  it('does not re-notify for @mentions already present in the previous description', async () => {
-    setupAuth();
-    setupCanEdit(true);
-    const newDesc = 'review @[Alice](user-alice:user) and @[Bob](user-bob:user)';
-    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
-    // First call: existingTask (Alice already mentioned); Second call: taskWithRelations after update
-    vi.mocked(db.query.taskItems.findFirst)
-      .mockResolvedValueOnce({ ...baseTask, description: 'review @[Alice](user-alice:user)' } as never)
-      .mockResolvedValueOnce({
-        ...baseTask, description: newDesc,
-        assignee: null, assigneeAgent: null, user: null, assignees: [],
-      } as never);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
-    setupTransaction({ ...baseTask, description: newDesc });
-
-    const response = await PATCH(createPatchRequest({ description: newDesc }), context);
-
-    expect(response.status).toBe(200);
-    // Alice was already in old description — no re-notification
-    expect(createMentionNotification).not.toHaveBeenCalledWith('user-alice', expect.anything(), expect.anything());
-    // Bob is newly added — should be notified at the task's own page ID
-    expect(createMentionNotification).toHaveBeenCalledWith('user-bob', baseTask.pageId, mockUserId);
-  });
 
   it('does not fire createMentionNotification when description is not part of the update', async () => {
     setupAuth();

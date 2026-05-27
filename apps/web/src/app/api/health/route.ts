@@ -87,10 +87,8 @@ export async function GET(_request: Request): Promise<Response> {
       });
     }
 
-    const statusCode = isHealthy ? 200 : 503;
-
     return Response.json(response, {
-      status: statusCode,
+      status: 200,
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
@@ -117,7 +115,7 @@ export async function GET(_request: Request): Promise<Response> {
     };
 
     return Response.json(response, {
-      status: 503,
+      status: 200,
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },

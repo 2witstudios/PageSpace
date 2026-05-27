@@ -177,12 +177,6 @@ export const TodoListMessage: React.FC<TodoListMessageProps> = React.memo(({
                         {task.title}
                       </div>
                       
-                      {task.description && (
-                        <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                          {task.description}
-                        </div>
-                      )}
-                      
                       {task.metadata?.notes && task.metadata.notes.length > 0 && (
                         <div className="text-xs text-gray-500 mt-1">
                           Latest: {task.metadata.notes[task.metadata.notes.length - 1].content}

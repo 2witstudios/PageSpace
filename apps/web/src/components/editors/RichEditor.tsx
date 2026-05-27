@@ -16,11 +16,12 @@ import { CodeBlockShiki } from '@/lib/editor/code-block';
 import { FontFormatting } from '@/lib/editor/font-formatting';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 import LinkButton from './LinkButton';
+import { FindExtension } from '@/lib/editor/find-plugin';
 
 interface RichEditorProps {
   value: string;
-  onChange: (value: string) => void;
-  onEditorChange: (editor: Editor | null) => void;
+  onChange?: (value: string) => void;
+  onEditorChange?: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
   contentMode?: 'html' | 'markdown';
@@ -88,6 +89,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       TableKit,
       CharacterCount,
       PageMention,
+      FindExtension,
       // Conditionally add pagination based on isPaginated flag
       ...(isPaginated ? [
         PaginationPlus.configure({
@@ -118,7 +120,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     onUpdate: ({ editor }) => {
       if (!readOnly) {
         const serialized = serializeEditorContent(editor, isMarkdownMode);
-        onChange(serialized);
+        onChange?.(serialized);
       }
     },
     editorProps: {
@@ -176,7 +178,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [editor]);
 
   useEffect(() => {
-    if (editor) {
+    if (editor && !editor.isDestroyed) {
       const currentSerialized = serializeEditorContent(editor, isMarkdownMode);
       // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
@@ -252,19 +254,19 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [value, editor, isMarkdownMode]);
 
   useEffect(() => {
-    onEditorChange(editor);
+    onEditorChange?.(editor);
     // Blur the editor if it's read-only to prevent focus
-    if (editor && readOnly && isEditorViewMounted) {
+    if (editor && !editor.isDestroyed && readOnly && isEditorViewMounted) {
       editor.commands.blur();
     }
     return () => {
-      onEditorChange(null);
+      onEditorChange?.(null);
     };
   }, [editor, onEditorChange, readOnly, isEditorViewMounted]);
 
   return (
     <div className="relative flex flex-col w-full h-full">
-      {editor && isEditorViewMounted && !readOnly && (
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
         <BubbleMenu
           editor={editor}
           pluginKey="bubbleMenu"
@@ -285,7 +287,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
         </BubbleMenu>
       )}
-      {editor && isEditorViewMounted && !readOnly && (
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
         <FloatingMenu
           editor={editor}
           pluginKey="floatingMenu"

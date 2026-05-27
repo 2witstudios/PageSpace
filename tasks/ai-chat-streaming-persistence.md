@@ -18,7 +18,7 @@ Add `packages/db/src/schema/ai-streams.ts` with a new `aiStreamSessions` pgTable
 - Given `channelId` field, should accept pageId for page chats and `user:${userId}:global` for global chat
 - Given `status` field, should only allow values: 'streaming', 'complete', or 'aborted'
 - Given (channelId, status) index, should enable fast queries for active streams per channel
-- Given schema change, should run `pnpm db:generate` to produce migration files (never hand-edit SQL)
+- Given schema change, should run `bun run db:generate` to produce migration files (never hand-edit SQL)
 
 ---
 

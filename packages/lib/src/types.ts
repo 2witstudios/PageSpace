@@ -73,6 +73,7 @@ export interface Page {
   extractionMethod?: ExtractionMethod;
   extractionMetadata?: ExtractionMetadata;
   contentHash?: string;
+  isPrivate?: boolean;
 }
 
 export interface Drive {

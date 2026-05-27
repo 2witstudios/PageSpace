@@ -17,17 +17,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-# Enable corepack and pin pnpm (with basic retry for transient network issues)
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1.3.12 /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy only manifests for dependency install caching
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/android/package.json ./apps/android/
+COPY apps/atlas/package.json ./apps/atlas/
+COPY apps/control-plane/package.json ./apps/control-plane/
+COPY apps/desktop/package.json ./apps/desktop/
+COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/ios/package.json ./apps/ios/
+COPY apps/marketing/package.json ./apps/marketing/
 COPY apps/processor/package.json ./apps/processor/
+COPY apps/realtime/package.json ./apps/realtime/
+COPY apps/web/package.json ./apps/web/
 
 # Install dependencies
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod=false
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 # Now copy source code AFTER dependencies are installed
 COPY tsconfig.json ./
@@ -36,12 +45,12 @@ COPY packages ./packages
 COPY apps/processor ./apps/processor
 
 # Build shared workspaces before compiling the processor
-RUN pnpm --filter @pagespace/db build \
-  && pnpm --filter @pagespace/lib build
+RUN bun run --filter '@pagespace/db' build \
+  && bun run --filter '@pagespace/lib' build
 
 # Build the processor service
 WORKDIR /app/apps/processor
-RUN pnpm build
+RUN bun run build
 
 # Production stage
 FROM node:22.17.0-bookworm-slim AS production

@@ -273,10 +273,7 @@ export async function GET(request: Request) {
         .from(pages)
         .where(sql`${pages.title} ILIKE ${searchPattern} ESCAPE '\\'`);
       filterConditions.push(
-        or(
-          inArray(taskItems.pageId, titleMatchSubquery),
-          sql`${taskItems.description} ILIKE ${searchPattern} ESCAPE '\\'`
-        )
+        inArray(taskItems.pageId, titleMatchSubquery)
       );
     }
     // Due date filter

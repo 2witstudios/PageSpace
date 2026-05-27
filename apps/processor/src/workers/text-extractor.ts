@@ -1,4 +1,5 @@
-import * as pdfjsLib from 'pdfjs-dist';
+// pdfjs-dist is loaded lazily in extractPdfText — v5+ uses DOMMatrix at module
+// init time which crashes Node.js on import. Dynamic import avoids the issue.
 import mammoth from 'mammoth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
@@ -85,6 +86,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
 }
 
 async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata: Record<string, unknown> }> {
+  const pdfjsLib = await import('pdfjs-dist');
   const uint8Array = new Uint8Array(buffer);
   const getDocument = pdfjsLib.getDocument as unknown as
     (params: { data: Uint8Array; disableWorker: boolean }) => PDFLoadingTask;

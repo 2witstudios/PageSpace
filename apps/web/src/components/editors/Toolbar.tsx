@@ -109,7 +109,7 @@ const Toolbar = ({ editor, contentMode = 'html' }: ToolbarProps) => {
     };
   }, [editor]);
 
-  if (!editor) {
+  if (!editor || editor.isDestroyed) {
     return null;
   }
 

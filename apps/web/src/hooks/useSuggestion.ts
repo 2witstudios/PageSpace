@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { useSuggestionCore } from './useSuggestionCore';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
@@ -38,9 +38,12 @@ export interface UseSuggestionResult {
   selectedIndex: number;
   loading: boolean;
   error: string | null;
+  /** The current @ query string (text typed after the @ trigger) */
+  query: string;
   actions: {
     selectSuggestion: (suggestion: MentionSuggestion) => void;
     selectItem: (index: number) => void;
+    close: () => void;
   };
 }
 
@@ -60,6 +63,7 @@ export function useSuggestion({
   onMentionInserted,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
+  const [currentQuery, setCurrentQuery] = useState('');
 
   // Default pattern: @ must be at start or preceded by whitespace (existing behavior)
   // Sheet pattern should allow formula operators like: ( = + - * / , < > ! and whitespace
@@ -92,6 +96,11 @@ export function useSuggestion({
 
   // Track when we're temporarily disabling mention detection after insertion
   const suppressMentionDetection = useRef(false);
+
+  // Index of the @ that opened the current popup (updated on open, read on dismiss)
+  const openTriggerIndexRef = useRef<number>(-1);
+  // Index of the @ trigger the user explicitly dismissed via ESC (-1 = none)
+  const dismissedTriggerRef = useRef<number>(-1);
 
   const suggestion = useSuggestionCore({
     driveId: driveId || null,
@@ -162,6 +171,12 @@ export function useSuggestion({
     }
   });
 
+  const dismiss = useCallback(() => {
+    dismissedTriggerRef.current = openTriggerIndexRef.current;
+    suggestion.actions.close();
+    context.close();
+  }, [suggestion.actions, context]);
+
   const handleValueChange = useCallback((newValue: string) => {
     onValueChange(newValue); // Propagate change immediately
 
@@ -201,43 +216,49 @@ export function useSuggestion({
       if (!isPartOfExistingMention) {
         // This is a fresh @ trigger, proceed with suggestion logic
         const query = textAfterTrigger;
-        
-        if (!context.isOpen) {
-          // Calculate position based on variant and input type
-          let position: Position | null = null;
+        setCurrentQuery(query);
 
-          if (variant === 'document') {
-            if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+        if (!context.isOpen) {
+          if (dismissedTriggerRef.current !== mentionTriggerIndex) {
+            // Calculate position based on variant and input type
+            let position: Position | null = null;
+
+            if (variant === 'document') {
+              if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+                position = positioningService.calculateTextareaPosition({
+                  element,
+                  textBeforeCursor,
+                  placement: popupPlacement,
+                });
+              } else {
+                position = positioningService.calculateInlinePosition({
+                  element,
+                });
+              }
+            } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
               position = positioningService.calculateTextareaPosition({
                 element,
                 textBeforeCursor,
                 placement: popupPlacement,
               });
-            } else {
-              position = positioningService.calculateInlinePosition({
-                element,
-              });
             }
-          } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
-            position = positioningService.calculateTextareaPosition({
-              element,
-              textBeforeCursor,
-              placement: popupPlacement,
-            });
-          }
 
-          if (position) {
-            context.open(position);
+            if (position) {
+              openTriggerIndexRef.current = mentionTriggerIndex;
+              context.open(position);
+            }
           }
         }
-        suggestion.actions.setQuery(query);
+        // MentionPickerPortal handles its own fetching — no need to drive useSuggestionCore
       } else {
         // This @ is part of an existing mention, close suggestions if open
+        dismissedTriggerRef.current = -1;
         if (context.isOpen) {
           suggestion.actions.close();
         }
       }
     } else {
+      dismissedTriggerRef.current = -1;
       if (context.isOpen) {
         suggestion.actions.close();
       }
@@ -259,7 +280,7 @@ export function useSuggestion({
     if (!context.isOpen || context.items.length === 0) return;
 
     const { items, selectedIndex } = context;
-    const { selectItem, selectSuggestion, close } = suggestion.actions;
+    const { selectItem, selectSuggestion } = suggestion.actions;
 
     switch (e.key) {
       case 'ArrowUp':
@@ -293,13 +314,13 @@ export function useSuggestion({
       case 'Escape':
         e.preventDefault();
         e.stopPropagation();
-        close();
+        dismiss();
         break;
 
       default:
         break;
     }
-  }, [context, suggestion.actions, popupPlacement]);
+  }, [context, suggestion.actions, popupPlacement, dismiss]);
 
   return {
     handleKeyDown,
@@ -310,6 +331,10 @@ export function useSuggestion({
     selectedIndex: context.selectedIndex,
     loading: context.loading,
     error: context.error,
-    actions: suggestion.actions,
+    query: currentQuery,
+    actions: {
+      ...suggestion.actions,
+      close: dismiss,
+    },
   };
 }

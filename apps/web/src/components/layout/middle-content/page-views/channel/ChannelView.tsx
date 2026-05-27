@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo, Fragment } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MessageWithUser } from '@/hooks/usePageTree';
-import { StreamingMarkdown, addHardLineBreaks } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
 import {
   Conversation,
   ConversationContent,
@@ -37,6 +37,8 @@ import {
 import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
+import { cn } from '@/lib/utils';
+import { useFindStore } from '@/stores/useFindStore';
 
 interface ChannelRef {
   id: string;
@@ -74,6 +76,37 @@ function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
+
+  // Find in page
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+  const [findMatchIds, setFindMatchIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) {
+      setFindMatchIds([]);
+      reportMatches(0);
+      return;
+    }
+    const q = findQuery.toLowerCase();
+    const ids = messages
+      .filter((m) => m.content?.toLowerCase().includes(q))
+      .map((m) => m.id);
+    setFindMatchIds(ids);
+    reportMatches(ids.length);
+  }, [isFindOpen, findQuery, messages, reportMatches]);
+
+  useEffect(() => {
+    const id = findMatchIds[findIndex];
+    if (!id) return;
+    const el = document.querySelector(`[data-message-id="${id}"]`);
+    el?.scrollIntoView({ block: 'center' });
+  }, [findIndex, findMatchIds]);
+
+  const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
+  const currentFindMsgId = findMatchIds[findIndex] ?? null;
   const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
@@ -538,7 +571,7 @@ function ChannelView({ page }: ChannelViewProps) {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
+              <RichText content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -623,7 +656,14 @@ function ChannelView({ page }: ChannelViewProps) {
                         return (
                         <Fragment key={m.id}>
                         {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
-                        <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
+                        <div
+                          data-message-id={m.id}
+                          className={cn(
+                            `group/msg flex items-start gap-4 ${rowSpacing} relative rounded`,
+                            findMatchSet.has(m.id) && 'find-highlight',
+                            currentFindMsgId === m.id && 'find-highlight-current',
+                          )}
+                        >
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
@@ -636,7 +676,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1">
+                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "[@media(hover:none)]:pr-28")}>
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -701,7 +741,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                     )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        <StreamingMarkdown content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
+                                        <RichText content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (

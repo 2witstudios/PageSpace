@@ -85,9 +85,10 @@ export function MessageHoverToolbar({
         // Hover devices: hidden by default, shown on hover/focus or when picker is open.
         // Touch / no-hover devices: always visible so message actions remain reachable.
         'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100',
-        '[@media(hover:none)]:opacity-100',
+        'pointer-events-none group-hover/msg:pointer-events-auto focus-within:pointer-events-auto',
+        '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto',
         'transition-opacity',
-        pickerOpen && 'opacity-100',
+        pickerOpen && 'opacity-100 pointer-events-auto',
         className,
       )}
     >

@@ -174,12 +174,29 @@ describe('permissions system', () => {
       })
     })
 
-    it('does not grant admin permissions to regular drive members', async () => {
+    it('grants read-only access to regular drive members on non-private pages', async () => {
       // Add otherUser as regular member (not admin) to the drive
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' })
 
-      // Regular member without explicit permissions should not have access
+      // Regular member gets default read-only access on non-private pages (Discord @everyone model)
       const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      expect(access).toEqual({
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+      })
+    })
+
+    it('denies access to regular drive members on private pages', async () => {
+      // Add otherUser as regular member (not admin) to the drive
+      await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' })
+
+      // Create a private page
+      const privatePage = await factories.createPage(testDrive.id, { isPrivate: true })
+
+      // Regular member cannot access private pages without explicit grant
+      const access = await getUserAccessLevel(otherUser.id, privatePage.id)
       expect(access).toBeNull()
     })
   })

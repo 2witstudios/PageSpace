@@ -5,7 +5,5 @@ import ChannelsCenterList from '@/components/inbox/ChannelsCenterList';
 
 export default function DriveChannelsPage() {
   const params = useParams();
-  const driveId = params.driveId as string;
-
-  return <ChannelsCenterList driveId={driveId} />;
+  return <ChannelsCenterList driveId={params.driveId as string} />;
 }

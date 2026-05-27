@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +34,10 @@ export async function GET(
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
 
-  const canView = await canUserViewPage(userId, meta.pageId);
+  const channelOwner = parseGlobalChannelId(meta.pageId);
+  const canView = channelOwner !== null
+    ? channelOwner === userId
+    : await canUserViewPage(userId, meta.pageId);
   if (!canView) {
     auditRequest(request, {
       eventType: 'authz.access.denied',

@@ -13,14 +13,14 @@
  * - Overscan for smooth scrolling
  */
 
-import React, { forwardRef, useImperativeHandle, useState, useCallback, useMemo } from 'react';
+import React, { forwardRef, useImperativeHandle, useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { UIMessage } from 'ai';
 import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
-import { VirtualizedMessageList } from './VirtualizedMessageList';
+import { VirtualizedMessageList, VirtualizedMessageListRef } from './VirtualizedMessageList';
 import {
   Conversation,
   ConversationContent,
@@ -66,6 +66,8 @@ interface ChatMessagesAreaProps {
   onPullUpRefresh?: () => Promise<void>;
   /** Remote in-progress streams from other users (or other tabs) — rendered as synthesized assistant messages */
   remoteStreams?: PendingStream[];
+  findMatchSet?: Set<string>;
+  findCurrentMessageId?: string | null;
 }
 
 export interface ChatMessagesAreaRef {
@@ -92,12 +94,15 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       isLoadingOlder = false,
       onPullUpRefresh,
       remoteStreams,
+      findMatchSet,
+      findCurrentMessageId,
     },
     ref
   ) => {
     const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
     const { scrollToBottom } = useStickToBottomContext();
     const scrollRef = useConversationScrollRef();
+    const virtualizerRef = useRef<VirtualizedMessageListRef>(null);
 
     // Pull-up refresh for checking missed messages
     const {
@@ -138,6 +143,18 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       scrollToBottom: () => scrollToBottom(),
     }), [scrollToBottom]);
 
+    // Scroll to the current find match
+    useEffect(() => {
+      if (!findCurrentMessageId) return;
+      if (shouldVirtualize) {
+        const index = messages.findIndex((m) => m.id === findCurrentMessageId);
+        if (index >= 0) virtualizerRef.current?.scrollToIndex(index, { align: 'center' });
+      } else {
+        document.querySelector(`[data-message-id="${findCurrentMessageId}"]`)
+          ?.scrollIntoView({ block: 'center' });
+      }
+    }, [findCurrentMessageId, messages, shouldVirtualize]);
+
     // Dedup remote streams whose messageId has already landed in `messages`
     // (handles the brief frame at completion when the real message has been
     // pushed but `removeStream` has not yet fired).
@@ -166,6 +183,8 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         isLastAssistantMessage={message.id === lastAssistantMessageId}
         isLastUserMessage={message.id === lastUserMessageId}
         isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
+        isHighlighted={findMatchSet?.has(message.id)}
+        isCurrentMatch={findCurrentMessageId === message.id}
       />
     ), [
       isReadOnly,
@@ -175,7 +194,9 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       handleUndoFromHere,
       lastAssistantMessageId,
       lastUserMessageId,
-      isStreaming
+      isStreaming,
+      findMatchSet,
+      findCurrentMessageId,
     ]);
 
     // Loading skeleton
@@ -227,6 +248,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
           ) : shouldVirtualize ? (
             // Virtualized rendering for large conversations
             <VirtualizedMessageList
+              ref={virtualizerRef}
               messages={messages}
               renderMessage={renderMessage}
               scrollRef={scrollRef}

@@ -30,7 +30,7 @@ echo "  InfluxDB is ready."
 SEED_SCRIPT="$REPO_ROOT/tests/load/scripts/seed-load-user.ts"
 if [ -f "$SEED_SCRIPT" ]; then
   echo "==> Seeding load test user..."
-  pnpm exec tsx "$SEED_SCRIPT"
+  bun "$SEED_SCRIPT"
 else
   echo "WARNING: Seed script not found at $SEED_SCRIPT — skipping user seed."
 fi
@@ -60,7 +60,7 @@ fi
 CLEANUP_SCRIPT="$REPO_ROOT/tests/load/scripts/cleanup-load-user.ts"
 if [ -f "$CLEANUP_SCRIPT" ]; then
   echo "==> Cleaning up load test user..."
-  pnpm exec tsx "$CLEANUP_SCRIPT" || true
+  bun "$CLEANUP_SCRIPT" || true
 fi
 
 echo ""

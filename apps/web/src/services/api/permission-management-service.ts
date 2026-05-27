@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -274,3 +275,106 @@ export const permissionManagementService = {
 };
 
 export type PermissionManagementService = typeof permissionManagementService;
+
+// ============================================================================
+// Role permission types
+// ============================================================================
+
+export interface RolePermissionFlags {
+  canView: boolean;
+  canEdit: boolean;
+  canShare: boolean;
+}
+
+export interface RoleGrant extends RolePermissionFlags {
+  roleId: string;
+  name: string;
+  color: string | null;
+}
+
+type RolePermResult = { success: true } | { success: false; error: string; status: number };
+
+// ============================================================================
+// Role permission service functions
+// ============================================================================
+
+export const rolePermissionService = {
+  async getPageRoleGrants(pageId: string): Promise<RoleGrant[]> {
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    if (!page) return [];
+
+    const roles = await listDriveRoles(page.driveId);
+    return roles
+      .filter(role => role.permissions[pageId] != null)
+      .map(role => ({
+        roleId: role.id,
+        name: role.name,
+        color: role.color,
+        canView: role.permissions[pageId].canView,
+        canEdit: role.permissions[pageId].canEdit,
+        canShare: role.permissions[pageId].canShare,
+      }));
+  },
+
+  async setRolePagePermission(
+    actorUserId: string,
+    pageId: string,
+    roleId: string,
+    permissions: RolePermissionFlags,
+  ): Promise<RolePermResult> {
+    if ((permissions.canEdit || permissions.canShare) && !permissions.canView) {
+      return { success: false, error: 'canView must be true when canEdit or canShare is set', status: 400 };
+    }
+
+    const canManage = await permissionManagementService.canUserManagePermissions(actorUserId, pageId);
+    if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
+
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    if (!page) return { success: false, error: 'Page not found', status: 404 };
+
+    const role = await getRoleById(page.driveId, roleId);
+    if (!role) return { success: false, error: 'Role not found', status: 404 };
+
+    await updateDriveRole(page.driveId, roleId, {
+      permissions: {
+        ...role.permissions,
+        [pageId]: {
+          canView: permissions.canView,
+          canEdit: permissions.canEdit,
+          canShare: permissions.canShare,
+        },
+      },
+    });
+    return { success: true };
+  },
+
+  async removeRolePagePermission(
+    actorUserId: string,
+    pageId: string,
+    roleId: string,
+  ): Promise<RolePermResult> {
+    const canManage = await permissionManagementService.canUserManagePermissions(actorUserId, pageId);
+    if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
+
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    if (!page) return { success: false, error: 'Page not found', status: 404 };
+
+    const role = await getRoleById(page.driveId, roleId);
+    if (!role) return { success: false, error: 'Role not found', status: 404 };
+
+    const remainingPermissions = Object.fromEntries(
+      Object.entries(role.permissions).filter(([key]) => key !== pageId)
+    );
+    await updateDriveRole(page.driveId, roleId, { permissions: remainingPermissions });
+    return { success: true };
+  },
+};

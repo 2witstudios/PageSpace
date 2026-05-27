@@ -2,7 +2,7 @@
 # Security Test Suite Runner
 # P5-T4: Runs all security-related tests for the PageSpace codebase
 #
-# Usage: pnpm test:security
+# Usage: bun run test:security
 #
 # This script runs comprehensive security tests including:
 # - Core security modules (rate limiting, path validation, URL validation)
@@ -34,8 +34,7 @@ run_test_suite() {
     TOTAL=$((TOTAL + 1))
     echo -e "${YELLOW}▶ Running: ${name}${NC}"
 
-    # Use pnpm --filter with test script, passing the path as an argument
-    if pnpm --filter "$filter" test -- "$path" --reporter=dot 2>&1; then
+    if bun run --filter "$filter" test -- "$path" --reporter=dot 2>&1; then
         echo -e "${GREEN}✓ ${name} passed${NC}"
         echo ""
     else
@@ -152,7 +151,7 @@ run_test_suite "MCP WebSocket Route Security" "web" "src/app/api/mcp-ws/__tests_
 echo "⚙️ Processor Security"
 echo "---------------------"
 
-run_test_suite "Processor Security Utils" "processor" "tests/security-utils.test.ts"
+run_test_suite "Processor Security Utils" "@pagespace/processor" "tests/security-utils.test.ts"
 
 # =============================================================================
 # Database Transaction Security Tests

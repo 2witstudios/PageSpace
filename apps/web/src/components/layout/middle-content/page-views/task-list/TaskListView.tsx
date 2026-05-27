@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useFindStore } from '@/stores/useFindStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useTaskListPageFilter } from './useTaskListPageFilter';
@@ -58,6 +59,8 @@ import {
   Kanban,
   Zap,
   Bell,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
 import {
   DndContext,
@@ -78,6 +81,8 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
+import { TaskListDescription } from './TaskListDescription';
+import { TaskRowDescription } from './TaskRowDescription';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -315,16 +320,26 @@ function MobileTaskCard({
   );
 }
 
+export const getExpansionRowClass = (isExpanded: boolean): string =>
+  isExpanded ? '' : 'hidden';
+
+export const toggleSet = (set: Set<string>, id: string): Set<string> => {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  return next;
+};
+
 // Sortable row component for drag-and-drop
 interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
+  isExpanded: boolean;
   contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, children }: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -343,6 +358,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: 
     <TableRow
       ref={setNodeRef}
       style={style}
+      data-task-id={task.id}
       className={cn(
         isCompleted && 'opacity-60',
         isDragging && 'opacity-50 bg-muted'
@@ -364,14 +380,33 @@ function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: 
     </TableRow>
   );
 
-  if (!contextMenu) return row;
+  const expansionRow = (
+    <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
+      <td colSpan={8} className="px-4 py-2 border-b bg-muted/20">
+        {isExpanded && <TaskRowDescription task={task} />}
+      </td>
+    </tr>
+  );
+
+  if (!contextMenu) {
+    return (
+      <>
+        {row}
+        {expansionRow}
+      </>
+    );
+  }
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      {contextMenu}
-    </ContextMenu>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        {contextMenu}
+      </ContextMenu>
+      {expansionRow}
+    </>
   );
+
 }
 
 function TaskListView({ page }: TaskListViewProps) {
@@ -386,10 +421,26 @@ function TaskListView({ page }: TaskListViewProps) {
   const [filter, setFilter] = useTaskListPageFilter(page.id);
   const [search, setSearch] = useState('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Connect Cmd+F to existing search input
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (isFindOpen) {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }
+  }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [triggerDialogTask, setTriggerDialogTask] = useState<TaskItem | null>(null);
   const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+  const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   const hasLoadedRef = useRef(false);
@@ -471,28 +522,44 @@ function TaskListView({ page }: TaskListViewProps) {
   }, [socket, connectionStatus, page.id]);
 
   // Derive dynamic status config from API response
-  const statusConfigs: TaskStatusConfig[] = data?.statusConfigs || [];
-  const statusConfigMap = buildStatusConfig(statusConfigs);
-  const statusOrder = getStatusOrder(statusConfigs);
+  const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
+  const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
+  const statusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
+
+  const activeSearch = isFindOpen ? findQuery : search;
 
   // Filter tasks
-  const filteredTasks = data?.tasks.filter(task => {
+  const filteredTasks = useMemo(() => data?.tasks.filter(task => {
     // Status filter - use group-based completion detection
     const isDone = isCompletedStatus(task.status, statusConfigs);
     if (filter === 'active' && isDone) return false;
     if (filter === 'completed' && !isDone) return false;
 
     // Search filter
-    if (search) {
-      const searchLower = search.toLowerCase();
-      return (
-        task.title.toLowerCase().includes(searchLower) ||
-        task.description?.toLowerCase().includes(searchLower)
-      );
+    if (activeSearch) {
+      const searchLower = activeSearch.toLowerCase();
+      return task.title.toLowerCase().includes(searchLower);
     }
 
     return true;
-  }) || [];
+  }) ?? [], [data?.tasks, filter, statusConfigs, activeSearch]);
+
+  // Report filtered task count to find store when search is active
+  useEffect(() => {
+    if (isFindOpen) {
+      reportMatches(findQuery ? filteredTasks.length : 0);
+    }
+  }, [isFindOpen, findQuery, filteredTasks.length, reportMatches]);
+
+  // Scroll to current find match
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) return;
+    const task = filteredTasks[findIndex];
+    if (!task) return;
+    const els = document.querySelectorAll(`[data-task-id="${task.id}"]`);
+    const visibleEl = Array.from(els).find(el => (el as HTMLElement).offsetParent !== null);
+    visibleEl?.scrollIntoView({ block: 'center' });
+  }, [findIndex, filteredTasks, isFindOpen, findQuery]);
 
   // Create new task (with optional status for kanban)
   const handleCreateTask = async (title?: string, status?: string) => {
@@ -642,6 +709,7 @@ function TaskListView({ page }: TaskListViewProps) {
   // Handle drag end - reorder pages (page position is source of truth)
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
+    setExpandedTaskIds(new Set()); // collapse all rows before reorder
     if (!over || active.id === over.id || !canEdit) return;
 
     const tasks = filteredTasks;
@@ -739,6 +807,11 @@ function TaskListView({ page }: TaskListViewProps) {
 
   return (
     <div className="flex flex-col h-full min-w-0">
+      <TaskListDescription
+        pageId={page.id}
+        canEdit={canEdit}
+        initialContent={page.content}
+      />
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
@@ -764,6 +837,7 @@ function TaskListView({ page }: TaskListViewProps) {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
+              ref={searchInputRef}
               placeholder="Filter tasks..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -848,8 +922,8 @@ function TaskListView({ page }: TaskListViewProps) {
       {/* Mobile Card View */}
       <div className="flex-1 overflow-auto md:hidden p-4 space-y-3">
         {filteredTasks.map((task) => (
+          <div key={task.id} data-task-id={task.id}>
           <MobileTaskCard
-            key={task.id}
             task={task}
             canEdit={canEdit}
             onToggleComplete={handleToggleComplete}
@@ -875,6 +949,7 @@ function TaskListView({ page }: TaskListViewProps) {
             statusOrder={statusOrder}
             statusConfigs={statusConfigs}
           />
+          </div>
         ))}
 
         {/* Mobile new task input */}
@@ -948,6 +1023,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         task={task}
                         canEdit={canEdit}
                         isCompleted={isCompletedStatus(task.status, statusConfigs)}
+                        isExpanded={expandedTaskIds.has(task.id)}
                         contextMenu={
                           <ContextMenuContent>
                             {task.pageId && (
@@ -999,7 +1075,17 @@ function TaskListView({ page }: TaskListViewProps) {
                               className="h-8"
                             />
                           ) : (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
+                                onClick={() => toggleTaskExpand(task.id)}
+                                className="text-muted-foreground hover:text-foreground shrink-0"
+                              >
+                                {expandedTaskIds.has(task.id)
+                                  ? <ChevronDown className="h-3.5 w-3.5" />
+                                  : <ChevronRight className="h-3.5 w-3.5" />}
+                              </button>
                               <span
                                 className={cn(
                                   'cursor-pointer hover:text-primary hover:underline',

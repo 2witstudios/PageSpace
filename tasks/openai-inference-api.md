@@ -100,4 +100,4 @@ These apply throughout the entire epic and are non-negotiable:
 - Commit after each task's RED→GREEN cycle with conventional commit format
 - Never bundle two tasks into one commit
 - Commit message body must state what changed AND why it matters
-- Run `pnpm typecheck` and `pnpm test:unit` before each commit; fix failures before committing
+- Run `bun run typecheck` and `bun run test:unit` before each commit; fix failures before committing

@@ -115,6 +115,7 @@ export async function POST(request: Request) {
       // Agents can use 'standard' or 'pro' as friendly aliases
       aiProvider: aiProvider || 'pagespace',
       aiModel: aiModel || 'standard',
+      createdBy: userId,
     };
 
     // Add optional configuration (save even if empty array)

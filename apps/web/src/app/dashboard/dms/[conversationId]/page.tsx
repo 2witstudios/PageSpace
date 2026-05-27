@@ -16,7 +16,7 @@ import type { FileAttachment } from '@/hooks/useAttachmentUpload';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
+import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
 import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
 import { toast } from 'sonner';
@@ -34,6 +34,7 @@ import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
 import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
 import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
+import { cn } from '@/lib/utils';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -508,7 +509,7 @@ export default function InboxDMPage() {
           </div>
           {m.content && (
             <div className="text-sm break-words [overflow-wrap:anywhere]">
-              {renderMessageParts(convertToMessageParts(m.content))}
+              {<RichText content={addHardLineBreaks(m.content)} />}
             </div>
           )}
           <MessageAttachment message={m} />
@@ -619,7 +620,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0">
+                  <div className={cn("flex-1 min-w-0", !isFirst && "[@media(hover:none)]:pr-28")}>
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
@@ -686,7 +687,7 @@ export default function InboxDMPage() {
                         )}
                         {message.content && (
                           <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                            {renderMessageParts(convertToMessageParts(message.content))}
+                            {<RichText content={addHardLineBreaks(message.content)} />}
                           </div>
                         )}
                         <MessageAttachment message={message} />

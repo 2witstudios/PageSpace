@@ -2,7 +2,7 @@
 
 /**
  * Aggregates coverage-summary.json from all packages into a unified monorepo table.
- * Run after `pnpm test:coverage` to see a combined view.
+ * Run after `bun run test:coverage` to see a combined view.
  */
 
 import { readFileSync, existsSync } from 'node:fs';

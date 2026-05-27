@@ -12,6 +12,8 @@ import { computePageStateHash, createPageVersion } from '@pagespace/lib/services
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { db } from '@pagespace/db/db';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -596,7 +598,19 @@ export const pageWriteTools = {
           revision: 0,
           stateHash,
           updatedAt: new Date(),
+          createdBy: userId,
         });
+
+        // AI_CHAT pages are agents — they need a drive membership to act with
+        // permissions. Without this row the agent has no role and is denied access.
+        if (isAIChatPage(type as PageType)) {
+          await db.insert(driveAgentMembers).values({
+            driveId: drive.id,
+            agentPageId: newPage.id,
+            role: 'MEMBER',
+            addedBy: userId,
+          });
+        }
 
         await createPageVersion({
           pageId: newPage.id,

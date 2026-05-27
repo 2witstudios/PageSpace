@@ -17,11 +17,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id', acceptedAt: 'acceptedAt' },
+  driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', id: 'id', acceptedAt: 'acceptedAt', customRoleId: 'customRoleId' },
   pagePermissions: {
     pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit',
     canShare: 'canShare', canDelete: 'canDelete', expiresAt: 'expiresAt', id: 'id',
   },
+  driveRoles: { id: 'id', driveId: 'driveId', permissions: 'permissions' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
@@ -264,7 +265,7 @@ describe('getUserAccessLevel', () => {
   it('returns full access when user is drive admin', async () => {
     mockValidators(true, true);
     const page = [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner' }];
-    const adminMembership = [{ id: 'member-id' }];
+    const membership = [{ role: 'ADMIN', customRoleId: null }];
 
     vi.mocked(db.select)
       // First call: page lookup
@@ -275,10 +276,10 @@ describe('getUserAccessLevel', () => {
           }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // Second call: admin check
+      // Second call: combined membership query
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(adminMembership) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(membership) }),
         }),
       } as unknown as ReturnType<typeof db.select>);
 
@@ -300,10 +301,10 @@ describe('getUserAccessLevel', () => {
           }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // admin check (no admin)
+      // combined membership query (MEMBER, no custom role)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
       // explicit permissions
@@ -322,6 +323,7 @@ describe('getUserAccessLevel', () => {
     const page = [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner' }];
 
     vi.mocked(db.select)
+      // page lookup
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
@@ -329,11 +331,13 @@ describe('getUserAccessLevel', () => {
           }),
         }),
       } as unknown as ReturnType<typeof db.select>)
+      // combined membership query → not a member at all
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
+      // explicit permissions → none
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
@@ -344,11 +348,12 @@ describe('getUserAccessLevel', () => {
     expect(result).toBeNull();
   });
 
-  it('logs no-permissions message when silent=false and no explicit permissions', async () => {
+  it('logs no-permissions message when silent=false and no explicit permissions and not a drive member', async () => {
     mockValidators(true, true);
-    const page = [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner' }];
+    const page = [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner', isPrivate: false }];
 
     vi.mocked(db.select)
+      // page + drive lookup
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
@@ -356,11 +361,13 @@ describe('getUserAccessLevel', () => {
           }),
         }),
       } as unknown as ReturnType<typeof db.select>)
+      // combined membership query → not a member
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
+      // explicit pagePermissions → none
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
@@ -380,6 +387,7 @@ describe('getUserAccessLevel', () => {
     const explicitPerm = [{ canView: true, canEdit: false, canShare: false, canDelete: false }];
 
     vi.mocked(db.select)
+      // page lookup
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
@@ -387,11 +395,13 @@ describe('getUserAccessLevel', () => {
           }),
         }),
       } as unknown as ReturnType<typeof db.select>)
+      // combined membership query (MEMBER, no custom role)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ role: 'MEMBER', customRoleId: null }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
+      // explicit permissions
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(explicitPerm) }),
@@ -829,7 +839,8 @@ describe('getUserAccessiblePagesInDrive', () => {
     expect(result).toEqual(['page-1']);
   });
 
-  it('returns only explicitly permissioned pages for regular member', async () => {
+  it('returns non-private pages plus explicit pages for drive member', async () => {
+    const nonPrivatePageIds = [{ id: 'non-private-page' }];
     const permPages = [{ pageId: 'page-with-perm' }];
     vi.mocked(db.select)
       // drive lookup (not owner)
@@ -839,6 +850,51 @@ describe('getUserAccessiblePagesInDrive', () => {
         }),
       } as unknown as ReturnType<typeof db.select>)
       // admin check (not admin)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // member check → is a member (no custom role)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row', customRoleId: null }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // non-private pages visible to all members
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(nonPrivatePageIds),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // explicit permissions
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(permPages) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    expect(result).toContain('non-private-page');
+    expect(result).toContain('page-with-perm');
+  });
+
+  it('returns only explicit pages for non-member without drive membership', async () => {
+    const permPages = [{ pageId: 'page-with-perm' }];
+    vi.mocked(db.select)
+      // drive lookup (not owner)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // admin check (not admin)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // member check → not a member
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
@@ -894,25 +950,40 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
     expect(result[0].permissions).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
-  it('returns pages with explicit permissions for non-owner', async () => {
+  it('returns non-private pages with default read and explicit pages with their grants for drive member', async () => {
+    const nonPrivatePages = [
+      { id: 'non-private-1', title: 'Open Page', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+    ];
     const permPages = [
-      { id: 'page-1', title: 'Page 1', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false,
-        canView: true, canEdit: false, canShare: false, canDelete: false },
+      { id: 'page-with-perm', title: 'Edit Page', type: 'DOCUMENT', parentId: null, position: 2, isTrashed: false,
+        canView: true, canEdit: true, canShare: false, canDelete: false },
     ];
     vi.mocked(db.select)
-      // drive lookup
+      // drive lookup (not owner)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // admin check
+      // admin check → not admin
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
       } as unknown as ReturnType<typeof db.select>)
-      // pages with permissions join
+      // member check → is a member (no custom role)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row', customRoleId: null }]) }),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // non-private pages (MEMBER default read)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(nonPrivatePages),
+        }),
+      } as unknown as ReturnType<typeof db.select>)
+      // explicit pages with permission join
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(permPages) }),
@@ -920,8 +991,10 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
       } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
-    expect(result).toHaveLength(1);
-    expect(result[0].permissions).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    const openPage = result.find(p => p.id === 'non-private-1');
+    const editPage = result.find(p => p.id === 'page-with-perm');
+    expect(openPage?.permissions).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(editPage?.permissions).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 });
 

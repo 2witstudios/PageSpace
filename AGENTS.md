@@ -14,7 +14,7 @@
 
 ### 1.2. Monorepo Architecture
 
-This project uses a pnpm workspace with the following structure:
+This project uses a bun workspace with the following structure:
 
 - `apps/web`: The main Next.js 15 frontend and backend application
 - `apps/realtime`: A dedicated Socket.IO service for real-time communication
@@ -137,43 +137,43 @@ const page = await db.select().from(pages);
 
 ```bash
 # Install dependencies
-pnpm install
+bun install
 
 # Environment setup
 cp .env.example .env
 # Also: apps/web/.env.example → apps/web/.env if needed
 
 # Database (local)
-pnpm dev:db                 # Starts Postgres + runs migrations
+bun run dev:db              # Starts Postgres + runs migrations
 docker compose up -d        # Alternative
 
 # Develop all apps
-pnpm dev                    # Runs Turbo dev across packages
+bun run dev                  # Runs Turbo dev across packages
 
 # Focus a single app
-pnpm --filter web dev
-pnpm --filter realtime dev
-pnpm --filter @pagespace/processor dev
+bun run --filter 'web' dev
+bun run --filter 'realtime' dev
+bun run --filter '@pagespace/processor' dev
 
 # Build and quality checks
-pnpm build                  # Build all apps
-pnpm typecheck              # TypeScript checks
-pnpm lint                   # ESLint
-pnpm --filter web build     # Build web app only
-pnpm --filter web lint      # Lint web app only
+bun run build                # Build all apps
+bun run typecheck            # TypeScript checks
+bun run lint                 # ESLint
+bun run --filter 'web' build # Build web app only
+bun run --filter 'web' lint  # Lint web app only
 
 # Database tasks
-pnpm db:generate            # Create migrations
-pnpm db:migrate             # Apply migrations
-pnpm --filter @pagespace/db db:studio  # Browse schema
+bun run db:generate          # Create migrations
+bun run db:migrate           # Apply migrations
+bun run --filter '@pagespace/db' db:studio  # Browse schema
 ```
 
 ### 4.2. Testing Guidelines
 
 - No global test runner is enforced yet. When adding tests:
   - Prefer unit tests for `packages/lib`/`apps/processor` (`*.test.ts` next to source or in `__tests__/`)
-  - Add a `test` script in the target package and run with `pnpm --filter <pkg> test`
-  - Use `pnpm typecheck` and `pnpm lint` as gates before PRs
+  - Add a `test` script in the target package and run with `bun run --filter '<pkg>' test`
+  - Use `bun run typecheck` and `bun run lint` as gates before PRs
 
 ## 5. PAGESPACE DOMAIN EXPERT AGENTS
 
@@ -216,7 +216,7 @@ PageSpace has 17 specialized domain expert agents with deep knowledge of specifi
 ### 6.1. Development Workflows
 
 1. **Adding new API routes**: Follow Next.js 15 async params pattern (see Section 2.1)
-2. **Database changes**: Update schema in `packages/db`, generate migrations with `pnpm db:generate`
+2. **Database changes**: Update schema in `packages/db`, generate migrations with `bun run db:generate`
 3. **New components**: Follow existing patterns in `components/` directory
 4. **Permission changes**: Update centralized logic in `@pagespace/lib/permissions/permissions`
 
@@ -224,7 +224,7 @@ PageSpace has 17 specialized domain expert agents with deep knowledge of specifi
 
 - **Commits**: short, imperative subject (≤72 chars), optional scope like `[web]`, `[processor]`
 - **PRs**: clear description, linked issues, screenshots for UI, note DB migrations and any `.env` or config changes. Include reproduction/verification steps.
-- **Before opening**: run `pnpm build`, `pnpm typecheck`, and relevant `db:*` tasks
+- **Before opening**: run `bun run build`, `bun run typecheck`, and relevant `db:*` tasks
 - **Documentation**: When changes land, update the changelog and any user-visible notes
 
 ## 7. SECURITY & CONFIGURATION

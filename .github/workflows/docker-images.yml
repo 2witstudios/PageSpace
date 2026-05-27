@@ -1,6 +1,7 @@
 name: Docker Images
 
 on:
+  workflow_dispatch:
   push:
     branches: [master]
     tags: ['v*.*.*']
@@ -8,7 +9,7 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'docker/**'
-      - 'pnpm-lock.yaml'
+      - 'bun.lock'
       - '.github/workflows/docker-images.yml'
 
 env:
@@ -36,15 +37,15 @@ jobs:
               NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
               NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
               NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
-          - service: marketing
-            dockerfile: apps/marketing/Dockerfile
+          - service: web-fly
+            dockerfile: apps/web/Dockerfile
             context: .
             build_args: |
-              NEXT_PUBLIC_MARKETING_URL=https://pagespace.ai
               NEXT_PUBLIC_APP_URL=https://pagespace.ai
-              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
-              NEXT_PUBLIC_GOOGLE_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
-              NEXT_PUBLIC_ENABLE_ONE_TAP=true
+              NEXT_PUBLIC_REALTIME_URL=https://pagespace-proxy.fly.dev
+              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
+              NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
+              NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
@@ -61,6 +62,11 @@ jobs:
             dockerfile: docker/cron/Dockerfile
             context: docker/cron
             build_args: ""
+          - service: admin
+            dockerfile: apps/admin/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_WEB_APP_URL=https://pagespace.ai
 
     steps:
       - uses: actions/checkout@v4
@@ -96,3 +102,106 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: ${{ matrix.build_args }}
+
+  deploy-fly:
+    name: Deploy to Fly.io
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: fly-production
+    if: github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Log in to Fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run migrations
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
+          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
+          docker push registry.fly.io/pagespace-web:migrate
+
+          # Migrations exit before reaching "started" state, so flyctl errors with
+          # "failed to reach desired start state" after 60s. This is expected.
+          # Use || true so bash -e doesn't exit; we verify success via machine state below.
+          flyctl machine run registry.fly.io/pagespace-web:migrate \
+            --app pagespace-web \
+            --region iad \
+            --restart no \
+            2>&1 | tee /tmp/machine_output.txt || true
+
+          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/machine_output.txt | head -1)
+          if [ -z "$MACHINE_ID" ]; then
+            echo "ERROR: could not parse machine ID from flyctl output"
+            cat /tmp/machine_output.txt
+            exit 1
+          fi
+          echo "Migration machine: $MACHINE_ID"
+
+          # Fail on any unexpected error (not the expected "desired start state" one)
+          if grep -q "Error:" /tmp/machine_output.txt && ! grep -q "desired start state" /tmp/machine_output.txt; then
+            echo "ERROR: unexpected flyctl error:"
+            grep "Error:" /tmp/machine_output.txt
+            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+            exit 1
+          fi
+
+          # Wait for machine to reach stopped state. --wait-timeout takes a duration string.
+          # flyctl machine wait exit code is authoritative: 0 = stopped, non-zero = timed out.
+          if ! flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m; then
+            echo "ERROR: machine did not reach stopped state within 5 minutes"
+            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+            exit 1
+          fi
+
+          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
+          echo "Migrations complete"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy web
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-web-fly:latest
+          docker tag ghcr.io/2witstudios/pagespace-web-fly:latest registry.fly.io/pagespace-web:latest
+          docker push registry.fly.io/pagespace-web:latest
+          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy realtime
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-realtime:latest
+          docker tag ghcr.io/2witstudios/pagespace-realtime:latest registry.fly.io/pagespace-realtime:latest
+          docker push registry.fly.io/pagespace-realtime:latest
+          flyctl deploy --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy processor
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-processor:latest
+          docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
+          docker push registry.fly.io/pagespace-processor:latest
+          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy admin
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-admin:latest
+          docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
+          docker push registry.fly.io/pagespace-admin:latest
+          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

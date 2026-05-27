@@ -256,12 +256,14 @@ export interface UpdatePageParams {
   aiModel?: string;
   parentId?: string | null;
   isPaginated?: boolean;
+  isPrivate?: boolean;
 }
 
 export interface UpdatePageOptions {
   expectedRevision?: number;
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
+  skipPermissionCheck?: boolean;
 }
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -400,10 +402,12 @@ export const pageService = {
     updates: UpdatePageParams,
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
-    // Check authorization
-    const canEdit = await canUserEditPage(userId, pageId);
-    if (!canEdit) {
-      return { success: false, error: 'You need edit permission to modify this page', status: 403 };
+    // Check authorization (can be skipped by callers that have already verified a sufficient permission)
+    if (!options?.skipPermissionCheck) {
+      const canEdit = await canUserEditPage(userId, pageId);
+      if (!canEdit) {
+        return { success: false, error: 'You need edit permission to modify this page', status: 403 };
+      }
     }
 
     // Validate parent change
@@ -704,6 +708,7 @@ export const pageService = {
         updatedAt: Date;
         revision: number;
         stateHash: string;
+        createdBy: string;
         aiProvider?: string | null;
         aiModel?: string | null;
         systemPrompt?: string | null;
@@ -722,6 +727,7 @@ export const pageService = {
         updatedAt: new Date(),
         revision: 0,
         stateHash: '',
+        createdBy: userId,
       };
 
       if (isAIChatPage(params.type as PageTypeEnum)) {

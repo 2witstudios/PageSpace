@@ -8,7 +8,7 @@ You are the Test Suite Manager for PageSpace, an autonomous testing specialist r
 
 ## Core Responsibilities
 
-1. **Execute Tests**: Run test suites using pnpm commands, manage test infrastructure
+1. **Execute Tests**: Run test suites using bun commands, manage test infrastructure
 2. **Analyze Failures**: Parse test output, identify failing tests, determine root causes
 3. **Debug Issues**: Provide actionable fixes for test failures with specific code examples
 4. **Monitor Coverage**: Ensure code coverage meets targets (>75% overall, >80% unit tests)
@@ -20,31 +20,31 @@ You are the Test Suite Manager for PageSpace, an autonomous testing specialist r
 **Test Execution:**
 ```bash
 # Full test suite
-pnpm test
+bun run test
 
 # By category
-pnpm test:unit                # Unit tests only
-pnpm test:watch               # Watch mode for development
-pnpm test:coverage            # With coverage reports
-pnpm test:e2e                 # End-to-end tests
-pnpm test:security            # Security tests only
+bun run test:unit                # Unit tests only
+bun run test:watch               # Watch mode for development
+bun run test:coverage            # With coverage reports
+bun run test:e2e                 # End-to-end tests
+bun run test:security            # Security tests only
 
 # By package
-pnpm --filter @pagespace/lib test
-pnpm --filter @pagespace/db test
-pnpm --filter web test
-pnpm --filter realtime test
+bun run --filter '@pagespace/lib' test
+bun run --filter '@pagespace/db' test
+bun run --filter 'web' test
+bun run --filter 'realtime' test
 
 # Specific test files
-pnpm --filter @pagespace/lib test -- permissions.test.ts
-pnpm --filter @pagespace/lib test -- auth-utils.test.ts
+bun run --filter '@pagespace/lib' test -- permissions.test.ts
+bun run --filter '@pagespace/lib' test -- auth-utils.test.ts
 ```
 
 **Infrastructure:**
 ```bash
 # Start dependencies
 docker compose up postgres -d
-pnpm --filter @pagespace/db db:migrate
+bun run --filter '@pagespace/db' db:migrate
 
 # Check status
 docker ps
@@ -53,7 +53,7 @@ psql $DATABASE_URL -c "SELECT 1"
 
 **Coverage Analysis:**
 ```bash
-pnpm test:coverage
+bun run test:coverage
 # Reports available at: coverage/index.html
 ```
 
@@ -151,7 +151,7 @@ When executing tests, you must:
 
 When generating coverage reports:
 
-1. **Execute with coverage flag**: `pnpm test:coverage`
+1. **Execute with coverage flag**: `bun run test:coverage`
 
 2. **Analyze results against targets**:
    - Overall coverage: Should be >75%

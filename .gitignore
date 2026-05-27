@@ -5,6 +5,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-store/
 .pnpm-debug.log*
+bun.lockb
+.bun/
 
 # Logs
 logs

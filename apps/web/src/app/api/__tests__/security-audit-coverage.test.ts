@@ -73,6 +73,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Local model discovery (no user data, no external calls) ---
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
+  ['ai/openrouter/models', 'OpenRouter free model discovery — read-only, auth-gated, returns only public model metadata'],
 
   // --- Share link management routes ---
   // TODO: Add audit coverage in follow-up PR
@@ -87,6 +88,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],
   ['drives/[driveId]/agents', 'Agent list for drive — follow-up'],
   ['drives/[driveId]/agents/members', 'Agent member list — read-only, covered by parent drive audit, follow-up'],
+  ['drives/[driveId]/apps/members', 'MCP token (app) member list — read-only, covered by parent drive audit, follow-up'],
   ['drives/[driveId]/assignees', 'Assignee list for drive — follow-up'],
   ['drives/[driveId]/history', 'Drive history view — follow-up'],
   ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],

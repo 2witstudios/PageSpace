@@ -3,6 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { getAppAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
@@ -129,8 +130,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Check user permissions - Zero Trust: explicitly verify view permission
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+    // Scoped tokens use their own drive membership role; unscoped tokens fall back to user permissions.
+    // Unscoped tokens have no mcp_token_drives row, so getAppAccessLevel would return null.
+    const isScoped = isMCPAuthResult(auth) && auth.allowedDriveIds.length > 0;
+    const accessLevel = isScoped
+      ? await getAppAccessLevel(auth.tokenId, pageId)
+      : await getUserAccessLevel(userId, pageId);
     if (!accessLevel || !accessLevel.canView) {
       loggers.api.warn('MCP document access denied - no view permission', {
         userId,

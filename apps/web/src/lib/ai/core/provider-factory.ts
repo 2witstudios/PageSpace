@@ -105,6 +105,9 @@ export async function createAIProvider(
     } else if (currentProvider === 'openrouter' || currentProvider === 'openrouter_free') {
       const managed = getManagedProviderKey(currentProvider);
       if (!managed?.apiKey) return notConfigured('OpenRouter');
+      if (currentProvider === 'openrouter_free' && !currentModel.endsWith(':free')) {
+        return { error: 'openrouter_free only accepts models with the ":free" suffix', status: 400 };
+      }
       const openrouter = createOpenRouter({ apiKey: managed.apiKey });
       model = openrouter.chat(currentModel);
     } else if (currentProvider === 'google') {

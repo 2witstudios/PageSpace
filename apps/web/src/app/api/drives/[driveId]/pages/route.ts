@@ -18,16 +18,34 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const UNREAD_INDICATOR_CUTOFF_DATE = new Date('2026-02-03T00:00:00.000Z');
 
 async function getPermittedPages(driveId: string, userId: string) {
-  // Check if user is a drive member - currently unused but will be needed for member-level permissions
-  // const membership = await db.query.driveMembers.findFirst({
-  //   where: and(
-  //     eq(driveMembers.driveId, driveId),
-  //     eq(driveMembers.userId, userId)
-  //   )
-  // });
+  // Rule 4: any accepted drive member can read non-private pages
+  const memberCheck = await db.select({ id: driveMembers.id })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt)
+    ))
+    .limit(1);
 
-  // Get pages user has explicit permissions for
-  const permittedPageIdsQuery = await db.selectDistinct({ id: pages.id })
+  const isMember = memberCheck.length > 0;
+
+  const permittedPageIdSet = new Set<string>();
+
+  if (isMember) {
+    // MEMBER gets implicit read on all non-private pages in the drive
+    const nonPrivatePages = await db.selectDistinct({ id: pages.id })
+      .from(pages)
+      .where(and(
+        eq(pages.driveId, driveId),
+        eq(pages.isTrashed, false),
+        eq(pages.isPrivate, false)
+      ));
+    for (const p of nonPrivatePages) permittedPageIdSet.add(p.id);
+  }
+
+  // Also include pages with explicit canView grants
+  const explicitPages = await db.selectDistinct({ id: pages.id })
     .from(pages)
     .leftJoin(pagePermissions, eq(pages.id, pagePermissions.pageId))
     .where(and(
@@ -36,29 +54,28 @@ async function getPermittedPages(driveId: string, userId: string) {
       eq(pagePermissions.userId, userId),
       eq(pagePermissions.canView, true)
     ));
-  const permittedPageIds = permittedPageIdsQuery.map(p => p.id);
+  for (const p of explicitPages) permittedPageIdSet.add(p.id);
+
+  const permittedPageIds = Array.from(permittedPageIdSet);
 
   if (permittedPageIds.length === 0) {
     return [];
   }
 
-  // If user has any permissions, also get ancestor pages for tree structure
-  let ancestorIds: string[] = [];
-  if (permittedPageIds.length > 0) {
-    const ancestorIdsQuery = await db.execute(sql`
-      WITH RECURSIVE ancestors AS (
-        SELECT id, "parentId"
-        FROM pages
-        WHERE id IN ${permittedPageIds}
-        UNION ALL
-        SELECT p.id, p."parentId"
-        FROM pages p
-        JOIN ancestors a ON p.id = a."parentId"
-      )
-      SELECT id FROM ancestors;
-    `);
-    ancestorIds = (ancestorIdsQuery.rows as { id: string }[]).map(r => r.id);
-  }
+  // Also get ancestor pages for tree structure
+  const ancestorIdsQuery = await db.execute(sql`
+    WITH RECURSIVE ancestors AS (
+      SELECT id, "parentId"
+      FROM pages
+      WHERE id IN ${permittedPageIds}
+      UNION ALL
+      SELECT p.id, p."parentId"
+      FROM pages p
+      JOIN ancestors a ON p.id = a."parentId"
+    )
+    SELECT id FROM ancestors;
+  `);
+  const ancestorIds = (ancestorIdsQuery.rows as { id: string }[]).map(r => r.id);
 
   const allVisiblePageIds = [...new Set([...permittedPageIds, ...ancestorIds])];
 

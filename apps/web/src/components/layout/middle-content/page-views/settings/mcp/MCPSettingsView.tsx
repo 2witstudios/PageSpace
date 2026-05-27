@@ -20,7 +20,8 @@ import {
   Alert,
   AlertDescription,
 } from '@/components/ui/alert';
-import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft, Shield } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft, Shield, Code2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
@@ -48,6 +49,125 @@ interface Drive {
   id: string;
   name: string;
   slug: string;
+}
+
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {label && <span className="ml-1">{label}</span>}
+    </Button>
+  );
+}
+
+function OpenAIApiCard() {
+  const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/v1` : '/api/v1';
+
+  const pythonSnippet = `from openai import OpenAI
+
+client = OpenAI(
+    base_url="${baseUrl}",
+    api_key="YOUR_MCP_TOKEN",
+)
+
+stream = client.chat.completions.create(
+    model="ps-agent://<pageId>",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)`;
+
+  const tsSnippet = `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${baseUrl}",
+  apiKey: "YOUR_MCP_TOKEN",
+});
+
+const stream = await client.chat.completions.create({
+  model: "ps-agent://<pageId>",
+  messages: [{ role: "user", content: "Hello!" }],
+  stream: true,
+});
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}`;
+
+  const curlSnippet = `curl ${baseUrl}/chat/completions \\
+  -H "Authorization: Bearer YOUR_MCP_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "ps-agent://<pageId>",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
+  }'`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Code2 className="h-5 w-5" />
+          OpenAI-Compatible API
+        </CardTitle>
+        <CardDescription>
+          Use any MCP token as an API key with the OpenAI SDK or any compatible client
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Base URL</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-md bg-muted px-3 py-2 font-mono text-sm">{baseUrl}</code>
+            <CopyButton text={baseUrl} />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Code examples</p>
+          <Tabs defaultValue="python">
+            <TabsList>
+              <TabsTrigger value="python">Python</TabsTrigger>
+              <TabsTrigger value="typescript">TypeScript</TabsTrigger>
+              <TabsTrigger value="curl">curl</TabsTrigger>
+            </TabsList>
+            {[
+              { value: 'python', code: pythonSnippet },
+              { value: 'typescript', code: tsSnippet },
+              { value: 'curl', code: curlSnippet },
+            ].map(({ value, code }) => (
+              <TabsContent key={value} value={value}>
+                <div className="relative">
+                  <pre className="rounded-lg bg-muted p-4 overflow-x-auto text-xs">
+                    <code className="font-mono">{code}</code>
+                  </pre>
+                  <div className="absolute top-2 right-2">
+                    <CopyButton text={code} />
+                  </div>
+                </div>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Replace <code className="rounded bg-muted px-1">YOUR_MCP_TOKEN</code> with any token from above.
+          Replace <code className="rounded bg-muted px-1">ps-agent://&lt;pageId&gt;</code> with the model ID
+          found on each agent&apos;s <strong>Settings</strong> tab.
+        </p>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function MCPSettingsView() {
@@ -555,6 +675,9 @@ export default function MCPSettingsView() {
 
         </CardContent>
       </Card>
+
+      {/* OpenAI-Compatible API */}
+      <OpenAIApiCard />
 
       <Alert>
         <AlertTriangle className="h-4 w-4" />
