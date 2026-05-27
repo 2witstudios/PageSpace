@@ -6,19 +6,19 @@ import { MessageDropZone } from '../MessageDropZone';
 import type { ChannelInputRef } from '../ChannelInput';
 
 const makeInputRef = (overrides: Partial<ChannelInputRef> = {}) => {
-  const uploadFile = vi.fn();
+  const uploadFiles = vi.fn();
   const canAcceptDrop = vi.fn(() => true);
   const ref: React.RefObject<ChannelInputRef | null> = {
     current: {
       focus: vi.fn(),
       clear: vi.fn(),
       insertText: vi.fn(),
-      uploadFile,
+      uploadFiles,
       canAcceptDrop,
       ...overrides,
     } satisfies ChannelInputRef,
   };
-  return { ref, uploadFile, canAcceptDrop };
+  return { ref, uploadFiles, canAcceptDrop };
 };
 
 const fireDragEvent = (
@@ -56,71 +56,71 @@ describe('MessageDropZone', () => {
     vi.clearAllMocks();
   });
 
-  it('drop_withFile_callsUploadFile_withFirstFile', () => {
-    const { ref, uploadFile } = makeInputRef();
+  it('drop_withFile_callsUploadFiles_withAllFiles', () => {
+    const { ref, uploadFiles } = makeInputRef();
     renderZone(ref);
 
     const file = new File(['x'], 'a.png', { type: 'image/png' });
     fireDragEvent(dropZone(), 'drop', { files: [file] });
 
-    expect(uploadFile).toHaveBeenCalledTimes(1);
-    expect(uploadFile).toHaveBeenCalledWith(file);
+    expect(uploadFiles).toHaveBeenCalledTimes(1);
+    expect(uploadFiles).toHaveBeenCalledWith([file]);
   });
 
-  it('drop_withMultipleFiles_callsUploadFile_withFirstOnly', () => {
-    const { ref, uploadFile } = makeInputRef();
+  it('drop_withMultipleFiles_callsUploadFiles_withAllFiles', () => {
+    const { ref, uploadFiles } = makeInputRef();
     renderZone(ref);
 
     const f1 = new File(['1'], 'one.png', { type: 'image/png' });
     const f2 = new File(['2'], 'two.png', { type: 'image/png' });
     fireDragEvent(dropZone(), 'drop', { files: [f1, f2] });
 
-    expect(uploadFile).toHaveBeenCalledTimes(1);
-    expect(uploadFile).toHaveBeenCalledWith(f1);
+    expect(uploadFiles).toHaveBeenCalledTimes(1);
+    expect(uploadFiles).toHaveBeenCalledWith([f1, f2]);
   });
 
   it('drop_withoutFilesType_isIgnored', () => {
-    const { ref, uploadFile } = makeInputRef();
+    const { ref, uploadFiles } = makeInputRef();
     renderZone(ref);
 
     // Simulate an in-app drag (e.g. a URL or text), not a file drag.
     fireDragEvent(dropZone(), 'drop', { types: ['text/plain'] });
 
-    expect(uploadFile).not.toHaveBeenCalled();
+    expect(uploadFiles).not.toHaveBeenCalled();
   });
 
   it('drop_whenDisabled_isIgnored', () => {
-    const { ref, uploadFile } = makeInputRef();
+    const { ref, uploadFiles } = makeInputRef();
     renderZone(ref, /* enabled */ false);
 
     const file = new File(['x'], 'a.png', { type: 'image/png' });
     fireDragEvent(dropZone(), 'drop', { files: [file] });
 
-    expect(uploadFile).not.toHaveBeenCalled();
+    expect(uploadFiles).not.toHaveBeenCalled();
   });
 
   it('drop_whenCanAcceptDropFalse_isIgnored', () => {
-    const { ref, uploadFile, canAcceptDrop } = makeInputRef();
+    const { ref, uploadFiles, canAcceptDrop } = makeInputRef();
     canAcceptDrop.mockReturnValue(false);
     renderZone(ref);
 
     const file = new File(['x'], 'a.png', { type: 'image/png' });
     fireDragEvent(dropZone(), 'drop', { files: [file] });
 
-    expect(uploadFile).not.toHaveBeenCalled();
+    expect(uploadFiles).not.toHaveBeenCalled();
   });
 
   it('dragEnter_withFiles_showsOverlay_dragLeaveHidesIt', () => {
     const { ref } = makeInputRef();
     renderZone(ref);
 
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     fireDragEvent(dropZone(), 'dragLeave', { files: [new File([''], 'a')] });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('dragEnter_withoutFilesType_doesNotShowOverlay', () => {
@@ -128,7 +128,7 @@ describe('MessageDropZone', () => {
     renderZone(ref);
 
     fireDragEvent(dropZone(), 'dragEnter', { types: ['text/plain'] });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('dragEnter_whenDisabled_doesNotShowOverlay', () => {
@@ -136,7 +136,7 @@ describe('MessageDropZone', () => {
     renderZone(ref, false);
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('dragEnter_whenCanAcceptDropFalse_doesNotShowOverlay', () => {
@@ -145,7 +145,7 @@ describe('MessageDropZone', () => {
     renderZone(ref);
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('drop_resetsOverlay_evenAfterMultipleDragEnters', () => {
@@ -156,10 +156,10 @@ describe('MessageDropZone', () => {
     const file = new File(['x'], 'a.png', { type: 'image/png' });
     fireDragEvent(dropZone(), 'dragEnter', { files: [file] });
     fireDragEvent(dropZone(), 'dragEnter', { files: [file] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     fireDragEvent(dropZone(), 'drop', { files: [file] });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('windowDrop_event_resetsOverlay_whenUserDragsOutOfWindow', () => {
@@ -167,12 +167,12 @@ describe('MessageDropZone', () => {
     renderZone(ref);
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     act(() => {
       window.dispatchEvent(new Event('drop'));
     });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('childDropStopsPropagation_overlayStillResets_viaCaptureListener', () => {
@@ -196,10 +196,10 @@ describe('MessageDropZone', () => {
 
     const file = new File(['x'], 'a.png', { type: 'image/png' });
     fireDragEvent(dropZone(), 'dragEnter', { files: [file] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     fireDragEvent(screen.getByTestId('inner-target'), 'drop', { files: [file] });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('documentDragLeave_withNullRelatedTarget_resetsOverlay', () => {
@@ -207,14 +207,14 @@ describe('MessageDropZone', () => {
     renderZone(ref);
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     act(() => {
       const ev = new Event('dragleave', { bubbles: true });
       Object.defineProperty(ev, 'relatedTarget', { value: null });
       document.dispatchEvent(ev);
     });
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 
   it('documentDragLeave_withRelatedTarget_doesNotReset', () => {
@@ -222,14 +222,14 @@ describe('MessageDropZone', () => {
     renderZone(ref);
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     act(() => {
       const ev = new Event('dragleave', { bubbles: true });
       Object.defineProperty(ev, 'relatedTarget', { value: document.body });
       document.dispatchEvent(ev);
     });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
   });
 
   it('enabledFalse_afterMount_resetsOverlayIfActive', () => {
@@ -237,13 +237,13 @@ describe('MessageDropZone', () => {
     const { rerender } = renderZone(ref, true);
 
     fireDragEvent(dropZone(), 'dragEnter', { files: [new File([''], 'a')] });
-    expect(screen.getByText('Drop file to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     rerender(
       <MessageDropZone inputRef={ref} enabled={false}>
         <div>children</div>
       </MessageDropZone>,
     );
-    expect(screen.queryByText('Drop file to attach')).toBeNull();
+    expect(screen.queryByText('Drop files to attach')).toBeNull();
   });
 });

@@ -1,3 +1,5 @@
+import { promises as fs } from 'fs';
+import { join } from 'path';
 import {
   S3Client,
   PutObjectCommand,
@@ -129,16 +131,35 @@ export async function writePageContent(
 
 export async function readPageContent(ref: string): Promise<string> {
   const key = getS3Key(ref);
-  const response = await s3().send(new GetObjectCommand({ Bucket: getBucket(), Key: key }));
-  if (!response.Body) throw new Error(`Empty S3 response body for ref ${ref}`);
-  const bytes = await response.Body.transformToByteArray();
-  const storedContent = Buffer.from(bytes).toString('utf8');
+  try {
+    const response = await s3().send(new GetObjectCommand({ Bucket: getBucket(), Key: key }));
+    if (!response.Body) throw new Error(`Empty S3 response body for ref ${ref}`);
+    const bytes = await response.Body.transformToByteArray();
+    const storedContent = Buffer.from(bytes).toString('utf8');
+    if (storedContent.startsWith(COMPRESSION_MAGIC)) {
+      const compressedData = storedContent.slice(COMPRESSION_MAGIC.length);
+      return decompressIfNeeded(compressedData, true);
+    }
+    return storedContent;
+  } catch (err: unknown) {
+    const code = (err as { Code?: string; name?: string }).Code ?? (err as { name?: string }).name;
+    // Fall back to filesystem for pre-cutover content not yet backfilled to S3.
+    // Remove this fallback once the aws s3 sync migration is complete.
+    if (code !== 'NoSuchKey') throw err;
+    return readPageContentFromFilesystem(ref);
+  }
+}
 
+async function readPageContentFromFilesystem(ref: string): Promise<string> {
+  const base = process.env.PAGE_CONTENT_STORAGE_PATH
+    ?? process.env.FILE_STORAGE_PATH
+    ?? join(process.cwd(), 'storage');
+  const filePath = join(base, CONTENT_SUBDIR, ref.slice(0, 2), ref);
+  const storedContent = await fs.readFile(filePath, 'utf8');
   if (storedContent.startsWith(COMPRESSION_MAGIC)) {
     const compressedData = storedContent.slice(COMPRESSION_MAGIC.length);
     return decompressIfNeeded(compressedData, true);
   }
-
   return storedContent;
 }
 

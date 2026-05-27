@@ -12,6 +12,12 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 
+/** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
+function toContentHash(storagePath: string): string {
+  const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
+  return m ? m[1] : storagePath;
+}
+
 interface RouteParams {
   params: Promise<{
     id: string;
@@ -24,6 +30,7 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const wantsJson = request.headers.get('Accept')?.includes('application/json') ?? false;
 
     const user = await verifyAuth(request);
     if (!user) {
@@ -47,7 +54,7 @@ export async function GET(
         return NextResponse.json({ error: 'File path not found' }, { status: 500 });
       }
 
-      const contentHash = page.filePath;
+      const contentHash = toContentHash(page.filePath);
       const mimeType = page.mimeType || 'application/octet-stream';
       const ttl = getPresignedUrlTtl(mimeType);
       const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);
@@ -59,6 +66,7 @@ export async function GET(
 
       auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'view', mimeType } });
 
+      if (wantsJson) return NextResponse.json({ url: presignedUrl });
       return NextResponse.redirect(presignedUrl, 307);
     }
 
@@ -76,14 +84,19 @@ export async function GET(
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
 
-    const contentHash = file.storagePath || file.id;
+    const contentHash = toContentHash(file.storagePath || file.id);
     const mimeType = file.mimeType || 'application/octet-stream';
     const ttl = getPresignedUrlTtl(mimeType);
-    const disposition = isDangerousMimeType(mimeType) ? `attachment; filename="${sanitizeFilenameForHeader(contentHash)}"` : undefined;
+    const filename = sanitizeFilenameForHeader(contentHash);
+    const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
+    const disposition = isDangerousMimeType(mimeType)
+      ? `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+      : undefined;
     const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition, mimeType);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'view', mimeType } });
 
+    if (wantsJson) return NextResponse.json({ url: presignedUrl });
     return NextResponse.redirect(presignedUrl, 307);
 
   } catch (error) {

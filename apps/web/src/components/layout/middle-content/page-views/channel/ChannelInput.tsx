@@ -63,8 +63,8 @@ export interface ChannelInputRef {
   clear: () => void;
   /** Insert text at cursor position */
   insertText: (text: string) => void;
-  /** Upload a file into the composer's attachment slot (used for drops outside the composer) */
-  uploadFile: (file: File) => void;
+  /** Upload one or more files into the composer's attachment slot (used for drops outside the composer) */
+  uploadFiles: (files: File[]) => void;
   /** Whether the composer can currently accept a new attachment */
   canAcceptDrop: () => boolean;
 }
@@ -142,9 +142,9 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         onChange(value + text);
         textareaRef.current?.focus();
       },
-      uploadFile: (file: File) => {
+      uploadFiles: (files: File[]) => {
         if (!canUpload) return;
-        void uploadFiles([file]);
+        void uploadFiles(files);
       },
       canAcceptDrop: () => canUpload,
     }));

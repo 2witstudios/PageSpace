@@ -12,6 +12,12 @@ import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 
+/** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
+function toContentHash(storagePath: string): string {
+  const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
+  return m ? m[1] : storagePath;
+}
+
 interface RouteParams {
   params: Promise<{
     id: string;
@@ -49,7 +55,7 @@ export async function GET(
         return NextResponse.json({ error: 'File path not found' }, { status: 500 });
       }
 
-      const contentHash = page.filePath;
+      const contentHash = toContentHash(page.filePath);
       const mimeType = page.mimeType || 'application/octet-stream';
       const filename = sanitizeFilenameForHeader(page.originalFileName || page.title);
       const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
@@ -76,7 +82,7 @@ export async function GET(
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
 
-    const contentHash = file.storagePath || file.id;
+    const contentHash = toContentHash(file.storagePath || file.id);
     const mimeType = file.mimeType || 'application/octet-stream';
     const filename = sanitizeFilenameForHeader(filenameParam || contentHash);
     const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
