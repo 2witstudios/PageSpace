@@ -401,14 +401,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
   // Validate status against task list's status configs
+  let initialCompletedAt: Date | null = null;
   if (status) {
     const validStatuses = await db.query.taskStatusConfigs.findMany({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
-      columns: { slug: true },
+      columns: { slug: true, group: true },
     });
     const validSlugs = validStatuses.map(s => s.slug);
     if (validSlugs.length > 0 && !validSlugs.includes(status)) {
       return NextResponse.json({ error: `Invalid status "${status}". Valid statuses: ${validSlugs.join(', ')}` }, { status: 400 });
+    }
+    const matchedConfig = validStatuses.find(s => s.slug === status);
+    if (matchedConfig?.group === 'done' || (!matchedConfig && status === 'completed')) {
+      initialCompletedAt = new Date();
     }
   }
 
@@ -447,6 +452,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
       position: nextPosition,
+      completedAt: initialCompletedAt,
     }).returning();
 
     // Create assignees in junction table
