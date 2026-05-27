@@ -23,5 +23,5 @@ ALTER TABLE "task_items" DROP COLUMN IF EXISTS "taskListId";--> statement-breakp
 -- Remove ghost task_items backfilled by migration 0120 where pageId points to the
 -- task list page itself (not a dedicated child page). These items are invisible in
 -- the new pages.parentId membership model and would violate the upcoming UNIQUE constraint.
-DELETE FROM task_items WHERE pageId IN (SELECT pageId FROM task_lists WHERE pageId IS NOT NULL);--> statement-breakpoint
+DELETE FROM "task_items" WHERE "pageId" IN (SELECT "pageId" FROM "task_lists" WHERE "pageId" IS NOT NULL);--> statement-breakpoint
 ALTER TABLE "task_items" ADD CONSTRAINT "task_items_pageId_unique" UNIQUE("pageId");
