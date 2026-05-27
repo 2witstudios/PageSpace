@@ -90,12 +90,12 @@ export const taskManagementTools = {
 
 To UPDATE: provide taskId
 To CREATE: provide pageId (of a TASK_LIST page) and title
-To DELETE: provide taskId and delete: true (hard-removes the task and trashes its linked DOCUMENT page; any other field updates passed in the same call are ignored)
+To DELETE: provide taskId and delete: true (hard-removes the task and trashes its linked TASK_LIST page; any other field updates passed in the same call are ignored)
 To REORDER: provide taskId and position — moves the existing task to the given index and re-densifies peer positions in the task list. Combine with field updates freely (e.g., status + position in one call).
 
 When creating tasks:
-- A DOCUMENT page is automatically created as a child of the TASK_LIST page
-- This linked page stores task notes and progress
+- A TASK_LIST page is automatically created as a child of the parent TASK_LIST page
+- This linked page stores the task description and any sub-tasks
 - The page title stays synced with the task title
 - DO NOT delete these pages directly - use this tool with delete: true to remove tasks
 
@@ -119,7 +119,7 @@ Agent Triggers:
     inputSchema: z.object({
       taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
       pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
-      delete: z.boolean().optional().describe('When true (with taskId), hard-deletes the task and trashes its linked DOCUMENT page. Field updates passed in the same call are ignored.'),
+      delete: z.boolean().optional().describe('When true (with taskId), hard-deletes the task and trashes its linked TASK_LIST page. Field updates passed in the same call are ignored.'),
       title: z.string().optional().describe('Task title (required when creating)'),
       status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
@@ -218,7 +218,7 @@ Agent Triggers:
             // returns empty — leaking orphan workflows rows.
             await disableTaskTriggers(taskId, 'Task deleted via update_task');
 
-            // Trash linked DOCUMENT page and hard-delete the task row in one transaction.
+            // Trash linked TASK_LIST page and hard-delete the task row in one transaction.
             // taskAssignees rows cascade-delete via FK on taskItems.
             // applyPageMutation returns a deferredTrigger that callers passing their own tx
             // must invoke after commit so downstream workflows tied to page activity fire.
@@ -726,15 +726,15 @@ Agent Triggers:
             }
           }
 
-          // Create document page and task in transaction
+          // Create task list page and task in transaction
           const result = await db.transaction(async (tx) => {
-            // Create document page for the task
+            // Create task list page (description + sub-tasks live here)
             const [taskPage] = await tx.insert(pages).values({
               title: title!,
-              type: 'DOCUMENT',
+              type: 'TASK_LIST',
               parentId: pageId!,
               driveId: taskListPage.driveId,
-              content: getDefaultContent(PageType.DOCUMENT),
+              content: '',
               position: nextPagePosition,
               updatedAt: new Date(),
             }).returning();
@@ -812,7 +812,7 @@ Agent Triggers:
               createPageEventPayload(taskListPage.driveId, createdPage.id, 'created', {
                 parentId: pageId,
                 title: resultTitle,
-                type: 'DOCUMENT',
+                type: 'TASK_LIST',
               }),
             ),
           ]);
