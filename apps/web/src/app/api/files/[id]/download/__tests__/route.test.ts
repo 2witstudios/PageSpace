@@ -132,6 +132,30 @@ describe('GET /api/files/[id]/download', () => {
     );
   });
 
+  it('normalizes legacy storagePath files/{hash}/original before presigning', async () => {
+    const LEGACY_PATH = `files/${VALID_HASH}/original`;
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({
+      id: mockFileId,
+      driveId: null,
+      storagePath: LEGACY_PATH,
+      mimeType: 'image/png',
+      sizeBytes: 10,
+    } as never);
+    vi.mocked(canUserAccessFile).mockResolvedValue(true);
+
+    const request = new Request('http://localhost/api/files/file-1/download');
+    await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    // Must pass bare hash, not the full legacy path
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(
+      VALID_HASH,
+      'original',
+      expect.any(Number),
+      expect.stringContaining('attachment')
+    );
+  });
+
   it('returns 401 when unauthenticated', async () => {
     vi.mocked(verifyAuth).mockResolvedValue(null as never);
 

@@ -124,6 +124,57 @@ describe('GET /api/files/[id]/view', () => {
     expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number), undefined, 'image/png');
   });
 
+  it('returns JSON url when Accept: application/json for file page', async () => {
+    const request = new Request('http://localhost/api/files/file-1/view', {
+      headers: { Accept: 'application/json' },
+    });
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { url: string };
+    expect(body.url).toBe('https://fly.storage.tigris.dev/presigned-url');
+  });
+
+  it('returns JSON url when Accept: application/json for attachment file', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({
+      id: mockFileId,
+      driveId: null,
+      storagePath: VALID_HASH,
+      mimeType: 'image/png',
+      sizeBytes: 10,
+    } as never);
+    vi.mocked(canUserAccessFile).mockResolvedValue(true);
+
+    const request = new Request('http://localhost/api/files/file-1/view', {
+      headers: { Accept: 'application/json' },
+    });
+    const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { url: string };
+    expect(body.url).toBe('https://fly.storage.tigris.dev/presigned-url');
+  });
+
+  it('normalizes legacy storagePath files/{hash}/original before presigning', async () => {
+    const LEGACY_PATH = `files/${VALID_HASH}/original`;
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({
+      id: mockFileId,
+      driveId: null,
+      storagePath: LEGACY_PATH,
+      mimeType: 'image/png',
+      sizeBytes: 10,
+    } as never);
+    vi.mocked(canUserAccessFile).mockResolvedValue(true);
+
+    const request = new Request('http://localhost/api/files/file-1/view');
+    await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    // Must pass bare hash, not the full legacy path
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number), undefined, 'image/png');
+  });
+
   it('returns 401 when unauthenticated', async () => {
     vi.mocked(verifyAuth).mockResolvedValue(null as never);
 
