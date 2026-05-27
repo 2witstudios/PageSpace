@@ -65,11 +65,11 @@ test.describe('File uploads', () => {
 
   // ── Auth guards ──────────────────────────────────────────────────────────────
 
-  test('GET /api/files/:id/view returns 401 for unauthenticated request', async ({ page }) => {
+  test('GET /api/files/:id/view returns 401 for unauthenticated request', async ({ page, baseURL }) => {
     // Use a fresh context with no session cookie
-    const ctx = await page.context().browser()!.newContext();
+    const ctx = await page.context().browser()!.newContext({ baseURL: baseURL ?? 'http://localhost:3000' });
     const req = ctx.request;
-    const response = await req.get('http://localhost:3000/api/files/some-file-id/view', {
+    const response = await req.get('/api/files/some-file-id/view', {
       maxRedirects: 0,
     });
     expect(response.status()).toBe(401);
