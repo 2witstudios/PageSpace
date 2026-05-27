@@ -386,6 +386,7 @@
         "dompurify": "^3.2.6",
         "embla-carousel-react": "^8.6.0",
         "google-auth-library": "^10.2.1",
+        "inapp-spy": "^5.0.9",
         "lucide-react": "^0.525.0",
         "mammoth": "^1.10.0",
         "marked": "^17.0.1",
@@ -2872,6 +2873,8 @@
     "import-meta-resolve": ["import-meta-resolve@4.2.0", "", {}, "sha512-Iqv2fzaTQN28s/FwZAoFq0ZSs/7hMAHJVX+w8PZl3cY19Pxk6jFFalxQoIfW2826i/fDLXv8IiEZRIT0lDuWcg=="],
 
     "imurmurhash": ["imurmurhash@0.1.4", "", {}, "sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA=="],
+
+    "inapp-spy": ["inapp-spy@5.0.9", "", {}, "sha512-5y1EBhi9PhojGtkdwcQd8I8GlVSjIE7X6ZpBae3w5PPg2NEaoRhGUPvLy6WwFZ/CgFusoEaaGVxaQmBzd70Zyg=="],
 
     "indent-string": ["indent-string@4.0.0", "", {}, "sha512-EdDDZu4A2OyIK7Lr/2zG+w5jmbuk1DVBnEwREQvBzspBJkCEbRa8GxU1lghYcaGJCnRWibjDXlq779X1/y5xwg=="],
 
