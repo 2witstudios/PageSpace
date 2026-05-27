@@ -5,6 +5,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from './page-mutation-service';
+import { syncTaskItemOnMove } from './task-sync-service';
 
 /**
  * Result types for page reorder operations
@@ -61,6 +62,8 @@ export const pageReorderService = {
           title: pages.title,
           ownerId: drives.ownerId,
           revision: pages.revision,
+          type: pages.type,
+          parentId: pages.parentId,
         })
         .from(pages)
         .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -118,22 +121,36 @@ export const pageReorderService = {
       }
 
       const actorInfo = await getActorInfo(userId);
-      await applyPageMutation({
-        pageId,
-        operation: 'move',
-        updates: {
-          parentId: newParentId,
-          position: newPosition,
-        },
-        updatedFields: ['parentId', 'position'],
-        expectedRevision: pageInfo.revision,
-        context: {
+      let deferredTrigger: (() => void) | undefined;
+      await db.transaction(async (tx) => {
+        const mutResult = await applyPageMutation({
+          pageId,
+          operation: 'move',
+          updates: {
+            parentId: newParentId,
+            position: newPosition,
+          },
+          updatedFields: ['parentId', 'position'],
+          expectedRevision: pageInfo.revision,
+          context: {
+            userId,
+            actorEmail: actorInfo.actorEmail,
+            actorDisplayName: actorInfo.actorDisplayName,
+            metadata: params.metadata,
+          },
+          tx,
+        });
+        deferredTrigger = mutResult.deferredTrigger;
+
+        await syncTaskItemOnMove(tx, {
+          movedPageId: pageId,
+          movedPageType: pageInfo.type,
+          oldParentId: pageInfo.parentId,
+          newParentId,
           userId,
-          actorEmail: actorInfo.actorEmail,
-          actorDisplayName: actorInfo.actorDisplayName,
-          metadata: params.metadata,
-        },
+        });
       });
+      deferredTrigger?.();
 
       return {
         success: true,
