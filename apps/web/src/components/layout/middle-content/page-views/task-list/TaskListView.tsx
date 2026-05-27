@@ -445,7 +445,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
-  const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content ?? null));
+  const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content));
   const hasLoadedRef = useRef(false);
 
   // Use centralized socket store for proper authentication
@@ -912,12 +912,7 @@ function TaskListView({ page }: TaskListViewProps) {
             <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
               <button
                 onClick={() => setViewMode('editor')}
-                className={cn(
-                  'p-1.5 rounded transition-colors',
-                  viewMode === 'editor'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
+                className="p-1.5 rounded transition-colors text-muted-foreground hover:text-foreground"
                 title="Editor view"
                 aria-label="Editor view"
               >
