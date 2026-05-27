@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-type TaskListViewMode = 'table' | 'kanban';
+type TaskListViewMode = 'table' | 'kanban' | 'editor';
 export type TaskListPageFilter = 'all' | 'active' | 'completed';
 
 export interface StoredDashboardFilters {
