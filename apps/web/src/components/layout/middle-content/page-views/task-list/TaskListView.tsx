@@ -95,6 +95,7 @@ import {
   isCompletedStatus,
   PRIORITY_CONFIG,
   TaskHandlers,
+  canExpandTask,
 } from './task-list-types';
 
 interface TaskListViewProps {
@@ -1076,16 +1077,20 @@ function TaskListView({ page }: TaskListViewProps) {
                             />
                           ) : (
                             <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
-                                onClick={() => toggleTaskExpand(task.id)}
-                                className="text-muted-foreground hover:text-foreground shrink-0"
-                              >
-                                {expandedTaskIds.has(task.id)
-                                  ? <ChevronDown className="h-3.5 w-3.5" />
-                                  : <ChevronRight className="h-3.5 w-3.5" />}
-                              </button>
+                              {canExpandTask(task) ? (
+                                <button
+                                  type="button"
+                                  aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
+                                  onClick={() => toggleTaskExpand(task.id)}
+                                  className="text-muted-foreground hover:text-foreground shrink-0"
+                                >
+                                  {expandedTaskIds.has(task.id)
+                                    ? <ChevronDown className="h-3.5 w-3.5" />
+                                    : <ChevronRight className="h-3.5 w-3.5" />}
+                                </button>
+                              ) : (
+                                <span className="inline-block w-[19px] shrink-0" />
+                              )}
                               <span
                                 className={cn(
                                   'cursor-pointer hover:text-primary hover:underline',
