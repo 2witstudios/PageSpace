@@ -448,9 +448,6 @@ function TaskListView({ page }: TaskListViewProps) {
   const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content));
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const hasLoadedRef = useRef(false);
-  // Stable ref so the page:moved socket handler always sees the latest task list
-  // without needing data in the socket effect's dependency array.
-  const tasksRef = useRef(data?.tasks);
 
   // Use centralized socket store for proper authentication
   const socket = useSocketStore((state) => state.socket);
@@ -482,8 +479,9 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   );
 
-  // Keep tasksRef current so the page:moved handler detects moved-out tasks
-  // even when the socket effect hasn't re-run since the SWR load completed.
+  // Stable ref so the page:moved handler always sees the current task list
+  // regardless of when the socket effect was installed relative to the SWR load.
+  const tasksRef = useRef(data?.tasks);
   useEffect(() => { tasksRef.current = data?.tasks; }, [data?.tasks]);
 
   // Connect to socket store when user is available
