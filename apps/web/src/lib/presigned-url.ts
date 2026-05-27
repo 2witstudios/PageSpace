@@ -6,7 +6,7 @@ let _client: S3Client | null = null;
 export function getS3Client(): S3Client {
   if (!_client) {
     _client = new S3Client({
-      region: process.env.AWS_REGION ?? 'auto',
+      region: process.env.AWS_REGION ?? 'auto', // 'auto' is the correct value for Tigris; set AWS_REGION for standard AWS S3
       endpoint: process.env.AWS_ENDPOINT_URL_S3,
       credentials: process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
         ? {
