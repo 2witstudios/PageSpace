@@ -99,7 +99,7 @@ describe('GET /api/files/[id]/download', () => {
     const request = new Request('http://localhost/api/files/file-1/download');
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(response.status).toBe(302);
+    expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('https://fly.storage.tigris.dev/presigned-download');
     expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(
       VALID_HASH,
@@ -123,7 +123,7 @@ describe('GET /api/files/[id]/download', () => {
     const request = new Request('http://localhost/api/files/file-1/download?filename=dm.png');
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(response.status).toBe(302);
+    expect(response.status).toBe(307);
     expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(
       VALID_HASH,
       'original',

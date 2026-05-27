@@ -100,7 +100,7 @@ describe('GET /api/files/[id]/view', () => {
     const request = new Request('http://localhost/api/files/file-1/view');
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(response.status).toBe(302);
+    expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('https://fly.storage.tigris.dev/presigned-url');
     // disposition=undefined (safe type), mimeType passed for ResponseContentType
     expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number), undefined, 'application/pdf');
@@ -120,7 +120,7 @@ describe('GET /api/files/[id]/view', () => {
     const request = new Request('http://localhost/api/files/file-1/view');
     const response = await GET(request as never, { params: Promise.resolve({ id: mockFileId }) });
 
-    expect(response.status).toBe(302);
+    expect(response.status).toBe(307);
     expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(VALID_HASH, 'original', expect.any(Number), undefined, 'image/png');
   });
 
