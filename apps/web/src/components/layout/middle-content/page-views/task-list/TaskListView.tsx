@@ -797,7 +797,7 @@ function TaskListView({ page }: TaskListViewProps) {
       <div className="flex flex-col h-full min-w-0">
         <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0">
           <span className="text-sm font-medium text-muted-foreground">Description</span>
-          <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+          <div className="flex items-center bg-muted rounded-md p-0.5">
             <button
               onClick={() => setViewMode('editor')}
               className={cn('p-1.5 rounded transition-colors', 'bg-background text-foreground shadow-sm')}
