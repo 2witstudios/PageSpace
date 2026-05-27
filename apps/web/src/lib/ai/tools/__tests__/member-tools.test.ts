@@ -102,7 +102,7 @@ describe('member-tools', () => {
     it('has correct tool definition', () => {
       expect(typeof memberTools.list_collaborators).toBe('object');
       expect(typeof memberTools.list_collaborators.description).toBe('string');
-      expect(memberTools.list_collaborators.description).toContain('userId');
+      expect(memberTools.list_collaborators.description).toContain('user ID');
     });
 
     it('requires user authentication', async () => {
