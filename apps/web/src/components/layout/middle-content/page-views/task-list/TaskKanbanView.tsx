@@ -166,7 +166,7 @@ function TaskCard({
         isDragging && 'opacity-50 ring-2 ring-primary'
       )}
     >
-      <CardContent className="p-3">
+      <CardContent className="px-3 py-2">
         {/* Header: Drag handle + Checkbox + Title + Actions */}
         <div className="flex items-start gap-2">
           {canEdit && dragHandleProps && (
@@ -260,7 +260,7 @@ function TaskCard({
         </div>
 
         {/* Metadata row */}
-        <div className="flex flex-wrap items-center gap-1.5 mt-2 ml-6">
+        <div className="flex flex-wrap items-center gap-1.5 mt-1 ml-6">
           {/* Priority badge */}
           <Badge className={cn('text-xs px-1.5 py-0', PRIORITY_CONFIG[task.priority].color)}>
             {PRIORITY_CONFIG[task.priority].label}
