@@ -9,7 +9,6 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { canActorEditPage } from './actor-permissions';
 import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
   syncTaskDueDateTrigger,
