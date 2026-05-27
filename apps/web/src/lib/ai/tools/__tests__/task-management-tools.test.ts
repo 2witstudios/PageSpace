@@ -36,7 +36,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
-  taskItems: { id: 'id', taskListId: 'taskListId', position: 'position' },
+  taskItems: { id: 'id', position: 'position' },
   taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
   taskAssignees: { taskId: 'taskId' },
 }));

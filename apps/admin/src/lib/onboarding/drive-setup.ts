@@ -84,7 +84,6 @@ ${task.description}
 
       await client.insert(taskItems).values({
         id: createId(),
-        taskListId,
         userId,
         assigneeId: task.assignee === 'self' ? userId : null,
         pageId: taskPageId,

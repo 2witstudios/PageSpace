@@ -762,7 +762,6 @@ Agent Triggers:
             const primaryAgentId = assigneeAgentId || (assigneeIds?.find(a => a.type === 'agent')?.id) || null;
 
             const [newTask] = await tx.insert(taskItems).values({
-              taskListId: taskList!.id,
               userId,
               pageId: taskPage.id,
               status: resolvedStatus,
