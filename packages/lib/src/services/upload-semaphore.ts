@@ -17,6 +17,7 @@ class UploadSemaphore {
   private readonly slotTimeout = 10 * 60 * 1000; // 10 minutes max per upload
 
   private constructor() {
+    // Per-process limit: with horizontal scaling each replica enforces this independently.
     const parsedLimit = Number.parseInt(process.env.UPLOAD_MAX_PERMITS ?? '20', 10);
     this.globalLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
     this.globalPermits = this.globalLimit;

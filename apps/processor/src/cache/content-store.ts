@@ -365,6 +365,8 @@ export class ContentStore {
     const normalizedHash = this.normalizeContentHash(rawHash);
     const key = this.originalKey(normalizedHash);
 
+    // ContentType omitted: presigned-URL delivery overrides via ResponseContentType.
+    // If a direct-serve path is ever added, add a mimeType param here.
     await this.s3.send(
       new PutObjectCommand({
         Bucket: this.bucket,
@@ -396,6 +398,8 @@ export class ContentStore {
     const normalizedHash = this.normalizeContentHash(rawHash);
     const key = this.originalKey(normalizedHash);
 
+    // ContentType omitted: presigned-URL delivery overrides via ResponseContentType.
+    // If a direct-serve path is ever added, add a mimeType param here.
     const fileStream = createReadStream(tempFilePath);
     const upload = new Upload({
       client: this.s3,
@@ -446,6 +450,8 @@ export class ContentStore {
     });
   }
 
+  // Loads the entire file into memory (up to ORIGINAL_MAX_BYTES = 2 GB).
+  // Avoid for large files; use streamOriginalToFile instead.
   async getOriginal(contentHash: string): Promise<Buffer | null> {
     let normalizedHash: string;
     try {
