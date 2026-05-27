@@ -15,7 +15,7 @@ import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 /** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
 function toContentHash(storagePath: string): string {
   const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
-  return m ? m[1] : storagePath;
+  return m ? m[1].toLowerCase() : storagePath;
 }
 
 interface RouteParams {

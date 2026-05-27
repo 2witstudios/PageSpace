@@ -50,8 +50,11 @@ export default function DocxViewer({ page }: DocxViewerProps) {
         }
         return response.json() as Promise<{ url: string }>;
       })
-      .then(({ url }) => fetch(url))
-      .then(r => r.arrayBuffer())
+      .then(async ({ url }) => {
+        const fileRes = await fetch(url);
+        if (!fileRes.ok) throw new Error(`Failed to load document content: ${fileRes.status}`);
+        return fileRes.arrayBuffer();
+      })
       .then(data => {
         console.log('DOCX data loaded:', data.byteLength, 'bytes');
         setDocxData(data);

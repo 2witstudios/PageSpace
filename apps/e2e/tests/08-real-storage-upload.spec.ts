@@ -87,7 +87,7 @@ test.describe('Real storage file uploads', () => {
     page,
     driveId,
   }) => {
-    if (canCleanupS3Objects()) assertSafeE2EBucket();
+    assertSafeE2EBucket();
 
     const { userId } = getSeedState();
     const fileName = `pagespace-real-storage-${randomUUID()}.txt`;

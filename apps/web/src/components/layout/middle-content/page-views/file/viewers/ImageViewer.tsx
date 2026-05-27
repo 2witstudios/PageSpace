@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2 } from 'lucide-react';
 
@@ -11,6 +11,11 @@ interface ImageViewerProps {
 export default function ImageViewer({ page }: ImageViewerProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsLoading(true);
+    setError(null);
+  }, [page.id]);
 
   if (error) {
     return (
@@ -29,6 +34,7 @@ export default function ImageViewer({ page }: ImageViewerProps) {
       )}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
+        key={page.id}
         src={`/api/files/${page.id}/view`}
         alt={page.title}
         className="max-w-full max-h-full object-contain"

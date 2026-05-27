@@ -88,7 +88,9 @@ export default function CodeViewer({ page }: CodeViewerProps) {
         });
         if (!res.ok) throw new Error('Failed to load file');
         const { url } = await res.json() as { url: string };
-        const text = await fetch(url).then(r => r.text());
+        const fileRes = await fetch(url);
+        if (!fileRes.ok) throw new Error('Failed to load file content');
+        const text = await fileRes.text();
         setCode(text);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load file');
