@@ -58,7 +58,11 @@ export async function GET(
           'X-Content-Type-Options': 'nosniff',
         },
       });
-    } catch {
+    } catch (err) {
+      const isNotFound = err && typeof err === 'object' && ('$metadata' in err
+        ? (err as { $metadata: { httpStatusCode?: number } }).$metadata.httpStatusCode === 404
+        : (err as { name?: string }).name === 'NoSuchKey');
+      if (!isNotFound) console.warn('Avatar S3 read error', { key, err: String(err) });
       return new NextResponse('Not Found', { status: 404 });
     }
   } catch (error) {
