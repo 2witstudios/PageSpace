@@ -107,6 +107,7 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
     } else if (e.touches.length === 1 && view.zoom > 1) {
       const t = e.touches[0];
       dragRef.current = { px: t.clientX, py: t.clientY, vx: view.x, vy: view.y };
+      setDragging(true);
     }
   }
 
@@ -137,6 +138,7 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
   function handleTouchEnd() {
     pinchRef.current = null;
     dragRef.current = null;
+    setDragging(false);
   }
 
   function zoomBy(factor: number) {
