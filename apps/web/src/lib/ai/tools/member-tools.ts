@@ -13,7 +13,7 @@ export const memberTools = {
   list_drive_members: tool({
     description: 'List all members of a drive/workspace with their user IDs, names, emails, and roles. Use this before assigning tasks, inviting people by ID, or sending channel messages — it gives you the userId needed for those operations.',
     inputSchema: z.object({
-      driveId: z.string().describe('The ID of the drive to list members for'),
+      driveId: z.string().regex(/^[a-z][a-z0-9]{1,31}$/, 'Invalid drive ID format').describe('The ID of the drive to list members for'),
     }),
     execute: async ({ driveId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -58,6 +58,8 @@ export const memberTools = {
 
       for (const m of memberRows) {
         if (!m.user?.id || !m.acceptedAt) continue;
+        // Skip if already added as owner (owner can have an accepted drive_members row too)
+        if (ownerRow?.id && m.user.id === ownerRow.id) continue;
         result.push({
           userId: m.user.id,
           name: m.user.name,
