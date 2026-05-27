@@ -80,7 +80,8 @@ router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: st
 
   try {
     const response = await s3().send(new GetObjectCommand({ Bucket: getS3Bucket(), Key: key }));
-    const bytes = await response.Body!.transformToByteArray();
+    if (!response.Body) return res.status(404).end();
+    const bytes = await response.Body.transformToByteArray();
     const extension = ext.slice(1).toLowerCase();
     const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
     res.setHeader('Content-Type', contentType);

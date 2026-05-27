@@ -47,7 +47,8 @@ export async function GET(
         Bucket: getS3Bucket(),
         Key: key,
       }));
-      const bytes = await response.Body!.transformToByteArray();
+      if (!response.Body) return new NextResponse('Not Found', { status: 404 });
+      const bytes = await response.Body.transformToByteArray();
       const contentType = CONTENT_TYPE_MAP[ext] || 'image/jpeg';
       return new NextResponse(bytes, {
         status: 200,
