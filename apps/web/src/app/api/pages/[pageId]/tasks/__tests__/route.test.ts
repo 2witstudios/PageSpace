@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { GET, POST, computeHasContent } from '../route';
+import { GET, POST } from '../route';
+import { computeHasContent } from '../task-utils';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies

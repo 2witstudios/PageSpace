@@ -12,14 +12,10 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
+import { computeHasContent } from './task-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-
-export const computeHasContent = (content: string | null | undefined): boolean => {
-  if (!content) return false;
-  return content.replace(/<[^>]*>/g, '').trim().length > 0;
-};
 
 /**
  * Get or create task list for a page, ensuring default status configs exist
