@@ -2,6 +2,42 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
+// In-memory S3 store for tests
+const s3Store = new Map<string, Uint8Array>();
+
+vi.mock('@aws-sdk/client-s3', () => {
+  class S3Client {
+    async send(command: { _tag: string; input: Record<string, unknown> }) {
+      const { Key, Body, Range } = command.input as { Key: string; Body?: Buffer; Range?: string };
+      if (command._tag === 'HeadObjectCommand') {
+        if (!s3Store.has(Key)) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
+        return { ContentLength: s3Store.get(Key)!.byteLength };
+      }
+      if (command._tag === 'PutObjectCommand') {
+        s3Store.set(Key, Body instanceof Buffer ? new Uint8Array(Body) : new Uint8Array(Body as unknown as ArrayBuffer));
+        return {};
+      }
+      if (command._tag === 'GetObjectCommand') {
+        if (!s3Store.has(Key)) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
+        let bytes = s3Store.get(Key)!;
+        if (Range) {
+          const match = Range.match(/bytes=(\d+)-(\d+)/);
+          if (match) bytes = bytes.slice(Number(match[1]), Number(match[2]) + 1);
+        }
+        return { Body: { transformToByteArray: () => Promise.resolve(bytes) } };
+      }
+    }
+  }
+  const makeCommand = (tag: string) =>
+    class { _tag = tag; input: unknown; constructor(input: unknown) { this.input = input; } };
+  return {
+    S3Client,
+    HeadObjectCommand: makeCommand('HeadObjectCommand'),
+    PutObjectCommand: makeCommand('PutObjectCommand'),
+    GetObjectCommand: makeCommand('GetObjectCommand'),
+  };
+});
+
 // Mock the database before importing the service
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -24,25 +60,16 @@ describe('page-version-service', () => {
   const testStoragePath = join(process.cwd(), 'test-storage-version-service');
 
   beforeEach(async () => {
-    // Set up test storage path
-    process.env.PAGE_CONTENT_STORAGE_PATH = testStoragePath;
-    // Clean up any existing test storage
-    try {
-      await fs.rm(testStoragePath, { recursive: true, force: true });
-    } catch {
-      // Ignore if doesn't exist
-    }
-    // Reset mocks
+    s3Store.clear();
     vi.clearAllMocks();
   });
 
   afterEach(async () => {
-    // Clean up test storage
-    delete process.env.PAGE_CONTENT_STORAGE_PATH;
+    // Clean up any leftover test-storage dirs from the old fs-based tests
     try {
       await fs.rm(testStoragePath, { recursive: true, force: true });
     } catch {
-      // Ignore if doesn't exist
+      // Ignore
     }
   });
 

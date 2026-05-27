@@ -1,5 +1,9 @@
-import { promises as fs } from 'fs';
-import { join, dirname, resolve, sep } from 'path';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+} from '@aws-sdk/client-s3';
 import { hashWithPrefix } from '../utils/hash-utils';
 import {
   compress,
@@ -12,46 +16,42 @@ import type { PageContentFormat } from '../content/page-content-format';
 const CONTENT_SUBDIR = 'page-content';
 const CONTENT_REF_REGEX = /^[a-f0-9]{64}$/i;
 
-/**
- * Magic header to identify compressed content.
- * Format: PSCOMP\x00 followed by compressed data
- */
 const COMPRESSION_MAGIC = 'PSCOMP\0';
 
-/**
- * Options for writing page content
- */
 export interface WritePageContentOptions {
-  /**
-   * Whether to enable compression.
-   * - true: Always compress content
-   * - false: Never compress content
-   * - 'auto' (default): Compress content if size >= COMPRESSION_THRESHOLD_BYTES
-   */
   compress?: boolean | 'auto';
 }
 
-/**
- * Result of writing page content
- */
 export interface WritePageContentResult {
-  /** Content reference (SHA-256 hash) */
   ref: string;
-  /** Original content size in bytes */
   size: number;
-  /** Whether content was compressed */
   compressed: boolean;
-  /** Stored size in bytes (may be smaller if compressed) */
   storedSize: number;
-  /** Compression ratio (1.0 if not compressed) */
   compressionRatio: number;
 }
 
-function getContentRoot(): string {
-  const base = process.env.PAGE_CONTENT_STORAGE_PATH
-    || process.env.FILE_STORAGE_PATH
-    || join(process.cwd(), 'storage');
-  return join(base, CONTENT_SUBDIR);
+// --- S3 helpers ---
+
+let _s3: S3Client | null = null;
+
+function s3(): S3Client {
+  if (!_s3) {
+    _s3 = new S3Client({
+      region: process.env.AWS_REGION ?? 'auto',
+      endpoint: process.env.AWS_ENDPOINT_URL_S3,
+      credentials: process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+        ? {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+          }
+        : undefined,
+    });
+  }
+  return _s3;
+}
+
+function getBucket(): string {
+  return process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
 }
 
 function assertContentRef(ref: string): void {
@@ -60,74 +60,29 @@ function assertContentRef(ref: string): void {
   }
 }
 
-function getContentPath(ref: string): string {
+function getS3Key(ref: string): string {
   assertContentRef(ref);
-  const root = getContentRoot();
-  const prefix = ref.slice(0, 2);
-  const contentPath = join(root, prefix, ref);
-  // Defense-in-depth: verify resolved path stays within content root
-  const resolvedPath = resolve(contentPath);
-  if (!resolvedPath.startsWith(resolve(root) + sep)) {
-    throw new Error('Content path escapes storage root');
-  }
-  return contentPath;
+  return `${CONTENT_SUBDIR}/${ref.slice(0, 2)}/${ref}`;
 }
 
-/**
- * Determines if content should be compressed based on options
- */
 function shouldApplyCompression(
   contentSize: number,
   options?: WritePageContentOptions
 ): boolean {
   const compressOption = options?.compress ?? 'auto';
-
-  if (compressOption === true) {
-    return true;
-  }
-
-  if (compressOption === false) {
-    return false;
-  }
-
-  // 'auto': compress if content size >= threshold
+  if (compressOption === true) return true;
+  if (compressOption === false) return false;
   return contentSize >= COMPRESSION_THRESHOLD_BYTES;
 }
 
-/**
- * Writes page content to storage with optional compression.
- *
- * Content is stored using content-addressable storage where the reference
- * is a SHA-256 hash of the format and original content. This ensures
- * identical content always produces the same reference.
- *
- * @param content - The content string to store
- * @param format - The content format (text, html, json, tiptap)
- * @param options - Optional settings for compression
- * @returns Result with reference, size, and compression metadata
- *
- * @example
- * ```typescript
- * // Auto-compress (compresses if content >= 1KB)
- * const result = await writePageContent(content, 'tiptap');
- *
- * // Force compression
- * const result = await writePageContent(content, 'tiptap', { compress: true });
- *
- * // Disable compression
- * const result = await writePageContent(content, 'tiptap', { compress: false });
- * ```
- */
 export async function writePageContent(
   content: string,
   format: PageContentFormat,
   options?: WritePageContentOptions
 ): Promise<WritePageContentResult> {
-  // Hash is computed from original content to ensure same reference
-  // for identical content regardless of compression
   const ref = hashWithPrefix(format, content);
-  const contentPath = getContentPath(ref);
-  const dir = dirname(contentPath);
+  const key = getS3Key(ref);
+  const bucket = getBucket();
 
   const originalSize = Buffer.byteLength(content, 'utf8');
   const applyCompression = shouldApplyCompression(originalSize, options);
@@ -138,21 +93,17 @@ export async function writePageContent(
   let compressionRatio = 1;
 
   if (applyCompression) {
-    // If compress: true was explicitly set, use compress() directly to force compression
-    // Otherwise use compressIfNeeded() which respects the size threshold
     const forceCompression = options?.compress === true;
-    const compressionResult = forceCompression ?
-      { ...compress(content), compressed: true } :
-      compressIfNeeded(content);
+    const compressionResult = forceCompression
+      ? { ...compress(content), compressed: true }
+      : compressIfNeeded(content);
 
     if (compressionResult.compressed) {
-      // Prepend magic header to identify compressed content
       dataToStore = COMPRESSION_MAGIC + compressionResult.data;
       compressed = true;
       storedSize = Buffer.byteLength(dataToStore, 'utf8');
       compressionRatio = compressionResult.compressionRatio;
     } else {
-      // Content was below threshold after check
       dataToStore = content;
       storedSize = originalSize;
     }
@@ -161,98 +112,60 @@ export async function writePageContent(
     storedSize = originalSize;
   }
 
-  await fs.mkdir(dir, { recursive: true });
-
+  // Content-addressable: skip upload if already stored
   try {
-    await fs.writeFile(contentPath, dataToStore, { flag: 'wx' });
-  } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || (error as NodeJS.ErrnoException).code !== 'EEXIST') {
-      throw error;
-    }
-    // File already exists - content-addressable, so we're done
+    await s3().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+  } catch {
+    await s3().send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: Buffer.from(dataToStore, 'utf8'),
+      ContentType: 'text/plain; charset=utf-8',
+    }));
   }
 
-  return {
-    ref,
-    size: originalSize,
-    compressed,
-    storedSize,
-    compressionRatio,
-  };
+  return { ref, size: originalSize, compressed, storedSize, compressionRatio };
 }
 
-/**
- * Reads page content from storage, automatically decompressing if needed.
- *
- * Maintains backward compatibility with uncompressed content by detecting
- * the compression magic header. If content doesn't have the header, it's
- * returned as-is (uncompressed legacy content).
- *
- * @param ref - The content reference (SHA-256 hash)
- * @returns The original content string
- * @throws Error if reference is invalid or content cannot be read/decompressed
- *
- * @example
- * ```typescript
- * const content = await readPageContent('abc123...');
- * const document = JSON.parse(content);
- * ```
- */
 export async function readPageContent(ref: string): Promise<string> {
-  const contentPath = getContentPath(ref);
-  const storedContent = await fs.readFile(contentPath, 'utf8');
+  const key = getS3Key(ref);
+  const response = await s3().send(new GetObjectCommand({ Bucket: getBucket(), Key: key }));
+  const bytes = await response.Body!.transformToByteArray();
+  const storedContent = Buffer.from(bytes).toString('utf8');
 
-  // Check for compression magic header
   if (storedContent.startsWith(COMPRESSION_MAGIC)) {
-    // Extract compressed data (after magic header)
     const compressedData = storedContent.slice(COMPRESSION_MAGIC.length);
     return decompressIfNeeded(compressedData, true);
   }
 
-  // No magic header - uncompressed content (backward compatible)
   return storedContent;
 }
 
-/**
- * Checks if stored content is compressed without fully reading it.
- * Useful for inspecting content state without decompression overhead.
- *
- * @param ref - The content reference (SHA-256 hash)
- * @returns True if content is stored in compressed format
- */
 export async function isContentCompressed(ref: string): Promise<boolean> {
-  const contentPath = getContentPath(ref);
-
-  // Read just enough bytes to check for magic header
-  const fd = await fs.open(contentPath, 'r');
-  try {
-    const buffer = Buffer.alloc(COMPRESSION_MAGIC.length);
-    await fd.read(buffer, 0, COMPRESSION_MAGIC.length, 0);
-    return buffer.toString('utf8') === COMPRESSION_MAGIC;
-  } finally {
-    await fd.close();
-  }
+  const key = getS3Key(ref);
+  const response = await s3().send(new GetObjectCommand({
+    Bucket: getBucket(),
+    Key: key,
+    Range: `bytes=0-${COMPRESSION_MAGIC.length - 1}`,
+  }));
+  const bytes = await response.Body!.transformToByteArray();
+  return Buffer.from(bytes).toString('utf8') === COMPRESSION_MAGIC;
 }
 
-/**
- * Gets content metadata without reading the full content.
- *
- * @param ref - The content reference (SHA-256 hash)
- * @returns Metadata about the stored content
- */
 export async function getContentMetadata(ref: string): Promise<{
   storedSize: number;
   compressed: boolean;
 }> {
-  const contentPath = getContentPath(ref);
-  const stats = await fs.stat(contentPath);
-  const compressed = await isContentCompressed(ref);
+  const key = getS3Key(ref);
+  const [headResponse, compressed] = await Promise.all([
+    s3().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key })),
+    isContentCompressed(ref),
+  ]);
 
   return {
-    storedSize: stats.size,
+    storedSize: headResponse.ContentLength ?? 0,
     compressed,
   };
 }
 
-// Re-export compression threshold for use by other modules
 export { COMPRESSION_THRESHOLD_BYTES };
