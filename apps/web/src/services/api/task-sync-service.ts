@@ -28,6 +28,9 @@ export async function syncTaskItemOnMove(
 
   if (movedPageType !== 'TASK_LIST') return
 
+  // No parent change — just a position reorder within the same parent, nothing to sync
+  if (oldParentId === newParentId) return
+
   // Remove from old parent if it was a TASK_LIST
   if (oldParentId) {
     const [oldParent] = await tx
