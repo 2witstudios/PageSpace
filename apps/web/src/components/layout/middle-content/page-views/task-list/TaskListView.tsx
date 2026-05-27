@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
@@ -83,6 +84,7 @@ import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
 import { getInitialOpenState, TaskListDescriptionHeader, TaskListDescriptionContent } from './TaskListDescription';
+import Toolbar from '@/components/editors/Toolbar';
 import { TaskRowDescription } from './TaskRowDescription';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
@@ -446,6 +448,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content));
+  const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const hasLoadedRef = useRef(false);
 
   // Use centralized socket store for proper authentication
@@ -824,11 +827,13 @@ function TaskListView({ page }: TaskListViewProps) {
             </button>
           </div>
         </div>
+        {canEdit && <Toolbar editor={editorInstance} contentMode="html" />}
         <TaskListDescriptionContent
           pageId={page.id}
           canEdit={canEdit}
           initialContent={page.content}
           className="flex-1 overflow-auto px-4 py-3"
+          onEditorChange={setEditorInstance}
         />
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground shrink-0">
           <span><strong>{data?.tasks.length || 0}</strong> tasks</span>

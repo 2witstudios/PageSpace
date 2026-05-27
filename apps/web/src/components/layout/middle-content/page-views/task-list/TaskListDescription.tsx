@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { type Editor } from '@tiptap/react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { isRichContentEmpty, usePageContent } from '@/hooks/usePageContent';
 
@@ -36,6 +37,7 @@ interface TaskListDescriptionContentProps {
   canEdit: boolean;
   initialContent: string | null;
   className?: string;
+  onEditorChange?: (editor: Editor | null) => void;
 }
 
 export function TaskListDescriptionContent({
@@ -43,6 +45,7 @@ export function TaskListDescriptionContent({
   canEdit,
   initialContent,
   className,
+  onEditorChange,
 }: TaskListDescriptionContentProps) {
   const { content, save } = usePageContent({ pageId, initialContent });
 
@@ -53,6 +56,7 @@ export function TaskListDescriptionContent({
         onChange={save}
         readOnly={!canEdit}
         contentMode="html"
+        onEditorChange={onEditorChange}
       />
     </div>
   );
