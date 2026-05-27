@@ -150,6 +150,7 @@ services:
     restart: unless-stopped
     networks:
       - internal
+      - frontend
     user: "1000:1000"
     read_only: true
     tmpfs:
