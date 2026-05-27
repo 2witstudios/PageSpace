@@ -55,10 +55,7 @@ import {
   Pencil,
   Trash2,
   FileText,
-  BookOpen,
   GripVertical,
-  LayoutList,
-  Kanban,
   Zap,
   Bell,
   ChevronRight,
@@ -83,7 +80,8 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
-import { getInitialOpenState, TaskListDescriptionHeader, TaskListDescriptionContent } from './TaskListDescription';
+import { getInitialOpenState, TaskListDescriptionContent } from './TaskListDescription';
+import { TaskListHeader } from './TaskListHeader';
 import Toolbar from '@/components/editors/Toolbar';
 import { TaskRowDescription } from './TaskRowDescription';
 import { StatusConfigManager } from './StatusConfigManager';
@@ -481,6 +479,11 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   );
 
+  // Stable ref so the page:moved handler always sees the current task list
+  // regardless of when the socket effect was installed relative to the SWR load.
+  const tasksRef = useRef(data?.tasks);
+  useEffect(() => { tasksRef.current = data?.tasks; }, [data?.tasks]);
+
   // Connect to socket store when user is available
   useEffect(() => {
     if (!user) return;
@@ -514,16 +517,29 @@ function TaskListView({ page }: TaskListViewProps) {
       mutate(`/api/pages/${page.id}/tasks`);
     };
 
+    // Handle tasks moved between lists via drag-and-drop. The reorder API emits
+    // page:moved on the drive room (joined by usePageTreeSocket). We need to
+    // refetch when a task enters or leaves this list. tasksRef (not data) is
+    // used so the handler always sees the current task list regardless of when
+    // this effect was installed relative to the SWR load.
+    const handlePageMoved = (payload: { pageId: string; parentId: string | null }) => {
+      const movedIn  = payload.parentId === page.id;
+      const movedOut = tasksRef.current?.some(t => t.pageId === payload.pageId);
+      if (movedIn || movedOut) mutate(`/api/pages/${page.id}/tasks`);
+    };
+
     socket.on('task:task_added', handleTaskAdded);
     socket.on('task:task_updated', handleTaskUpdated);
     socket.on('task:task_deleted', handleTaskDeleted);
     socket.on('task:tasks_reordered', handleTasksReordered);
+    socket.on('page:moved', handlePageMoved);
 
     return () => {
       socket.off('task:task_added', handleTaskAdded);
       socket.off('task:task_updated', handleTaskUpdated);
       socket.off('task:task_deleted', handleTaskDeleted);
       socket.off('task:tasks_reordered', handleTasksReordered);
+      socket.off('page:moved', handlePageMoved);
     };
   }, [socket, connectionStatus, page.id]);
 
@@ -798,35 +814,12 @@ function TaskListView({ page }: TaskListViewProps) {
   if (viewMode === 'editor') {
     return (
       <div className="flex flex-col h-full min-w-0">
-        <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0">
-          <span className="text-sm font-medium text-muted-foreground">Description</span>
-          <div className="flex items-center bg-muted rounded-md p-0.5">
-            <button
-              onClick={() => setViewMode('editor')}
-              className={cn('p-1.5 rounded transition-colors', 'bg-background text-foreground shadow-sm')}
-              title="Editor view"
-              aria-label="Editor view"
-            >
-              <BookOpen className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setViewMode('table')}
-              className={cn('p-1.5 rounded transition-colors', 'text-muted-foreground hover:text-foreground')}
-              title="Table view"
-              aria-label="Table view"
-            >
-              <LayoutList className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setViewMode('kanban')}
-              className={cn('p-1.5 rounded transition-colors', 'text-muted-foreground hover:text-foreground')}
-              title="Kanban view"
-              aria-label="Kanban view"
-            >
-              <Kanban className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+        <TaskListHeader
+          pageId={page.id}
+          viewMode="editor"
+          onViewModeChange={setViewMode}
+          canEdit={canEdit}
+        />
         {canEdit && <Toolbar editor={editorInstance} contentMode="html" />}
         <TaskListDescriptionContent
           pageId={page.id}
@@ -865,9 +858,13 @@ function TaskListView({ page }: TaskListViewProps) {
 
   return (
     <div className="flex flex-col h-full min-w-0">
-      <TaskListDescriptionHeader
-        open={descriptionOpen}
-        onToggle={() => setDescriptionOpen(prev => !prev)}
+      <TaskListHeader
+        pageId={page.id}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        descriptionOpen={descriptionOpen}
+        onDescriptionToggle={() => setDescriptionOpen(prev => !prev)}
+        canEdit={canEdit}
       />
       {descriptionOpen && (
         <TaskListDescriptionContent
@@ -913,44 +910,6 @@ function TaskListView({ page }: TaskListViewProps) {
 
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
           <div className="flex items-center gap-2 sm:contents">
-            {/* View toggle (desktop only) */}
-            <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
-              <button
-                onClick={() => setViewMode('editor')}
-                className="p-1.5 rounded transition-colors text-muted-foreground hover:text-foreground"
-                title="Editor view"
-                aria-label="Editor view"
-              >
-                <BookOpen className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setViewMode('table')}
-                className={cn(
-                  'p-1.5 rounded transition-colors',
-                  viewMode === 'table'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                title="Table view"
-                aria-label="Table view"
-              >
-                <LayoutList className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setViewMode('kanban')}
-                className={cn(
-                  'p-1.5 rounded transition-colors',
-                  viewMode === 'kanban'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                title="Kanban view"
-                aria-label="Kanban view"
-              >
-                <Kanban className="h-4 w-4" />
-              </button>
-            </div>
-
             {canEdit && (
               <StatusConfigManager
                 pageId={page.id}
