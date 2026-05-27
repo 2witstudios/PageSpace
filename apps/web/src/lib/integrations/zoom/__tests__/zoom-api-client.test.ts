@@ -46,11 +46,10 @@ describe('encodeZoomUUID', () => {
 });
 
 describe('buildZoomOAuthScopes', () => {
-  it('returns a space-separated string containing all required scopes', () => {
+  it('returns a space-separated string of only granular (3-segment) scopes', () => {
     const parts = buildZoomOAuthScopes().split(' ');
-    expect(parts).toContain('recording:read');
-    expect(parts).toContain('user:read');
-    expect(parts).toContain('meeting:write');
+    expect(parts).toContain('user:read:user');
+    expect(parts).toContain('meeting:write:meeting');
     expect(parts).toContain('meeting:read:search');
     expect(parts).toContain('meeting:read:assets');
     expect(parts).toContain('ai_companion:read:search');
@@ -58,8 +57,15 @@ describe('buildZoomOAuthScopes', () => {
     expect(parts).toContain('cloud_recording:read:content');
   });
 
-  it('does not include recording:read:admin (user-scoped app, not org-admin)', () => {
-    expect(buildZoomOAuthScopes()).not.toContain('recording:read:admin');
+  it('does not include classic (2-segment) scopes that break granular OAuth apps', () => {
+    const scopes = buildZoomOAuthScopes();
+    expect(scopes).not.toContain('recording:read ');
+    expect(scopes).not.toMatch(/\buser:read\b(?!:)/);
+    expect(scopes).not.toMatch(/\bmeeting:write\b(?!:)/);
+  });
+
+  it('does not include :admin suffix (user-scoped app, not org-admin)', () => {
+    expect(buildZoomOAuthScopes()).not.toContain(':admin');
   });
 });
 

@@ -7,9 +7,8 @@ export const encodeZoomUUID = (uuid: string): string =>
 
 export const buildZoomOAuthScopes = (): string =>
   [
-    'recording:read',
-    'user:read',
-    'meeting:write',
+    'user:read:user',
+    'meeting:write:meeting',
     'meeting:read:search',
     'meeting:read:assets',
     'ai_companion:read:search',
