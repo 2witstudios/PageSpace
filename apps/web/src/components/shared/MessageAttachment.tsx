@@ -79,9 +79,10 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
 
   function handleMouseMove(e: React.MouseEvent) {
     if (!dragRef.current) return;
-    const dx = e.clientX - dragRef.current.px;
-    const dy = e.clientY - dragRef.current.py;
-    setView((prev: ViewState) => ({ ...prev, x: dragRef.current!.vx + dx, y: dragRef.current!.vy + dy }));
+    const { px, py, vx, vy } = dragRef.current;
+    const dx = e.clientX - px;
+    const dy = e.clientY - py;
+    setView((prev: ViewState) => ({ ...prev, x: vx + dx, y: vy + dy }));
   }
 
   function handleMouseUp() {
@@ -126,9 +127,10 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
       setView({ zoom: nextZoom, x: focalX - (focalX - vx) * scale, y: focalY - (focalY - vy) * scale });
     } else if (e.touches.length === 1 && dragRef.current) {
       const t = e.touches[0];
-      const dx = t.clientX - dragRef.current.px;
-      const dy = t.clientY - dragRef.current.py;
-      setView((prev: ViewState) => ({ ...prev, x: dragRef.current!.vx + dx, y: dragRef.current!.vy + dy }));
+      const { px, py, vx, vy } = dragRef.current;
+      const dx = t.clientX - px;
+      const dy = t.clientY - py;
+      setView((prev: ViewState) => ({ ...prev, x: vx + dx, y: vy + dy }));
     }
   }
 
