@@ -63,7 +63,7 @@ async function deleteUserAvatars(userId: string): Promise<void> {
   if (objects.length === 0) return;
   await s3().send(new DeleteObjectsCommand({
     Bucket: bucket,
-    Delete: { Objects: objects.map(o => ({ Key: o.Key! })), Quiet: true },
+    Delete: { Objects: objects.flatMap(o => o.Key ? [{ Key: o.Key }] : []), Quiet: true },
   }));
 }
 
