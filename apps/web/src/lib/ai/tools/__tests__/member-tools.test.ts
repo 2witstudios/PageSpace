@@ -37,7 +37,7 @@ import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/driv
 import type { ToolExecutionContext } from '../../core';
 
 const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
-const mockListDriveMembers = vi.mocked(listDriveMembers);
+vi.mocked(listDriveMembers);
 
 const makeContext = (userId: string) => ({
   toolCallId: '1',
