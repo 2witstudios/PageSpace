@@ -188,11 +188,14 @@ describe('useAttachmentUpload', () => {
 
     expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
     expect(startEditing).toHaveBeenCalledTimes(1);
+    expect(endEditing).not.toHaveBeenCalled();
 
     await act(async () => {
       resolveFirst?.(okResponse(batchResponse([{ success: true, file: fileData }])));
       await Promise.resolve();
     });
+
+    expect(endEditing).toHaveBeenCalledTimes(1);
   });
 
   it('shows per-file error toast when a file in the batch fails', async () => {
