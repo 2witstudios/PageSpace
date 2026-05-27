@@ -402,7 +402,7 @@ export async function GET(request: Request) {
       .map(task => {
         const listPageId = task.page?.parentId;
         const pageInfo = listPageId ? taskListPageMap.get(listPageId) : undefined;
-        if (!pageInfo) {
+        if (!listPageId || !pageInfo) {
           loggers.api.warn('Task has no accessible parent task list - skipping', {
             taskId: task.id,
             listPageId,

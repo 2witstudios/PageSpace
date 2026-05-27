@@ -483,7 +483,7 @@ export async function DELETE(
           actorDisplayName: actorInfo.actorDisplayName ?? undefined,
           metadata: {
             taskId,
-            taskListId: taskList.id,
+            taskListId: taskList?.id,
             taskListPageId: pageId,
           },
         },

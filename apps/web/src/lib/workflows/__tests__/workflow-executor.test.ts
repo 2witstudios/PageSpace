@@ -35,7 +35,7 @@ vi.mock('@pagespace/db/db', () => ({
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
-    query: { taskItems: { findFirst: vi.fn() } },
+    query: { taskItems: { findFirst: vi.fn() }, taskLists: { findFirst: vi.fn() } },
   },
 }));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({
@@ -55,6 +55,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { id: 'id' },
+  taskLists: { id: 'id', pageId: 'pageId' },
   taskAssignees: { taskId: 'taskId', userId: 'userId', agentPageId: 'agentPageId' },
   taskStatusConfigs: { taskListId: 'taskListId', slug: 'slug' },
 }));
