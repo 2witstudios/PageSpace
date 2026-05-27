@@ -175,7 +175,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - PORT=${REALTIME_PORT}
-      - CORS_ORIGIN=http://localhost:3000
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
     deploy:
       resources:
         limits:
