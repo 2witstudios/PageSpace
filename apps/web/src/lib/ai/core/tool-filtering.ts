@@ -127,6 +127,8 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
 } {
   const allTools = [
     // Read tools
+    'list_drive_members',
+    'list_collaborators',
     'list_drives',
     'list_pages',
     'read_page',
