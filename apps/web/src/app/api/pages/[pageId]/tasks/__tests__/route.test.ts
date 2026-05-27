@@ -195,6 +195,22 @@ describe('Task API Routes', () => {
   const mockPageId = 'page-456';
   const mockTaskListId = 'tasklist-789';
 
+  // Build a thenable select chain that resolves to `result`
+  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id' }]) => {
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+    };
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.groupBy = vi.fn().mockResolvedValue([]);
+    chain.limit = vi.fn().mockResolvedValue([]);
+    return chain;
+  };
+
   beforeEach(() => {
     vi.resetAllMocks();
     // vi.resetAllMocks() clears mockCreateMentionNotification's implementation,
@@ -212,21 +228,7 @@ describe('Task API Routes', () => {
       })),
     } as never);
     // Re-set up db.select to support all three select patterns in the route
-    vi.mocked(db.select).mockImplementation(() => {
-      const result = [{ id: 'child-page-id' }];
-      const chain: Record<string, unknown> = {
-        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-          Promise.resolve(result).then(resolve, reject),
-        catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
-      };
-      chain.from = vi.fn(() => chain);
-      chain.where = vi.fn(() => chain);
-      chain.innerJoin = vi.fn(() => chain);
-      chain.orderBy = vi.fn(() => chain);
-      chain.groupBy = vi.fn().mockResolvedValue([]);
-      chain.limit = vi.fn().mockResolvedValue([]);
-      return chain as never;
-    });
+    vi.mocked(db.select).mockImplementation(() => makeSelectChain() as never);
     // Re-set up db.transaction
     // @ts-expect-error - partial mock data
     vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
@@ -342,16 +344,18 @@ describe('Task API Routes', () => {
     });
 
     it('filters out trashed tasks', async () => {
-      const mockTasks = [
-        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Active', position: 0, isTrashed: false } },
-        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Trashed', position: 1, isTrashed: true } },
-      ];
+      // isTrashed filtering is DB-side: the childPages query only returns non-trashed
+      // page IDs, so task-2 (trashed) is never included in taskItems.findMany results.
+      const activeTask = { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Active', position: 0, isTrashed: false } };
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
+      // childPages query returns only the non-trashed page (DB filters isTrashed=false)
+      vi.mocked(db.select).mockImplementationOnce(() => makeSelectChain([{ id: 'p-1' }]) as never);
+      // taskItems.findMany only receives p-1 in its inArray clause, returns the active task
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([activeTask] as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
