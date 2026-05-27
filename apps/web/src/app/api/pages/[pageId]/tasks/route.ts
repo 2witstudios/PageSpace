@@ -112,21 +112,44 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     orderBy: [asc(taskStatusConfigs.position)],
   });
 
+  // Derive tasks from pages that are direct TASK_LIST children of this page
+  const childPages = await db
+    .select({ id: pages.id })
+    .from(pages)
+    .where(and(
+      eq(pages.parentId, pageId),
+      eq(pages.type, 'TASK_LIST'),
+      eq(pages.isTrashed, false),
+    ));
+  const childPageIds = childPages.map(p => p.id);
+
+  if (childPageIds.length === 0) {
+    return NextResponse.json({
+      taskList: {
+        id: taskList.id,
+        title: taskList.title,
+        description: taskList.description,
+        status: taskList.status,
+        updatedAt: taskList.updatedAt,
+      },
+      tasks: [],
+      statusConfigs,
+    });
+  }
+
   // Build query - include assignees relation
   const query = db.query.taskItems.findMany({
     where: and(
-      eq(taskItems.taskListId, taskList.id),
+      inArray(taskItems.pageId, childPageIds),
       status ? eq(taskItems.status, status) : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
     ),
     columns: {
       id: true,
-      taskListId: true,
       userId: true,
       assigneeId: true,
       assigneeAgentId: true,
       pageId: true,
-
       status: true,
       priority: true,
       position: true,
@@ -191,9 +214,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   let tasks = await query;
 
-  // Filter out tasks whose pages are trashed
-  tasks = tasks.filter(task => !task.page?.isTrashed);
-
   // Sort by page.position (source of truth), fallback to task.position
   tasks.sort((a, b) => {
     const posA = a.page?.position ?? a.position;
@@ -228,18 +248,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
   }
 
-  // Batch-count sub-tasks for each task's linked page
+  // Batch-count sub-tasks for each task's linked page via pages.parentId
   const subTaskCountByPageId = new Map<string, number>();
   const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
   if (linkedPageIds.length > 0) {
     const subTaskRows = await db
-      .select({ pageId: taskLists.pageId, total: count() })
-      .from(taskLists)
-      .innerJoin(taskItems, eq(taskItems.taskListId, taskLists.id))
-      .where(inArray(taskLists.pageId, linkedPageIds))
-      .groupBy(taskLists.pageId);
+      .select({ parentId: pages.parentId, total: count() })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(and(
+        inArray(pages.parentId, linkedPageIds),
+        eq(pages.isTrashed, false),
+      ))
+      .groupBy(pages.parentId);
     for (const row of subTaskRows) {
-      if (row.pageId) subTaskCountByPageId.set(row.pageId, Number(row.total));
+      if (row.parentId) subTaskCountByPageId.set(row.parentId, Number(row.total));
     }
   }
 
@@ -378,20 +401,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
   }
 
-  // Get highest position for new task and new page
-  const [lastTask, lastChildPage] = await Promise.all([
-    db.query.taskItems.findFirst({
-      where: eq(taskItems.taskListId, taskList.id),
-      orderBy: [desc(taskItems.position)],
-    }),
-    db.query.pages.findFirst({
-      where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
-      orderBy: [desc(pages.position)],
-    }),
-  ]);
+  // Get highest position for new page (task position mirrors page position)
+  const lastChildPage = await db.query.pages.findFirst({
+    where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
+    orderBy: [desc(pages.position)],
+  });
 
-  const nextTaskPosition = (lastTask?.position ?? -1) + 1;
-  const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
+  const nextPosition = (lastChildPage?.position ?? 0) + 1;
 
   // Determine primary assignee for backward compat fields (derive from assigneeIds if present)
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
@@ -406,13 +422,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       parentId: pageId,
       driveId: taskListPage.driveId,
       content: '',
-      position: nextPagePosition,
+      position: nextPosition,
       updatedAt: new Date(),
     }).returning();
 
-    // Create task with link to the page
+    // Create task metadata — list membership is derived from pages.parentId
     const [newTask] = await tx.insert(taskItems).values({
-      taskListId: taskList.id,
       userId,
       pageId: taskPage.id,
       status: status || 'pending',
@@ -420,7 +435,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
-      position: nextTaskPosition,
+      position: nextPosition,
     }).returning();
 
     // Create assignees in junction table

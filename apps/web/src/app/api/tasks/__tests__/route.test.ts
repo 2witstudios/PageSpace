@@ -42,10 +42,10 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title', parentId: 'parentId' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description' },
+  taskItems: { assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description' },
   taskLists: { id: 'id', pageId: 'pageId' },
   taskStatusConfigs: { taskListId: 'taskListId' },
 }));
@@ -177,7 +177,6 @@ const createTaskListFixture = (overrides: Partial<{
 
 const createTaskFixture = (overrides: Partial<{
   id: string;
-  taskListId: string;
   userId: string;
   assigneeId: string;
   pageId: string;
@@ -188,10 +187,8 @@ const createTaskFixture = (overrides: Partial<{
   updatedAt: Date;
   assignee: object | null;
   page: object | null;
-  taskList: object | null;
 }> = {}) => ({
   id: overrides.id ?? 'task_1',
-  taskListId: overrides.taskListId ?? 'tasklist_1',
   userId: overrides.userId ?? 'user_creator',
   assigneeId: overrides.assigneeId ?? 'user_123',
   assigneeAgentId: null,
@@ -208,8 +205,7 @@ const createTaskFixture = (overrides: Partial<{
   assignee: overrides.assignee ?? { id: 'user_123', name: 'Test User', image: null },
   assigneeAgent: null,
   user: { id: 'user_creator', name: 'Creator', image: null },
-  page: overrides.page ?? { id: 'page_task', title: overrides.title ?? 'Test Task', isTrashed: false },
-  taskList: overrides.taskList ?? { id: 'tasklist_1', pageId: 'page_tasklist', title: 'My Tasks' },
+  page: overrides.page ?? { id: 'page_task', title: overrides.title ?? 'Test Task', isTrashed: false, parentId: 'page_tasklist' },
 });
 
 // ============================================================================
@@ -356,7 +352,7 @@ describe('GET /api/tasks', () => {
         createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
-        createTaskFixture({ id: 'task_1', taskListId: 'tasklist_1' }),
+        createTaskFixture({ id: 'task_1' }),
       ]);
 
       const request = new Request('https://example.com/api/tasks?context=user');
@@ -411,9 +407,7 @@ describe('GET /api/tasks', () => {
       // Mock count query to return more than returned tasks
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn()
-            .mockResolvedValueOnce([]) // First call for trashed pages
-            .mockResolvedValueOnce([{ total: 10 }]), // Second call for count
+          where: vi.fn().mockResolvedValueOnce([{ total: 10 }]),
         }),
       } as any);
 
@@ -459,14 +453,7 @@ describe('GET /api/tasks', () => {
   });
 
   describe('trashed page filtering', () => {
-    it('should exclude tasks from trashed pages at query level', async () => {
-      // Mock that there are trashed pages
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValueOnce([{ id: 'trashed_page_1' }]),
-        }),
-      } as any);
-
+    it('should exclude tasks from trashed pages via subquery filter', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
       ]);
@@ -477,7 +464,7 @@ describe('GET /api/tasks', () => {
       const request = new Request('https://example.com/api/tasks?context=user');
       await GET(request);
 
-      // The query should be called with trashed page exclusion filter
+      // The query should be called (isTrashed=false filter is baked into the validTaskPageSubquery)
       expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
     });
   });

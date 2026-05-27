@@ -244,7 +244,7 @@ export const pageReadTools = {
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
             .where(and(
-              eq(taskItems.taskListId, taskList.id),
+              eq(pages.parentId, taskList.pageId!),
               eq(pages.isTrashed, false),
             ))
             .orderBy(asc(taskItems.position));

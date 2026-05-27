@@ -198,9 +198,8 @@ const baseTask = {
   assigneeAgentId: null,
   pageId: 'linked-page-1',
   completedAt: null,
-  taskListId: mockTaskListId,
   position: 0,
-  page: { title: 'Existing Task' },
+  page: { title: 'Existing Task', parentId: mockPageId },
 };
 
 function setupTaskLookup(taskList = { id: mockTaskListId }, task: Record<string, unknown> | null = baseTask) {

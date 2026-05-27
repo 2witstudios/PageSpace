@@ -33,7 +33,6 @@ export interface TaskAssigneeData {
 
 export interface TaskItem {
   id: string;
-  taskListId: string;
   userId: string;
   assigneeId: string | null;
   assigneeAgentId: string | null;

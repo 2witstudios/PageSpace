@@ -177,7 +177,7 @@ Agent Triggers:
           const existingTask = await db.query.taskItems.findFirst({
             where: eq(taskItems.id, taskId),
             with: {
-              page: { columns: { title: true } },
+              page: { columns: { title: true, parentId: true } },
             },
           });
 
@@ -186,7 +186,7 @@ Agent Triggers:
           }
 
           taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.id, existingTask.taskListId),
+            where: eq(taskLists.pageId, existingTask.page?.parentId ?? ''),
           });
 
           if (!taskList) {
@@ -206,7 +206,7 @@ Agent Triggers:
           // DELETE branch — short-circuits all field updates
           if (isDelete) {
             const taskListPageId = taskList.pageId;
-            const taskListId = existingTask.taskListId;
+            const taskListId = taskList.id;
             const linkedPageId = existingTask.pageId;
             const existingTitle = existingTask.page?.title ?? '';
             const actorInfo = await getActorInfo(userId);
@@ -302,7 +302,11 @@ Agent Triggers:
             // (e.g. useAggregatedTasks → TasksDropdown) can drop the deleted
             // task immediately instead of waiting for a subsequent tool call.
             const remainingTasks = await db.query.taskItems.findMany({
-              where: eq(taskItems.taskListId, taskListId),
+              where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
+                eq(pages.parentId, taskList.pageId!),
+                eq(pages.type, 'TASK_LIST'),
+                eq(pages.isTrashed, false),
+              ))),
               orderBy: [asc(taskItems.position)],
               with: {
                 assignee: { columns: { id: true, name: true, image: true } },
@@ -400,7 +404,7 @@ Agent Triggers:
 
           // Fetch status configs for rollup and validation
           const validConfigs = await db.query.taskStatusConfigs.findMany({
-            where: eq(taskStatusConfigs.taskListId, existingTask.taskListId),
+            where: eq(taskStatusConfigs.taskListId, taskList.id),
             columns: { slug: true, group: true },
           });
 
@@ -483,7 +487,7 @@ Agent Triggers:
                       aiConversationId: (context as ToolExecutionContext).conversationId,
                       metadata: {
                         taskId,
-                        taskListId: existingTask.taskListId,
+                        taskListId: taskList?.id,
                         taskListPageId: taskList?.pageId ?? undefined,
                       },
                     },
@@ -539,7 +543,12 @@ Agent Triggers:
             const peers = await db
               .select({ id: taskItems.id, position: taskItems.position })
               .from(taskItems)
-              .where(eq(taskItems.taskListId, existingTask.taskListId))
+              .innerJoin(pages, eq(pages.id, taskItems.pageId))
+              .where(and(
+                eq(pages.parentId, taskList.pageId!),
+                eq(pages.type, 'TASK_LIST'),
+                eq(pages.isTrashed, false),
+              ))
               .orderBy(asc(taskItems.position));
 
             const filtered = peers.filter(p => p.id !== taskId);
@@ -572,19 +581,24 @@ Agent Triggers:
               : new Set(['in_progress']);
 
             const siblingTasks = await db
-              .select()
+              .select({ id: taskItems.id, status: taskItems.status })
               .from(taskItems)
-              .where(eq(taskItems.taskListId, existingTask.taskListId));
+              .innerJoin(pages, eq(pages.id, taskItems.pageId))
+              .where(and(
+                eq(pages.parentId, taskList.pageId!),
+                eq(pages.type, 'TASK_LIST'),
+                eq(pages.isTrashed, false),
+              ));
 
             const allCompleted = siblingTasks.every(t =>
               t.id === taskId ? doneStatusSlugs.has(status) : doneStatusSlugs.has(t.status)
             );
 
             if (allCompleted) {
-              await db.update(taskLists).set({ status: 'completed' }).where(eq(taskLists.id, existingTask.taskListId));
+              await db.update(taskLists).set({ status: 'completed' }).where(eq(taskLists.id, taskList.id));
             } else if (inProgressSlugs.has(status)) {
               await db.update(taskLists).set({ status: 'in_progress' }).where(and(
-                eq(taskLists.id, existingTask.taskListId),
+                eq(taskLists.id, taskList.id),
                 eq(taskLists.status, 'pending')
               ));
             }
@@ -678,9 +692,14 @@ Agent Triggers:
 
           // Determine position for new task
           const existingTasks = await db
-            .select()
+            .select({ position: taskItems.position })
             .from(taskItems)
-            .where(eq(taskItems.taskListId, taskList.id))
+            .innerJoin(pages, eq(pages.id, taskItems.pageId))
+            .where(and(
+              eq(pages.parentId, pageId!),
+              eq(pages.type, 'TASK_LIST'),
+              eq(pages.isTrashed, false),
+            ))
             .orderBy(desc(taskItems.position));
 
           const nextTaskPosition = position ?? (existingTasks.length > 0 ? (existingTasks[0]?.position || 0) + 1 : 0);
@@ -836,7 +855,11 @@ Agent Triggers:
 
         // Get all tasks for response with assignee relations
         const allTasks = await db.query.taskItems.findMany({
-          where: eq(taskItems.taskListId, taskList!.id),
+          where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
+            eq(pages.parentId, pageId!),
+            eq(pages.type, 'TASK_LIST'),
+            eq(pages.isTrashed, false),
+          ))),
           orderBy: [asc(taskItems.position)],
           with: {
             assignee: {
@@ -1013,32 +1036,48 @@ This helps agents understand their responsibilities and coordinate work with oth
           conditions.push(isNull(taskItems.completedAt));
         }
 
-        // Query tasks assigned to the agent
+        // Query tasks assigned to the agent (task list membership derived from pages.parentId)
         const tasks = await db.query.taskItems.findMany({
           where: and(...conditions),
           orderBy: [asc(taskItems.position)],
           with: {
-            taskList: {
-              columns: { id: true, title: true, pageId: true },
-              with: {
-                page: {
-                  columns: { id: true, title: true, driveId: true },
-                },
-              },
-            },
             assignee: {
               columns: { id: true, name: true },
             },
             page: {
-              columns: { id: true, title: true, isTrashed: true },
+              columns: { id: true, title: true, isTrashed: true, parentId: true },
             },
           },
         });
 
+        // Collect unique task list page IDs from task parents
+        const taskListPageIds = [...new Set(
+          tasks.map(t => t.page?.parentId).filter((id): id is string => !!id)
+        )];
+
+        // Fetch page info (driveId) and task list records for those parent pages
+        const [taskListPagesInfo, taskListsInfo] = await Promise.all([
+          taskListPageIds.length > 0
+            ? db.query.pages.findMany({
+                where: inArray(pages.id, taskListPageIds),
+                columns: { id: true, driveId: true },
+              })
+            : Promise.resolve([]),
+          taskListPageIds.length > 0
+            ? db.query.taskLists.findMany({
+                where: inArray(taskLists.pageId, taskListPageIds),
+                columns: { id: true, pageId: true, title: true },
+              })
+            : Promise.resolve([]),
+        ]);
+
+        const taskListPageInfoMap = new Map(taskListPagesInfo.map(p => [p.id, p]));
+        const taskListByPageId = new Map(taskListsInfo.map(tl => [tl.pageId, tl]));
+
         // Get unique drive IDs from tasks and check permissions
         const taskDriveIds = [...new Set(
-          tasks
-            .map(t => t.taskList?.page?.driveId)
+          taskListPageIds
+            .map(id => taskListPageInfoMap.get(id)?.driveId)
             .filter((id): id is string => !!id)
         )];
 
@@ -1057,7 +1096,8 @@ This helps agents understand their responsibilities and coordinate work with oth
         // Filter out tasks with trashed pages, inaccessible drives, and optionally by driveId
         const filteredTasks = tasks.filter(task => {
           if (task.page?.isTrashed) return false;
-          const taskDriveId = task.taskList?.page?.driveId;
+          const parentId = task.page?.parentId;
+          const taskDriveId = parentId ? taskListPageInfoMap.get(parentId)?.driveId : undefined;
           // Security: only include tasks from drives the user can access
           if (taskDriveId && !accessibleDriveIds.has(taskDriveId)) return false;
           // Optional driveId filter from params
@@ -1066,7 +1106,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         });
 
         // Build group lookup from status configs across all task lists
-        const uniqueTaskListIds = [...new Set(filteredTasks.map(t => t.taskList?.id).filter(Boolean))] as string[];
+        const uniqueTaskListIds = taskListsInfo.map(tl => tl.id);
         const allConfigs = uniqueTaskListIds.length > 0
           ? await db.query.taskStatusConfigs.findMany({
               where: inArray(taskStatusConfigs.taskListId, uniqueTaskListIds),
@@ -1105,12 +1145,17 @@ This helps agents understand their responsibilities and coordinate work with oth
             priority: t.priority,
             dueDate: t.dueDate,
             pageId: t.pageId,
-            taskList: t.taskList ? {
-              id: t.taskList.id,
-              title: t.taskList.title,
-              pageId: t.taskList.pageId,
-              driveId: t.taskList.page?.driveId,
-            } : null,
+            taskList: (() => {
+              const parentId = t.page?.parentId;
+              const tl = parentId ? taskListByPageId.get(parentId) : undefined;
+              const tlPage = parentId ? taskListPageInfoMap.get(parentId) : undefined;
+              return tl ? {
+                id: tl.id,
+                title: tl.title,
+                pageId: tl.pageId,
+                driveId: tlPage?.driveId,
+              } : null;
+            })(),
             // Include user co-assignee if present
             userAssignee: t.assignee ? {
               id: t.assignee.id,

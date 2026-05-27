@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members'
-import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
+import { taskItems } from '@pagespace/db/schema/tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -150,11 +150,10 @@ export async function GET(
       pageResults = await getPermittedPages(drive.id, userId);
     }
 
-    // Get task-linked page IDs scoped to this drive (join through taskLists → pages in drive)
+    // Get task-linked page IDs scoped to this drive (task pages are children of task list pages)
     const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
       .from(taskItems)
-      .innerJoin(taskLists, eq(taskItems.taskListId, taskLists.id))
-      .innerJoin(pages, eq(taskLists.pageId, pages.id))
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
       .where(and(
         isNotNull(taskItems.pageId),
         eq(pages.driveId, drive.id)

@@ -34,7 +34,7 @@ export function useTaskMutations(
   const { onPageMutate, onSuccess, onError } = options;
 
   const getConfigsForTask = useCallback((task: Task): TaskStatusConfig[] => {
-    return statusConfigsByTaskList[task.taskListId] || [];
+    return statusConfigsByTaskList[task.taskListPageId ?? ''] || [];
   }, [statusConfigsByTaskList]);
 
   const handleError = useCallback((error: Error, message: string) => {
