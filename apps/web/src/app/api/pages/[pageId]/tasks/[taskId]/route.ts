@@ -4,15 +4,14 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
-import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
-import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
-import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
+
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -43,31 +42,25 @@ export async function PATCH(
     }, { status: 403 });
   }
 
-  // Verify task belongs to this page's task list
+  // Look up task list for status config validation and broadcast metadata
   const taskList = await db.query.taskLists.findFirst({
     where: eq(taskLists.pageId, pageId),
   });
 
-  if (!taskList) {
-    return NextResponse.json({ error: 'Task list not found' }, { status: 404 });
-  }
-
+  // Verify task exists and its page is a direct child of this task list page
   const existingTask = await db.query.taskItems.findFirst({
-    where: and(
-      eq(taskItems.id, taskId),
-      eq(taskItems.taskListId, taskList.id),
-    ),
+    where: eq(taskItems.id, taskId),
     with: {
-      page: { columns: { title: true } },
+      page: { columns: { title: true, parentId: true } },
     },
   });
 
-  if (!existingTask) {
+  if (!existingTask || existingTask.page?.parentId !== pageId) {
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position } = body;
+  const { title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -80,18 +73,16 @@ export async function PATCH(
     trimmedTitle = title.trim();
   }
 
-  if (description !== undefined) {
-    updates.description = description?.trim() || null;
-  }
-
   let statusMovedToDone = false;
 
   if (status !== undefined) {
     // Validate against task list's custom status configs
-    const validStatuses = await db.query.taskStatusConfigs.findMany({
-      where: eq(taskStatusConfigs.taskListId, taskList.id),
-      columns: { slug: true, group: true },
-    });
+    const validStatuses = taskList
+      ? await db.query.taskStatusConfigs.findMany({
+          where: eq(taskStatusConfigs.taskListId, taskList.id),
+          columns: { slug: true, group: true },
+        })
+      : [];
 
     if (validStatuses.length > 0) {
       const validConfig = validStatuses.find(s => s.slug === status);
@@ -240,7 +231,7 @@ export async function PATCH(
               actorDisplayName: actorInfo.actorDisplayName ?? undefined,
               metadata: {
                 taskId,
-                taskListId: taskList.id,
+                taskListId: taskList?.id,
                 taskListPageId: pageId,
               },
             },
@@ -386,31 +377,6 @@ export async function PATCH(
     }
   }
 
-  if (description !== undefined) {
-    try {
-      const oldMentionIds = new Set(extractMentionedUserIds(existingTask.description ?? ''));
-      const newMentionIds = extractMentionedUserIds(updates.description ?? '');
-      const newlyAdded = newMentionIds.filter((id) => id !== userId && !oldMentionIds.has(id));
-      if (newlyAdded.length > 0) {
-        const taskPageId = existingTask.pageId;
-        const viewChecks = await Promise.all(
-          newlyAdded.map(async (id) => ({ id, canView: await canUserViewPage(id, taskPageId) }))
-        );
-        await Promise.all(
-          viewChecks
-            .filter((e) => e.canView)
-            .map((e) =>
-              createMentionNotification(e.id, taskPageId, userId).catch((err) =>
-                loggers.api.error('Failed to send mention notification', err as Error)
-              )
-            )
-        );
-      }
-    } catch (err) {
-      loggers.api.error('Failed to resolve mention targets', err as Error);
-    }
-  }
-
   const responseBody = { ...taskWithRelations, title: responseTitle };
 
   // Broadcast events
@@ -418,7 +384,7 @@ export async function PATCH(
     broadcastTaskEvent({
       type: 'task_updated',
       taskId,
-      taskListId: taskList.id,
+      taskListId: taskList?.id,
       userId,
       pageId,
       data: responseBody,
@@ -475,26 +441,20 @@ export async function DELETE(
     columns: { driveId: true },
   });
 
-  // Verify task belongs to this page's task list
+  // Look up task list for broadcast metadata
   const taskList = await db.query.taskLists.findFirst({
     where: eq(taskLists.pageId, pageId),
   });
 
-  if (!taskList) {
-    return NextResponse.json({ error: 'Task list not found' }, { status: 404 });
-  }
-
+  // Verify task exists and its page is a direct child of this task list page
   const existingTask = await db.query.taskItems.findFirst({
-    where: and(
-      eq(taskItems.id, taskId),
-      eq(taskItems.taskListId, taskList.id),
-    ),
+    where: eq(taskItems.id, taskId),
     with: {
-      page: { columns: { title: true } },
+      page: { columns: { title: true, parentId: true } },
     },
   });
 
-  if (!existingTask) {
+  if (!existingTask || existingTask.page?.parentId !== pageId) {
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
@@ -523,7 +483,7 @@ export async function DELETE(
           actorDisplayName: actorInfo.actorDisplayName ?? undefined,
           metadata: {
             taskId,
-            taskListId: taskList.id,
+            taskListId: taskList?.id,
             taskListPageId: pageId,
           },
         },
@@ -551,7 +511,7 @@ export async function DELETE(
     broadcastTaskEvent({
       type: 'task_deleted',
       taskId,
-      taskListId: taskList.id,
+      taskListId: taskList?.id,
       userId,
       pageId,
       data: { id: taskId },

@@ -68,9 +68,7 @@ import { KanbanColumn, KanbanCard } from './TaskKanbanComponents';
 const STATUS_GROUPS: TaskStatusGroup[] = ['todo', 'in_progress', 'done'];
 
 interface TasksDashboardProps {
-  context: 'user' | 'drive';
   driveId?: string;
-  driveName?: string;
 }
 
 interface ExtendedFilters extends TaskFilters {
@@ -80,7 +78,8 @@ interface ExtendedFilters extends TaskFilters {
   statusGroup?: StatusGroupFilter;
 }
 
-export function TasksDashboard({ context, driveId: initialDriveId, driveName }: TasksDashboardProps) {
+export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
+  const isLocked = !!propDriveId;
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -111,10 +110,10 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   // Filter state — URL params win on mount; otherwise fall back to per-scope persisted prefs.
-  const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
+  const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(propDriveId);
   const persistDashboardFilter = useLayoutStore((state) => state.setTasksDashboardFilter);
   const [filters, setFilters] = useState<ExtendedFilters>(() => {
-    const initialScopeKey = scopeKeyFor(context, initialDriveId);
+    const initialScopeKey = scopeKeyFor(isLocked ? 'drive' : 'user', propDriveId);
     const stored = useLayoutStore.getState().tasksDashboardFilters[initialScopeKey];
     return pickInitialFilters(searchParams, stored);
   });
@@ -177,8 +176,11 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
     router.replace(newUrl, { scroll: false });
 
-    persistDashboardFilter(scopeKeyFor(context, newDriveId), toStoredDashboardFilters(newFilters));
-  }, [router, persistDashboardFilter, context]);
+    const scopeKey = isLocked
+      ? scopeKeyFor('drive', newDriveId ?? propDriveId)
+      : scopeKeyFor('user', undefined);
+    persistDashboardFilter(scopeKey, toStoredDashboardFilters(newFilters));
+  }, [router, persistDashboardFilter, isLocked, propDriveId]);
 
   // Handle search with debounce
   const handleSearchChange = useCallback((value: string) => {
@@ -202,16 +204,10 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       if (!response.ok) throw new Error('Failed to fetch drives');
       const data = await response.json();
       setDrives(data);
-
-      // If context is 'drive' and no drive selected, select first one
-      if (context === 'drive' && !selectedDriveId && data.length > 0) {
-        setSelectedDriveId(data[0].id);
-      }
     } catch (err) {
       console.error('Error fetching drives:', err);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedDriveId is only checked, not derived from
-  }, [context]);
+  }, []);
 
   // Fetch tasks
   const fetchTasks = useCallback(
@@ -225,13 +221,13 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
       try {
         const params = new URLSearchParams();
-        params.set('context', context);
+        params.set('context', isLocked ? 'drive' : 'user');
         params.set('limit', '50');
         params.set('offset', offset.toString());
 
-        if (context === 'drive' && selectedDriveId) {
+        if (isLocked && selectedDriveId) {
           params.set('driveId', selectedDriveId);
-        } else if (context === 'user' && filters.driveId) {
+        } else if (!isLocked && filters.driveId) {
           params.set('driveId', filters.driveId);
         }
         if (filters.status) {
@@ -285,7 +281,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
         setLoadingMore(false);
       }
     },
-    [context, selectedDriveId, filters]
+    [isLocked, selectedDriveId, filters]
   );
 
   // Initial load
@@ -295,21 +291,21 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
   // Fetch tasks when filters or drive changes
   useEffect(() => {
-    if (context === 'user' || (context === 'drive' && selectedDriveId)) {
+    if (!isLocked || selectedDriveId) {
       fetchTasks();
     }
-  }, [context, selectedDriveId, filters, fetchTasks]);
+  }, [isLocked, selectedDriveId, filters, fetchTasks]);
 
   // Register/unregister editing state for UI refresh protection
   useEffect(() => {
-    const dashboardId = `tasks-dashboard-${context}-${selectedDriveId || 'all'}`;
+    const dashboardId = `tasks-dashboard-${isLocked ? 'drive' : 'user'}-${selectedDriveId || 'all'}`;
     if (editingTaskId) {
       useEditingStore.getState().startEditing(dashboardId, 'form', { componentName: 'TasksDashboard' });
     } else {
       useEditingStore.getState().endEditing(dashboardId);
     }
     return () => useEditingStore.getState().endEditing(dashboardId);
-  }, [editingTaskId, context, selectedDriveId]);
+  }, [editingTaskId, isLocked, selectedDriveId]);
 
   // Handlers
   const handleLoadMore = () => {
@@ -329,7 +325,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   };
 
   const handleDriveChange = (driveId: string) => {
-    if (context === 'drive') {
+    if (isLocked) {
       setSelectedDriveId(driveId);
       const stored = useLayoutStore.getState().tasksDashboardFilters[scopeKeyFor('drive', driveId)];
       const updatedFilters = fromStoredOrDefaults(stored);
@@ -351,7 +347,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
   // Helper to get status configs for a specific task
   const getConfigsForTask = useCallback((task: Task): TaskStatusConfig[] => {
-    return statusConfigsByTaskList[task.taskListId] || [];
+    return statusConfigsByTaskList[task.taskListPageId ?? ''] || [];
   }, [statusConfigsByTaskList]);
 
   // Task update handlers
@@ -569,11 +565,11 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     );
   }
 
-  const title = context === 'drive'
-    ? `${driveName || drives.find(d => d.id === selectedDriveId)?.name || 'Drive'} Tasks`
+  const title = isLocked
+    ? `${drives.find(d => d.id === selectedDriveId)?.name || 'Drive'} Tasks`
     : 'My Tasks';
 
-  const description = context === 'drive'
+  const description = isLocked
     ? 'Tasks assigned to you in this drive'
     : filters.driveId
       ? `Your tasks in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
@@ -586,7 +582,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     filters.status ||
     filters.priority ||
     (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
-    (context === 'user' && filters.driveId) ||
+    (!isLocked && filters.driveId) ||
     filters.assigneeFilter === 'all' ||
     (filters.statusGroup && filters.statusGroup !== 'active')
   );
@@ -604,7 +600,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
     setSearchValue('');
     setFilters(nextFilters);
-    updateUrl(nextFilters, context === 'drive' ? selectedDriveId : undefined);
+    updateUrl(nextFilters, isLocked ? selectedDriveId : undefined);
   };
 
   // Count active filters for the badge on mobile filter button
@@ -613,7 +609,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     filters.status,
     filters.priority,
     filters.dueDateFilter && filters.dueDateFilter !== 'all',
-    context === 'user' && filters.driveId,
+    !isLocked && filters.driveId,
     filters.assigneeFilter === 'all',
     filters.statusGroup && filters.statusGroup !== 'active',
   ].filter(Boolean).length;
@@ -647,7 +643,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                       variant="ghost"
                       size="icon"
                       className="h-9 w-9 shrink-0"
-                      onClick={() => router.push(context === 'drive' && selectedDriveId
+                      onClick={() => router.push(isLocked && selectedDriveId
                         ? `/dashboard/${selectedDriveId}`
                         : '/dashboard'
                       )}
@@ -697,7 +693,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                 {/* Mobile Compact Task List */}
                 {tasks.length === 0 ? (
                   <TaskEmptyState
-                    context={context}
+                    isLocked={isLocked}
                     hasDriveSelected={!!selectedDriveId}
                     hasActiveFilters={hasActiveFilters}
                     onClearFilters={clearFilters}
@@ -749,7 +745,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                 <TaskFilterSheet
                   open={filterSheetOpen}
                   onOpenChange={setFilterSheetOpen}
-                  context={context}
+                  isLocked={isLocked}
                   drives={drives}
                   selectedDriveId={selectedDriveId}
                   filters={filters}
@@ -767,7 +763,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => router.push(context === 'drive' && selectedDriveId
+                    onClick={() => router.push(isLocked && selectedDriveId
                       ? `/dashboard/${selectedDriveId}`
                       : '/dashboard'
                     )}
@@ -849,7 +845,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
                   <FilterControls
                     layout="desktop"
-                    context={context}
+                    isLocked={isLocked}
                     drives={drives}
                     selectedDriveId={selectedDriveId}
                     filters={filters}
@@ -864,7 +860,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                 {/* Desktop Tasks View */}
                 {tasks.length === 0 ? (
                   <TaskEmptyState
-                    context={context}
+                    isLocked={isLocked}
                     hasDriveSelected={!!selectedDriveId}
                     hasActiveFilters={hasActiveFilters}
                     onClearFilters={clearFilters}

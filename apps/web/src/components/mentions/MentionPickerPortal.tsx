@@ -113,19 +113,23 @@ export function MentionPickerPortal({
   if (typeof document === 'undefined') return null;
 
   const viewportH = getViewportHeight();
+  const viewportW = window.visualViewport?.width ?? window.innerWidth;
   const maxHeight =
     position.bottom !== undefined
       ? `${viewportH - position.bottom - 8}px`
       : `${viewportH - (position.top ?? 0) - 8}px`;
 
+  const actualWidth = Math.min(Math.max(position.width ?? 256, 256), 320);
+  const clampedLeft = Math.max(8, Math.min(position.left, viewportW - actualWidth - 8));
+
   const style: React.CSSProperties = {
     position: 'fixed',
     zIndex: 50,
     maxHeight,
+    width: actualWidth,
     ...(position.bottom !== undefined
-      ? { bottom: position.bottom, left: position.left }
-      : { top: position.top, left: position.left }),
-    ...(position.width ? { width: position.width } : {}),
+      ? { bottom: position.bottom, left: clampedLeft }
+      : { top: position.top, left: clampedLeft }),
   };
 
   return createPortal(

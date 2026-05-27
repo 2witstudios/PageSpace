@@ -21,7 +21,7 @@ export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 
 export interface FilterControlsProps {
   layout: 'mobile' | 'desktop';
-  context: 'user' | 'drive';
+  isLocked: boolean;
   drives: Drive[];
   selectedDriveId: string | undefined;
   filters: FilterValues;
@@ -34,7 +34,7 @@ export interface FilterControlsProps {
 
 export function FilterControls({
   layout,
-  context,
+  isLocked,
   drives,
   selectedDriveId,
   filters,
@@ -66,7 +66,7 @@ export function FilterControls({
         >
           <div className="flex w-max min-w-full gap-2">
             <DriveSelect
-              context={context}
+              isLocked={isLocked}
               drives={drives}
               selectedDriveId={selectedDriveId}
               driveFilterId={filters.driveId}
@@ -120,7 +120,7 @@ export function FilterControls({
         onChange={(g) => onFiltersChange({ statusGroup: g })}
       />
       <DriveSelect
-        context={context}
+        isLocked={isLocked}
         drives={drives}
         selectedDriveId={selectedDriveId}
         driveFilterId={filters.driveId}

@@ -30,7 +30,7 @@ export type { DueDateFilter, AssigneeFilter, StatusGroupFilter, FilterValues };
 export interface TaskFilterSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  context: 'user' | 'drive';
+  isLocked: boolean;
   drives: Drive[];
   selectedDriveId: string | undefined;
   filters: FilterValues;
@@ -44,7 +44,7 @@ export interface TaskFilterSheetProps {
 export function TaskFilterSheet({
   open,
   onOpenChange,
-  context,
+  isLocked,
   drives,
   selectedDriveId,
   filters,
@@ -108,7 +108,7 @@ export function TaskFilterSheet({
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Drive</label>
             <DriveSelect
-              context={context}
+              isLocked={isLocked}
               drives={drives}
               selectedDriveId={selectedDriveId}
               driveFilterId={filters.driveId}

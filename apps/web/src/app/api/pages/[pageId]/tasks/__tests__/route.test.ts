@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
+import { computeHasContent } from '../task-utils';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies
@@ -60,14 +61,25 @@ vi.mock('@pagespace/db/db', () => {
       returning: vi.fn(),
     })),
   }));
-  // Active-trigger-count lookup: db.select(...).from(workflows).where(...).groupBy(...)
-  const mockSelect = vi.fn(() => ({
-    from: vi.fn(() => ({
-      where: vi.fn(() => ({
-        groupBy: vi.fn().mockResolvedValue([]),
-      })),
-    })),
-  }));
+  // Supports three select patterns in the route:
+  // 1. childPages: await db.select().from(pages).where(...)           — thenable chain
+  // 2. triggerRows: await db.select().from(triggers).where().groupBy()
+  // 3. subTaskRows: await db.select().from(items).innerJoin().where().groupBy()
+  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id' }]) => {
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+    };
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.groupBy = vi.fn().mockResolvedValue([]);
+    chain.limit = vi.fn().mockResolvedValue([]);
+    return chain;
+  };
+  const mockSelect = vi.fn(() => makeSelectChain());
   return {
     db: {
       query: {
@@ -150,10 +162,54 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
+const assert = ({ given, should, actual, expected }: {
+  given: string; should: string; actual: unknown; expected: unknown;
+}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
+
+describe('computeHasContent', () => {
+  it('null content', () => {
+    assert({ given: 'null', should: 'return false', actual: computeHasContent(null), expected: false });
+  });
+  it('undefined content', () => {
+    assert({ given: 'undefined', should: 'return false', actual: computeHasContent(undefined), expected: false });
+  });
+  it('empty string', () => {
+    assert({ given: 'empty string', should: 'return false', actual: computeHasContent(''), expected: false });
+  });
+  it('HTML with no visible text', () => {
+    assert({ given: '<p></p>', should: 'return false', actual: computeHasContent('<p></p>'), expected: false });
+  });
+  it('HTML with whitespace only', () => {
+    assert({ given: '<p>   </p>', should: 'return false', actual: computeHasContent('<p>   </p>'), expected: false });
+  });
+  it('HTML with real text content', () => {
+    assert({ given: '<p>Hello</p>', should: 'return true', actual: computeHasContent('<p>Hello</p>'), expected: true });
+  });
+  it('nested HTML with text', () => {
+    assert({ given: '<h1>Title</h1><p>Body</p>', should: 'return true', actual: computeHasContent('<h1>Title</h1><p>Body</p>'), expected: true });
+  });
+});
+
 describe('Task API Routes', () => {
   const mockUserId = 'user-123';
   const mockPageId = 'page-456';
   const mockTaskListId = 'tasklist-789';
+
+  // Build a thenable select chain that resolves to `result`
+  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id' }]) => {
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+    };
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.groupBy = vi.fn().mockResolvedValue([]);
+    chain.limit = vi.fn().mockResolvedValue([]);
+    return chain;
+  };
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -171,14 +227,8 @@ describe('Task API Routes', () => {
         returning: vi.fn(),
       })),
     } as never);
-    // Re-set up db.select default for active-trigger-count lookup
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          groupBy: vi.fn().mockResolvedValue([]),
-        })),
-      })),
-    } as never);
+    // Re-set up db.select to support all three select patterns in the route
+    vi.mocked(db.select).mockImplementation(() => makeSelectChain() as never);
     // Re-set up db.transaction
     // @ts-expect-error - partial mock data
     vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
@@ -294,16 +344,18 @@ describe('Task API Routes', () => {
     });
 
     it('filters out trashed tasks', async () => {
-      const mockTasks = [
-        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Active', position: 0, isTrashed: false } },
-        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Trashed', position: 1, isTrashed: true } },
-      ];
+      // isTrashed filtering is DB-side: the childPages query only returns non-trashed
+      // page IDs, so task-2 (trashed) is never included in taskItems.findMany results.
+      const activeTask = { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Active', position: 0, isTrashed: false } };
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
+      // childPages query returns only the non-trashed page (DB filters isTrashed=false)
+      vi.mocked(db.select).mockImplementationOnce(() => makeSelectChain([{ id: 'p-1' }]) as never);
+      // taskItems.findMany only receives p-1 in its inArray clause, returns the active task
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([activeTask] as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -391,25 +443,6 @@ describe('Task API Routes', () => {
       await expect(GET(createRequest(), { params: mockParams })).rejects.toThrow('connection refused');
     });
 
-    it('searches by description', async () => {
-      const mockTasks = [
-        { id: 'task-1', description: 'Buy groceries', status: 'pending', page: { id: 'p-1', title: 'Generic', isTrashed: false, position: 0 } },
-        { id: 'task-2', description: null, status: 'pending', page: { id: 'p-2', title: 'Call mom', isTrashed: false, position: 1 } },
-      ];
-      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
-
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
-
-      const response = await GET(createRequest('?search=groceries'), { params: mockParams });
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.tasks).toHaveLength(1);
-      expect(body.tasks[0].id).toBe('task-1');
-    });
 
     it('filters tasks by search query', async () => {
       const mockTasks = [
@@ -726,35 +759,6 @@ describe('Task API Routes', () => {
       expect(response.status).toBe(201);
     });
 
-    it('fires createMentionNotification for @mentioned users in task description', async () => {
-      const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
-      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
-
-      transactionPageResult = [mockNewPage];
-      transactionTaskResult = [mockNewTask];
-
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.pages.findFirst)
-        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
-        .mockResolvedValueOnce(null as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
-      vi.mocked(db.query.taskItems.findFirst)
-        .mockResolvedValueOnce(null as never)
-        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
-
-      const response = await POST(
-        createRequest({ title: 'Task', description: 'Needs review @[Alice](user-alice:user)' }),
-        { params: mockParams },
-      );
-
-      expect(response.status).toBe(201);
-      // Notification must link to the individual task page, not the task list page
-      expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', mockNewPage.id, mockUserId);
-    });
 
     it('does not notify the task creator even when self-mentioned in description', async () => {
       const mockTaskList = { id: mockTaskListId };
@@ -845,6 +849,53 @@ describe('Task API Routes', () => {
       );
 
       expect(response.status).toBe(201);
+    });
+
+    it('creates task page as TASK_LIST type with empty content', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', title: 'New Task', status: 'pending', priority: 'medium', position: 0 };
+      const mockNewPage = { id: 'new-page', title: 'New Task', type: 'TASK_LIST' };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      let capturedPageInsert: Record<string, unknown> | null = null;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+        let insertCallCount = 0;
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn((vals: Record<string, unknown>) => {
+              insertCallCount++;
+              if (insertCallCount === 1) capturedPageInsert = vals;
+              return {
+                returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
+              };
+            }),
+          })),
+        };
+        return callback(tx);
+      });
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+        .mockResolvedValueOnce(null as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
+
+      expect(response.status).toBe(201);
+      expect(capturedPageInsert).toMatchObject({
+        type: 'TASK_LIST',
+        content: '',
+      });
     });
   });
 });

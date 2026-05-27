@@ -170,58 +170,48 @@ export async function GET(request: Request) {
 
     const taskListPageIds = taskListPages.map(p => p.id);
 
-    // Get task lists linked to these pages
-    const taskListsData = await db.query.taskLists.findMany({
+    // Map taskListPageId → page info for enriching results
+    const taskListPageMap = new Map<string, { id: string; driveId: string; title: string }>();
+    for (const page of taskListPages) {
+      taskListPageMap.set(page.id, page);
+    }
+
+    // Get task lists for status config lookup only (task membership is now via pages.parentId)
+    const taskListsForConfigs = await db.query.taskLists.findMany({
       where: inArray(taskLists.pageId, taskListPageIds),
       columns: { id: true, pageId: true },
     });
+    const taskListIdToPageId = new Map(
+      taskListsForConfigs
+        .filter((tl): tl is typeof tl & { pageId: string } => tl.pageId !== null)
+        .map(tl => [tl.id, tl.pageId])
+    );
 
-    if (taskListsData.length === 0) {
-      return NextResponse.json({
-        tasks: [],
-        pagination: {
-          total: 0,
-          limit: params.limit,
-          offset: params.offset,
-          hasMore: false,
-        },
-      });
-    }
-
-    const taskListIds = taskListsData.map(tl => tl.id);
-
-    // Build map of taskListId -> page info for enriching results
-    const taskListToPageMap = new Map<string, { pageId: string; driveId: string; taskListTitle: string }>();
-    for (const tl of taskListsData) {
-      const pageInfo = taskListPages.find(p => p.id === tl.pageId);
-      if (pageInfo) {
-        taskListToPageMap.set(tl.id, {
-          pageId: pageInfo.id,
-          driveId: pageInfo.driveId,
-          taskListTitle: pageInfo.title,
-        });
-      }
-    }
-
-    // Get trashed page IDs to exclude tasks referencing them
-    // This ensures pagination counts match the actual filtered results
-    const trashedPages = await db.select({ id: pages.id })
-      .from(pages)
-      .where(and(eq(pages.isTrashed, true), inArray(pages.driveId, driveIds)));
-    const trashedPageIds = trashedPages.map(p => p.id);
-
-    // Fetch status configs for all involved task lists. Done up-front so we can
-    // both (a) filter by status group and (b) enrich each task with metadata below.
-    const statusConfigRows = await db.query.taskStatusConfigs.findMany({
-      where: inArray(taskStatusConfigs.taskListId, taskListIds),
-    });
+    // Fetch status configs, keyed by the task list PAGE ID (not the taskList row ID)
+    const statusConfigRows = taskListsForConfigs.length > 0
+      ? await db.query.taskStatusConfigs.findMany({
+          where: inArray(taskStatusConfigs.taskListId, taskListsForConfigs.map(tl => tl.id)),
+        })
+      : [];
 
     const taskListStatusMap = new Map<string, typeof statusConfigRows>();
     for (const config of statusConfigRows) {
-      const existing = taskListStatusMap.get(config.taskListId) || [];
+      const listPageId = taskListIdToPageId.get(config.taskListId);
+      if (!listPageId) continue;
+      const existing = taskListStatusMap.get(listPageId) || [];
       existing.push(config);
-      taskListStatusMap.set(config.taskListId, existing);
+      taskListStatusMap.set(listPageId, existing);
     }
+
+    // Subquery: task pages that are non-trashed TASK_LIST children of accessible list pages
+    const validTaskPageSubquery = db
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(
+        inArray(pages.parentId, taskListPageIds),
+        eq(pages.type, 'TASK_LIST'),
+        eq(pages.isTrashed, false),
+      ));
 
     // Build assignee filter condition
     // Default: tasks assigned to current user
@@ -241,12 +231,8 @@ export async function GET(request: Request) {
 
     // Build filter conditions for tasks
     const filterConditions = [
-      inArray(taskItems.taskListId, taskListIds),
+      inArray(taskItems.pageId, validTaskPageSubquery),
       assigneeCondition,
-      // Exclude tasks whose linked page is trashed
-      trashedPageIds.length > 0
-        ? not(inArray(taskItems.pageId, trashedPageIds))
-        : undefined,
     ].filter(Boolean);
 
     if (params.status) {
@@ -273,10 +259,7 @@ export async function GET(request: Request) {
         .from(pages)
         .where(sql`${pages.title} ILIKE ${searchPattern} ESCAPE '\\'`);
       filterConditions.push(
-        or(
-          inArray(taskItems.pageId, titleMatchSubquery),
-          sql`${taskItems.description} ILIKE ${searchPattern} ESCAPE '\\'`
-        )
+        inArray(taskItems.pageId, titleMatchSubquery)
       );
     }
     // Due date filter
@@ -325,16 +308,13 @@ export async function GET(request: Request) {
       }
     }
 
-    // Serialize status configs once so we can return the same shape from both
-    // the empty fast-path and the regular response. The dashboard builds its
-    // status menus from this payload, so an empty {} would hide custom statuses
-    // even when the underlying task lists still have them.
+    // Serialize status configs keyed by the task list PAGE ID
     const serializedStatusConfigsByTaskList: Record<string, Array<{
       id: string; taskListId: string; name: string;
       slug: string; color: string; group: TaskStatusGroup; position: number;
     }>> = {};
-    for (const [taskListId, configs] of taskListStatusMap) {
-      serializedStatusConfigsByTaskList[taskListId] = configs.map(c => ({
+    for (const [listPageId, configs] of taskListStatusMap) {
+      serializedStatusConfigsByTaskList[listPageId] = configs.map(c => ({
         id: c.id, taskListId: c.taskListId, name: c.name,
         slug: c.slug, color: c.color, group: c.group, position: c.position,
       }));
@@ -342,7 +322,7 @@ export async function GET(request: Request) {
 
     // Group-level status filter. Convert the requested group into a per-task-list
     // set of allowed status slugs (custom configs first, defaults if none) and
-    // build an OR over (taskListId, status IN (...)) tuples.
+    // build an OR over (pageId IN children, status IN (...)) tuples.
     if (params.statusGroup && params.statusGroup !== 'all') {
       const allowedGroups: TaskStatusGroup[] = params.statusGroup === 'active'
         ? ['todo', 'in_progress']
@@ -353,13 +333,21 @@ export async function GET(request: Request) {
         .filter(([, cfg]) => allowedGroupSet.has(cfg.group))
         .map(([slug]) => slug);
 
-      const perTaskListConditions = taskListIds.map((id) => {
-        const configs = taskListStatusMap.get(id);
+      const perTaskListConditions = taskListPageIds.map((listPageId) => {
+        const configs = taskListStatusMap.get(listPageId);
         const slugs = configs && configs.length > 0
           ? configs.filter((c) => allowedGroupSet.has(c.group)).map((c) => c.slug)
           : defaultAllowedSlugs;
         if (slugs.length === 0) return undefined;
-        return and(eq(taskItems.taskListId, id), inArray(taskItems.status, slugs));
+        const childPageSubquery = db
+          .select({ id: pages.id })
+          .from(pages)
+          .where(and(
+            eq(pages.parentId, listPageId),
+            eq(pages.type, 'TASK_LIST'),
+            eq(pages.isTrashed, false),
+          ));
+        return and(inArray(taskItems.pageId, childPageSubquery), inArray(taskItems.status, slugs));
       }).filter((c): c is NonNullable<typeof c> => c !== undefined);
 
       if (perTaskListConditions.length === 0) {
@@ -400,10 +388,7 @@ export async function GET(request: Request) {
           columns: { id: true, name: true, image: true },
         },
         page: {
-          columns: { id: true, title: true, isTrashed: true },
-        },
-        taskList: {
-          columns: { id: true, pageId: true, title: true },
+          columns: { id: true, title: true, isTrashed: true, parentId: true },
         },
       },
       orderBy: [desc(taskItems.updatedAt)],
@@ -412,21 +397,20 @@ export async function GET(request: Request) {
     });
 
     // Enrich tasks with drive, task list page info, and status metadata
-    // Filter out orphaned tasks where pageInfo is missing to prevent undefined URLs
+    // Filter out orphaned tasks where parent list is not accessible
     const enrichedTasks = tasks
       .map(task => {
-        const pageInfo = taskListToPageMap.get(task.taskListId);
-        if (!pageInfo) {
-          loggers.api.warn('Task has orphaned taskListId - skipping', {
+        const listPageId = task.page?.parentId;
+        const pageInfo = listPageId ? taskListPageMap.get(listPageId) : undefined;
+        if (!listPageId || !pageInfo) {
+          loggers.api.warn('Task has no accessible parent task list - skipping', {
             taskId: task.id,
-            taskListId: task.taskListId,
+            listPageId,
           });
           return null;
         }
 
-        // Compute status metadata from custom configs or defaults.
-        // Note: DB configs use `.name` while DEFAULT_STATUS_CONFIG uses `.label` — both map to statusLabel.
-        const configs = taskListStatusMap.get(task.taskListId) || [];
+        const configs = taskListStatusMap.get(listPageId) || [];
         const matchingConfig = configs.find(c => c.slug === task.status);
         const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];
 
@@ -438,8 +422,8 @@ export async function GET(request: Request) {
           ...task,
           title: task.page?.title ?? '',
           driveId: pageInfo.driveId,
-          taskListPageId: pageInfo.pageId,
-          taskListPageTitle: pageInfo.taskListTitle,
+          taskListPageId: listPageId,
+          taskListPageTitle: pageInfo.title,
           statusGroup,
           statusLabel,
           statusColor,

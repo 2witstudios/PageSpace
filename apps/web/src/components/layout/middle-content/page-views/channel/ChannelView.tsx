@@ -39,6 +39,8 @@ import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useFindStore } from '@/stores/useFindStore';
+import { useDraft } from '@/hooks/useDraft';
+import { buildDraftKey } from '@/lib/draft/draft';
 
 interface ChannelRef {
   id: string;
@@ -75,7 +77,9 @@ interface MessageWithReactions extends MessageWithUser {
 function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
-  const [inputValue, setInputValue] = useState('');
+  const { draft: inputValue, setDraft: setInputValue, clearDraft: clearInputDraft } = useDraft(
+    buildDraftKey('channel', page.id),
+  );
 
   // Find in page
   const findQuery = useFindStore((s) => s.query);
@@ -336,7 +340,7 @@ function ChannelView({ page }: ChannelViewProps) {
     }
     const activeQuoteId = quotedMessageId;
     const activeQuoteSnapshot = activeQuotedSnapshot;
-    setInputValue('');
+    clearInputDraft();
     channelInputRef.current?.clear();
     clearQuote();
     handleSubmit(content, attachment, activeQuoteId, activeQuoteSnapshot);

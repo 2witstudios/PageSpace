@@ -12,6 +12,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -175,6 +176,14 @@ export async function POST(request: Request) {
         if (page.driveId !== targetDriveId) {
           await updateChildrenDriveId(tx, page.id, targetDriveId);
         }
+
+        await syncTaskItemOnMove(tx, {
+          movedPageId: page.id,
+          movedPageType: page.type,
+          oldParentId: page.parentId,
+          newParentId: targetParentId,
+          userId,
+        });
 
         nextPosition += 1;
       }

@@ -67,7 +67,7 @@ export async function populateUserDrive(
       const taskPageId = await insertPage({
         id: createId(),
         title: task.title,
-        type: 'DOCUMENT',
+        type: 'TASK_LIST',
         content: `
 # ${task.title}
 
@@ -84,11 +84,9 @@ ${task.description}
 
       await client.insert(taskItems).values({
         id: createId(),
-        taskListId,
         userId,
         assigneeId: task.assignee === 'self' ? userId : null,
         pageId: taskPageId,
-        description: task.description,
         status: task.status,
         priority: task.priority,
         position: index,

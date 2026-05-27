@@ -71,12 +71,10 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
  */
 export const taskItems = pgTable('task_items', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  taskListId: text('taskListId').notNull().references(() => taskLists.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   assigneeId: text('assigneeId').references(() => users.id, { onDelete: 'set null' }),
   assigneeAgentId: text('assigneeAgentId').references(() => pages.id, { onDelete: 'set null' }),
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  description: text('description'),
+  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }).unique(),
   status: text('status').notNull().default('pending'),
   priority: text('priority', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),
   position: integer('position').notNull().default(0),
@@ -87,8 +85,6 @@ export const taskItems = pgTable('task_items', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {
   return {
-    taskListIdx: index('task_items_task_list_id_idx').on(table.taskListId),
-    taskListStatusIdx: index('task_items_task_list_status_idx').on(table.taskListId, table.status),
     assigneeIdx: index('task_items_assignee_id_idx').on(table.assigneeId),
     assigneeAgentIdx: index('task_items_assignee_agent_id_idx').on(table.assigneeAgentId),
     pageIdx: index('task_items_page_id_idx').on(table.pageId),
@@ -135,7 +131,6 @@ export const taskListsRelations = relations(taskLists, ({ one, many }) => ({
     fields: [taskLists.pageId],
     references: [pages.id],
   }),
-  items: many(taskItems),
   statusConfigs: many(taskStatusConfigs),
 }));
 
@@ -147,10 +142,6 @@ export const taskStatusConfigsRelations = relations(taskStatusConfigs, ({ one })
 }));
 
 export const taskItemsRelations = relations(taskItems, ({ one, many }) => ({
-  taskList: one(taskLists, {
-    fields: [taskItems.taskListId],
-    references: [taskLists.id],
-  }),
   user: one(users, {
     fields: [taskItems.userId],
     references: [users.id],

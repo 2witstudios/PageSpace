@@ -49,7 +49,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { pageId: 'pageId', taskListId: 'taskListId', position: 'position' },
+  taskItems: { pageId: 'pageId', position: 'position' },
   taskLists: { pageId: 'pageId' },
   taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
   DEFAULT_TASK_STATUSES: [

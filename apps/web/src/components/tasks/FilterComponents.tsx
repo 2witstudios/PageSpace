@@ -59,7 +59,7 @@ export function FilterSelect({
 }
 
 export interface DriveSelectProps {
-  context: 'user' | 'drive';
+  isLocked: boolean;
   drives: Drive[];
   selectedDriveId: string | undefined;
   driveFilterId: string | undefined;
@@ -68,14 +68,14 @@ export interface DriveSelectProps {
 }
 
 export function DriveSelect({
-  context,
+  isLocked,
   drives,
   selectedDriveId,
   driveFilterId,
   onDriveChange,
   triggerClassName,
 }: DriveSelectProps) {
-  const value = context === 'drive' ? selectedDriveId : (driveFilterId || 'all');
+  const value = isLocked ? selectedDriveId : (driveFilterId || 'all');
 
   return (
     <Select
@@ -86,7 +86,7 @@ export function DriveSelect({
         <SelectValue placeholder="All drives" />
       </SelectTrigger>
       <SelectContent>
-        {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
+        {!isLocked && <SelectItem value="all">All drives</SelectItem>}
         {drives.map((drive) => (
           <SelectItem key={drive.id} value={drive.id}>
             {drive.name}

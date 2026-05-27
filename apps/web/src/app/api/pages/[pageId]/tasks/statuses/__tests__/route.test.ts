@@ -44,29 +44,47 @@ const createTxMock = () => {
   };
 };
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
-    query: {
-      taskLists: { findFirst: vi.fn() },
-      taskStatusConfigs: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
-      taskItems: { findMany: vi.fn().mockResolvedValue([]) },
-    },
-    insert: vi.fn(() => ({
-      values: vi.fn(() => ({
-        returning: vi.fn().mockResolvedValue([]),
+vi.mock('@pagespace/db/db', () => {
+  const makeSelectChain = (result: unknown[] = []) => {
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+    };
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.groupBy = vi.fn().mockResolvedValue(result);
+    chain.limit = vi.fn().mockResolvedValue(result);
+    return chain;
+  };
+
+  return {
+    db: {
+      query: {
+        taskLists: { findFirst: vi.fn() },
+        taskStatusConfigs: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+        taskItems: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      select: vi.fn(() => makeSelectChain()),
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          returning: vi.fn().mockResolvedValue([]),
+        })),
       })),
-    })),
-    delete: vi.fn(() => ({
-      where: vi.fn().mockResolvedValue(undefined),
-    })),
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
+      delete: vi.fn(() => ({
         where: vi.fn().mockResolvedValue(undefined),
       })),
-    })),
-    transaction: vi.fn(async (callback) => callback(createTxMock())),
-  },
-}));
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue(undefined),
+        })),
+      })),
+      transaction: vi.fn(async (callback) => callback(createTxMock())),
+    },
+  };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ field: a, value: b })),
   and: vi.fn((...c: unknown[]) => c),
@@ -571,9 +589,25 @@ describe('PUT /api/pages/[pageId]/tasks/statuses', () => {
 });
 
 describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
+  const makeEmptySelectChain = (result: unknown[] = []) => {
+    const chain: Record<string, unknown> = {
+      then: (resolve: (v: unknown[]) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(result).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(result).catch(reject),
+    };
+    chain.from = vi.fn(() => chain);
+    chain.where = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy = vi.fn(() => chain);
+    chain.groupBy = vi.fn().mockResolvedValue(result);
+    chain.limit = vi.fn().mockResolvedValue(result);
+    return chain;
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(checkMCPPageScope).mockResolvedValue(null as never);
+    vi.mocked(db.select).mockImplementation(() => makeEmptySelectChain() as never);
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -638,9 +672,8 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     vi.mocked(db.query.taskStatusConfigs.findFirst).mockResolvedValue({
       id: 'cfg-1', slug: 'review', group: 'in_progress',
     } as never);
-    vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
-      { id: 'task-1' }, { id: 'task-2' },
-    ] as never);
+    const taskRows = [{ id: 'task-1' }, { id: 'task-2' }];
+    vi.mocked(db.select).mockReturnValueOnce(makeEmptySelectChain(taskRows) as never);
 
     const response = await DELETE(createDeleteRequest({ statusId: 'cfg-1' }), context);
     expect(response.status).toBe(400);
@@ -656,7 +689,7 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     vi.mocked(db.query.taskStatusConfigs.findFirst)
       .mockResolvedValueOnce({ id: 'cfg-1', slug: 'review', group: 'in_progress' } as never) // statusToDelete
       .mockResolvedValueOnce(null as never); // migration target not found
-    vi.mocked(db.query.taskItems.findMany).mockResolvedValue([{ id: 'task-1' }] as never);
+    // tasksWithStatus can be empty — the migration target check runs regardless
 
     const response = await DELETE(createDeleteRequest({
       statusId: 'cfg-1',
@@ -723,9 +756,8 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     vi.mocked(db.query.taskStatusConfigs.findFirst)
       .mockResolvedValueOnce({ id: 'cfg-1', slug: 'review', group: 'in_progress' } as never) // statusToDelete
       .mockResolvedValueOnce({ id: 'cfg-2', slug: 'wip', group: 'in_progress' } as never); // migration target
-    vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
-      { id: 'task-1' }, { id: 'task-2' },
-    ] as never);
+    const taskRows = [{ id: 'task-1' }, { id: 'task-2' }];
+    vi.mocked(db.select).mockReturnValueOnce(makeEmptySelectChain(taskRows) as never);
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
       { id: 'cfg-1', slug: 'review', group: 'in_progress' },
       { id: 'cfg-2', slug: 'wip', group: 'in_progress' },
@@ -756,7 +788,7 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     vi.mocked(db.query.taskStatusConfigs.findFirst)
       .mockResolvedValueOnce({ id: 'cfg-1', slug: 'review', group: 'in_progress' } as never) // statusToDelete
       .mockResolvedValueOnce(null as never); // migration target not found
-    vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never); // no tasks
+    // db.select default returns [] — no tasks use this status
 
     const response = await DELETE(createDeleteRequest({
       statusId: 'cfg-1',

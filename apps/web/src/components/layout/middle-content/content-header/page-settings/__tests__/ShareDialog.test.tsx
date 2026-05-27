@@ -107,6 +107,12 @@ const makeInviteSuccess = () =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+const makeEmptyRolesResponse = () =>
+  new Response(JSON.stringify({ roles: [] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
 describe('ShareDialog — off-platform invite branch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -237,7 +243,13 @@ describe('ShareDialog — off-platform invite branch', () => {
   });
 
   it('given /api/users/find returns 200, uses the direct grant path (not share-invite)', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValueOnce(make200UserResponse());
+    // fetchRoleData fires on dialog open and consumes 2 fetchWithAuth calls
+    // (one for /api/drives/:driveId/roles, one for /api/pages/:pageId/role-permissions)
+    // before handleInvite can call /api/users/find
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(makeEmptyRolesResponse())
+      .mockResolvedValueOnce(makeEmptyRolesResponse())
+      .mockResolvedValueOnce(make200UserResponse());
     vi.mocked(post).mockResolvedValueOnce({ id: 'perm_1' });
 
     const user = userEvent.setup();

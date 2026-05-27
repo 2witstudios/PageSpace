@@ -121,8 +121,8 @@ describe('Task triggers API', () => {
 
     it('returns 403 when user lacks edit permission (trigger configs are editor-only)', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(false);
 
@@ -132,8 +132,8 @@ describe('Task triggers API', () => {
 
     it('returns triggers list on success', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       const triggerRow = { id: 'trg-1', triggerType: 'completion', agentPageId, prompt: 'do it', isEnabled: true, workflowId: 'wf-1' };
@@ -161,8 +161,8 @@ describe('Task triggers API', () => {
 
     it('returns 403 when user lacks edit permission', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(false);
 
@@ -175,8 +175,8 @@ describe('Task triggers API', () => {
 
     it('rejects due_date trigger when task has no due date', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
 
@@ -191,8 +191,8 @@ describe('Task triggers API', () => {
 
     it('upserts trigger and returns 200 on success', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       vi.mocked(db.select).mockReturnValueOnce({
@@ -213,8 +213,8 @@ describe('Task triggers API', () => {
 
     it('returns 500 if the trigger row is missing after upsert', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       // Simulate the post-upsert re-query coming back empty (race / constraint loss)
@@ -248,10 +248,10 @@ describe('Task triggers API', () => {
       const taskMetadata = { hasTrigger: true, triggerTypes: ['completion', 'due_date'] };
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
         id: taskId,
-        taskListId,
+        page: { parentId: pageId },
         metadata: taskMetadata,
       } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, isTrashed: false } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
 

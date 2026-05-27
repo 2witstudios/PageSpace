@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc, desc, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
@@ -327,14 +328,16 @@ export async function DELETE(
     return NextResponse.json({ error: 'Status config not found' }, { status: 404 });
   }
 
-  // Check if any tasks use this status
-  const tasksWithStatus = await db.query.taskItems.findMany({
-    where: and(
-      eq(taskItems.taskListId, taskList.id),
+  // Check if any tasks in this list use this status (join through pages.parentId)
+  const tasksWithStatus = await db
+    .select({ id: taskItems.id })
+    .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(and(
+      eq(pages.parentId, pageId),
+      eq(pages.isTrashed, false),
       eq(taskItems.status, statusToDelete.slug),
-    ),
-    columns: { id: true },
-  });
+    ));
 
   if (tasksWithStatus.length > 0 && !migrateToSlug) {
     return NextResponse.json({

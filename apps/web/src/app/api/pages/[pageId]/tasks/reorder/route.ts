@@ -43,14 +43,10 @@ export async function PATCH(
     columns: { driveId: true, title: true },
   });
 
-  // Verify task list exists for this page
+  // Look up task list for broadcast metadata (non-fatal if missing)
   const taskList = await db.query.taskLists.findFirst({
     where: eq(taskLists.pageId, pageId),
   });
-
-  if (!taskList) {
-    return NextResponse.json({ error: 'Task list not found' }, { status: 404 });
-  }
 
   const body = await req.json();
   const { tasks } = body;
@@ -81,7 +77,7 @@ export async function PATCH(
   await broadcastTaskEvent({
     type: 'tasks_reordered',
     taskId: tasks[0]?.id ?? '',
-    taskListId: taskList.id,
+    taskListId: taskList?.id,
     userId,
     pageId,
     data: { tasks },
@@ -97,7 +93,7 @@ export async function PATCH(
     }, {
       ...actorInfo,
       metadata: {
-        taskListId: taskList.id,
+        taskListId: taskList?.id,
         reorderedTaskIds: tasks.map((t: { id: string }) => t.id),
         newPositions: tasks.map((t: { id: string; position: number }) => ({
           id: t.id,

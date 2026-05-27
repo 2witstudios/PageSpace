@@ -36,7 +36,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
-  taskItems: { id: 'id', taskListId: 'taskListId', position: 'position' },
+  taskItems: { id: 'id', position: 'position' },
   taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
   taskAssignees: { taskId: 'taskId' },
 }));
@@ -295,6 +295,85 @@ describe('task-management-tools', () => {
       ).rejects.toThrow('Page must be a TASK_LIST page to add tasks');
     });
 
+    describe('create branch', () => {
+      it('creates task page as TASK_LIST type with empty content', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'page-1',
+          type: 'TASK_LIST',
+          title: 'My Task List',
+          driveId: 'drive-1',
+        });
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'page-1',
+          userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
+        });
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        let capturedPageInsert: Record<string, unknown> | null = null;
+        const transactionMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+          let insertCallCount = 0;
+          const tx = {
+            insert: vi.fn(() => ({
+              values: vi.fn((vals: Record<string, unknown>) => {
+                insertCallCount++;
+                if (insertCallCount === 1) capturedPageInsert = vals;
+                return {
+                  returning: vi.fn().mockResolvedValue(
+                    insertCallCount === 1
+                      ? [{ id: 'new-page', title: 'New Task', type: 'TASK_LIST' }]
+                      : [{ id: 'new-task', taskListId: 'list-1', pageId: 'new-page', title: 'New Task', status: 'pending', priority: 'medium', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, metadata: {}, createdAt: new Date(), updatedAt: new Date() }]
+                  ),
+                };
+              }),
+            })),
+          };
+          return cb(tx);
+        });
+        mockDb.transaction = transactionMock as unknown as typeof mockDb.transaction;
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue(null);
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+        mockDb.query.pages.findFirst = vi.fn()
+          .mockResolvedValueOnce({ id: 'page-1', type: 'TASK_LIST', title: 'My Task List', driveId: 'drive-1' })  // taskListPage
+          .mockResolvedValueOnce(null)  // lastChildPage
+          .mockResolvedValueOnce({ ...{ id: 'new-task', taskListId: 'list-1', pageId: 'new-page', title: 'New Task', status: 'pending', priority: 'medium', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, metadata: null, completedAt: null, createdAt: new Date(), updatedAt: new Date() }, assignee: null, assigneeAgent: null, user: null, assignees: [] });  // enriched task
+
+        // Mock db.select for position query (supports innerJoin for sibling fetch)
+        mockDb.select = vi.fn(() => ({
+          from: vi.fn(() => ({
+            innerJoin: vi.fn(() => ({
+              where: vi.fn(() => ({
+                orderBy: vi.fn().mockResolvedValue([]),
+              })),
+            })),
+            where: vi.fn(() => ({
+              orderBy: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        })) as unknown as typeof mockDb.select;
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        const result = await taskManagementTools.update_task.execute!(
+          { pageId: 'page-1', title: 'New Task' },
+          context
+        );
+
+        expect(capturedPageInsert).toMatchObject({
+          type: 'TASK_LIST',
+          content: '',
+        });
+        expect((result as { success: boolean }).success).toBe(true);
+      });
+    });
+
     describe('delete branch', () => {
       it('hard-deletes task and trashes linked DOCUMENT page when delete: true', async () => {
         mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
@@ -470,6 +549,7 @@ describe('task-management-tools', () => {
         const dbSelectMock = vi.fn(() => {
           const chain = {
             from: vi.fn().mockReturnThis(),
+            innerJoin: vi.fn().mockReturnThis(),
             where: vi.fn().mockReturnThis(),
             orderBy: vi.fn(() => {
               selectCalls.push('orderBy');

@@ -16,7 +16,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { taskItems, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
+import { taskItems, taskLists, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -435,31 +435,35 @@ async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'c
   const task = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, taskItemId),
     with: {
-      taskList: {
-        columns: { id: true, title: true, pageId: true },
-      },
       page: {
-        columns: { title: true },
+        columns: { title: true, parentId: true },
       },
     },
   });
 
   if (!task) return null;
 
+  const taskListPageId = task.page?.parentId;
+  const taskList = taskListPageId
+    ? await db.query.taskLists.findFirst({
+        where: eq(taskLists.pageId, taskListPageId),
+        columns: { id: true, title: true },
+      })
+    : undefined;
+
   const parts: string[] = ['<task-context>'];
   parts.push(`Title: ${task.page?.title ?? ''}`);
-  if (task.description) parts.push(`Description: ${task.description}`);
   parts.push(`Status: ${task.status}`);
   parts.push(`Priority: ${task.priority}`);
   if (task.dueDate) parts.push(`Due Date: ${task.dueDate.toISOString()}`);
   if (task.completedAt) parts.push(`Completed At: ${task.completedAt.toISOString()}`);
 
   // Status group context
-  if (task.taskList) {
-    parts.push(`Task List: ${task.taskList.title}`);
+  if (taskList) {
+    parts.push(`Task List: ${taskList.title}`);
     const statusConfig = await db.query.taskStatusConfigs.findFirst({
       where: and(
-        eq(taskStatusConfigs.taskListId, task.taskList.id),
+        eq(taskStatusConfigs.taskListId, taskList.id),
         eq(taskStatusConfigs.slug, task.status),
       ),
       columns: { group: true, name: true },

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { db } from '@pagespace/db/db';
-import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
-import { eq, and, isNull, isNotNull, sql } from '@pagespace/db/operators';
+import { taskLists } from '@pagespace/db/schema/tasks';
+import { and, isNull, isNotNull } from '@pagespace/db/operators';
 
 /**
  * Cleanup script to remove ephemeral (conversation-scoped) task lists.
@@ -34,25 +34,9 @@ async function cleanup(): Promise<void> {
     return;
   }
 
-  // Count task items that will be deleted
-  const taskCount = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(taskItems)
-    .where(sql`${taskItems.taskListId} = ANY(${listIds})`);
-
-  console.log(`Will delete ${taskCount[0]?.count ?? 0} task item(s)`);
-
-  // Perform the cleanup in a transaction
+  // Delete the task lists (task items for ephemeral lists are now orphaned since
+  // taskItems no longer has a taskListId FK — they'll be cleaned by a separate orphan sweep)
   await db.transaction(async (tx) => {
-    // Delete task items first (foreign key constraint)
-    const deletedItems = await tx
-      .delete(taskItems)
-      .where(sql`${taskItems.taskListId} = ANY(${listIds})`)
-      .returning({ id: taskItems.id });
-
-    console.log(`Deleted ${deletedItems.length} task item(s)`);
-
-    // Delete the task lists
     const deletedLists = await tx
       .delete(taskLists)
       .where(and(

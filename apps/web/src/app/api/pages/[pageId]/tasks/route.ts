@@ -10,13 +10,9 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
-import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
-import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getDefaultContent } from '@pagespace/lib/content/page-types.config'
-import { PageType } from '@pagespace/lib/utils/enums';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
+import { computeHasContent } from './task-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -116,21 +112,44 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     orderBy: [asc(taskStatusConfigs.position)],
   });
 
+  // Derive tasks from pages that are direct TASK_LIST children of this page
+  const childPages = await db
+    .select({ id: pages.id })
+    .from(pages)
+    .where(and(
+      eq(pages.parentId, pageId),
+      eq(pages.type, 'TASK_LIST'),
+      eq(pages.isTrashed, false),
+    ));
+  const childPageIds = childPages.map(p => p.id);
+
+  if (childPageIds.length === 0) {
+    return NextResponse.json({
+      taskList: {
+        id: taskList.id,
+        title: taskList.title,
+        description: taskList.description,
+        status: taskList.status,
+        updatedAt: taskList.updatedAt,
+      },
+      tasks: [],
+      statusConfigs,
+    });
+  }
+
   // Build query - include assignees relation
   const query = db.query.taskItems.findMany({
     where: and(
-      eq(taskItems.taskListId, taskList.id),
+      inArray(taskItems.pageId, childPageIds),
       status ? eq(taskItems.status, status) : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
     ),
     columns: {
       id: true,
-      taskListId: true,
       userId: true,
       assigneeId: true,
       assigneeAgentId: true,
       pageId: true,
-      description: true,
       status: true,
       priority: true,
       position: true,
@@ -166,8 +185,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         columns: {
           id: true,
           title: true,
+          type: true,
           isTrashed: true,
           position: true,
+          content: true,
         },
       },
       assignees: {
@@ -193,9 +214,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   let tasks = await query;
 
-  // Filter out tasks whose pages are trashed
-  tasks = tasks.filter(task => !task.page?.isTrashed);
-
   // Sort by page.position (source of truth), fallback to task.position
   tasks.sort((a, b) => {
     const posA = a.page?.position ?? a.position;
@@ -207,8 +225,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (search) {
     const searchLower = search.toLowerCase();
     tasks = tasks.filter(task =>
-      (task.page?.title.toLowerCase().includes(searchLower)) ||
-      (task.description?.toLowerCase().includes(searchLower))
+      (task.page?.title ?? '').toLowerCase().includes(searchLower)
     );
   }
 
@@ -231,10 +248,31 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
   }
 
-  const enrichedTasks = tasks.map((t) => ({
+  // Batch-count sub-tasks for each task's linked page via pages.parentId
+  const subTaskCountByPageId = new Map<string, number>();
+  const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
+  if (linkedPageIds.length > 0) {
+    const subTaskRows = await db
+      .select({ parentId: pages.parentId, total: count() })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(and(
+        inArray(pages.parentId, linkedPageIds),
+        eq(pages.isTrashed, false),
+      ))
+      .groupBy(pages.parentId);
+    for (const row of subTaskRows) {
+      if (row.parentId) subTaskCountByPageId.set(row.parentId, Number(row.total));
+    }
+  }
+
+  const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
-    title: t.page?.title ?? '',
+    title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
+    hasContent: computeHasContent(page?.content),
+    subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
+    page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
   }));
 
   return NextResponse.json({
@@ -277,7 +315,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const body = await req.json();
   const {
     title,
-    description,
     status,
     priority,
     assigneeId,
@@ -364,20 +401,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
   }
 
-  // Get highest position for new task and new page
-  const [lastTask, lastChildPage] = await Promise.all([
-    db.query.taskItems.findFirst({
-      where: eq(taskItems.taskListId, taskList.id),
-      orderBy: [desc(taskItems.position)],
-    }),
-    db.query.pages.findFirst({
-      where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
-      orderBy: [desc(pages.position)],
-    }),
-  ]);
+  // Get highest position for new page (task position mirrors page position)
+  const lastChildPage = await db.query.pages.findFirst({
+    where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
+    orderBy: [desc(pages.position)],
+  });
 
-  const nextTaskPosition = (lastTask?.position ?? -1) + 1;
-  const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
+  const nextPosition = (lastChildPage?.position ?? 0) + 1;
 
   // Determine primary assignee for backward compat fields (derive from assigneeIds if present)
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
@@ -385,29 +415,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
-    // Create document page for the task
+    // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
       title: title.trim(),
-      type: 'DOCUMENT',
+      type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,
-      content: getDefaultContent(PageType.DOCUMENT),
-      position: nextPagePosition,
+      content: '',
+      position: nextPosition,
       updatedAt: new Date(),
     }).returning();
 
-    // Create task with link to the page
+    // Create task metadata — list membership is derived from pages.parentId
     const [newTask] = await tx.insert(taskItems).values({
-      taskListId: taskList.id,
       userId,
       pageId: taskPage.id,
-      description: description?.trim() || null,
       status: status || 'pending',
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
-      position: nextTaskPosition,
+      position: nextPosition,
     }).returning();
 
     // Create assignees in junction table
@@ -516,34 +544,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       createPageEventPayload(taskListPage.driveId, result.page.id, 'created', {
         parentId: pageId,
         title: createdTitle,
-        type: 'DOCUMENT',
+        type: 'TASK_LIST',
       }),
     ),
   ]);
-
-  if (description) {
-    try {
-      const mentionedIds = await expandMentionsToUserIds(description, taskListPage.driveId!);
-      const candidates = mentionedIds.filter((id) => id !== userId);
-      if (candidates.length > 0) {
-        const taskPageId = result.page.id;
-        const viewChecks = await Promise.all(
-          candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, taskPageId) }))
-        );
-        await Promise.all(
-          viewChecks
-            .filter((e) => e.canView)
-            .map((e) =>
-              createMentionNotification(e.id, taskPageId, userId).catch((err) =>
-                loggers.api.error('Failed to send mention notification', err as Error)
-              )
-            )
-        );
-      }
-    } catch (err) {
-      loggers.api.error('Failed to resolve mention targets', err as Error);
-    }
-  }
 
   // Log task creation for compliance (fire-and-forget)
   const actorInfo = await getActorInfo(userId);

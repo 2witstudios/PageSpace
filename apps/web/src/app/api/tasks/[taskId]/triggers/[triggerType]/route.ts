@@ -32,25 +32,30 @@ export async function DELETE(
   }
   const triggerTypeValue = parsedType.data;
 
-  const task = await db.query.taskItems.findFirst({ where: eq(taskItems.id, taskId) });
-  if (!task) {
+  const task = await db.query.taskItems.findFirst({
+    where: eq(taskItems.id, taskId),
+    with: { page: { columns: { parentId: true } } },
+  });
+  if (!task?.page?.parentId) {
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
-  const taskList = await db.query.taskLists.findFirst({ where: eq(taskLists.id, task.taskListId) });
-  if (!taskList?.pageId) {
-    return NextResponse.json({ error: 'Task list not found' }, { status: 404 });
-  }
-
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, taskList.pageId),
-    columns: { id: true, isTrashed: true },
-  });
-  if (!page || page.isTrashed) {
+  const taskListPageId = task.page.parentId;
+  const [taskListPage, taskList] = await Promise.all([
+    db.query.pages.findFirst({
+      where: eq(pages.id, taskListPageId),
+      columns: { id: true, isTrashed: true },
+    }),
+    db.query.taskLists.findFirst({
+      where: eq(taskLists.pageId, taskListPageId),
+      columns: { id: true },
+    }),
+  ]);
+  if (!taskListPage || taskListPage.isTrashed) {
     return NextResponse.json({ error: 'Task list page not found' }, { status: 404 });
   }
 
-  const canEdit = await canUserEditPage(userId, taskList.pageId);
+  const canEdit = await canUserEditPage(userId, taskListPageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
@@ -73,9 +78,9 @@ export async function DELETE(
   void broadcastTaskEvent({
     type: 'task_updated',
     taskId,
-    taskListId: task.taskListId,
+    taskListId: taskList?.id,
     userId,
-    pageId: taskList.pageId,
+    pageId: taskListPageId,
     data: { id: taskId, removedTriggerType: triggerTypeValue },
   });
 

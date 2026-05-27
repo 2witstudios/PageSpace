@@ -19,6 +19,7 @@ import {
   Copy,
   Lock,
   LockOpen,
+  Users,
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useCapacitor } from "@/hooks/useCapacitor";
@@ -39,6 +40,7 @@ import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { MovePageDialog } from "@/components/dialogs/MovePageDialog";
 import { CopyPageDialog } from "@/components/dialogs/CopyPageDialog";
+import { ShareDialog } from "@/components/layout/middle-content/content-header/page-settings/ShareDialog";
 import { patch, del, post } from "@/lib/auth/auth-fetch";
 import { Projection } from "@/lib/tree/sortable-tree";
 import { cn } from "@/lib/utils";
@@ -109,6 +111,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
   const [isRenameOpen, setRenameOpen] = useState(false);
   const [isMoveOpen, setMoveOpen] = useState(false);
   const [isCopyOpen, setCopyOpen] = useState(false);
+  const [isPermissionsOpen, setPermissionsOpen] = useState(false);
   const params = useParams();
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const createTab = useTabsStore((state) => state.createTab);
@@ -284,7 +287,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
               {...handleProps.attributes}
               data-tree-node-id={item.id}
               className={cn(
-                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
+                "group relative flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
                 showDropIndicator && dropPosition === "inside" &&
                   "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
                 !isActive && !showDropIndicator &&
@@ -292,7 +295,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 params.pageId === item.id && "bg-gray-200 dark:bg-gray-700",
                 isInMultiSelectMode && isPageSelected && "bg-primary/10 dark:bg-primary/20 ring-1 ring-primary/50"
               )}
-              style={{ paddingLeft: `${depth * 8 + 4}px` }}
+              style={{ paddingLeft: `${depth * 8 + 16}px` }}
             >
               {/* Multi-select Checkbox */}
               {isInMultiSelectMode && (
@@ -309,7 +312,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 </div>
               )}
 
-              {/* Expand/Collapse Chevron */}
+              {/* Expand/Collapse Chevron — absolutely positioned in the indent gutter so it doesn't shift the icon */}
               {hasChildren && (
                 <button
                   onClick={(e) => {
@@ -319,11 +322,12 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                   onPointerDown={(e) => e.stopPropagation()}
                   aria-expanded={isExpanded}
                   aria-label={isExpanded ? "Collapse" : "Expand"}
-                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+                  className="absolute flex items-center justify-center w-4 h-4 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+                  style={{ left: `${depth * 8}px` }}
                 >
                   <ChevronRight
                     className={cn(
-                      "h-4 w-4 text-gray-500 transition-transform duration-200",
+                      "h-3 w-3 text-gray-500 transition-transform duration-200",
                       isExpanded && "rotate-90"
                     )}
                   />
@@ -451,6 +455,10 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                   )}
                   <span>{item.isPrivate ? "Unprotect page" : "Protect page"}</span>
                 </ContextMenuItem>
+                <ContextMenuItem onSelect={() => setPermissionsOpen(true)}>
+                  <Users className="mr-2 h-4 w-4" />
+                  <span>Permissions</span>
+                </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem onSelect={handleEnterMultiSelect}>
                   <CheckSquare className="mr-2 h-4 w-4" />
@@ -517,6 +525,13 @@ export const PageTreeItem = React.memo(function PageTreeItem({
         onClose={() => setCopyOpen(false)}
         pages={[pageInfo]}
         onSuccess={() => mutate()}
+      />
+
+      <ShareDialog
+        pageId={item.id}
+        defaultTab="permissions"
+        open={isPermissionsOpen}
+        onOpenChange={setPermissionsOpen}
       />
     </>
   );

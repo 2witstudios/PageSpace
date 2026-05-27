@@ -20,8 +20,8 @@ import { FindExtension } from '@/lib/editor/find-plugin';
 
 interface RichEditorProps {
   value: string;
-  onChange: (value: string) => void;
-  onEditorChange: (editor: Editor | null) => void;
+  onChange?: (value: string) => void;
+  onEditorChange?: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
   contentMode?: 'html' | 'markdown';
@@ -120,7 +120,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     onUpdate: ({ editor }) => {
       if (!readOnly) {
         const serialized = serializeEditorContent(editor, isMarkdownMode);
-        onChange(serialized);
+        onChange?.(serialized);
       }
     },
     editorProps: {
@@ -254,13 +254,13 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [value, editor, isMarkdownMode]);
 
   useEffect(() => {
-    onEditorChange(editor);
+    onEditorChange?.(editor);
     // Blur the editor if it's read-only to prevent focus
     if (editor && !editor.isDestroyed && readOnly && isEditorViewMounted) {
       editor.commands.blur();
     }
     return () => {
-      onEditorChange(null);
+      onEditorChange?.(null);
     };
   }, [editor, onEditorChange, readOnly, isEditorViewMounted]);
 
@@ -307,13 +307,15 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleBlockquote().run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('blockquote') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Quote size={16} /><span>Quote</span></button>
         </FloatingMenu>
       )}
-      <div className={`flex-1 overflow-y-auto ${readOnly ? 'opacity-95' : ''}`}>
+      <div className="flex-1 overflow-y-auto">
         <EditorContent editor={editor} />
         {isPaginated && <div className="print-page-number hidden print:block" />}
       </div>
-      <div className="flex justify-end p-2 text-sm text-muted-foreground">
-        {editor?.storage.characterCount.characters()} characters
-      </div>
+      {!readOnly && (
+        <div className="flex justify-end p-2 text-sm text-muted-foreground">
+          {editor?.storage.characterCount.characters()} characters
+        </div>
+      )}
     </div>
   );
 };

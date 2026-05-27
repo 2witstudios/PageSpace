@@ -8,7 +8,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed' },
+  pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', type: 'type' },
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -76,6 +76,7 @@ interface Row {
   pageId: string;
   isTrashed: boolean;
   isPrivate: boolean;
+  pageType: string | null;
   driveOwnerId: string | null;
   memberRole: string | null;
   explicitCanView: boolean | null;
@@ -93,6 +94,7 @@ function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
   return {
     isTrashed: false,
     isPrivate: false,
+    pageType: null,
     driveOwnerId: null,
     memberRole: null,
     explicitCanView: null,
@@ -228,6 +230,22 @@ describe('getBatchPagePermissions', () => {
 
   it('given an accepted MEMBER on a non-private page, should grant read-only access', async () => {
     stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER' })]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual(READ_ONLY);
+  });
+
+  it('given an accepted MEMBER on a non-private CHANNEL page, should grant canEdit access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER', pageType: 'CHANNEL' })]);
+
+    const result = await getBatchPagePermissions(USER, ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given an accepted MEMBER on a non-private DOCUMENT page, should grant read-only access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER', pageType: 'DOCUMENT' })]);
 
     const result = await getBatchPagePermissions(USER, ['p1']);
 

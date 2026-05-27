@@ -14,6 +14,7 @@ export interface ConversationMessage extends UIMessage {
   isActive?: boolean;
   editedAt?: Date;
   createdAt?: Date;
+  userName?: string | null;
 }
 
 /**

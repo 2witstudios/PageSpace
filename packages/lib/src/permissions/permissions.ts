@@ -125,6 +125,7 @@ export async function getUserAccessLevel(
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
       isPrivate: pages.isPrivate,
+      type: pages.type,
     })
     .from(pages)
     .leftJoin(drives, eq(pages.driveId, drives.id))
@@ -241,7 +242,8 @@ export async function getUserAccessLevel(
         if (!silent) {
           loggers.api.debug(`[PERMISSIONS] User is drive member, page is not private - granting read access`);
         }
-        return { canView: true, canEdit: false, canShare: false, canDelete: false };
+        const canEdit = pageData.type === 'CHANNEL';
+        return { canView: true, canEdit, canShare: false, canDelete: false };
       }
 
       if (!silent) {
@@ -956,6 +958,7 @@ export async function getBatchPagePermissions(
         pageId: pages.id,
         isTrashed: pages.isTrashed,
         isPrivate: pages.isPrivate,
+        pageType: pages.type,
         driveOwnerId: drives.ownerId,
         memberRole: driveMembers.role,
         explicitCanView: pagePermissions.canView,
@@ -1032,11 +1035,13 @@ export async function getBatchPagePermissions(
         }
       }
 
-      // Rule 4: any accepted drive member gets read access to non-private pages
+      // Rule 4: any accepted drive member gets access to non-private pages.
+      // Channels grant canEdit so members can post messages (Discord/Slack semantics).
       if (isMember && !row.isPrivate) {
+        const canEdit = row.pageType === 'CHANNEL';
         results.set(row.pageId, {
           canView: true,
-          canEdit: false,
+          canEdit,
           canShare: false,
           canDelete: false,
         });

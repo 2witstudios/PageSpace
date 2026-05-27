@@ -74,7 +74,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', id: 'dm.id' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { pageId: 'ti.pageId', taskListId: 'ti.taskListId' },
+  taskItems: { pageId: 'ti.pageId' },
   taskLists: { id: 'tl.id', pageId: 'tl.pageId' },
 }));
 
