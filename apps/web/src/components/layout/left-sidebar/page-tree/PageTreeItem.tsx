@@ -287,7 +287,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
               {...handleProps.attributes}
               data-tree-node-id={item.id}
               className={cn(
-                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
+                "group relative flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
                 showDropIndicator && dropPosition === "inside" &&
                   "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
                 !isActive && !showDropIndicator &&
@@ -295,7 +295,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 params.pageId === item.id && "bg-gray-200 dark:bg-gray-700",
                 isInMultiSelectMode && isPageSelected && "bg-primary/10 dark:bg-primary/20 ring-1 ring-primary/50"
               )}
-              style={{ paddingLeft: `${depth * 8 + 4}px` }}
+              style={{ paddingLeft: `${depth * 8 + 20}px` }}
             >
               {/* Multi-select Checkbox */}
               {isInMultiSelectMode && (
@@ -312,7 +312,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 </div>
               )}
 
-              {/* Expand/Collapse Chevron */}
+              {/* Expand/Collapse Chevron — absolutely positioned in the indent gutter so it doesn't shift the icon */}
               {hasChildren && (
                 <button
                   onClick={(e) => {
@@ -322,11 +322,12 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                   onPointerDown={(e) => e.stopPropagation()}
                   aria-expanded={isExpanded}
                   aria-label={isExpanded ? "Collapse" : "Expand"}
-                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+                  className="absolute flex items-center justify-center w-4 h-4 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+                  style={{ left: `${depth * 8 + 2}px` }}
                 >
                   <ChevronRight
                     className={cn(
-                      "h-4 w-4 text-gray-500 transition-transform duration-200",
+                      "h-3 w-3 text-gray-500 transition-transform duration-200",
                       isExpanded && "rotate-90"
                     )}
                   />
