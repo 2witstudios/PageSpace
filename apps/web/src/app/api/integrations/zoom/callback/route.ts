@@ -132,6 +132,7 @@ export async function GET(req: Request) {
         zoomAccountId: me.account_id,
         zoomEmail: me.email,
         status: 'active',
+        scopeVersion: 'v2',
       })
       .onConflictDoUpdate({
         target: zoomConnections.userId,
@@ -143,6 +144,7 @@ export async function GET(req: Request) {
           zoomAccountId: me.account_id,
           zoomEmail: me.email,
           status: 'active',
+          scopeVersion: 'v2',
           updatedAt: new Date(),
         },
       });

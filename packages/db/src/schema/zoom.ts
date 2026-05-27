@@ -36,6 +36,9 @@ export const zoomConnections = pgTable('zoom_connections', {
   targetDriveId: text('targetDriveId').references(() => drives.id, { onDelete: 'set null' }),
   targetFolderId: text('targetFolderId'), // page ID of target folder; soft ref (no FK)
 
+  // null = v1 (read-only scopes), 'v2' = full scopes including meeting:write
+  scopeVersion: text('scopeVersion'),
+
   // Per-user content options (all default on per user research)
   includeAiSummary: boolean('includeAiSummary').default(true).notNull(),
   includeActionItems: boolean('includeActionItems').default(true).notNull(),

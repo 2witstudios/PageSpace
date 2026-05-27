@@ -1,5 +1,22 @@
 const ZOOM_API_BASE = 'https://api.zoom.us/v2';
 
+export const encodeZoomUUID = (uuid: string): string =>
+  uuid.startsWith('/') || uuid.includes('//')
+    ? encodeURIComponent(encodeURIComponent(uuid))
+    : encodeURIComponent(uuid);
+
+export const buildZoomOAuthScopes = (): string =>
+  [
+    'recording:read',
+    'user:read',
+    'meeting:write',
+    'meeting:read:search',
+    'meeting:read:assets',
+    'ai_companion:read:search',
+    'cloud_recording:read:list_user_recordings',
+    'cloud_recording:read:content',
+  ].join(' ');
+
 const TRUSTED_ZOOM_HOSTS = ['zoom.us'];
 const TRUSTED_ZOOM_SUFFIX = '.zoom.us';
 
@@ -27,7 +44,7 @@ export const buildAuthHeader = (accessToken: string): Record<string, string> => 
 });
 
 export const buildRecordingsUrl = (meetingUuid: string): string =>
-  `${ZOOM_API_BASE}/meetings/${encodeURIComponent(meetingUuid)}/recordings`;
+  `${ZOOM_API_BASE}/meetings/${encodeZoomUUID(meetingUuid)}/recordings`;
 
 export const getRecordings = async (
   accessToken: string,
