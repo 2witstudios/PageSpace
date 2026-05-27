@@ -3,7 +3,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 let _client: S3Client | null = null;
 
-function getS3Client(): S3Client {
+export function getS3Client(): S3Client {
   if (!_client) {
     _client = new S3Client({
       region: process.env.AWS_REGION ?? 'auto',
@@ -19,7 +19,7 @@ function getS3Client(): S3Client {
   return _client;
 }
 
-function getS3Bucket(): string {
+export function getS3Bucket(): string {
   return process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
 }
 
