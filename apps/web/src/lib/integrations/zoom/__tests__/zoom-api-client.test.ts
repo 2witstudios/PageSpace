@@ -7,6 +7,8 @@ vi.stubGlobal('fetch', mockFetch);
 import {
   buildAuthHeader,
   buildRecordingsUrl,
+  encodeZoomUUID,
+  buildZoomOAuthScopes,
   getRecordings,
   downloadTranscript,
 } from '../zoom-api-client';
@@ -22,6 +24,48 @@ describe('buildAuthHeader', () => {
     const headerString = JSON.stringify(header);
     expect(headerString).not.toContain('access_token=');
     expect(headerString).not.toContain('?secret_token');
+  });
+});
+
+describe('encodeZoomUUID', () => {
+  it('double-encodes a UUID starting with /', () => {
+    const uuid = '/u3D+1234==';
+    expect(encodeZoomUUID(uuid)).toBe(encodeURIComponent(encodeURIComponent(uuid)));
+  });
+
+  it('double-encodes a UUID containing //', () => {
+    const uuid = 'abc//def==';
+    expect(encodeZoomUUID(uuid)).toBe(encodeURIComponent(encodeURIComponent(uuid)));
+  });
+
+  it('single-encodes a normal UUID with no leading slash or double slash', () => {
+    const uuid = 'abc+def=xyz';
+    expect(encodeZoomUUID(uuid)).toBe(encodeURIComponent(uuid));
+    expect(encodeZoomUUID(uuid)).not.toBe(encodeURIComponent(encodeURIComponent(uuid)));
+  });
+});
+
+describe('buildZoomOAuthScopes', () => {
+  it('returns a space-separated string of only granular (3-segment) scopes', () => {
+    const parts = buildZoomOAuthScopes().split(' ');
+    expect(parts).toContain('user:read:user');
+    expect(parts).toContain('meeting:write:meeting');
+    expect(parts).toContain('meeting:read:search');
+    expect(parts).toContain('meeting:read:assets');
+    expect(parts).toContain('ai_companion:read:search');
+    expect(parts).toContain('cloud_recording:read:list_user_recordings');
+    expect(parts).toContain('cloud_recording:read:content');
+  });
+
+  it('does not include classic (2-segment) scopes that break granular OAuth apps', () => {
+    const scopes = buildZoomOAuthScopes();
+    expect(scopes).not.toContain('recording:read ');
+    expect(scopes).not.toMatch(/\buser:read\b(?!:)/);
+    expect(scopes).not.toMatch(/\bmeeting:write\b(?!:)/);
+  });
+
+  it('does not include :admin suffix (user-scoped app, not org-admin)', () => {
+    expect(buildZoomOAuthScopes()).not.toContain(':admin');
   });
 });
 
@@ -48,6 +92,12 @@ describe('buildRecordingsUrl', () => {
   it('path ends with /recordings', () => {
     const url = buildRecordingsUrl('meeting-123');
     expect(new URL(url).pathname).toMatch(/\/recordings$/);
+  });
+
+  it('double-encodes a UUID starting with / in the path', () => {
+    const uuid = '/u3D+abc==';
+    const url = buildRecordingsUrl(uuid);
+    expect(url).toContain(encodeURIComponent(encodeURIComponent(uuid)));
   });
 });
 

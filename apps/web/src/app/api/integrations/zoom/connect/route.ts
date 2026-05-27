@@ -6,6 +6,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import { normalizeZoomReturnPath } from '@/lib/integrations/zoom/return-url';
+import { buildZoomOAuthScopes } from '@/lib/integrations/zoom/zoom-api-client';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -57,6 +58,7 @@ export async function POST(req: Request) {
       client_id: process.env.ZOOM_OAUTH_CLIENT_ID!,
       redirect_uri: callbackUrl,
       response_type: 'code',
+      scope: buildZoomOAuthScopes(),
       state: stateParam,
     });
 

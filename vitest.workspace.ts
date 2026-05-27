@@ -31,6 +31,7 @@ export default defineWorkspace([
       root: './apps/web',
       environment: 'jsdom',
       globals: true,
+      css: false,
       setupFiles: ['./src/test/setup.ts'],
       coverage: {
         provider: 'v8',
