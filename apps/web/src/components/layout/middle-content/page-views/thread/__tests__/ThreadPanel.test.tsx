@@ -87,9 +87,20 @@ vi.mock('@/hooks/useAttachmentUpload', () => ({
   }),
 }));
 
-vi.mock('@/hooks/useDraft', () => ({
-  useDraft: () => ({ draft: '', setDraft: vi.fn(), clearDraft: vi.fn() }),
-}));
+vi.mock('@/hooks/useDraft', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { useState } = require('react');
+  return {
+    useDraft: () => {
+      const [draft, setDraftState] = useState('');
+      return {
+        draft,
+        setDraft: (v: string) => setDraftState(v),
+        clearDraft: () => setDraftState(''),
+      };
+    },
+  };
+});
 
 const postSpy = vi.fn<(url: string, body: unknown) => Promise<unknown>>(async () => ({ ok: true }));
 vi.mock('@/lib/auth/auth-fetch', () => ({
