@@ -64,22 +64,24 @@ export default function Sidebar({ className }: SidebarProps) {
         className
       )}
     >
-      <div className="flex h-full flex-col px-3 py-3">
+      <div className="flex h-full flex-col py-3">
         {/* Drive Switcher - always visible, at top */}
         {/* On macOS Electron in sheet mode, add left padding to clear stoplight buttons */}
-        <div className={cn("mb-3", isElectronMac && isSheetBreakpoint && "pl-[60px]")}>
+        <div className={cn("px-3 mb-3", isElectronMac && isSheetBreakpoint && "pl-[60px]")}>
           <DriveSwitcher />
         </div>
 
         {/* Primary Navigation (Dashboard, Inbox, Tasks, Calendar) */}
-        <PrimaryNavigation driveId={driveId as string} />
+        <div className="px-3">
+          <PrimaryNavigation driveId={driveId as string} />
+        </div>
 
         {/* Main content area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {driveId ? (
             <>
               {/* Drive view: Search + PageTree */}
-              <div className="flex items-center gap-2 mb-3 flex-shrink-0">
+              <div className="px-3 flex items-center gap-2 mb-3 flex-shrink-0">
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -119,21 +121,23 @@ export default function Sidebar({ className }: SidebarProps) {
                 )}
               </div>
 
-              <div className="flex-1 min-h-0 overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-hidden pr-3">
                 <PageTree driveId={driveId as string} searchQuery={searchQuery} />
               </div>
             </>
           ) : (
             /* Dashboard view: Pulse, Favorites, Recents */
-            <DashboardSidebar />
+            <div className="px-3 flex-1 flex flex-col min-h-0">
+              <DashboardSidebar />
+            </div>
           )}
         </div>
 
         {/* Drive footer - only shown when in a drive */}
-        {driveId && <DriveFooter canManage={canManage} />}
+        {driveId && <div className="px-3"><DriveFooter canManage={canManage} /></div>}
 
         {/* Dashboard footer - only shown when NOT in a drive */}
-        {!driveId && <DashboardFooter />}
+        {!driveId && <div className="px-3"><DashboardFooter /></div>}
 
       </div>
     </aside>
