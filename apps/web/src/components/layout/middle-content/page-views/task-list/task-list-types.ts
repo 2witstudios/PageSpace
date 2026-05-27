@@ -49,6 +49,7 @@ export interface TaskItem {
   activeTriggerCount?: number;
   hasContent?: boolean;
   subTaskCount?: number;
+  subTaskCompletedCount?: number;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;

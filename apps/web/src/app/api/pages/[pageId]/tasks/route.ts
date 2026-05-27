@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, inArray, count } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, count, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
@@ -248,21 +248,31 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
   }
 
-  // Batch-count sub-tasks for each task's linked page via pages.parentId
+  // Batch-count sub-tasks (total + completed) for each task's linked page via pages.parentId
   const subTaskCountByPageId = new Map<string, number>();
+  const subTaskCompletedByPageId = new Map<string, number>();
   const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
   if (linkedPageIds.length > 0) {
-    const subTaskRows = await db
-      .select({ parentId: pages.parentId, total: count() })
-      .from(taskItems)
-      .innerJoin(pages, eq(pages.id, taskItems.pageId))
-      .where(and(
-        inArray(pages.parentId, linkedPageIds),
-        eq(pages.isTrashed, false),
-      ))
-      .groupBy(pages.parentId);
+    const baseWhere = and(inArray(pages.parentId, linkedPageIds), eq(pages.isTrashed, false));
+    const [subTaskRows, completedSubTaskRows] = await Promise.all([
+      db
+        .select({ parentId: pages.parentId, total: count() })
+        .from(taskItems)
+        .innerJoin(pages, eq(pages.id, taskItems.pageId))
+        .where(baseWhere)
+        .groupBy(pages.parentId),
+      db
+        .select({ parentId: pages.parentId, total: count() })
+        .from(taskItems)
+        .innerJoin(pages, eq(pages.id, taskItems.pageId))
+        .where(and(baseWhere, isNotNull(taskItems.completedAt)))
+        .groupBy(pages.parentId),
+    ]);
     for (const row of subTaskRows) {
       if (row.parentId) subTaskCountByPageId.set(row.parentId, Number(row.total));
+    }
+    for (const row of completedSubTaskRows) {
+      if (row.parentId) subTaskCompletedByPageId.set(row.parentId, Number(row.total));
     }
   }
 
@@ -272,6 +282,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
     hasContent: computeHasContent(page?.content),
     subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
+    subTaskCompletedCount: subTaskCompletedByPageId.get(t.pageId ?? '') ?? 0,
     page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
   }));
 
@@ -390,14 +401,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
   // Validate status against task list's status configs
+  let initialCompletedAt: Date | null = null;
   if (status) {
     const validStatuses = await db.query.taskStatusConfigs.findMany({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
-      columns: { slug: true },
+      columns: { slug: true, group: true },
     });
     const validSlugs = validStatuses.map(s => s.slug);
     if (validSlugs.length > 0 && !validSlugs.includes(status)) {
       return NextResponse.json({ error: `Invalid status "${status}". Valid statuses: ${validSlugs.join(', ')}` }, { status: 400 });
+    }
+    const matchedConfig = validStatuses.find(s => s.slug === status);
+    if (matchedConfig?.group === 'done' || (!matchedConfig && status === 'completed')) {
+      initialCompletedAt = new Date();
     }
   }
 
@@ -436,6 +452,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
       position: nextPosition,
+      completedAt: initialCompletedAt,
     }).returning();
 
     // Create assignees in junction table

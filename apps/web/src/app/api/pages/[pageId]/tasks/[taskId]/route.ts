@@ -13,6 +13,7 @@ import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
+import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -183,6 +184,21 @@ export async function PATCH(
 
   if (position !== undefined) {
     updates.position = position;
+  }
+
+  // Completion guard: cannot mark a task done while it has incomplete sub-tasks
+  if (updates.completedAt instanceof Date && existingTask.pageId) {
+    try {
+      await assertSubTasksComplete(existingTask.pageId);
+    } catch (error) {
+      if (error instanceof SubtasksIncompleteError) {
+        return NextResponse.json(
+          { error: error.message, pending: error.pending, total: error.total },
+          { status: 422 }
+        );
+      }
+      throw error;
+    }
   }
 
   const actorInfo = await getActorInfo(userId);

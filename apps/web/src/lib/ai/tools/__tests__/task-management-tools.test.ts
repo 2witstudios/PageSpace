@@ -89,10 +89,22 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(),
 }));
 
+vi.mock('@/lib/tasks/completion-guard', () => ({
+  assertSubTasksComplete: vi.fn().mockResolvedValue(undefined),
+  SubtasksIncompleteError: class SubtasksIncompleteError extends Error {
+    readonly code = 'SUBTASKS_INCOMPLETE' as const;
+    constructor(public readonly pending: number, public readonly total: number) {
+      super(`Complete all sub-tasks first (${pending} of ${total} remaining)`);
+      this.name = 'SubtasksIncompleteError';
+    }
+  },
+}));
+
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
+import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -625,6 +637,38 @@ describe('task-management-tools', () => {
         expect(reorderTxMock).toHaveBeenCalled();
         // Result should reflect the clamped/densified position
         expect((result as { task: { position: number } }).task.position).toBe(3);
+      });
+    });
+
+    describe('completion guard', () => {
+      it('returns structured failure when completing a task with incomplete sub-tasks', async () => {
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+          id: 'task-1',
+          taskListId: 'list-1',
+          pageId: 'task-page-1',
+          completedAt: null,
+        });
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'tasklist-page-1',
+          userId: 'user-123',
+        });
+        mockCanUserEditPage.mockResolvedValue(true);
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        vi.mocked(assertSubTasksComplete).mockRejectedValueOnce(
+          new SubtasksIncompleteError(2, 3)
+        );
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        const result = await taskManagementTools.update_task.execute!(
+          { taskId: 'task-1', status: 'completed' },
+          context
+        );
+        expect(result).toMatchObject({ success: false, pending: 2, total: 3 });
       });
     });
 

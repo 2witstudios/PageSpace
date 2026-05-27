@@ -637,6 +637,14 @@ function TaskListView({ page }: TaskListViewProps) {
       }) || 'pending';
       await handleStatusChange(task.id, todoStatus);
     } else {
+      // Block completion when sub-tasks are incomplete
+      const subTaskCount = task.subTaskCount ?? 0;
+      const subTaskCompletedCount = task.subTaskCompletedCount ?? 0;
+      if (subTaskCount > 0 && subTaskCompletedCount < subTaskCount) {
+        const pending = subTaskCount - subTaskCompletedCount;
+        toast.error(`Finish ${pending} sub-task${pending > 1 ? 's' : ''} first`);
+        return;
+      }
       // Move to first "done" group status
       const doneStatus = statusOrder.find(slug => {
         const cfg = statusConfigMap[slug];

@@ -18,6 +18,7 @@ import {
   disableTaskTriggers,
 } from '@/lib/workflows/task-trigger-helpers';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 
 const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
@@ -430,6 +431,23 @@ Agent Triggers:
               updateData.completedAt = status === 'completed' ? new Date() : null;
             }
           }
+          // Completion guard: cannot mark a task done while it has incomplete sub-tasks
+          if (updateData.completedAt instanceof Date && existingTask.pageId) {
+            try {
+              await assertSubTasksComplete(existingTask.pageId);
+            } catch (error) {
+              if (error instanceof SubtasksIncompleteError) {
+                return {
+                  success: false,
+                  error: error.message,
+                  pending: error.pending,
+                  total: error.total,
+                };
+              }
+              throw error;
+            }
+          }
+
           if (priority !== undefined) updateData.priority = priority;
           if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
           if (assigneeAgentId !== undefined) updateData.assigneeAgentId = assigneeAgentId;
