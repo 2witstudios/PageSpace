@@ -5,7 +5,7 @@ import { TasksDashboard } from '@/components/tasks';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function TasksPageContent() {
-  return <TasksDashboard context="user" />;
+  return <TasksDashboard />;
 }
 
 export default function TasksPage() {
