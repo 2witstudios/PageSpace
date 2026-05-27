@@ -100,6 +100,10 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role' },
 }));
 
+vi.mock('@/services/api/task-sync-service', () => ({
+  syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
