@@ -39,7 +39,7 @@ export async function GET(
       return new NextResponse('Bad Request', { status: 400 });
     }
 
-    const ext = filename.split('.').pop()!.toLowerCase();
+    const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpeg';
     const key = `avatars/${userId}/${filename}`;
 
     try {

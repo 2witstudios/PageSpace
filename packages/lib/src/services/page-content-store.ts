@@ -130,7 +130,8 @@ export async function writePageContent(
 export async function readPageContent(ref: string): Promise<string> {
   const key = getS3Key(ref);
   const response = await s3().send(new GetObjectCommand({ Bucket: getBucket(), Key: key }));
-  const bytes = await response.Body!.transformToByteArray();
+  if (!response.Body) throw new Error(`Empty S3 response body for ref ${ref}`);
+  const bytes = await response.Body.transformToByteArray();
   const storedContent = Buffer.from(bytes).toString('utf8');
 
   if (storedContent.startsWith(COMPRESSION_MAGIC)) {
@@ -148,7 +149,8 @@ export async function isContentCompressed(ref: string): Promise<boolean> {
     Key: key,
     Range: `bytes=0-${COMPRESSION_MAGIC.length - 1}`,
   }));
-  const bytes = await response.Body!.transformToByteArray();
+  if (!response.Body) return false;
+  const bytes = await response.Body.transformToByteArray();
   return Buffer.from(bytes).toString('utf8') === COMPRESSION_MAGIC;
 }
 

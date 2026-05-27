@@ -88,7 +88,11 @@ router.get('/:userId/:filename', rateLimitRead, async (req: Request<{ userId: st
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     return res.send(Buffer.from(bytes));
-  } catch {
+  } catch (err) {
+    const isNotFound = err && typeof err === 'object' && ('$metadata' in err
+      ? (err as { $metadata: { httpStatusCode?: number } }).$metadata.httpStatusCode === 404
+      : (err as { name?: string }).name === 'NoSuchKey');
+    if (!isNotFound) processorLogger.warn('Avatar S3 read error', { key, err: String(err) });
     return res.status(404).end();
   }
 });
