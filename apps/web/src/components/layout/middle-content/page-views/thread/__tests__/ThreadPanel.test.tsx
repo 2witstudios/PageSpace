@@ -87,6 +87,10 @@ vi.mock('@/hooks/useAttachmentUpload', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useDraft', () => ({
+  useDraft: () => ({ draft: '', setDraft: vi.fn(), clearDraft: vi.fn() }),
+}));
+
 const postSpy = vi.fn<(url: string, body: unknown) => Promise<unknown>>(async () => ({ ok: true }));
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
