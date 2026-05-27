@@ -383,8 +383,8 @@ describe('collectUserAiUsage', () => {
 
 describe('collectUserTasks', () => {
   it('given_tasksExist_returnsListsWithItems', async () => {
-    const list = { id: 'tl1', title: 'My Tasks' };
-    const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListId: 'tl1', createdAt: new Date() };
+    const list = { id: 'tl1', pageId: 'page_tl1', title: 'My Tasks' };
+    const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListPageId: 'page_tl1', createdAt: new Date() };
     const db = createChainDb([[list], [item]]);
 
     const result = await collectUserTasks(db as never, 'user-1');
@@ -404,7 +404,7 @@ describe('collectUserTasks', () => {
   });
 
   it('given_listsWithNoItems_returnsListsWithEmptyItemsArray', async () => {
-    const db = createChainDb([[{ id: 'tl1', title: 'Empty List' }], []]);
+    const db = createChainDb([[{ id: 'tl1', pageId: 'page_tl1', title: 'Empty List' }], []]);
 
     const result = await collectUserTasks(db as never, 'user-1');
 

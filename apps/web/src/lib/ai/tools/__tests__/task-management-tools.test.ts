@@ -36,7 +36,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
-  taskItems: { id: 'id', taskListId: 'taskListId', position: 'position' },
+  taskItems: { id: 'id', position: 'position' },
   taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
   taskAssignees: { taskId: 'taskId' },
 }));
@@ -342,9 +342,14 @@ describe('task-management-tools', () => {
           .mockResolvedValueOnce(null)  // lastChildPage
           .mockResolvedValueOnce({ ...{ id: 'new-task', taskListId: 'list-1', pageId: 'new-page', title: 'New Task', status: 'pending', priority: 'medium', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, metadata: null, completedAt: null, createdAt: new Date(), updatedAt: new Date() }, assignee: null, assigneeAgent: null, user: null, assignees: [] });  // enriched task
 
-        // Mock db.select for position query
+        // Mock db.select for position query (supports innerJoin for sibling fetch)
         mockDb.select = vi.fn(() => ({
           from: vi.fn(() => ({
+            innerJoin: vi.fn(() => ({
+              where: vi.fn(() => ({
+                orderBy: vi.fn().mockResolvedValue([]),
+              })),
+            })),
             where: vi.fn(() => ({
               orderBy: vi.fn().mockResolvedValue([]),
             })),
@@ -544,6 +549,7 @@ describe('task-management-tools', () => {
         const dbSelectMock = vi.fn(() => {
           const chain = {
             from: vi.fn().mockReturnThis(),
+            innerJoin: vi.fn().mockReturnThis(),
             where: vi.fn().mockReturnThis(),
             orderBy: vi.fn(() => {
               selectCalls.push('orderBy');

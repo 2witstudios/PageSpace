@@ -347,7 +347,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
   // Helper to get status configs for a specific task
   const getConfigsForTask = useCallback((task: Task): TaskStatusConfig[] => {
-    return statusConfigsByTaskList[task.taskListId] || [];
+    return statusConfigsByTaskList[task.taskListPageId ?? ''] || [];
   }, [statusConfigsByTaskList]);
 
   // Task update handlers

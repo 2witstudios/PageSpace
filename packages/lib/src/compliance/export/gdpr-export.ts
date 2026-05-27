@@ -441,6 +441,7 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
   const lists = await database
     .select({
       id: taskLists.id,
+      pageId: taskLists.pageId,
       title: taskLists.title,
     })
     .from(taskLists)
@@ -448,31 +449,40 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
 
   if (lists.length === 0) return [];
 
-  const listIds = lists.map(l => l.id);
+  const listPageIds = lists.map(l => l.pageId).filter((id): id is string => id != null);
+
+  if (listPageIds.length === 0) {
+    return lists.map(list => ({ listId: list.id, listTitle: list.title, items: [] }));
+  }
+
   const allItems = await database
     .select({
       id: taskItems.id,
       title: pages.title,
       status: taskItems.status,
       priority: taskItems.priority,
-      taskListId: taskItems.taskListId,
+      taskListPageId: pages.parentId,
       createdAt: taskItems.createdAt,
     })
     .from(taskItems)
     .innerJoin(pages, eq(pages.id, taskItems.pageId))
-    .where(inArray(taskItems.taskListId, listIds));
+    .where(and(
+      inArray(pages.parentId, listPageIds),
+      eq(pages.isTrashed, false),
+    ));
 
-  const itemsByList = new Map<string, typeof allItems>();
+  const itemsByListPageId = new Map<string, typeof allItems>();
   for (const item of allItems) {
-    const existing = itemsByList.get(item.taskListId) ?? [];
+    if (!item.taskListPageId) continue;
+    const existing = itemsByListPageId.get(item.taskListPageId) ?? [];
     existing.push(item);
-    itemsByList.set(item.taskListId, existing);
+    itemsByListPageId.set(item.taskListPageId, existing);
   }
 
   return lists.map(list => ({
     listId: list.id,
     listTitle: list.title,
-    items: (itemsByList.get(list.id) ?? []).map(item => ({
+    items: (itemsByListPageId.get(list.pageId ?? '') ?? []).map(item => ({
       id: item.id,
       title: item.title,
       status: item.status,

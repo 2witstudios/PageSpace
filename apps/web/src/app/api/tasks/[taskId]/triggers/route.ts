@@ -32,6 +32,7 @@ const upsertTriggerSchema = z.object({
 type ResolvedTaskContext = {
   task: typeof taskItems.$inferSelect;
   taskListPageId: string;
+  taskListId: string | undefined;
   driveId: string;
   timezone: string;
 };
@@ -39,23 +40,27 @@ type ResolvedTaskContext = {
 async function resolveTaskContext(taskId: string): Promise<ResolvedTaskContext | null> {
   const task = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, taskId),
+    with: { page: { columns: { parentId: true } } },
   });
-  if (!task) return null;
+  if (!task?.page?.parentId) return null;
 
-  const taskList = await db.query.taskLists.findFirst({
-    where: eq(taskLists.id, task.taskListId),
-  });
-  if (!taskList?.pageId) return null;
-
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, taskList.pageId),
-    columns: { id: true, driveId: true, isTrashed: true },
-  });
+  const taskListPageId = task.page.parentId;
+  const [page, taskList] = await Promise.all([
+    db.query.pages.findFirst({
+      where: eq(pages.id, taskListPageId),
+      columns: { id: true, driveId: true, isTrashed: true },
+    }),
+    db.query.taskLists.findFirst({
+      where: eq(taskLists.pageId, taskListPageId),
+      columns: { id: true },
+    }),
+  ]);
   if (!page || page.isTrashed) return null;
 
   return {
     task,
-    taskListPageId: taskList.pageId,
+    taskListPageId,
+    taskListId: taskList?.id,
     driveId: page.driveId,
     timezone: 'UTC',
   };
@@ -214,7 +219,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
   void broadcastTaskEvent({
     type: 'task_updated',
     taskId,
-    taskListId: ctx.task.taskListId,
+    taskListId: ctx.taskListId,
     userId,
     pageId: ctx.taskListPageId,
     data: { id: taskId, triggerType },
