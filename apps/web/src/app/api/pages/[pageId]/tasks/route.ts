@@ -18,6 +18,11 @@ import { createTaskAssignedNotification } from '@pagespace/lib/notifications/not
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
+export const computeHasContent = (content: string | null | undefined): boolean => {
+  if (!content) return false;
+  return content.replace(/<[^>]*>/g, '').trim().length > 0;
+};
+
 /**
  * Get or create task list for a page, ensuring default status configs exist
  */
@@ -166,6 +171,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           type: true,
           isTrashed: true,
           position: true,
+          content: true,
         },
       },
       assignees: {
@@ -228,10 +234,28 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
   }
 
-  const enrichedTasks = tasks.map((t) => ({
+  // Batch-count sub-tasks for each task's linked page
+  const subTaskCountByPageId = new Map<string, number>();
+  const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
+  if (linkedPageIds.length > 0) {
+    const subTaskRows = await db
+      .select({ pageId: taskLists.pageId, total: count() })
+      .from(taskLists)
+      .innerJoin(taskItems, eq(taskItems.taskListId, taskLists.id))
+      .where(inArray(taskLists.pageId, linkedPageIds))
+      .groupBy(taskLists.pageId);
+    for (const row of subTaskRows) {
+      if (row.pageId) subTaskCountByPageId.set(row.pageId, Number(row.total));
+    }
+  }
+
+  const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
-    title: t.page?.title ?? '',
+    title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
+    hasContent: computeHasContent(page?.content),
+    subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
+    page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
   }));
 
   return NextResponse.json({

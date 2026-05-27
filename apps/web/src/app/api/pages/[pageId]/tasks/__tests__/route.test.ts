@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { GET, POST } from '../route';
+import { GET, POST, computeHasContent } from '../route';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies
@@ -149,6 +149,34 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/per
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
+
+const assert = ({ given, should, actual, expected }: {
+  given: string; should: string; actual: unknown; expected: unknown;
+}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
+
+describe('computeHasContent', () => {
+  it('null content', () => {
+    assert({ given: 'null', should: 'return false', actual: computeHasContent(null), expected: false });
+  });
+  it('undefined content', () => {
+    assert({ given: 'undefined', should: 'return false', actual: computeHasContent(undefined), expected: false });
+  });
+  it('empty string', () => {
+    assert({ given: 'empty string', should: 'return false', actual: computeHasContent(''), expected: false });
+  });
+  it('HTML with no visible text', () => {
+    assert({ given: '<p></p>', should: 'return false', actual: computeHasContent('<p></p>'), expected: false });
+  });
+  it('HTML with whitespace only', () => {
+    assert({ given: '<p>   </p>', should: 'return false', actual: computeHasContent('<p>   </p>'), expected: false });
+  });
+  it('HTML with real text content', () => {
+    assert({ given: '<p>Hello</p>', should: 'return true', actual: computeHasContent('<p>Hello</p>'), expected: true });
+  });
+  it('nested HTML with text', () => {
+    assert({ given: '<h1>Title</h1><p>Body</p>', should: 'return true', actual: computeHasContent('<h1>Title</h1><p>Body</p>'), expected: true });
+  });
+});
 
 describe('Task API Routes', () => {
   const mockUserId = 'user-123';
@@ -809,7 +837,8 @@ describe('Task API Routes', () => {
 
       let capturedPageInsert: Record<string, unknown> | null = null;
 
-      vi.mocked(db.transaction).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
           insert: vi.fn(() => ({
