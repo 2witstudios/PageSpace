@@ -57,10 +57,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 // --- Service seam --------------------------------------------------------------
-const mockProcessAttachmentUpload = vi.fn();
+const mockProcessAttachmentUploads = vi.fn();
 vi.mock('@pagespace/lib/services/attachment-upload', () => ({
-  processAttachmentUpload: (...args: unknown[]) =>
-    mockProcessAttachmentUpload(...args),
+  processAttachmentUploads: (...args: unknown[]) =>
+    mockProcessAttachmentUploads(...args),
 }));
 
 // --- Imports under test --------------------------------------------------------
@@ -121,7 +121,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
       participant1Id: 'user-1',
       participant2Id: 'user-2',
     });
-    mockProcessAttachmentUpload.mockResolvedValue(successResponse());
+    mockProcessAttachmentUploads.mockResolvedValue(successResponse());
   });
 
   it('POST_dmUpload_validParticipantWithVerifiedEmail_delegatesToProcessAttachmentUpload_withConversationTarget', async () => {
@@ -131,8 +131,8 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(mockProcessAttachmentUpload).toHaveBeenCalledTimes(1);
-    expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
+    expect(mockProcessAttachmentUploads).toHaveBeenCalledTimes(1);
+    expect(mockProcessAttachmentUploads).toHaveBeenCalledWith({
       request,
       target: { type: 'conversation', conversationId: 'conv-1' },
       authContext,
@@ -150,7 +150,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     expect(res.status).toBe(403);
     expect(body.requiresEmailVerification).toBe(true);
     expect(body.error).toMatch(/email/i);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
     // SIEM-visible denial: emit authz.access.denied with a discriminator so
     // the email-verification denial path is observable downstream.
     expect(mockAuditRequest).toHaveBeenCalledWith(
@@ -175,7 +175,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
 
     expect(res.status).toBe(404);
     expect(body.error).toMatch(/not found/i);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
   });
 
   it('POST_dmUpload_nonParticipant_returns404_withoutCallingPipeline_toPreventExistenceLeak', async () => {
@@ -194,7 +194,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
 
     expect(res.status).toBe(404);
     expect(body.error).toMatch(/not found/i);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
     // Email-verify is not consulted once the lookup fails — short-circuit.
     expect(vi.mocked(isEmailVerified)).not.toHaveBeenCalled();
   });
@@ -212,13 +212,13 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
     });
 
     expect(res.status).toBe(401);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
     expect(mockDmConversationsFindFirst).not.toHaveBeenCalled();
     expect(vi.mocked(isEmailVerified)).not.toHaveBeenCalled();
   });
 
   it('POST_dmUpload_pipelineReturns413_quotaExceeded_routePropagatesAs413', async () => {
-    mockProcessAttachmentUpload.mockResolvedValue(
+    mockProcessAttachmentUploads.mockResolvedValue(
       new Response(JSON.stringify({ error: 'Storage quota exceeded' }), {
         status: 413,
         headers: { 'content-type': 'application/json' },
@@ -235,7 +235,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
   });
 
   it('POST_dmUpload_pipelineReturns429_concurrentLimit_routePropagatesAs429', async () => {
-    mockProcessAttachmentUpload.mockResolvedValue(
+    mockProcessAttachmentUploads.mockResolvedValue(
       new Response(JSON.stringify({ error: 'Too many concurrent uploads.' }), {
         status: 429,
         headers: { 'content-type': 'application/json' },
@@ -252,7 +252,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
   });
 
   it('POST_dmUpload_pipelineThrowsUnexpected_returns500_withStructuredError', async () => {
-    mockProcessAttachmentUpload.mockRejectedValue(new Error('boom'));
+    mockProcessAttachmentUploads.mockRejectedValue(new Error('boom'));
 
     const res = await POST(makeRequest() as never, {
       params: Promise.resolve({ conversationId: 'conv-1' }),
@@ -314,7 +314,7 @@ describe('POST /api/messages/[conversationId]/upload (thin wrapper)', () => {
         formattedQuota: '1 KB',
       },
     };
-    mockProcessAttachmentUpload.mockResolvedValue(successResponse(channelLikeBody));
+    mockProcessAttachmentUploads.mockResolvedValue(successResponse(channelLikeBody));
 
     const res = await POST(makeRequest() as never, {
       params: Promise.resolve({ conversationId: 'conv-1' }),

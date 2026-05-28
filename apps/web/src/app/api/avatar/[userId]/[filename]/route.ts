@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFile } from 'fs/promises';
-import { join, resolve } from 'path';
-import { resolveAvatarPath, verifyPathWithinBase } from '@/lib/security/safe-path';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 
 const CONTENT_TYPE_MAP: Record<string, string> = {
   png: 'image/png',
@@ -11,14 +10,19 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   jpeg: 'image/jpeg',
 };
 
-// When PROCESSOR_URL points to a remote service (Fly.io, etc.) the web app
-// doesn't have direct access to the file volume. Proxy avatar reads through
-// the processor's public /avatars/:userId/:filename endpoint instead.
-const PROCESSOR_URL = process.env.PROCESSOR_URL;
-const USE_PROCESSOR_PROXY =
-  PROCESSOR_URL &&
-  !PROCESSOR_URL.startsWith('http://processor:') &&
-  !PROCESSOR_URL.startsWith('http://localhost:');
+// Matches CUID2, UUID, and similar ID formats: alphanumeric + hyphens, min 3 chars
+const SAFE_USER_ID = /^[a-z0-9][a-z0-9_-]{2,}$/i;
+const MAX_FILENAME_LEN = 255;
+const ALLOWED_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+
+function isValidFilename(filename: string): boolean {
+  if (!filename || filename.length > MAX_FILENAME_LEN) return false;
+  if (filename.includes('/') || filename.includes('\\')) return false;
+  if (filename.startsWith('.')) return false;
+  if (filename.includes('..')) return false;
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return ALLOWED_EXTS.has(ext);
+}
 
 export async function GET(
   request: NextRequest,
@@ -27,14 +31,26 @@ export async function GET(
   try {
     const { userId, filename } = await context.params;
 
-    if (USE_PROCESSOR_PROXY) {
-      const upstream = `${PROCESSOR_URL}/avatars/${encodeURIComponent(userId)}/${encodeURIComponent(filename)}`;
-      const res = await fetch(upstream, { next: { revalidate: 86400 } });
-      if (!res.ok) {
-        return new NextResponse('Not Found', { status: 404 });
-      }
-      const contentType = res.headers.get('Content-Type') || 'image/jpeg';
-      return new NextResponse(res.body, {
+    if (!SAFE_USER_ID.test(userId)) {
+      return new NextResponse('Bad Request', { status: 400 });
+    }
+
+    if (!isValidFilename(filename)) {
+      return new NextResponse('Bad Request', { status: 400 });
+    }
+
+    const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpeg';
+    const key = `avatars/${userId}/${filename}`;
+
+    try {
+      const response = await getS3Client().send(new GetObjectCommand({
+        Bucket: getS3Bucket(),
+        Key: key,
+      }));
+      if (!response.Body) return new NextResponse('Not Found', { status: 404 });
+      const bytes = await response.Body.transformToByteArray();
+      const contentType = CONTENT_TYPE_MAP[ext] || 'image/jpeg';
+      return new NextResponse(bytes, {
         status: 200,
         headers: {
           'Content-Type': contentType,
@@ -42,40 +58,13 @@ export async function GET(
           'X-Content-Type-Options': 'nosniff',
         },
       });
-    }
-
-    // Local filesystem path (Docker Compose / self-hosted with shared volume)
-    const storageBasePath = process.env.FILE_STORAGE_PATH || join(process.cwd(), 'storage');
-
-    const pathResult = resolveAvatarPath(storageBasePath, userId, filename);
-    if (!pathResult.success) {
-      return new NextResponse('Bad Request', { status: 400 });
-    }
-
-    const filepath = pathResult.path;
-    const avatarsBaseDir = resolve(storageBasePath, 'avatars');
-    if (!(await verifyPathWithinBase(filepath, avatarsBaseDir))) {
+    } catch (err) {
+      const isNotFound = err && typeof err === 'object' && ('$metadata' in err
+        ? (err as { $metadata: { httpStatusCode?: number } }).$metadata.httpStatusCode === 404
+        : (err as { name?: string }).name === 'NoSuchKey');
+      if (!isNotFound) console.warn('Avatar S3 read error', { key, err: String(err) });
       return new NextResponse('Not Found', { status: 404 });
     }
-
-    let fileBuffer: Buffer;
-    try {
-      fileBuffer = await readFile(filepath);
-    } catch {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-
-    const extension = filename.split('.').pop()?.toLowerCase() || 'jpeg';
-    const contentType = CONTENT_TYPE_MAP[extension] || 'image/jpeg';
-
-    return new NextResponse(new Uint8Array(fileBuffer), {
-      status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=31536000, immutable',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
   } catch (error) {
     console.error('Error serving avatar:', error);
     return new NextResponse('Internal Server Error', { status: 500 });

@@ -1,34 +1,17 @@
-import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { S3Client } from '@aws-sdk/client-s3';
 
-// Mock fs - use vi.hoisted to avoid hoisting issues
-const { mockMkdir, mockWriteFile, mockReadFile, mockAccess, mockRm, mockRmdir, mockUnlink, mockStat, mockCopyFile, mockReaddir } = vi.hoisted(() => ({
-  mockMkdir: vi.fn().mockResolvedValue(undefined),
-  mockWriteFile: vi.fn().mockResolvedValue(undefined),
-  mockReadFile: vi.fn(),
-  mockAccess: vi.fn(),
-  mockRm: vi.fn().mockResolvedValue(undefined),
-  mockRmdir: vi.fn().mockResolvedValue(undefined),
-  mockUnlink: vi.fn().mockResolvedValue(undefined),
-  mockStat: vi.fn(),
-  mockCopyFile: vi.fn().mockResolvedValue(undefined),
-  mockReaddir: vi.fn().mockResolvedValue([]),
+// Mock @aws-sdk/lib-storage Upload class
+vi.mock('@aws-sdk/lib-storage', () => ({
+  Upload: vi.fn().mockImplementation(() => ({
+    done: vi.fn().mockResolvedValue({}),
+  })),
 }));
 
-vi.mock('fs', () => ({
-  promises: {
-    mkdir: (...args: unknown[]) => mockMkdir(...args),
-    writeFile: (...args: unknown[]) => mockWriteFile(...args),
-    readFile: (...args: unknown[]) => mockReadFile(...args),
-    access: (...args: unknown[]) => mockAccess(...args),
-    rm: (...args: unknown[]) => mockRm(...args),
-    rmdir: (...args: unknown[]) => mockRmdir(...args),
-    unlink: (...args: unknown[]) => mockUnlink(...args),
-    stat: (...args: unknown[]) => mockStat(...args),
-    copyFile: (...args: unknown[]) => mockCopyFile(...args),
-    readdir: (...args: unknown[]) => mockReaddir(...args),
-  },
-  createReadStream: vi.fn(() => {
-    const EventEmitter = require('events').EventEmitter;
+// Mock fs for createReadStream (used in hashFile / saveOriginalFromFile stream)
+const mockCreateReadStream = vi.hoisted(() =>
+  vi.fn(() => {
+    const { EventEmitter } = require('events');
     const emitter = new EventEmitter();
     process.nextTick(() => {
       emitter.emit('data', Buffer.from('test-data'));
@@ -36,475 +19,346 @@ vi.mock('fs', () => ({
     });
     return emitter;
   }),
+);
+
+const mockStat = vi.hoisted(() => vi.fn().mockResolvedValue({ size: 1024 }));
+
+vi.mock('fs', () => ({
+  createReadStream: mockCreateReadStream,
+}));
+
+vi.mock('fs/promises', () => ({
+  stat: mockStat,
 }));
 
 import { ContentStore, isValidContentHash, isValidPreset, InvalidContentHashError } from '../content-store';
 
 const VALID_HASH = 'a'.repeat(64);
-const BASE_CACHE_PATH = '/cache';
-const BASE_STORAGE_PATH = '/storage';
+const BUCKET = 'test-bucket';
+
+function makeBody(data: Buffer | string): AsyncIterable<Uint8Array> {
+  const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield new Uint8Array(buf);
+    },
+  };
+}
+
+const NOT_FOUND = Object.assign(new Error('Not found'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } });
 
 function createStore() {
-  return new ContentStore(BASE_CACHE_PATH, BASE_STORAGE_PATH);
+  const send = vi.fn();
+  const s3 = { send } as unknown as S3Client;
+  const store = new ContentStore(s3, BUCKET);
+  return { store, send };
 }
 
 describe('ContentStore', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockAccess.mockRejectedValue({ code: 'ENOENT' });
-    mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-    mockStat.mockResolvedValue({ size: 1024 });
-  });
-
   describe('initialize', () => {
-    it('creates cache and storage directories', async () => {
-      const store = createStore();
+    it('is a no-op (S3 bucket is pre-created)', async () => {
+      const { store, send } = createStore();
       await store.initialize();
-
-      expect(mockMkdir).toHaveBeenCalledWith(BASE_CACHE_PATH, { recursive: true });
-      expect(mockMkdir).toHaveBeenCalledWith(BASE_STORAGE_PATH, { recursive: true });
+      expect(send).not.toHaveBeenCalled();
     });
   });
 
   describe('getCachePath', () => {
-    it('returns path for valid hash and preset', async () => {
-      const store = createStore();
-      const p = await store.getCachePath(VALID_HASH, 'thumbnail');
-      expect(p).toContain(VALID_HASH);
-      expect(p).toContain('thumbnail.jpg');
+    it('returns S3 key containing hash and preset', async () => {
+      const { store } = createStore();
+      const key = await store.getCachePath(VALID_HASH, 'thumbnail');
+      expect(key).toContain(VALID_HASH.toLowerCase());
+      expect(key).toContain('thumbnail');
     });
 
     it('throws InvalidContentHashError for invalid hash', async () => {
-      const store = createStore();
+      const { store } = createStore();
       await expect(store.getCachePath('invalid', 'thumbnail')).rejects.toBeInstanceOf(InvalidContentHashError);
     });
   });
 
   describe('getOriginalPath', () => {
-    it('returns path for valid hash', async () => {
-      const store = createStore();
-      const p = await store.getOriginalPath(VALID_HASH);
-      expect(p).toContain(VALID_HASH);
-      expect(p).toContain('original');
+    it('returns S3 key containing hash and "original"', async () => {
+      const { store } = createStore();
+      const key = await store.getOriginalPath(VALID_HASH);
+      expect(key).toContain(VALID_HASH.toLowerCase());
+      expect(key).toContain('original');
     });
 
     it('throws InvalidContentHashError for invalid hash', async () => {
-      const store = createStore();
+      const { store } = createStore();
       await expect(store.getOriginalPath('bad')).rejects.toBeInstanceOf(InvalidContentHashError);
     });
   });
 
   describe('cacheExists', () => {
-    it('returns true when cache file accessible', async () => {
-      mockAccess.mockResolvedValueOnce(undefined);
-      const store = createStore();
-      const result = await store.cacheExists(VALID_HASH, 'thumbnail');
-      expect(result).toBe(true);
+    it('returns true when HeadObject succeeds', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({});
+      expect(await store.cacheExists(VALID_HASH, 'thumbnail')).toBe(true);
     });
 
-    it('returns false when cache file not accessible', async () => {
-      mockAccess.mockRejectedValueOnce(new Error('ENOENT'));
-      const store = createStore();
-      const result = await store.cacheExists(VALID_HASH, 'thumbnail');
-      expect(result).toBe(false);
+    it('returns false when HeadObject returns 404', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.cacheExists(VALID_HASH, 'thumbnail')).toBe(false);
     });
 
     it('returns false for invalid content hash', async () => {
-      const store = createStore();
-      const result = await store.cacheExists('invalid', 'thumbnail');
-      expect(result).toBe(false);
+      const { store } = createStore();
+      expect(await store.cacheExists('invalid', 'thumbnail')).toBe(false);
     });
 
-    it('propagates non-InvalidContentHashError errors', async () => {
-      // The getCachePath throws an error that's not InvalidContentHashError
-      // We need to test the rethrow path
-      const store = createStore();
-      // With a valid hash but preset that throws a different error, currently
-      // getCachePath only throws InvalidContentHashError. Let's test with
-      // an invalid preset that triggers a regular error
-      // Actually getCachePath throws "Invalid preset name" Error (not InvalidContentHashError)
-      await expect(store.cacheExists(VALID_HASH, '../traversal')).rejects.toThrow('Invalid preset name');
+    it('returns false for invalid preset (path traversal)', async () => {
+      const { store } = createStore();
+      expect(await store.cacheExists(VALID_HASH, '../traversal')).toBe(false);
+    });
+
+    it('rethrows unexpected S3 errors', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(new Error('Network error'));
+      await expect(store.cacheExists(VALID_HASH, 'thumbnail')).rejects.toThrow('Network error');
     });
   });
 
   describe('saveCache', () => {
-    it('saves buffer to cache path', async () => {
-      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' });
-      const store = createStore();
+    it('puts buffer to S3 and writes metadata', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({}); // PutObject for file
+      send.mockRejectedValueOnce(NOT_FOUND); // GetObject for existing metadata → not found
+      send.mockResolvedValueOnce({}); // PutObject for metadata
+
       const buffer = Buffer.from('image-data');
       const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
-      expect(mockMkdir).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), expect.objectContaining({ recursive: true }));
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), buffer);
       expect(entry.contentHash).toBe(VALID_HASH);
       expect(entry.preset).toBe('thumbnail');
       expect(entry.size).toBe(buffer.length);
       expect(entry.mimeType).toBe('image/webp');
+      expect(send).toHaveBeenCalledTimes(3);
     });
 
-    it('updates existing metadata', async () => {
-      const existingMetadata = JSON.stringify({
-        'ai-chat': {
-          preset: 'ai-chat',
-          size: 100,
-          mimeType: 'image/jpeg',
-          createdAt: new Date().toISOString(),
-          lastAccessed: new Date().toISOString(),
-        },
+    it('merges with existing metadata', async () => {
+      const { store, send } = createStore();
+      const existingMeta = JSON.stringify({
+        'ai-chat': { preset: 'ai-chat', size: 100, mimeType: 'image/jpeg', createdAt: new Date().toISOString(), lastAccessed: new Date().toISOString() },
       });
-      mockReadFile.mockResolvedValueOnce(existingMetadata);
+      send.mockResolvedValueOnce({}); // PutObject for file
+      // GetObject for existing metadata
+      send.mockResolvedValueOnce({ Body: makeBody(existingMeta) });
+      send.mockResolvedValueOnce({}); // PutObject metadata
 
-      const store = createStore();
-      const buffer = Buffer.from('new-cache');
+      const buffer = Buffer.from('new-data');
       await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
+      // 3rd call is PutObject for metadata — verify it's JSON
+      const metaPutCall = send.mock.calls[2][0] as { input: { Body: string; ContentType: string } };
+      expect(metaPutCall.input.ContentType).toBe('application/json');
+      const written = JSON.parse(metaPutCall.input.Body);
+      expect(written.thumbnail).toBeTruthy();
+      expect(written['ai-chat']).toBeTruthy();
     });
 
-    it('skips unsafe metadata keys like __proto__', async () => {
-      const maliciousMetadata = JSON.stringify({
-        ['__proto__']: { preset: 'hack' },
-        thumbnail: {
-          preset: 'thumbnail',
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: new Date().toISOString(),
-          lastAccessed: new Date().toISOString(),
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(maliciousMetadata);
+    it('skips unsafe metadata keys from existing metadata', async () => {
+      const { store, send } = createStore();
+      const malicious = JSON.stringify({ ['__proto__']: { preset: 'hack' }, thumbnail: { preset: 'thumbnail', size: 1, mimeType: 'x', createdAt: '', lastAccessed: '' } });
+      send.mockResolvedValueOnce({}); // PutObject file
+      send.mockResolvedValueOnce({ Body: makeBody(malicious) }); // GetObject meta
+      send.mockResolvedValueOnce({}); // PutObject meta
 
-      const store = createStore();
-      const buffer = Buffer.from('data');
-      const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
-      expect(entry).toBeTruthy();
-      expect(entry.preset).toBe('thumbnail');
-
-      // Verify __proto__ is not written back as own property
-      const writeCall = mockWriteFile.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('metadata')
-      );
-      expect(writeCall).toBeDefined();
-      const written = JSON.parse(writeCall![1] as string);
+      await store.saveCache(VALID_HASH, 'thumbnail', Buffer.from('x'), 'image/webp');
+      const putMeta = send.mock.calls[2][0] as { input: { Body: string } };
+      const written = JSON.parse(putMeta.input.Body ?? '{}');
       expect(Object.hasOwn(written, '__proto__')).toBe(false);
     });
   });
 
   describe('getCache', () => {
-    it('returns buffer when file exists', async () => {
-      const testBuffer = Buffer.from('cached-data');
-      mockReadFile.mockResolvedValueOnce(testBuffer);
-      // For metadata update - ENOENT so metadata update is skipped
-      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' });
-
-      const store = createStore();
+    it('returns buffer when object exists', async () => {
+      const { store, send } = createStore();
+      const data = Buffer.from('cached-data');
+      send.mockResolvedValueOnce({ Body: makeBody(data) });
       const result = await store.getCache(VALID_HASH, 'thumbnail');
-      expect(result).toEqual(testBuffer);
+      expect(result).toEqual(data);
     });
 
-    it('returns null when file not found', async () => {
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-      const store = createStore();
-      const result = await store.getCache(VALID_HASH, 'thumbnail');
-      expect(result).toBeNull();
+    it('returns null when object not found', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.getCache(VALID_HASH, 'thumbnail')).toBeNull();
     });
 
     it('returns null for invalid content hash', async () => {
-      const store = createStore();
-      const result = await store.getCache('invalid', 'thumbnail');
-      expect(result).toBeNull();
+      const { store } = createStore();
+      expect(await store.getCache('invalid', 'thumbnail')).toBeNull();
     });
 
-    it('updates lastAccessed in metadata', async () => {
-      const testBuffer = Buffer.from('cached-data');
-      mockReadFile.mockResolvedValueOnce(testBuffer);
-      const metadata = JSON.stringify({
-        thumbnail: {
-          preset: 'thumbnail',
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: new Date().toISOString(),
-          lastAccessed: new Date().toISOString(),
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
-      await store.getCache(VALID_HASH, 'thumbnail');
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
-    });
-
-    it('propagates non-InvalidContentHashError from getCachePath', async () => {
-      const store = createStore();
-      // Invalid preset triggers regular Error
-      await expect(store.getCache(VALID_HASH, '../etc')).rejects.toThrow('Invalid preset name');
+    it('returns null for invalid preset', async () => {
+      const { store } = createStore();
+      expect(await store.getCache(VALID_HASH, '../etc')).toBeNull();
     });
   });
 
   describe('saveOriginal', () => {
-    it('saves buffer and creates metadata', async () => {
-      const store = createStore();
+    it('puts buffer to S3 and writes metadata', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValue({}); // PutObject original, PutObject meta, PutObject meta (appendUploadMetadata)
+
       const buffer = Buffer.from('original-file');
-      // Mock for appendUploadMetadata - getOriginalMetadata will fail
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-
-      const result = await store.saveOriginal(buffer, 'test.pdf', {
-        tenantId: 'tenant-1',
-        driveId: 'drive-1',
-      });
-
+      const result = await store.saveOriginal(buffer, 'test.pdf', { tenantId: 'tenant-1' });
       expect(result.contentHash).toHaveLength(64);
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('test.pdf'));
+      expect(send).toHaveBeenCalled();
     });
   });
 
   describe('saveOriginalFromFile', () => {
-    it('copies file and creates metadata', async () => {
-      const store = createStore();
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
+    it('streams file to S3 and writes metadata', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValue({});
 
-      const result = await store.saveOriginalFromFile(
-        '/tmp/upload-file',
-        'test.pdf',
-        VALID_HASH,
-        { tenantId: 'tenant-1' }
-      );
-
+      const result = await store.saveOriginalFromFile('/tmp/upload', 'test.pdf', VALID_HASH);
       expect(result.contentHash).toBe(VALID_HASH);
-      expect(mockCopyFile).toHaveBeenCalledWith('/tmp/upload-file', expect.stringContaining(VALID_HASH));
+      expect(result.path).toContain(VALID_HASH);
     });
 
     it('computes hash when not provided', async () => {
-      const store = createStore();
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
+      const { store, send } = createStore();
+      send.mockResolvedValue({});
 
-      // The file hash will be computed from the stream mock
-      const result = await store.saveOriginalFromFile(
-        '/tmp/upload-file',
-        'test.pdf'
-      );
-
-      // Hash should be a valid 64-char hex string
+      const result = await store.saveOriginalFromFile('/tmp/upload', 'test.pdf');
       expect(result.contentHash).toHaveLength(64);
       expect(result.contentHash).toMatch(/^[a-f0-9]{64}$/);
     });
   });
 
   describe('originalExists', () => {
-    it('returns true when original file accessible', async () => {
-      mockAccess.mockResolvedValueOnce(undefined);
-      const store = createStore();
-      const result = await store.originalExists(VALID_HASH);
-      expect(result).toBe(true);
+    it('returns true when HeadObject succeeds', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({});
+      expect(await store.originalExists(VALID_HASH)).toBe(true);
     });
 
-    it('returns false when original file not accessible', async () => {
-      mockAccess.mockRejectedValueOnce(new Error('ENOENT'));
-      const store = createStore();
-      const result = await store.originalExists(VALID_HASH);
-      expect(result).toBe(false);
+    it('returns false when HeadObject returns 404', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.originalExists(VALID_HASH)).toBe(false);
+    });
+
+    it('returns false for invalid hash', async () => {
+      const { store } = createStore();
+      expect(await store.originalExists('invalid')).toBe(false);
     });
   });
 
   describe('getOriginal', () => {
-    it('returns buffer when file exists', async () => {
-      const testBuffer = Buffer.from('original-data');
-      mockReadFile.mockResolvedValueOnce(testBuffer);
-      // For getOriginalMetadata - ENOENT
-      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' });
-
-      const store = createStore();
-      const result = await store.getOriginal(VALID_HASH);
-      expect(result).toEqual(testBuffer);
+    it('returns buffer when object exists', async () => {
+      const { store, send } = createStore();
+      const data = Buffer.from('original-data');
+      send.mockResolvedValueOnce({ Body: makeBody(data) });
+      expect(await store.getOriginal(VALID_HASH)).toEqual(data);
     });
 
-    it('returns null when file not found', async () => {
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-      const store = createStore();
-      const result = await store.getOriginal(VALID_HASH);
-      expect(result).toBeNull();
+    it('returns null when object not found', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.getOriginal(VALID_HASH)).toBeNull();
     });
 
-    it('returns null for invalid content hash', async () => {
-      const store = createStore();
-      const result = await store.getOriginal('invalid-hash');
-      expect(result).toBeNull();
+    it('returns null for invalid hash', async () => {
+      const { store } = createStore();
+      expect(await store.getOriginal('invalid-hash')).toBeNull();
     });
 
-    it('updates lastAccessedAt in metadata', async () => {
-      const testBuffer = Buffer.from('data');
-      mockReadFile.mockResolvedValueOnce(testBuffer);
-      // Return metadata for update
-      const metadata = JSON.stringify({
-        originalName: 'file.pdf',
-        contentHash: VALID_HASH,
-        size: 1000,
-        savedAt: new Date().toISOString(),
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
-      await store.getOriginal(VALID_HASH);
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining(VALID_HASH));
-    });
-
-    it('propagates non-InvalidContentHashError from getOriginalPath', async () => {
-      // getOriginal calls getOriginalPath which only throws InvalidContentHashError
-      // The other error path is from the internal catch that rethrows
-      // Let's test the InvalidContentHashError path (returns null)
-      const store = createStore();
-      const result = await store.getOriginal('too-short');
-      expect(result).toBeNull();
-    });
-
-    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
-    it('rethrows non-InvalidContentHashError from normalizeContentHash in getOriginal', async () => {
-      const store = createStore();
-      const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
+    it('rethrows non-InvalidContentHashError from normalizeContentHash', async () => {
+      const { store } = createStore();
+      const orig = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
-        throw new TypeError('Unexpected getOriginal normalize error');
+        throw new TypeError('Unexpected error');
       };
-      await expect(store.getOriginal(VALID_HASH)).rejects.toThrow('Unexpected getOriginal normalize error');
-      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = originalNormalize;
+      await expect(store.getOriginal(VALID_HASH)).rejects.toThrow('Unexpected error');
+      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = orig;
     });
   });
 
   describe('getCacheUrl', () => {
-    it('returns correct URL pattern', async () => {
-      const store = createStore();
-      const url = await store.getCacheUrl(VALID_HASH, 'thumbnail');
-      expect(url).toBe(`/cache/${VALID_HASH}/thumbnail`);
+    it('returns /cache/{hash}/{preset} path', async () => {
+      const { store } = createStore();
+      expect(await store.getCacheUrl(VALID_HASH, 'thumbnail')).toBe(`/cache/${VALID_HASH}/thumbnail`);
     });
 
     it('throws for invalid hash', async () => {
-      const store = createStore();
+      const { store } = createStore();
       await expect(store.getCacheUrl('invalid', 'thumbnail')).rejects.toBeInstanceOf(InvalidContentHashError);
     });
   });
 
   describe('getCacheMetadata', () => {
-    it('returns empty object when no metadata file (ENOENT)', async () => {
-      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' });
-      const store = createStore();
-      const result = await store.getCacheMetadata(VALID_HASH);
-      expect(result).toEqual({});
+    it('returns empty object when metadata not found', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.getCacheMetadata(VALID_HASH)).toEqual({});
     });
 
     it('returns parsed metadata entries', async () => {
-      const metadata = JSON.stringify({
-        thumbnail: {
-          path: '/cache/hash/thumbnail.jpg',
-          size: 1000,
-          mimeType: 'image/webp',
-          createdAt: '2024-01-01T00:00:00Z',
-          lastAccessed: '2024-01-02T00:00:00Z',
-        },
+      const { store, send } = createStore();
+      const meta = JSON.stringify({
+        thumbnail: { path: 'cache/x/thumbnail', size: 1000, mimeType: 'image/webp', createdAt: '2024-01-01T00:00:00Z', lastAccessed: '2024-01-02T00:00:00Z' },
       });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(meta) });
       const result = await store.getCacheMetadata(VALID_HASH);
       expect(result.thumbnail).toBeTruthy();
       expect(result.thumbnail.size).toBe(1000);
     });
 
     it('skips dangerous keys', async () => {
-      const metadata = JSON.stringify({
+      const { store, send } = createStore();
+      const meta = JSON.stringify({
         ['__proto__']: { path: '/bad', size: 0, mimeType: 'x', createdAt: '', lastAccessed: '' },
-        thumbnail: {
-          path: '/cache/hash/thumbnail.jpg',
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: '2024-01-01T00:00:00Z',
-          lastAccessed: '2024-01-01T00:00:00Z',
-        },
+        thumbnail: { path: 'cache/x/thumbnail', size: 100, mimeType: 'image/webp', createdAt: '2024-01-01T00:00:00Z', lastAccessed: '2024-01-01T00:00:00Z' },
       });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(meta) });
       const result = await store.getCacheMetadata(VALID_HASH);
       expect(Object.hasOwn(result, '__proto__')).toBe(false);
       expect(result.thumbnail).toBeTruthy();
     });
 
     it('skips invalid preset keys', async () => {
-      const metadata = JSON.stringify({
+      const { store, send } = createStore();
+      const meta = JSON.stringify({
         '../evil': { size: 0, mimeType: 'x', createdAt: '', lastAccessed: '', path: '/bad' },
-        'valid-preset': {
-          path: '/cache/hash/valid-preset.jpg',
-          size: 100,
-          mimeType: 'image/jpeg',
-          createdAt: '2024-01-01T00:00:00Z',
-          lastAccessed: '2024-01-01T00:00:00Z',
-        },
+        'valid-preset': { path: 'x', size: 100, mimeType: 'image/jpeg', createdAt: '2024-01-01T00:00:00Z', lastAccessed: '2024-01-01T00:00:00Z' },
       });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(meta) });
       const result = await store.getCacheMetadata(VALID_HASH);
       expect(result['../evil']).toBeUndefined();
     });
 
-    it('throws on non-ENOENT read errors', async () => {
-      const err = new Error('Permission denied') as NodeJS.ErrnoException;
-      err.code = 'EACCES';
-      mockReadFile.mockRejectedValueOnce(err);
-      const store = createStore();
-      await expect(store.getCacheMetadata(VALID_HASH)).rejects.toBeTruthy();
+    it('rethrows non-404 S3 errors', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(new Error('Permission denied'));
+      await expect(store.getCacheMetadata(VALID_HASH)).rejects.toThrow('Permission denied');
     });
 
-    it('returns empty for null metadata data', async () => {
-      mockReadFile.mockResolvedValueOnce('null');
-      const store = createStore();
-      const result = await store.getCacheMetadata(VALID_HASH);
-      expect(result).toEqual({});
-    });
-
-    it('skips entries with non-object values', async () => {
-      const metadata = JSON.stringify({
-        thumbnail: 'not-an-object',
-        preview: null,
-        valid: {
-          path: '/cache/hash/valid.jpg',
-          size: 100,
-          mimeType: 'image/jpeg',
-          createdAt: '2024-01-01T00:00:00Z',
-          lastAccessed: '2024-01-01T00:00:00Z',
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
-      const result = await store.getCacheMetadata(VALID_HASH);
-      expect(result.thumbnail).toBeUndefined();
+    it('returns empty for null metadata body', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody('null') });
+      expect(await store.getCacheMetadata(VALID_HASH)).toEqual({});
     });
 
     it('uses default path when entry has no path', async () => {
-      const metadata = JSON.stringify({
-        thumbnail: {
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: '2024-01-01T00:00:00Z',
-          lastAccessed: '2024-01-01T00:00:00Z',
-        },
+      const { store, send } = createStore();
+      const meta = JSON.stringify({
+        thumbnail: { size: 100, mimeType: 'image/webp', createdAt: '2024-01-01T00:00:00Z', lastAccessed: '2024-01-01T00:00:00Z' },
       });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(meta) });
       const result = await store.getCacheMetadata(VALID_HASH);
-      expect(result.thumbnail.path).toContain('thumbnail.jpg');
+      expect(result.thumbnail.path).toContain('thumbnail');
     });
 
     it('uses default values when entry fields are missing', async () => {
-      const metadata = JSON.stringify({
-        thumbnail: {
-          path: '/cache/hash/thumbnail.jpg',
-          // size, mimeType, createdAt, lastAccessed missing
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
+      const { store, send } = createStore();
+      const meta = JSON.stringify({ thumbnail: { path: 'x' } });
+      send.mockResolvedValueOnce({ Body: makeBody(meta) });
       const result = await store.getCacheMetadata(VALID_HASH);
       expect(result.thumbnail.size).toBe(0);
       expect(result.thumbnail.mimeType).toBe('application/octet-stream');
@@ -513,311 +367,210 @@ describe('ContentStore', () => {
 
   describe('getOriginalMetadata', () => {
     it('returns null for invalid hash', async () => {
-      const store = createStore();
-      const result = await store.getOriginalMetadata('invalid');
-      expect(result).toBeNull();
+      const { store } = createStore();
+      expect(await store.getOriginalMetadata('invalid')).toBeNull();
     });
 
-    it('returns null when file not found', async () => {
-      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' });
-      const store = createStore();
-      const result = await store.getOriginalMetadata(VALID_HASH);
-      expect(result).toBeNull();
+    it('returns null when object not found', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.getOriginalMetadata(VALID_HASH)).toBeNull();
     });
 
     it('returns normalized metadata', async () => {
-      const raw = JSON.stringify({
-        originalName: 'test.pdf',
-        contentHash: VALID_HASH,
-        size: 2048,
-        savedAt: '2024-01-01T00:00:00Z',
-        tenants: ['tenant-1'],
-        drives: ['drive-1'],
-      });
-      mockReadFile.mockResolvedValueOnce(raw);
-
-      const store = createStore();
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(JSON.stringify({ originalName: 'test.pdf', contentHash: VALID_HASH, size: 2048, savedAt: '2024-01-01T00:00:00Z', tenants: ['t1'] })) });
       const result = await store.getOriginalMetadata(VALID_HASH);
       expect(result?.originalName).toBe('test.pdf');
       expect(result?.size).toBe(2048);
     });
 
     it('normalizes invalid raw metadata gracefully', async () => {
-      mockReadFile.mockResolvedValueOnce(JSON.stringify({}));
-      const store = createStore();
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody('{}') });
       const result = await store.getOriginalMetadata(VALID_HASH);
-      expect(result).not.toBeNull();
       expect(result?.originalName).toBe('file');
       expect(result?.size).toBe(0);
     });
 
     it('handles uploads array in metadata', async () => {
-      const raw = JSON.stringify({
-        originalName: 'test.pdf',
-        contentHash: VALID_HASH,
-        size: 100,
-        savedAt: '2024-01-01T00:00:00Z',
-        uploads: [
-          { tenantId: 't1', userId: 'u1', driveId: 'd1', service: 's1', uploadedAt: '2024-01-01T00:00:00Z' },
-          { tenantId: null, uploadedAt: '2024-01-01T00:00:00Z' },
-        ],
-      });
-      mockReadFile.mockResolvedValueOnce(raw);
-
-      const store = createStore();
+      const { store, send } = createStore();
+      const raw = JSON.stringify({ originalName: 'test.pdf', contentHash: VALID_HASH, size: 100, savedAt: '2024-01-01T00:00:00Z', uploads: [{ tenantId: 't1', uploadedAt: '2024-01-01T00:00:00Z' }, {}] });
+      send.mockResolvedValueOnce({ Body: makeBody(raw) });
       const result = await store.getOriginalMetadata(VALID_HASH);
       expect(result?.uploads).toHaveLength(2);
     });
 
     it('falls back to new Date() when uploadedAt is not a string', async () => {
-      const raw = JSON.stringify({
-        originalName: 'test.pdf',
-        contentHash: VALID_HASH,
-        size: 100,
-        savedAt: '2024-01-01T00:00:00Z',
-        uploads: [
-          { tenantId: 't1', uploadedAt: 12345 },  // uploadedAt is a number, not a string
-          { tenantId: 't2' },                       // uploadedAt missing
-        ],
-      });
-      mockReadFile.mockResolvedValueOnce(raw);
-
-      const store = createStore();
+      const { store, send } = createStore();
+      const raw = JSON.stringify({ originalName: 'x', contentHash: VALID_HASH, size: 0, savedAt: '2024-01-01T00:00:00Z', uploads: [{ uploadedAt: 12345 }] });
+      send.mockResolvedValueOnce({ Body: makeBody(raw) });
       const result = await store.getOriginalMetadata(VALID_HASH);
-      expect(result?.uploads).toHaveLength(2);
-      // uploadedAt should be a valid ISO string (generated by new Date().toISOString())
       expect(result?.uploads?.[0].uploadedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-      expect(result?.uploads?.[1].uploadedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     });
 
     it('generates contentHash from name+size if missing', async () => {
-      mockReadFile.mockResolvedValueOnce(JSON.stringify({
-        originalName: 'file.pdf',
-        size: 100,
-        savedAt: '2024-01-01T00:00:00Z',
-      }));
-
-      const store = createStore();
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(JSON.stringify({ originalName: 'file.pdf', size: 100, savedAt: '2024-01-01T00:00:00Z' })) });
       const result = await store.getOriginalMetadata(VALID_HASH);
       expect(result?.contentHash).toHaveLength(64);
     });
 
-    it('propagates non-InvalidContentHashError errors', async () => {
-      const err = new Error('Unexpected error');
-      (err as NodeJS.ErrnoException).code = 'EACCES';
-      mockReadFile.mockRejectedValueOnce(err);
-
-      const store = createStore();
-      // getOriginalMetadata catches all errors and returns null
-      const result = await store.getOriginalMetadata(VALID_HASH);
-      expect(result).toBeNull();
-    });
-
-    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
     it('rethrows non-InvalidContentHashError from normalizeContentHash', async () => {
-      const store = createStore();
-      const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
+      const { store } = createStore();
+      const orig = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected normalize error');
       };
       await expect(store.getOriginalMetadata(VALID_HASH)).rejects.toThrow('Unexpected normalize error');
-      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = originalNormalize;
+      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = orig;
     });
   });
 
   describe('appendUploadMetadata', () => {
     it('creates new metadata when none exists', async () => {
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-      const store = createStore();
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND); // GetObject for existing meta → not found
+      send.mockResolvedValueOnce({}); // PutObject for new meta
 
-      await store.appendUploadMetadata(VALID_HASH, {
-        tenantId: 'tenant-1',
-        driveId: 'drive-1',
-        userId: 'user-1',
-        service: 'processor',
-      });
+      await store.appendUploadMetadata(VALID_HASH, { tenantId: 'tenant-1', driveId: 'drive-1', userId: 'user-1', service: 'processor' });
 
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('tenant-1'));
+      const putCall = send.mock.calls[1][0] as { input: { Body: string } };
+      expect(putCall.input.Body).toContain('tenant-1');
     });
 
     it('appends to existing metadata', async () => {
-      const existing = JSON.stringify({
-        originalName: 'file.pdf',
-        contentHash: VALID_HASH,
-        size: 1000,
-        savedAt: new Date().toISOString(),
-        tenants: ['existing-tenant'],
-        uploads: [],
-      });
-      mockReadFile.mockResolvedValueOnce(existing);
+      const { store, send } = createStore();
+      const existing = JSON.stringify({ originalName: 'f', contentHash: VALID_HASH, size: 1, savedAt: new Date().toISOString(), tenants: ['old'], uploads: [] });
+      send.mockResolvedValueOnce({ Body: makeBody(existing) }); // GetObject existing meta
+      send.mockResolvedValueOnce({}); // PutObject updated meta
 
-      const store = createStore();
       await store.appendUploadMetadata(VALID_HASH, { tenantId: 'new-tenant' });
 
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('new-tenant'));
+      const putCall = send.mock.calls[1][0] as { input: { Body: string } };
+      expect(putCall.input.Body).toContain('new-tenant');
     });
 
     it('handles undefined options', async () => {
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-      const store = createStore();
-
-      await store.appendUploadMetadata(VALID_HASH);
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining(VALID_HASH));
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      send.mockResolvedValueOnce({});
+      await expect(store.appendUploadMetadata(VALID_HASH)).resolves.not.toThrow();
     });
   });
 
   describe('tenantHasAccess', () => {
     it('returns false for null tenantId', async () => {
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, null);
-      expect(result).toBe(false);
+      const { store } = createStore();
+      expect(await store.tenantHasAccess(VALID_HASH, null)).toBe(false);
     });
 
     it('returns false when no metadata', async () => {
-      mockReadFile.mockRejectedValue({ code: 'ENOENT' });
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, 'tenant-1');
-      expect(result).toBe(false);
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.tenantHasAccess(VALID_HASH, 'tenant-1')).toBe(false);
     });
 
     it('returns true when no tenant list (open access)', async () => {
-      mockReadFile.mockResolvedValueOnce(
-        JSON.stringify({
-          originalName: 'file.pdf',
-          contentHash: VALID_HASH,
-          size: 100,
-          savedAt: new Date().toISOString(),
-        })
-      );
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, 'tenant-1');
-      expect(result).toBe(true);
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(JSON.stringify({ originalName: 'f', contentHash: VALID_HASH, size: 0, savedAt: new Date().toISOString() })) });
+      expect(await store.tenantHasAccess(VALID_HASH, 'tenant-1')).toBe(true);
     });
 
     it('returns true when tenants array is empty', async () => {
-      mockReadFile.mockResolvedValueOnce(
-        JSON.stringify({
-          originalName: 'file.pdf',
-          contentHash: VALID_HASH,
-          size: 100,
-          savedAt: new Date().toISOString(),
-          tenants: [],
-        })
-      );
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, 'tenant-1');
-      expect(result).toBe(true);
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(JSON.stringify({ originalName: 'f', contentHash: VALID_HASH, size: 0, savedAt: new Date().toISOString(), tenants: [] })) });
+      expect(await store.tenantHasAccess(VALID_HASH, 'tenant-1')).toBe(true);
     });
 
     it('returns true when tenantId is in list', async () => {
-      mockReadFile.mockResolvedValueOnce(
-        JSON.stringify({
-          originalName: 'file.pdf',
-          contentHash: VALID_HASH,
-          size: 100,
-          savedAt: new Date().toISOString(),
-          tenants: ['tenant-1', 'tenant-2'],
-        })
-      );
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, 'tenant-1');
-      expect(result).toBe(true);
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(JSON.stringify({ originalName: 'f', contentHash: VALID_HASH, size: 0, savedAt: new Date().toISOString(), tenants: ['tenant-1', 'tenant-2'] })) });
+      expect(await store.tenantHasAccess(VALID_HASH, 'tenant-1')).toBe(true);
     });
 
     it('returns false when tenantId not in list', async () => {
-      mockReadFile.mockResolvedValueOnce(
-        JSON.stringify({
-          originalName: 'file.pdf',
-          contentHash: VALID_HASH,
-          size: 100,
-          savedAt: new Date().toISOString(),
-          tenants: ['tenant-2'],
-        })
-      );
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, 'tenant-1');
-      expect(result).toBe(false);
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Body: makeBody(JSON.stringify({ originalName: 'f', contentHash: VALID_HASH, size: 0, savedAt: new Date().toISOString(), tenants: ['tenant-2'] })) });
+      expect(await store.tenantHasAccess(VALID_HASH, 'tenant-1')).toBe(false);
     });
 
     it('returns false for undefined tenantId', async () => {
-      const store = createStore();
-      const result = await store.tenantHasAccess(VALID_HASH, undefined);
-      expect(result).toBe(false);
+      const { store } = createStore();
+      expect(await store.tenantHasAccess(VALID_HASH, undefined)).toBe(false);
     });
   });
 
   describe('deleteOriginal', () => {
-    it('returns true when deletion succeeds', async () => {
-      mockRm.mockResolvedValueOnce(undefined);
-      const store = createStore();
-      const result = await store.deleteOriginal(VALID_HASH);
-      expect(result).toBe(true);
+    it('returns true when both DeleteObject calls succeed', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValue({});
+      expect(await store.deleteOriginal(VALID_HASH)).toBe(true);
+      expect(send).toHaveBeenCalledTimes(2);
     });
 
-    it('returns false when deletion fails', async () => {
-      mockRm.mockRejectedValueOnce(new Error('Permission denied'));
-      const store = createStore();
-      const result = await store.deleteOriginal(VALID_HASH);
-      expect(result).toBe(false);
+    it('returns false when deletion throws', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(new Error('Permission denied'));
+      expect(await store.deleteOriginal(VALID_HASH)).toBe(false);
     });
 
     it('returns false for invalid hash', async () => {
-      const store = createStore();
-      const result = await store.deleteOriginal('invalid');
-      expect(result).toBe(false);
+      const { store } = createStore();
+      expect(await store.deleteOriginal('invalid')).toBe(false);
     });
 
-    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
-    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in originalExists', async () => {
-      const store = createStore();
-      const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
-      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
-        throw new TypeError('Unexpected type error');
-      };
+    it('rethrows when normalizeContentHash throws non-InvalidContentHashError', async () => {
+      const { store } = createStore();
+      const orig = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
+      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => { throw new TypeError('Unexpected type error'); };
       await expect(store.deleteOriginal(VALID_HASH)).rejects.toThrow('Unexpected type error');
-      // Restore
-      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = originalNormalize;
+      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = orig;
     });
   });
 
   describe('deleteCache', () => {
-    it('returns true when deletion succeeds', async () => {
-      mockRm.mockResolvedValueOnce(undefined);
-      const store = createStore();
-      const result = await store.deleteCache(VALID_HASH);
-      expect(result).toBe(true);
+    it('returns true when list and delete succeed', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Contents: [{ Key: `cache/${VALID_HASH}/thumbnail` }] }); // ListObjectsV2
+      send.mockResolvedValueOnce({}); // DeleteObjects
+      expect(await store.deleteCache(VALID_HASH)).toBe(true);
     });
 
-    it('returns false when deletion fails', async () => {
-      mockRm.mockRejectedValueOnce(new Error('Fail'));
-      const store = createStore();
-      const result = await store.deleteCache(VALID_HASH);
-      expect(result).toBe(false);
+    it('returns true when no cache objects exist', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ Contents: [] });
+      expect(await store.deleteCache(VALID_HASH)).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns false when S3 operation throws', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(new Error('Fail'));
+      expect(await store.deleteCache(VALID_HASH)).toBe(false);
     });
 
     it('returns false for invalid hash', async () => {
-      const store = createStore();
-      const result = await store.deleteCache('invalid');
-      expect(result).toBe(false);
+      const { store } = createStore();
+      expect(await store.deleteCache('invalid')).toBe(false);
     });
 
-    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
-    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in cacheExists', async () => {
-      const store = createStore();
-      const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
-      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
-        throw new TypeError('Unexpected cache error');
-      };
+    it('rethrows when normalizeContentHash throws non-InvalidContentHashError', async () => {
+      const { store } = createStore();
+      const orig = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
+      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => { throw new TypeError('Unexpected cache error'); };
       await expect(store.deleteCache(VALID_HASH)).rejects.toThrow('Unexpected cache error');
-      // Restore
-      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = originalNormalize;
+      (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = orig;
     });
   });
 
   describe('deleteOriginalAndCache', () => {
-    it('returns results for both deletions', async () => {
-      mockRm.mockResolvedValue(undefined);
-      const store = createStore();
+    it('returns true for both when all S3 calls succeed', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValue({});
+      send.mockResolvedValueOnce({}); // deleteOriginal: original
+      send.mockResolvedValueOnce({}); // deleteOriginal: metadata
+      send.mockResolvedValueOnce({ Contents: [] }); // deleteCache: list
       const result = await store.deleteOriginalAndCache(VALID_HASH);
       expect(result.originalDeleted).toBe(true);
       expect(result.cacheDeleted).toBe(true);
@@ -825,92 +578,10 @@ describe('ContentStore', () => {
   });
 
   describe('cleanupOldCache', () => {
-    it('returns 0 when no content dirs', async () => {
-      mockReaddir.mockResolvedValueOnce([]);
-      const store = createStore();
-      const count = await store.cleanupOldCache();
-      expect(count).toBe(0);
-    });
-
-    it('skips invalid directory names', async () => {
-      mockReaddir.mockResolvedValueOnce(['not-a-hash', 'another-invalid']);
-      const store = createStore();
-      const count = await store.cleanupOldCache();
-      expect(count).toBe(0);
-    });
-
-    it('deletes old cache entries', async () => {
-      mockReaddir.mockResolvedValueOnce([VALID_HASH]);
-      const oldDate = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
-      const metadata = JSON.stringify({
-        thumbnail: {
-          path: `/cache/${VALID_HASH}/thumbnail.jpg`,
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: oldDate,
-          lastAccessed: oldDate,
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-      mockUnlink.mockResolvedValueOnce(undefined);
-      mockRmdir.mockResolvedValueOnce(undefined);
-
-      const store = createStore();
-      const count = await store.cleanupOldCache(7 * 24 * 60 * 60 * 1000);
-      expect(count).toBe(1);
-    });
-
-    it('keeps recent cache entries', async () => {
-      mockReaddir.mockResolvedValueOnce([VALID_HASH]);
-      const recentDate = new Date().toISOString();
-      const metadata = JSON.stringify({
-        thumbnail: {
-          path: `/cache/${VALID_HASH}/thumbnail.jpg`,
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: recentDate,
-          lastAccessed: recentDate,
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-
-      const store = createStore();
-      const count = await store.cleanupOldCache(7 * 24 * 60 * 60 * 1000);
-      expect(count).toBe(0);
-      // Should write updated metadata since entries remain
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
-    });
-
-    it('skips dirs without metadata', async () => {
-      mockReaddir.mockResolvedValueOnce([VALID_HASH]);
-      mockReadFile.mockRejectedValueOnce({ code: 'ENOENT' });
-
-      const store = createStore();
-      const count = await store.cleanupOldCache();
-      expect(count).toBe(0);
-    });
-
-    it('handles unlink errors gracefully', async () => {
-      mockReaddir.mockResolvedValueOnce([VALID_HASH]);
-      const oldDate = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
-      const metadata = JSON.stringify({
-        thumbnail: {
-          path: `/cache/${VALID_HASH}/thumbnail.jpg`,
-          size: 100,
-          mimeType: 'image/webp',
-          createdAt: oldDate,
-          lastAccessed: oldDate,
-        },
-      });
-      mockReadFile.mockResolvedValueOnce(metadata);
-      mockUnlink.mockRejectedValueOnce(new Error('Already deleted'));
-      mockRmdir.mockResolvedValueOnce(undefined);
-
-      const store = createStore();
-      // Should not throw even if unlink fails
-      const count = await store.cleanupOldCache(7 * 24 * 60 * 60 * 1000);
-      // Count is 0 since unlink failed and we don't count it
-      expect(count).toBe(0);
+    it('is a no-op and returns 0 (S3 lifecycle handles TTL)', async () => {
+      const { store, send } = createStore();
+      expect(await store.cleanupOldCache()).toBe(0);
+      expect(send).not.toHaveBeenCalled();
     });
   });
 });
@@ -930,7 +601,7 @@ describe('isValidContentHash', () => {
 });
 
 describe('isValidPreset', () => {
-  it('returns true for valid preset', () => {
+  it('returns true for valid presets', () => {
     expect(isValidPreset('thumbnail')).toBe(true);
     expect(isValidPreset('ai-chat')).toBe(true);
     expect(isValidPreset('extracted-text.txt')).toBe(true);

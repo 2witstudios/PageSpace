@@ -123,7 +123,7 @@ vi.mock('@/components/shared/MessageAttachment', () => ({
 type ChannelInputProps = {
   value: string;
   onChange: (v: string) => void;
-  onSend: (a?: FileAttachment) => void;
+  onSend: (a?: FileAttachment[]) => void;
   conversationId?: string;
   channelId?: string;
   attachmentsEnabled?: boolean;
@@ -146,13 +146,14 @@ vi.mock(
             <button
               data-testid="send-with-attachment"
               onClick={() =>
-                props.onSend({
+                props.onSend([{
+                  instanceId: 'instance-x',
                   id: 'file-x',
                   originalName: 'pic.png',
                   size: 1024,
                   mimeType: 'image/png',
                   contentHash: 'hash-x',
-                })
+                }])
               }
             />
           </div>
@@ -168,6 +169,7 @@ vi.mock(
 import InboxDMPage from '../page';
 
 const sampleAttachment: FileAttachment = {
+  instanceId: 'instance-x',
   id: 'file-x',
   originalName: 'pic.png',
   size: 1024,

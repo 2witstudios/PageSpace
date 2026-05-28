@@ -1,5 +1,5 @@
 import { test as base, APIRequestContext } from '@playwright/test';
-import { seedState } from './seed-state';
+import { getSeedState } from './seed-state';
 
 interface SeededPage {
   pageId: string;
@@ -19,7 +19,7 @@ async function seedPage(request: APIRequestContext): Promise<SeededPage> {
     data: {
       title,
       type: 'DOCUMENT',
-      driveId: seedState.driveId,
+      driveId: getSeedState().driveId,
       parentId: null,
     },
   });

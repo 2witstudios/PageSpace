@@ -31,14 +31,14 @@ export const serverEnvSchema = z
       .default('info'),
 
     // Optional URLs
-    WEB_APP_URL: z.string().url().optional(),
-    NEXT_PUBLIC_REALTIME_URL: z.string().url().optional(),
-    INTERNAL_REALTIME_URL: z.string().url().optional(),
+    WEB_APP_URL: z.string().url().optional().or(z.literal('')),
+    NEXT_PUBLIC_REALTIME_URL: z.string().url().optional().or(z.literal('')),
+    INTERNAL_REALTIME_URL: z.string().url().optional().or(z.literal('')),
 
     // Optional OAuth
     GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
     GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
-    GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+    GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
 
     // Optional AI keys
     GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),

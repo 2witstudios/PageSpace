@@ -42,9 +42,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 // --- Service seam (the single function the wrapper must delegate to) ------------
-const mockProcessAttachmentUpload = vi.fn();
+const mockProcessAttachmentUploads = vi.fn();
 vi.mock('@pagespace/lib/services/attachment-upload', () => ({
-  processAttachmentUpload: (...args: unknown[]) => mockProcessAttachmentUpload(...args),
+  processAttachmentUploads: (...args: unknown[]) => mockProcessAttachmentUploads(...args),
 }));
 
 // --- Imports under test ---------------------------------------------------------
@@ -94,7 +94,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
       type: 'CHANNEL',
       driveId: 'drive-1',
     });
-    mockProcessAttachmentUpload.mockResolvedValue(
+    mockProcessAttachmentUploads.mockResolvedValue(
       new Response(JSON.stringify(SUCCESS_RESPONSE_BODY), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -107,8 +107,8 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
     const res = await POST(request as never, { params: Promise.resolve({ pageId: 'page-1' }) });
 
     expect(res.status).toBe(200);
-    expect(mockProcessAttachmentUpload).toHaveBeenCalledTimes(1);
-    expect(mockProcessAttachmentUpload).toHaveBeenCalledWith({
+    expect(mockProcessAttachmentUploads).toHaveBeenCalledTimes(1);
+    expect(mockProcessAttachmentUploads).toHaveBeenCalledWith({
       request,
       target: { type: 'page', pageId: 'page-1', driveId: 'drive-1' },
       authContext,
@@ -123,7 +123,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
 
     expect(res.status).toBe(404);
     expect(body.error).toMatch(/not found/i);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
   });
 
   it('returns 400 for a non-channel page (without calling the service)', async () => {
@@ -136,7 +136,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
     const res = await POST(makeRequest() as never, { params: Promise.resolve({ pageId: 'page-1' }) });
 
     expect(res.status).toBe(400);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
   });
 
   it('returns 400 when the channel has no associated drive (without calling the service)', async () => {
@@ -149,7 +149,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
     const res = await POST(makeRequest() as never, { params: Promise.resolve({ pageId: 'page-1' }) });
 
     expect(res.status).toBe(400);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
   });
 
   it('returns 403 and emits authz.access.denied audit when the caller lacks edit permission', async () => {
@@ -158,7 +158,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
     const res = await POST(makeRequest() as never, { params: Promise.resolve({ pageId: 'page-1' }) });
 
     expect(res.status).toBe(403);
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -181,7 +181,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
 
     expect(res.status).toBe(500);
     expect(body.error).toBe('Failed to upload file');
-    expect(mockProcessAttachmentUpload).not.toHaveBeenCalled();
+    expect(mockProcessAttachmentUploads).not.toHaveBeenCalled();
   });
 
   it('forwards the response from processAttachmentUpload unchanged', async () => {
@@ -189,7 +189,7 @@ describe('POST /api/channels/[pageId]/upload (thin wrapper)', () => {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
-    mockProcessAttachmentUpload.mockResolvedValue(customResponse);
+    mockProcessAttachmentUploads.mockResolvedValue(customResponse);
 
     const res = await POST(makeRequest() as never, { params: Promise.resolve({ pageId: 'page-1' }) });
     const body = await res.json();

@@ -7,6 +7,7 @@
   },
   "devDependencies": {
     "@pagespace/db": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1045.0",
     "@playwright/test": "^1.52.0",
     "@types/node": "^24.0.0",
     "dotenv": "^16.0.0",

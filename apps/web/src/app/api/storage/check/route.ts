@@ -8,7 +8,6 @@ import {
   STORAGE_TIERS
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -32,16 +31,6 @@ export async function POST(request: NextRequest) {
     }
 
     const { fileSize } = parsed.data;
-
-    // Check memory availability first
-    const memCheck = await checkMemoryMiddleware();
-    if (!memCheck.allowed) {
-      return NextResponse.json({
-        allowed: false,
-        reason: memCheck.reason || 'Server is busy',
-        memoryStatus: memCheck.status
-      }, { status: 503 }); // Service Unavailable
-    }
 
     // Check storage quota
     const quotaCheck = await checkStorageQuota(userId, fileSize);

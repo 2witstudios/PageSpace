@@ -2,15 +2,13 @@
 
 ## Active Epics
 
+- [Fly.io Upload Infrastructure](tasks/fly-upload-infra.md) — migrate from local VPS filesystem to Tigris S3, presigned URL delivery, remove memory monitor, raise limits for video support, batch upload in channels/DMs.
 - [Agent Conversation Privacy](tasks/agent-conversation-privacy.md) — User-scoped conversation history for AI Chat pages; private by default, opt-in multiplayer sharing.
 - [AI Chat Co-mount Fix](tasks/ai-chat-comount-fix.md) — Fix message stealing and stream-abort conflicts when the same AI agent is open in both the middle panel and right sidebar.
 
 - [OpenAI API v1 Follow-Up](tasks/openai-api-v1-followup.md) — Token usage tracking in `onFinish` + `GET /api/v1/models` discovery endpoint.
 - [Zoom Transcript Integration](tasks/zoom-transcript-integration.md) — Auto-save Zoom meeting transcripts as Document pages in a user-configured drive; webhook-driven, AI summary + action items, cloud-only.
-
-
 - [Public Share Links](tasks/public-share-links.md) — Reusable page/drive share links (Discord-style join + Google Drive-style access); sign-in required, fully revocable, zero PII in link records.
-
 - [Inline Quote Replies](tasks/inline-quote-replies.md) — Slack/Twitter-style inline quote-reply embeds in channels and DMs via additive `quotedMessageId` self-FK + read-time enrichment helper; orthogonal to the just-shipped thread panel.
 - [Slack DM Support](tasks/slack-dm-support.md) — extend the Slack provider adapter with `im:*` + `mpim:*` scopes and default `conversations.list` to all conversation types so agents can read 1:1 and group DMs alongside channels.
 - [DM File Attachments](tasks/dm-file-attachments.md) — bring DM conversations to channel parity for file attachments via a `fileConversations` join table, nullable `files.driveId`, and shared upload/token/processor/composer/renderer infrastructure.

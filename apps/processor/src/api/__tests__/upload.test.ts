@@ -18,8 +18,8 @@ const {
   UPLOAD_TEMP_DIR,
 } = vi.hoisted(() => {
   // Set env var BEFORE module loads (hoisted runs first)
-  process.env.CACHE_PATH = '/tmp/test-cache';
-  const UPLOAD_TEMP_DIR = '/tmp/test-cache/temp-uploads';
+  process.env.TEMP_UPLOADS_PATH = '/tmp/test-uploads';
+  const UPLOAD_TEMP_DIR = '/tmp/test-uploads/uploads';
   const MOCK_HASH = 'a'.repeat(64);
 
   // Create a stream-like object that emits 'data' and 'end' events

@@ -35,6 +35,13 @@ const LABEL_TO_MIME: Readonly<Record<string, string>> = Object.freeze({
   avif: 'image/avif',
   heif: 'image/heif',
   ico: 'image/vnd.microsoft.icon',
+  // video — keep in sync with queue-manager's `mimeType.startsWith('video/')` branch
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska',
+  m4v: 'video/mp4',
   // text-extractable — keep in sync with workers/text-extractor.ts#needsTextExtraction
   pdf: 'application/pdf',
   doc: 'application/msword',

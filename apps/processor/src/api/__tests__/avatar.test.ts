@@ -5,26 +5,12 @@ import request from 'supertest';
 
 // Hoisted mocks
 const {
-  mockFsMkdir,
-  mockFsReaddir,
-  mockFsUnlink,
-  mockFsWriteFile,
-  mockFsRmdir,
-  mockResolvePathWithin,
+  mockS3Send,
   mockNormalizeIdentifier,
   mockSanitizeExtension,
   mockHasAuthScope,
 } = vi.hoisted(() => ({
-  mockFsMkdir: vi.fn().mockResolvedValue(undefined),
-  mockFsReaddir: vi.fn().mockResolvedValue([]),
-  mockFsUnlink: vi.fn().mockResolvedValue(undefined),
-  mockFsWriteFile: vi.fn().mockResolvedValue(undefined),
-  mockFsRmdir: vi.fn().mockResolvedValue(undefined),
-  // Default implementation: return base/seg
-  mockResolvePathWithin: vi.fn().mockImplementation((base: string, ...segs: string[]) => {
-    if (!base) return null;
-    return `${base}/${segs.join('/')}`;
-  }),
+  mockS3Send: vi.fn(),
   mockNormalizeIdentifier: vi.fn().mockImplementation((value: unknown) => {
     if (typeof value !== 'string' || !value) return null;
     return value;
@@ -45,7 +31,6 @@ vi.mock('../../middleware/auth', () => ({
 vi.mock('../../utils/security', () => ({
   DEFAULT_IMAGE_EXTENSION: '.png',
   IDENTIFIER_PATTERN: /^[A-Za-z0-9_-]{3,64}$/,
-  resolvePathWithin: (...args: unknown[]) => mockResolvePathWithin(...args),
   normalizeIdentifier: (...args: unknown[]) => mockNormalizeIdentifier(...args),
   sanitizeExtension: (...args: unknown[]) => mockSanitizeExtension(...args),
 }));
@@ -59,14 +44,21 @@ vi.mock('../../logger', () => ({
   },
 }));
 
-vi.mock('fs', () => ({
-  promises: {
-    mkdir: (...args: unknown[]) => mockFsMkdir(...args),
-    readdir: (...args: unknown[]) => mockFsReaddir(...args),
-    unlink: (...args: unknown[]) => mockFsUnlink(...args),
-    writeFile: (...args: unknown[]) => mockFsWriteFile(...args),
-    rmdir: (...args: unknown[]) => mockFsRmdir(...args),
-  },
+vi.mock('@aws-sdk/client-s3', () => {
+  const makeCommand = (tag: string) =>
+    class { _tag = tag; input: unknown; constructor(i: unknown) { this.input = i; } };
+  return {
+    S3Client: vi.fn().mockImplementation(() => ({ send: mockS3Send })),
+    PutObjectCommand: makeCommand('PutObject'),
+    GetObjectCommand: makeCommand('GetObject'),
+    ListObjectsV2Command: makeCommand('ListObjectsV2'),
+    DeleteObjectsCommand: makeCommand('DeleteObjects'),
+  };
+});
+
+vi.mock('../../s3-client', () => ({
+  createS3Client: () => ({ send: mockS3Send }),
+  getS3Bucket: () => 'test-bucket',
 }));
 
 vi.mock('multer', () => {
@@ -116,36 +108,42 @@ function createMockFile(overrides: Partial<Express.Multer.File> = {}): Express.M
   };
 }
 
+function defaultS3Behavior() {
+  mockS3Send.mockImplementation(async (command: { _tag: string }) => {
+    if (command._tag === 'ListObjectsV2') return { Contents: [] };
+    if (command._tag === 'DeleteObjects') return {};
+    if (command._tag === 'PutObject') return {};
+    if (command._tag === 'GetObject') {
+      return {
+        Body: {
+          transformToByteArray: () => Promise.resolve(new Uint8Array(Buffer.from('fake-image'))),
+        },
+      };
+    }
+    throw new Error(`Unexpected S3 command: ${command._tag}`);
+  });
+}
+
 describe('POST /avatar/upload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
-      if (!base) return null;
-      return `${base}/${segs.join('/')}`;
-    });
+    defaultS3Behavior();
     mockNormalizeIdentifier.mockImplementation((value: unknown) => {
       if (typeof value !== 'string' || !value) return null;
       return value;
     });
-    mockFsMkdir.mockResolvedValue(undefined);
-    mockFsReaddir.mockResolvedValue([]);
-    mockFsWriteFile.mockResolvedValue(undefined);
     mockSanitizeExtension.mockReturnValue('.jpg');
   });
 
   it('returns 401 when no auth', async () => {
     const app = createApp(undefined, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(401);
   });
 
   it('returns 400 when no file provided', async () => {
     const app = createApp({ userId: 'user-1' });
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('No file provided');
   });
@@ -153,9 +151,7 @@ describe('POST /avatar/upload', () => {
   it('returns 400 when userId is invalid', async () => {
     mockNormalizeIdentifier.mockReturnValue(null);
     const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: '' });
+    const response = await request(app).post('/avatar/upload').send({ userId: '' });
     expect(response.status).toBe(400);
     expect(response.body.error).toContain('Invalid user ID format');
   });
@@ -163,9 +159,7 @@ describe('POST /avatar/upload', () => {
   it('returns 403 when uploading for another user without scope', async () => {
     mockHasAuthScope.mockReturnValue(false);
     const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-2' });
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-2' });
     expect(response.status).toBe(403);
     expect(response.body.error).toContain('Cannot modify avatar');
   });
@@ -173,103 +167,98 @@ describe('POST /avatar/upload', () => {
   it('allows uploading for another user with avatars:write:any scope', async () => {
     mockHasAuthScope.mockReturnValue(true);
     const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-2' });
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-2' });
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
   });
 
-  it('saves avatar successfully for own user', async () => {
+  it('saves avatar successfully via S3 PutObjectCommand', async () => {
     const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.filename).toBe('avatar.jpg');
-    expect(mockFsWriteFile).toHaveBeenCalledWith(
-      expect.stringContaining('user-1'),
-      Buffer.from('fake-image-data')
+
+    const putCall = mockS3Send.mock.calls.find(
+      (call: unknown[]) => (call[0] as { _tag: string })._tag === 'PutObject'
     );
+    expect(putCall).toBeDefined();
+    const putInput = (putCall![0] as { input: { Key: string; Body: Buffer } }).input;
+    expect(putInput.Key).toContain('avatars/user-1/avatar');
+    expect(putInput.Body).toEqual(Buffer.from('fake-image-data'));
   });
 
-  it('deletes old avatar files before saving new one', async () => {
-    mockFsReaddir.mockResolvedValue(['avatar.jpg', 'avatar.png', 'other-file.txt']);
-    const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
-    expect(response.status).toBe(200);
-    // Should unlink avatar.jpg and avatar.png (starts with 'avatar.')
-    expect(mockFsUnlink).toHaveBeenCalledTimes(2);
-  });
-
-  it('returns 400 when avatarsDir resolution fails', async () => {
-    // resolvePathWithin returns null for the userId directory
-    mockResolvePathWithin.mockReturnValue(null);
-    const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
-    expect(response.status).toBe(400);
-    expect(response.body.error).toContain('Invalid avatar path');
-  });
-
-  it('handles errors gracefully', async () => {
-    mockFsWriteFile.mockRejectedValue(new Error('Disk full'));
-    const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
-    expect(response.status).toBe(500);
-    expect(response.body.error).toContain('Failed to upload avatar');
-  });
-
-  it('returns 400 when filepath resolution fails after avatarsDir is set', async () => {
-    // avatarsDir resolves OK (first call), but filepath (second call for filename) returns null
-    let callCount = 0;
-    mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
-      callCount++;
-      // First call: AVATAR_ROOT init at module load (already done)
-      // In handler: first call = avatarsDir, second call = filePath
-      if (callCount === 1) return `${base}/${segs.join('/')}`; // avatarsDir OK
-      return null; // filepath fails
+  it('lists and deletes old avatars before saving new one', async () => {
+    mockS3Send.mockImplementation(async (command: { _tag: string }) => {
+      if (command._tag === 'ListObjectsV2') return {
+        Contents: [
+          { Key: 'avatars/user-1/avatar.jpg' },
+          { Key: 'avatars/user-1/avatar.png' },
+        ],
+      };
+      if (command._tag === 'DeleteObjects') return {};
+      if (command._tag === 'PutObject') return {};
+      throw new Error(`Unexpected: ${command._tag}`);
     });
+
     const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
-    expect(response.status).toBe(400);
-    expect(response.body.error).toContain('Invalid avatar path');
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(200);
+
+    const deleteCall = mockS3Send.mock.calls.find(
+      (call: unknown[]) => (call[0] as { _tag: string })._tag === 'DeleteObjects'
+    );
+    expect(deleteCall).toBeDefined();
+    const deleteInput = (deleteCall![0] as { input: { Delete: { Objects: Array<{ Key: string }> } } }).input;
+    expect(deleteInput.Delete.Objects).toHaveLength(2);
   });
 
-  it('handles readdir error when deleting old avatars', async () => {
-    mockFsReaddir.mockRejectedValue(new Error('ENOENT'));
+  it('succeeds when no previous avatars exist (empty ListObjectsV2)', async () => {
+    // defaultS3Behavior returns { Contents: [] } for ListObjectsV2
     const app = createApp({ userId: 'user-1' }, createMockFile());
-    const response = await request(app)
-      .post('/avatar/upload')
-      .send({ userId: 'user-1' });
-    // readdir error is caught silently, upload still succeeds
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
+    // DeleteObjects should NOT be called when list is empty
+    const deleteCall = mockS3Send.mock.calls.find(
+      (call: unknown[]) => (call[0] as { _tag: string })._tag === 'DeleteObjects'
+    );
+    expect(deleteCall).toBeUndefined();
+  });
+
+  it('succeeds even when S3 list fails (best-effort cleanup)', async () => {
+    mockS3Send.mockImplementation(async (command: { _tag: string }) => {
+      if (command._tag === 'ListObjectsV2') throw new Error('S3 error');
+      if (command._tag === 'PutObject') return {};
+      throw new Error(`Unexpected: ${command._tag}`);
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+  });
+
+  it('returns 500 when S3 PutObject fails', async () => {
+    mockS3Send.mockImplementation(async (command: { _tag: string }) => {
+      if (command._tag === 'ListObjectsV2') return { Contents: [] };
+      if (command._tag === 'PutObject') throw new Error('S3 write error');
+      throw new Error(`Unexpected: ${command._tag}`);
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(500);
+    expect(response.body.error).toContain('Failed to upload avatar');
   });
 });
 
 describe('DELETE /avatar/:userId', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
-      if (!base) return null;
-      return `${base}/${segs.join('/')}`;
-    });
+    defaultS3Behavior();
     mockNormalizeIdentifier.mockImplementation((value: unknown) => {
       if (typeof value !== 'string' || !value) return null;
       return value;
     });
-    mockFsReaddir.mockResolvedValue(['avatar.jpg']);
-    mockFsUnlink.mockResolvedValue(undefined);
-    mockFsRmdir.mockResolvedValue(undefined);
   });
 
   it('returns 401 when no auth', async () => {
@@ -302,45 +291,33 @@ describe('DELETE /avatar/:userId', () => {
     expect(response.body.success).toBe(true);
   });
 
-  it('deletes own avatar successfully', async () => {
+  it('deletes own avatar via S3', async () => {
+    mockS3Send.mockImplementation(async (command: { _tag: string }) => {
+      if (command._tag === 'ListObjectsV2') return { Contents: [{ Key: 'avatars/user-1/avatar.jpg' }] };
+      if (command._tag === 'DeleteObjects') return {};
+      throw new Error(`Unexpected: ${command._tag}`);
+    });
+
     const app = createApp({ userId: 'user-1' });
     const response = await request(app).delete('/avatar/user-1');
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
-    expect(mockFsUnlink).toHaveBeenCalledWith(expect.stringContaining('avatar'));
+
+    const deleteCall = mockS3Send.mock.calls.find(
+      (call: unknown[]) => (call[0] as { _tag: string })._tag === 'DeleteObjects'
+    );
+    expect(deleteCall).toBeDefined();
   });
 
-  it('returns success even when directory does not exist', async () => {
-    mockFsReaddir.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+  it('returns success even when no avatars exist', async () => {
+    // defaultS3Behavior returns { Contents: [] } for ListObjectsV2
     const app = createApp({ userId: 'user-1' });
     const response = await request(app).delete('/avatar/user-1');
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
   });
 
-  it('handles unlink errors gracefully (inner try/catch)', async () => {
-    mockFsReaddir.mockResolvedValue(['avatar.jpg']);
-    mockFsUnlink.mockRejectedValue(new Error('Permission denied'));
-    mockFsRmdir.mockRejectedValue(Object.assign(new Error('ENOTEMPTY'), { code: 'ENOTEMPTY' }));
-    // Both unlink and rmdir failures are caught by inner try/catch
-    const app = createApp({ userId: 'user-1' });
-    const response = await request(app).delete('/avatar/user-1');
-    // The outer delete catches the inner errors, returns 200
-    expect(response.status).toBe(200);
-    expect(response.body.success).toBe(true);
-  });
-
-  it('returns 400 when avatarsDir resolution fails in delete handler', async () => {
-    // Make resolvePathWithin return null for the avatarsDir call inside the delete handler
-    mockResolvePathWithin.mockReturnValue(null);
-    const app = createApp({ userId: 'user-1' });
-    const response = await request(app).delete('/avatar/user-1');
-    expect(response.status).toBe(400);
-    expect(response.body.error).toContain('Invalid avatar path');
-  });
-
-  it('returns 500 when outer catch is triggered in delete handler', async () => {
-    // Make normalizeIdentifier throw synchronously to trigger the outer catch block
+  it('returns 500 when outer catch is triggered', async () => {
     mockNormalizeIdentifier.mockImplementation(() => {
       throw new Error('Unexpected identifier error');
     });
@@ -349,5 +326,39 @@ describe('DELETE /avatar/:userId', () => {
     expect(response.status).toBe(500);
     expect(response.body.error).toContain('Failed to delete avatar');
     expect(response.body.details).toContain('Unexpected identifier error');
+  });
+});
+
+describe('GET /avatar/:userId/:filename', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    defaultS3Behavior();
+    mockNormalizeIdentifier.mockImplementation((value: unknown) => {
+      if (typeof value !== 'string' || !value) return null;
+      return value;
+    });
+    mockSanitizeExtension.mockReturnValue('.jpg');
+  });
+
+  it('returns 400 when userId is invalid', async () => {
+    mockNormalizeIdentifier.mockReturnValue(null);
+    const app = createApp();
+    const response = await request(app).get('/avatar/bad-id/avatar.jpg');
+    expect(response.status).toBe(400);
+  });
+
+  it('returns avatar image from S3', async () => {
+    const app = createApp();
+    const response = await request(app).get('/avatar/user-1/avatar.jpg');
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('image/jpeg');
+    expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  });
+
+  it('returns 404 when avatar not found in S3', async () => {
+    mockS3Send.mockRejectedValue(Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' }));
+    const app = createApp();
+    const response = await request(app).get('/avatar/user-1/avatar.jpg');
+    expect(response.status).toBe(404);
   });
 });

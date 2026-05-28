@@ -15,12 +15,12 @@ import { getMaxFileSizeBytes } from './upload-multer-config';
 
 const router = Router();
 
-const CACHE_ROOT = path.resolve(process.env.CACHE_PATH || '/data/cache');
-const TEMP_UPLOADS_DIR = resolvePathWithin(CACHE_ROOT, 'temp-uploads');
+const TEMP_ROOT = path.resolve(process.env.TEMP_UPLOADS_PATH || '/tmp/processor-uploads');
+const TEMP_UPLOADS_DIR = resolvePathWithin(TEMP_ROOT, 'uploads');
 
 /* c8 ignore next 3 */
 if (!TEMP_UPLOADS_DIR) {
-  throw new Error('Invalid upload cache path configuration');
+  throw new Error('Invalid upload temp path configuration');
 }
 
 // Configure multer for disk storage to avoid memory exhaustion

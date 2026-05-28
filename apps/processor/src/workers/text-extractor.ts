@@ -1,5 +1,3 @@
-import path from 'path';
-import fs from 'fs/promises';
 // pdfjs-dist is loaded lazily in extractPdfText — v5+ uses DOMMatrix at module
 // init time which crashes Node.js on import. Dynamic import avoids the issue.
 import mammoth from 'mammoth';
@@ -57,12 +55,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     // Clean extracted text - remove null bytes and other invalid UTF-8 characters
     extractedText = extractedText.replace(/\0/g, '').trim();
 
-    const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'text'));
-    await fs.mkdir(cacheDir, { recursive: true });
-    await fs.writeFile(
-      path.join(cacheDir, 'extracted-text.txt'),
-      extractedText
-    );
+    await contentStore.saveCache(contentHash, 'extracted-text.txt', Buffer.from(extractedText), 'text/plain');
 
     loggers.processor.info('Text extraction succeeded', {
       contentHash,

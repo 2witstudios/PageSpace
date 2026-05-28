@@ -27,35 +27,35 @@ export interface StorageCheckResult {
 export const STORAGE_TIERS = {
   free: {
     name: 'Free',
-    quotaBytes: 500 * 1024 * 1024,      // 500MB
-    maxFileSize: 20 * 1024 * 1024,      // 20MB
-    maxConcurrentUploads: 2,
+    quotaBytes: 500 * 1024 * 1024,       // 500MB
+    maxFileSize: 50 * 1024 * 1024,       // 50MB
+    maxConcurrentUploads: 3,
     maxFileCount: 100,
-    features: ['500MB storage', '20MB per file', 'Basic processing']
+    features: ['500MB storage', '50MB per file', 'Basic processing']
   },
   pro: {
     name: 'Pro',
-    quotaBytes: 2 * 1024 * 1024 * 1024, // 2GB
-    maxFileSize: 50 * 1024 * 1024,      // 50MB
-    maxConcurrentUploads: 3,
+    quotaBytes: 2 * 1024 * 1024 * 1024,  // 2GB
+    maxFileSize: 250 * 1024 * 1024,      // 250MB
+    maxConcurrentUploads: 5,
     maxFileCount: 500,
-    features: ['2GB storage', '50MB per file']
+    features: ['2GB storage', '250MB per file']
   },
   founder: {
     name: 'Founder',
     quotaBytes: 10 * 1024 * 1024 * 1024, // 10GB
-    maxFileSize: 50 * 1024 * 1024,       // 50MB
-    maxConcurrentUploads: 3,
+    maxFileSize: 500 * 1024 * 1024,      // 500MB
+    maxConcurrentUploads: 5,
     maxFileCount: 500,
-    features: ['10GB storage', '50MB per file']
+    features: ['10GB storage', '500MB per file']
   },
   business: {
     name: 'Business',
     quotaBytes: 50 * 1024 * 1024 * 1024, // 50GB
-    maxFileSize: 100 * 1024 * 1024,      // 100MB
+    maxFileSize: 1024 * 1024 * 1024,     // 1GB
     maxConcurrentUploads: 10,
     maxFileCount: 5000,
-    features: ['50GB storage', '100MB per file']
+    features: ['50GB storage', '1GB per file']
   }
 } as const;
 

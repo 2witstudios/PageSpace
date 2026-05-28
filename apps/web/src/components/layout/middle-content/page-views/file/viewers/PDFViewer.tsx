@@ -52,11 +52,16 @@ export default function PDFViewer({ page }: PDFViewerProps) {
     const loadPdf = async () => {
       try {
         setIsLoading(true);
-        const response = await fetchWithAuth(`/api/files/${page.id}/view`);
-        if (!response.ok) {
-          throw new Error(`Failed to load PDF: ${response.status}`);
-        }
-        const data = await response.arrayBuffer();
+        setError(null);
+        setPdfData(null);
+        const res = await fetchWithAuth(`/api/files/${page.id}/view`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) throw new Error(`Failed to load PDF: ${res.status}`);
+        const { url } = await res.json() as { url: string };
+        const fileRes = await fetch(url);
+        if (!fileRes.ok) throw new Error(`Failed to fetch PDF bytes: ${fileRes.status}`);
+        const data = await fileRes.arrayBuffer();
         setPdfData(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load PDF');

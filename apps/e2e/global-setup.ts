@@ -6,6 +6,7 @@ import { sessionService } from '../../packages/lib/src/auth/session-service';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const E2E_DIR = path.join(process.cwd(), 'apps/e2e');
+const DEFAULT_BASE_URL = 'http://localhost:3000';
 
 function assertNotProduction(url: string): void {
   const { hostname } = new URL(url);
@@ -17,10 +18,21 @@ function assertNotProduction(url: string): void {
   }
 }
 
+function getBaseUrl(): URL {
+  return new URL(
+    process.env.E2E_BASE_URL ??
+      process.env.PLAYWRIGHT_BASE_URL ??
+      process.env.NEXT_PUBLIC_APP_URL ??
+      process.env.WEB_APP_URL ??
+      DEFAULT_BASE_URL
+  );
+}
+
 export default async function globalSetup() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error('DATABASE_URL is required');
   assertNotProduction(dbUrl);
+  const baseUrl = getBaseUrl();
 
   const user = await factories.createUser();
   const drive = await factories.createDrive(user.id);
@@ -41,10 +53,10 @@ export default async function globalSetup() {
       {
         name: 'session',
         value: token,
-        domain: 'localhost',
+        domain: baseUrl.hostname,
         path: '/',
         httpOnly: true,
-        secure: false,
+        secure: baseUrl.protocol === 'https:',
         sameSite: 'Strict' as const,
         expires: Math.floor((Date.now() + SESSION_TTL_MS) / 1000),
       },

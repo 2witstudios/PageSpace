@@ -7,7 +7,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
-  processAttachmentUpload,
+  processAttachmentUploads,
   type AttachmentTarget,
 } from '@pagespace/lib/services/attachment-upload';
 
@@ -72,7 +72,7 @@ export async function POST(
       driveId: channelPage.driveId,
     };
 
-    return processAttachmentUpload({ request, target, authContext: ctx });
+    return processAttachmentUploads({ request, target, authContext: ctx });
   } catch (error) {
     loggers.api.error('Channel upload wrapper error', error as Error, { pageId });
     return NextResponse.json({ error: 'Failed to upload file' }, { status: 500 });

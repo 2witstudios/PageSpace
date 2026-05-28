@@ -1114,6 +1114,7 @@
     }
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1045.0",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",

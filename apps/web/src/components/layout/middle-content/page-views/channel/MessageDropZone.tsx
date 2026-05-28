@@ -23,8 +23,8 @@ const hasFiles = (dataTransfer: DataTransfer | null) => {
 
 /**
  * MessageDropZone - wraps a channel/DM view so the entire message pane accepts
- * file drops. On drop, the first file is forwarded to the composer's attachment
- * slot via the imperative `uploadFile` handle.
+ * file drops. On drop, all files are forwarded to the composer's attachment
+ * slot via the imperative `uploadFiles` handle.
  */
 export function MessageDropZone({
   inputRef,
@@ -94,8 +94,8 @@ export function MessageDropZone({
     e.stopPropagation();
     reset();
     if (!inputRef.current?.canAcceptDrop()) return;
-    const file = Array.from(e.dataTransfer?.files ?? [])[0];
-    if (file) inputRef.current.uploadFile(file);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) inputRef.current.uploadFiles(files);
   };
 
   return (
@@ -115,7 +115,7 @@ export function MessageDropZone({
         >
           <div className="flex flex-col items-center gap-2 text-primary">
             <Upload className="h-8 w-8" />
-            <p className="text-sm font-medium">Drop file to attach</p>
+            <p className="text-sm font-medium">Drop files to attach</p>
           </div>
         </div>
       )}
