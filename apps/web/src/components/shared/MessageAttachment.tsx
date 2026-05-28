@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import { FileIcon, FileText, Download, Video, Plus, Minus, RotateCcw } from 'lucide-react';
+import { FileIcon, FileText, Download, Plus, Minus, RotateCcw } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -247,33 +247,14 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
   if (isVideoAttachment(message)) {
     return (
       <div className="mt-2">
-        <button
-          type="button"
-          onClick={() => setPreviewOpen(true)}
-          className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors cursor-pointer"
-        >
-          <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-            <Video className="h-5 w-5 text-muted-foreground" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{name}</p>
-            {size != null && (
-              <p className="text-xs text-muted-foreground">{formatFileSize(size)}</p>
-            )}
-          </div>
-        </button>
-
-        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent className="max-w-[90vw] max-h-[90vh] p-2">
-            <DialogTitle className="sr-only">Video preview</DialogTitle>
-            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-            <video
-              src={`/api/files/${fileId}/view`}
-              controls
-              className="max-w-full max-h-[85vh] mx-auto"
-            />
-          </DialogContent>
-        </Dialog>
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video
+          src={`/api/files/${fileId}/view`}
+          controls
+          preload="metadata"
+          className="rounded-lg max-h-72 max-w-sm w-full border border-border/50 bg-black/5"
+        />
+        <p className="text-xs text-muted-foreground mt-1 truncate max-w-sm">{name}</p>
       </div>
     );
   }
