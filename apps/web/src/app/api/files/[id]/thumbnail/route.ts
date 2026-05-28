@@ -7,6 +7,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { isFilePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { generatePresignedUrl } from '@/lib/presigned-url';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -47,6 +48,8 @@ export async function GET(request: NextRequest, context: RouteParams) {
 
     const [, contentHash, preset] = match;
     const presignedUrl = await generatePresignedUrl(contentHash, preset, 3600);
+
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'thumbnail', mimeType: page.mimeType } });
 
     return NextResponse.redirect(presignedUrl, 307);
   } catch (error) {

@@ -23,7 +23,7 @@ export default function VideoViewer({ page }: { page: TreePage }) {
         preload="metadata"
         className="max-w-full max-h-full rounded-lg"
         style={{ visibility: isLoading ? 'hidden' : 'visible' }}
-        onCanPlay={() => setIsLoading(false)}
+        onLoadedMetadata={() => setIsLoading(false)}
         onError={() => setIsLoading(false)}
       />
     </div>
