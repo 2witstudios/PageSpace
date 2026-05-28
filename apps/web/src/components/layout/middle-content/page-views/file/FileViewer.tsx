@@ -8,6 +8,7 @@ import ImageViewer from './viewers/ImageViewer';
 import CodeViewer from './viewers/CodeViewer';
 import DocxViewer from './viewers/DocxViewer';
 import GenericFileViewer from './viewers/GenericFileViewer';
+import VideoViewer from './viewers/VideoViewer';
 
 interface FileViewerProps {
   page: TreePage;
@@ -18,6 +19,7 @@ function getFileType(mimeType: string | undefined, fileName: string | undefined)
   if (!mimeType) return 'generic';
   
   if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
   if (mimeType === 'application/pdf') return 'pdf';
   if (mimeType.startsWith('text/') || isCodeFile(fileName)) return 'code';
   if (isWordDocument(mimeType)) return 'docx';
@@ -70,6 +72,8 @@ export default function FileViewer({ page }: FileViewerProps) {
         return <PDFViewer page={page} />;
       case 'image':
         return <ImageViewer page={page} />;
+      case 'video':
+        return <VideoViewer page={page} />;
       case 'code':
         return <CodeViewer page={page} />;
       case 'docx':
