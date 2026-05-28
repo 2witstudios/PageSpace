@@ -512,7 +512,7 @@ export default function InboxDMPage() {
             </span>
           </div>
           {m.content && (
-            <div className="text-sm break-words [overflow-wrap:anywhere]">
+            <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
               {<RichText content={addHardLineBreaks(m.content)} />}
             </div>
           )}

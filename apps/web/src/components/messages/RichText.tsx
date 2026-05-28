@@ -285,7 +285,7 @@ function createCustomAnchor(router: RouterLike) {
       <a
         href={href}
         onClick={handleClick}
-        className="min-w-0 max-w-full break-all [overflow-wrap:anywhere] inline-block"
+        className="min-w-0 max-w-full break-all [overflow-wrap:anywhere] inline-block text-primary underline underline-offset-2 hover:opacity-80 transition-opacity cursor-pointer"
         {...props}
       >
         {children}
