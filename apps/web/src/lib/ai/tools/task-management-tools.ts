@@ -39,23 +39,13 @@ const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
 
 export const taskManagementTools = {
   /**
-   * Update or create a task
-   * - If taskId is provided, updates the existing task
-   * - If taskId is not provided but taskListId or pageId is, creates a new task
+   * Update fields of an existing task (identified by taskId).
+   * Field-only: create/delete/reorder are separate verb tools.
    */
   update_task: tool({
-    description: `Update an existing task, create a new one, delete one, or reorder one on a TASK_LIST page.
+    description: `Update fields of an existing task (identified by taskId). To create a task use create_task; to delete use delete_task; to reorder use reorder_task.
 
-To UPDATE: provide taskId
-To CREATE: provide pageId (of a TASK_LIST page) and title
-To DELETE: provide taskId and delete: true (hard-removes the task and trashes its linked TASK_LIST page; any other field updates passed in the same call are ignored)
-To REORDER: provide taskId and position — moves the existing task to the given index and re-densifies peer positions in the task list. Combine with field updates freely (e.g., status + position in one call).
-
-When creating tasks:
-- A TASK_LIST page is automatically created as a child of the parent TASK_LIST page
-- This linked page stores the task description and any sub-tasks
-- The page title stays synced with the task title
-- DO NOT delete these pages directly - use this tool with delete: true to remove tasks
+Updatable fields: status, priority, assignees (assigneeId/assigneeAgentId/assigneeIds), dueDate, note, title, agentTrigger.
 
 Status:
 - Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
@@ -75,10 +65,8 @@ Agent Triggers:
 - triggerType 'due_date' fires when the due date arrives (requires dueDate)
 - triggerType 'completion' fires when the task is marked done`,
     inputSchema: z.object({
-      taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
-      pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
-      delete: z.boolean().optional().describe('When true (with taskId), hard-deletes the task and trashes its linked TASK_LIST page. Field updates passed in the same call are ignored.'),
-      title: z.string().optional().describe('Task title (required when creating)'),
+      taskId: z.string().optional().describe('ID of the existing task to update. Required — to create a new task use create_task instead.'),
+      title: z.string().optional().describe('New task title (renames the existing task)'),
       status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
       assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user). Legacy single-assignee field.'),
@@ -89,7 +77,6 @@ Agent Triggers:
       })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
-      position: z.number().optional().describe('Position in the list. For new tasks, defaults to end. For existing tasks (taskId provided), moves the task to this index and re-densifies peer positions.'),
       agentTrigger: z.preprocess(
         normalizeTaskAgentTriggerInput,
         agentTriggerBaseSchema.extend({
@@ -98,63 +85,24 @@ Agent Triggers:
       ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, delete: deleteFlag, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
+      const { taskId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, agentTrigger } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
         throw new Error('User authentication required');
       }
 
-      // Determine if this is an update, create, or delete operation
-      const isUpdate = !!taskId;
-      const isDelete = isUpdate && deleteFlag === true;
-
-      if (!isUpdate && !pageId) {
-        throw new Error('Either taskId (to update) or pageId (to create) must be provided');
-      }
-
-      if (!isUpdate && deleteFlag === true) {
-        throw new Error('delete requires a taskId');
-      }
-
-      if (!isUpdate && !title) {
-        throw new Error('Title is required when creating a new task');
+      if (!taskId) {
+        throw new Error('taskId is required to update a task. To create a new task, use create_task.');
       }
 
       try {
-        if (!isUpdate) {
-          // CREATE — requires pageId of a TASK_LIST page
-          return await createTask(context as ToolExecutionContext, userId, {
-            pageId: pageId!,
-            title: title!,
-            status,
-            priority,
-            assigneeId,
-            assigneeAgentId,
-            assigneeIds,
-            dueDate,
-            note,
-            position,
-            agentTrigger,
-          });
-        }
-
-        // UPDATE / DELETE / REORDER — taskId resolves the existing task + list
+        // taskId resolves the existing task + its owning list
         const { existingTask, taskList } = await resolveTaskForUpdate(
           context as ToolExecutionContext,
           userId,
-          taskId!,
+          taskId,
         );
-
-        if (isDelete) {
-          return await deleteTask(
-            context as ToolExecutionContext,
-            userId,
-            existingTask,
-            taskList,
-            'Task deleted via update_task',
-          );
-        }
 
         let resultTask: typeof taskItems.$inferSelect = existingTask;
         let resultTitle = '';
@@ -302,7 +250,7 @@ Agent Triggers:
             }
 
             // Replace assignees (array = full replace; legacy single fields otherwise).
-            await syncTaskAssignees(tx, taskId!, { assigneeIds, assigneeId, assigneeAgentId });
+            await syncTaskAssignees(tx, taskId, { assigneeIds, assigneeId, assigneeAgentId });
 
             return updatedTask;
           });
@@ -312,14 +260,6 @@ Agent Triggers:
             throw new Error(`Linked page was modified concurrently — retry the update: ${error.message}`);
           }
           throw error;
-        }
-
-        // Reorder: when position is provided alongside taskId, move the task
-        // to the requested index and re-densify peer positions to 0..n-1.
-        if (position !== undefined) {
-          const clamped = await reorderTaskPeers(taskList.pageId!, taskId!, position);
-          // Reflect the densified position on resultTask so the response is accurate
-          resultTask = { ...resultTask, position: clamped };
         }
 
         // Update task list status based on task completion
@@ -400,9 +340,7 @@ Agent Triggers:
 
         return await buildTaskListResponse({
           action: 'updated',
-          // Preserves prior behavior: the update response scoped its task list
-          // by the (absent) pageId param, not by taskList.pageId.
-          parentPageId: pageId!,
+          parentPageId: taskList.pageId!,
           taskListId: taskList.id,
           resultTask,
           resultTitle,
@@ -410,7 +348,7 @@ Agent Triggers:
         });
       } catch (error) {
         console.error('Error in update_task:', error);
-        throw new Error(`Failed to ${isUpdate ? 'update' : 'create'} task: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to update task: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
