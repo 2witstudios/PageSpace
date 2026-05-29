@@ -284,7 +284,7 @@ export const channelTools = {
         // Verify the channel exists
         const channel = await db.query.pages.findFirst({
           where: and(eq(pages.id, channelId), eq(pages.isTrashed, false)),
-          columns: { id: true, title: true, type: true },
+          columns: { id: true, title: true, type: true, driveId: true },
         });
         if (!channel) {
           throw new Error(`Channel with ID "${channelId}" not found`);
@@ -331,6 +331,26 @@ export const channelTools = {
             message: `Message "${messageId}" has already been deleted.`,
           };
         }
+
+        // Log activity for audit trail (fire-and-forget)
+        const toolContext = context as ToolExecutionContext;
+        getActorInfo(userId)
+          .then(actorInfo => {
+            logMessageActivity(userId, 'message_delete', {
+              id: messageId,
+              pageId: channelId,
+              driveId: channel.driveId,
+              conversationType: 'channel',
+            }, actorInfo, {
+              isAiGenerated: true,
+              aiProvider: toolContext.aiProvider ?? 'unknown',
+              aiModel: toolContext.aiModel ?? 'unknown',
+              aiConversationId: toolContext.conversationId,
+            });
+          })
+          .catch(() => {
+            channelLogger.warn('Failed to get actor info for activity logging');
+          });
 
         // Broadcast deletion to real-time channel (fire-and-forget)
         if (process.env.INTERNAL_REALTIME_URL) {
