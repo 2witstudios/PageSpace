@@ -8,6 +8,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
@@ -206,9 +207,16 @@ export async function POST(
       return NextResponse.json({ error: 'Grant already exists for this connection' }, { status: 409 });
     }
 
+    // Prefer the canonical builtin provider definition (always current, carries
+    // toolBundles) over the persisted DB config, which on upgraded installs may
+    // not yet have bundles until GET /api/integrations/providers refreshes it.
+    // Without this, the default would fall back to null (all non-dangerous tools)
+    // instead of the intended Read-only bundle.
+    const canonicalConfig =
+      getBuiltinProvider(connection.provider?.slug ?? '') ?? connection.provider?.config;
     const resolvedAllowedTools =
       allowedTools === undefined
-        ? defaultAllowedToolsForProvider(connection.provider?.config)
+        ? defaultAllowedToolsForProvider(canonicalConfig)
         : allowedTools;
 
     const grant = await createGrant(db, {

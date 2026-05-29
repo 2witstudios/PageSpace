@@ -248,14 +248,16 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
 });
 
 describe('POST /api/agents/[agentId]/integrations default bundle', () => {
+  // Non-builtin slug so the default resolves from this connection's persisted
+  // config bundles (the builtin-canonical path is covered by a separate test).
   const githubConnection = {
     id: 'conn-1',
     userId: mockUserId,
     driveId: null,
     status: 'active',
     provider: {
-      slug: 'github',
-      name: 'GitHub',
+      slug: 'acme-tools',
+      name: 'Acme Tools',
       config: {
         toolBundles: [
           { id: 'read_only', name: 'Read-only', description: 'reads', toolIds: ['list_repos', 'get_repo'], recommended: true },
@@ -342,5 +344,28 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
       expect.anything(),
       expect.objectContaining({ allowedTools: ['read_thing'] })
     );
+  });
+
+  it('uses the canonical builtin bundle for github even when the stored config lacks bundles', async () => {
+    // Simulates an upgraded install whose persisted provider config has not yet
+    // been refreshed with toolBundles.
+    mockGetConnectionWithProvider.mockResolvedValue({
+      id: 'conn-1',
+      userId: mockUserId,
+      driveId: null,
+      status: 'active',
+      provider: { slug: 'github', name: 'GitHub', config: { tools: [] } },
+    });
+
+    await POST(postRequest({ connectionId: 'conn-1' }), {
+      params: Promise.resolve({ agentId: mockAgentId }),
+    });
+
+    const allowed = mockCreateGrant.mock.calls[0][1].allowedTools as string[];
+    // Canonical Read-only bundle: read tools present, write tools absent.
+    expect(allowed).toContain('list_repos');
+    expect(allowed).toContain('list_issues');
+    expect(allowed).not.toContain('create_issue');
+    expect(allowed).not.toBeNull();
   });
 });
