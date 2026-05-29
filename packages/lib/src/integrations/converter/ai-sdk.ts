@@ -4,8 +4,10 @@
  * Converts integration ToolDefinitions into Vercel AI SDK tool objects
  * that route execution through the sandbox executor.
  *
- * Tool naming convention mirrors MCP: int__{providerSlug}__{connectionShortId}__{toolId}
- * This is AI-provider-safe (no colons, only alphanumeric + underscores + hyphens).
+ * Tool naming convention mirrors MCP: int__{providerSlug}__{toolId} (with an
+ * optional __{connectionShortId} disambiguation segment for agents holding more
+ * than one connection per provider). Every segment is AI-provider-safe (no
+ * colons, only alphanumeric + underscores + hyphens).
  */
 
 import { z } from 'zod';
@@ -16,6 +18,7 @@ import type {
   ToolCallResult,
   ToolGrant,
 } from '../types';
+import { isToolAllowed } from '../validation/is-tool-allowed';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -266,6 +269,18 @@ export function convertIntegrationToolsToAISDK(
     const needsDisambiguation = (connectionsByProvider.get(providerSlug)?.size ?? 0) > 1;
 
     for (const tool of providerConfig.tools) {
+      // Only expose tools the grant actually permits. Filtering here (not just
+      // at execution time) keeps disallowed tools out of the model's context —
+      // the least-privilege default bundle then translates into fewer tokens,
+      // not just blocked calls.
+      const permitted = isToolAllowed(tool.id, {
+        providerTools: providerConfig.tools,
+        grantAllowedTools: grant.allowedTools,
+        grantDeniedTools: grant.deniedTools,
+        grantReadOnly: grant.readOnly,
+      });
+      if (!permitted.allowed) continue;
+
       const toolName = buildIntegrationToolName(
         providerSlug,
         tool.id,

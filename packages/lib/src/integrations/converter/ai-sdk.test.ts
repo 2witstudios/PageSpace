@@ -252,6 +252,26 @@ describe('convertIntegrationToolsToAISDK', () => {
     expect(toolNames.every((n) => /^[a-zA-Z0-9_-]+$/.test(n))).toBe(true);
   });
 
+  it('should only expose tools the grant explicitly allows', () => {
+    const restrictedGrant: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      allowedTools: ['list_repos'],
+    };
+    const tools = convertIntegrationToolsToAISDK([restrictedGrant], executorContext, vi.fn());
+    expect(Object.keys(tools)).toEqual(['int__github__list_repos']);
+  });
+
+  it('should exclude write tools when the grant is read-only', () => {
+    const readOnlyGrant: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      readOnly: true,
+    };
+    const tools = convertIntegrationToolsToAISDK([readOnlyGrant], executorContext, vi.fn());
+    const names = Object.keys(tools);
+    expect(names).toContain('int__github__list_repos');
+    expect(names).not.toContain('int__github__create_issue');
+  });
+
   it('should prefix descriptions with provider name', () => {
     const mockExecutor = vi.fn();
     const tools = convertIntegrationToolsToAISDK([mockGrant], executorContext, mockExecutor);
