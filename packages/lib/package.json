@@ -182,6 +182,11 @@
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
     },
+    "./services/drive-agent-service": {
+      "types": "./dist/services/drive-agent-service.d.ts",
+      "import": "./dist/services/drive-agent-service.js",
+      "require": "./dist/services/drive-agent-service.js"
+    },
     "./services/validated-service-token": {
       "types": "./dist/services/validated-service-token.d.ts",
       "import": "./dist/services/validated-service-token.js",
@@ -798,6 +803,9 @@
       ],
       "services/drive-member-service": [
         "./dist/services/drive-member-service.d.ts"
+      ],
+      "services/drive-agent-service": [
+        "./dist/services/drive-agent-service.d.ts"
       ],
       "services/validated-service-token": [
         "./dist/services/validated-service-token.d.ts"

@@ -28,13 +28,14 @@ vi.mock('@pagespace/db/schema/members', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
+  inArray: vi.fn((_a: unknown, _b: unknown) => 'inArray'),
 }));
 
 // ---------------------------------------------------------------------------
 // Imports after mocks
 // ---------------------------------------------------------------------------
 
-import { getAgentAccessLevel, hasAgentDriveMembership } from '../agent-permissions';
+import { getAgentAccessLevel, getAgentAccessiblePagesInDrive, hasAgentDriveMembership } from '../agent-permissions';
 import { db } from '@pagespace/db/db';
 
 // ---------------------------------------------------------------------------
@@ -52,6 +53,16 @@ function stubSelect(rows: unknown[]) {
       where: vi.fn().mockReturnValue({
         limit: vi.fn().mockResolvedValue(rows),
       }),
+    }),
+  } as unknown as ReturnType<typeof db.select>;
+}
+
+// Stub for queries that resolve directly from .where() (no .limit()), e.g. the
+// page-enumeration queries in getAgentAccessiblePagesInDrive.
+function stubSelectList(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(rows),
     }),
   } as unknown as ReturnType<typeof db.select>;
 }
@@ -185,5 +196,44 @@ describe('hasAgentDriveMembership', () => {
   it('returns false when no membership row', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
     expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAgentAccessiblePagesInDrive — enumeration by role
+// ---------------------------------------------------------------------------
+
+describe('getAgentAccessiblePagesInDrive', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns [] when the agent has no membership', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([])); // membership lookup
+    expect(await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID)).toEqual([]);
+  });
+
+  it('grants a plain MEMBER (no custom role) view-only access to every page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }])) // membership
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+        { id: 'p2', title: 'B', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+      ])); // page enumeration
+
+    const result = await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toHaveLength(2);
+    expect(result.every((p) => p.permissions.canView)).toBe(true);
+    expect(result.every((p) => !p.permissions.canEdit)).toBe(true);
+  });
+
+  it('grants an ADMIN full access to every page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]))
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+      ]));
+
+    const result = await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toHaveLength(1);
+    expect(result[0].permissions).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 });

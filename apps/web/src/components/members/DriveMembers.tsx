@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
 import { AgentMemberRow, type AgentMember } from './AgentMemberRow';
+import { InviteAgentDialog } from './InviteAgentDialog';
 import { AppMemberRow, type AppMember } from './AppMemberRow';
 import { PendingInvitesSection } from './PendingInvitesSection';
 import { DriveShareLinkSection } from './DriveShareLinkSection';
@@ -72,6 +73,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
+  const [inviteAgentOpen, setInviteAgentOpen] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
   const socket = useSocket();
@@ -254,11 +256,19 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
       </div>
 
       <div>
-        <div className="mb-3">
-          <h2 className="text-lg font-semibold">Agents ({agentMembers.length})</h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            AI agents with access to this drive
-          </p>
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold">Agents ({agentMembers.length})</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              AI agents with access to this drive
+            </p>
+          </div>
+          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+            <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              Invite Agent
+            </Button>
+          )}
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
           {agentMembers.length === 0 ? (
@@ -313,6 +323,14 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         invites={pendingInvites}
         currentUserRole={currentUserRole}
         onRevoke={handleRevokeInvite}
+      />
+
+      <InviteAgentDialog
+        driveId={driveId}
+        open={inviteAgentOpen}
+        onOpenChange={setInviteAgentOpen}
+        existingAgentPageIds={agentMembers.map((a) => a.agentPageId)}
+        onInvited={fetchMembers}
       />
     </div>
   );

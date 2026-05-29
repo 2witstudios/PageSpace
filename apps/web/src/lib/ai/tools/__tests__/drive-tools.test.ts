@@ -39,8 +39,13 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+  listAgentDrives: vi.fn(),
+}));
+
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db/db';
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
@@ -63,6 +68,31 @@ describe('drive-tools', () => {
       await expect(
         driveTools.list_drives.execute!({}, context)
       ).rejects.toThrow('User authentication required');
+    });
+
+    it('scopes to the agent\'s drives when called by a page-agent', async () => {
+      vi.mocked(listAgentDrives).mockResolvedValue([
+        { driveId: 'd1', driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true },
+        { driveId: 'd2', driveName: 'Hub', driveSlug: 'hub', role: 'MEMBER', customRoleId: null, isHome: false },
+      ]);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      const result = await driveTools.list_drives.execute!({}, context) as {
+        drives: Array<{ id: string; slug: string; title: string }>;
+      };
+
+      expect(listAgentDrives).toHaveBeenCalledWith('agent_1');
+      expect(result.drives.map((d) => d.id)).toEqual(['d1', 'd2']);
+      // The user-scoped DB query path must not be used for an agent actor.
+      expect(mockDb.query.drives.findFirst).not.toHaveBeenCalled();
     });
   });
 

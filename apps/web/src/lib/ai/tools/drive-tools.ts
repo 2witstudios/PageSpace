@@ -9,7 +9,9 @@ import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activi
 import { getDriveAccessWithDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { type ToolExecutionContext } from '../core';
+import { getAgentPageId } from './actor-permissions';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -43,6 +45,38 @@ export const driveTools = {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      // Page-agents are scoped to their explicit drive memberships (plus their
+      // home drive), so discovery matches where they can actually act. The user
+      // / global assistant path (no agentPageId) stays user-scoped below.
+      const agentPageId = getAgentPageId(context as ToolExecutionContext);
+      if (agentPageId) {
+        try {
+          const agentDrives = await listAgentDrives(agentPageId);
+          return {
+            success: true,
+            drives: agentDrives.map((d) => ({
+              id: d.driveId,
+              slug: d.driveSlug,
+              title: d.driveName,
+              description: '',
+              isDefault: false,
+            })),
+            summary: `Found ${agentDrives.length} workspace${agentDrives.length === 1 ? '' : 's'} this agent can access`,
+            stats: {
+              totalDrives: agentDrives.length,
+              driveNames: agentDrives.map((d) => d.driveName),
+            },
+            nextSteps: agentDrives.length > 0 ? [
+              'Use list_pages with both driveSlug and driveId from above to explore the structure of any workspace',
+              'Use read_page to examine specific documents for context',
+            ] : ['This agent has not been added to any drives yet'],
+          };
+        } catch (error) {
+          console.error('Error reading agent drives:', error);
+          throw new Error('Failed to read drives');
+        }
       }
 
       try {
