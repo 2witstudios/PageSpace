@@ -109,7 +109,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
     },
   }),
 
-  list_workflow: tool({
+  list_workflows: tool({
     description: 'List the standalone cron workflows in a drive. Does not include task- or calendar-bound triggers, which are managed via update_task / calendar tools.',
     inputSchema: z.object({
       driveId: z.string().describe('Drive to list workflows for'),
@@ -213,7 +213,8 @@ The cron expression must not fire more often than every 5 minutes (the polling c
       }
       // Reschedule the next run whenever the schedule or timezone changes, or
       // when a paused workflow is resumed (a stale nextRunAt may be in the past).
-      if (cronExpression !== undefined || timezone !== undefined || isEnabled === true) {
+      const resuming = isEnabled === true && !workflow.isEnabled;
+      if (cronExpression !== undefined || timezone !== undefined || resuming) {
         updates.nextRunAt = getNextRunDate(effectiveCron, effectiveTz);
       }
 

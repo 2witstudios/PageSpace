@@ -156,7 +156,7 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     // Agent communication
     'ask_agent',
     // Workflow read
-    'list_workflow',
+    'list_workflows',
     // Write tools
     ...Array.from(WRITE_TOOLS),
   ];

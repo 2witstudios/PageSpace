@@ -170,7 +170,7 @@ const STANDALONE = {
 };
 const TASK_BACKED = { ...STANDALONE, id: 'wf-2', cronExpression: null };
 
-describe('list_workflow', () => {
+describe('list_workflows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCanActorAccessDrive.mockResolvedValue(true);
@@ -179,7 +179,7 @@ describe('list_workflow', () => {
   });
 
   it('lists standalone cron workflows in the drive', async () => {
-    const result = (await workflowTools.list_workflow.execute!({ driveId: 'drive-1' }, ctx())) as {
+    const result = (await workflowTools.list_workflows.execute!({ driveId: 'drive-1' }, ctx())) as {
       success: boolean;
       workflows: Array<Record<string, unknown>>;
     };
@@ -190,7 +190,7 @@ describe('list_workflow', () => {
 
   it('rejects when the actor cannot access the drive', async () => {
     mockCanActorAccessDrive.mockResolvedValue(false);
-    await expect(workflowTools.list_workflow.execute!({ driveId: 'drive-1' }, ctx())).rejects.toThrow(/No access/);
+    await expect(workflowTools.list_workflows.execute!({ driveId: 'drive-1' }, ctx())).rejects.toThrow(/No access/);
   });
 });
 

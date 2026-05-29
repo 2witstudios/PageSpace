@@ -53,7 +53,7 @@ const CATEGORY_MAP: Record<string, string> = {
   create_calendar_event: 'calendar', update_calendar_event: 'calendar', delete_calendar_event: 'calendar',
   rsvp_calendar_event: 'calendar', invite_calendar_attendees: 'calendar', remove_calendar_attendee: 'calendar',
   send_channel_message: 'channels',
-  create_workflow: 'workflows', list_workflow: 'workflows', update_workflow: 'workflows', delete_workflow: 'workflows',
+  create_workflow: 'workflows', list_workflows: 'workflows', update_workflow: 'workflows', delete_workflow: 'workflows',
 };
 
 export function buildNonCoreToolNamesPrompt(toolNames: string[]): string {

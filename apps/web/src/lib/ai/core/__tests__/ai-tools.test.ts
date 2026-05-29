@@ -101,7 +101,7 @@ vi.mock('../../tools/channel-tools', () => ({
 vi.mock('../../tools/workflow-tools', () => ({
   workflowTools: {
     create_workflow: { name: 'create_workflow', description: 'Create workflow' },
-    list_workflow: { name: 'list_workflow', description: 'List workflows' },
+    list_workflows: { name: 'list_workflows', description: 'List workflows' },
     update_workflow: { name: 'update_workflow', description: 'Update workflow' },
     delete_workflow: { name: 'delete_workflow', description: 'Delete workflow' },
   },
