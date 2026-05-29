@@ -69,7 +69,9 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
                 Drive Integrations
               </CardTitle>
               <CardDescription>
-                External services connected to this drive. Available to all AI agents in this drive.
+                External services connected to this drive. Each AI Chat then chooses which of a
+                connection&apos;s tools its agent can use — that per-agent choice is what caps what
+                an agent can do.
               </CardDescription>
             </div>
             <Button
