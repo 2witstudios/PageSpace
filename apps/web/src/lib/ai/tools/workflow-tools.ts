@@ -218,6 +218,20 @@ The cron expression must not fire more often than every 5 minutes (the polling c
         updates.nextRunAt = getNextRunDate(effectiveCron, effectiveTz);
       }
 
+      // No fields to change — avoid Drizzle's invalid empty `SET` clause (which
+      // errors at the DB layer) and return the workflow's current state.
+      if (Object.keys(updates).length === 0) {
+        return {
+          success: true,
+          workflowId,
+          schedule: getHumanReadableCron(effectiveCron),
+          timezone: effectiveTz,
+          isEnabled: workflow.isEnabled,
+          nextRunAt: workflow.nextRunAt?.toISOString() ?? null,
+          summary: `No changes applied to workflow ${workflowId}.`,
+        };
+      }
+
       await db.update(workflows).set(updates).where(eq(workflows.id, workflowId));
 
       logger.info('Updated cron workflow', { workflowId, fields: Object.keys(updates) });

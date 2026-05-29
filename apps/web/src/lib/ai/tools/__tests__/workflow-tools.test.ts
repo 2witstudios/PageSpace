@@ -220,6 +220,16 @@ describe('update_workflow', () => {
     expect(setArg.nextRunAt).toBeUndefined();
   });
 
+  it('is a no-op (no empty SET) when no fields are provided', async () => {
+    const result = (await workflowTools.update_workflow.execute!({ workflowId: 'wf-1' }, ctx())) as {
+      success: boolean;
+      summary: string;
+    };
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(result.summary).toMatch(/No changes/);
+  });
+
   it('refuses to edit a task- or calendar-managed workflow', async () => {
     mockSelectWhere.mockResolvedValue([TASK_BACKED]);
     await expect(
