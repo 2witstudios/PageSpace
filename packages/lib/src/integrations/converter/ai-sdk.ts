@@ -60,37 +60,58 @@ export interface CoreTool {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const INT_TOOL_PREFIX = 'int__';
+/** Sentinel prefix for the optional connection-disambiguation segment. */
+const CONN_DISAMBIGUATOR = '~';
 
 /**
  * Build a namespaced integration tool name.
- * Format: int__{providerSlug}__{connectionShortId}__{toolId}
+ *
+ * Format: `int__{providerSlug}__{toolId}`. When an agent holds more than one
+ * connection for the same provider, pass `connectionId` to append a
+ * `__~{shortId}` disambiguation segment so the names stay unique. The common
+ * single-connection case carries no connection id — the segment was meaningless
+ * to the model and pure token noise.
  */
 export function buildIntegrationToolName(
   providerSlug: string,
-  connectionId: string,
-  toolId: string
+  toolId: string,
+  connectionId?: string
 ): string {
-  const shortId = connectionId.slice(0, 8);
-  return `${INT_TOOL_PREFIX}${providerSlug}__${shortId}__${toolId}`;
+  const base = `${INT_TOOL_PREFIX}${providerSlug}__${toolId}`;
+  return connectionId
+    ? `${base}__${CONN_DISAMBIGUATOR}${connectionId.slice(0, 8)}`
+    : base;
 }
 
 /**
- * Parse a namespaced integration tool name back to components.
+ * Parse a namespaced integration tool name back to components. The
+ * `connectionShortId` is present only for names that carry the disambiguation
+ * segment. Tool ids may themselves contain `__`, which is preserved.
  */
 export function parseIntegrationToolName(
   name: string
-): { providerSlug: string; connectionShortId: string; toolId: string } | null {
+): { providerSlug: string; toolId: string; connectionShortId?: string } | null {
   if (!name.startsWith(INT_TOOL_PREFIX)) return null;
 
-  const rest = name.slice(INT_TOOL_PREFIX.length);
-  const parts = rest.split('__');
-  if (parts.length < 3) return null;
+  const parts = name.slice(INT_TOOL_PREFIX.length).split('__');
+  if (parts.length < 2) return null;
 
-  return {
-    providerSlug: parts[0],
-    connectionShortId: parts[1],
-    toolId: parts.slice(2).join('__'),
-  };
+  const providerSlug = parts[0];
+  const toolParts = parts.slice(1);
+
+  let connectionShortId: string | undefined;
+  const last = toolParts[toolParts.length - 1];
+  if (toolParts.length > 1 && last.startsWith(CONN_DISAMBIGUATOR)) {
+    connectionShortId = last.slice(CONN_DISAMBIGUATOR.length);
+    toolParts.pop();
+  }
+
+  const toolId = toolParts.join('__');
+  if (!providerSlug || !toolId) return null;
+
+  return connectionShortId
+    ? { providerSlug, toolId, connectionShortId }
+    : { providerSlug, toolId };
 }
 
 /**
@@ -230,6 +251,19 @@ export function convertIntegrationToolsToAISDK(
 ): Record<string, CoreTool> {
   const tools: Record<string, CoreTool> = {};
 
+  // Count distinct connections per provider so single-connection providers
+  // (the common case) get clean names and only genuine collisions across two+
+  // connections of the same provider carry a disambiguation segment.
+  const connectionsByProvider = new Map<string, Set<string>>();
+  for (const grant of grants) {
+    const conn = grant.connection;
+    if (!conn || conn.status !== 'active' || !conn.provider?.config) continue;
+    const slug = conn.provider.slug;
+    const set = connectionsByProvider.get(slug) ?? new Set<string>();
+    set.add(conn.id);
+    connectionsByProvider.set(slug, set);
+  }
+
   for (const grant of grants) {
     const connection = grant.connection;
     if (!connection) continue;
@@ -238,12 +272,13 @@ export function convertIntegrationToolsToAISDK(
 
     const providerConfig = connection.provider.config;
     const providerSlug = connection.provider.slug;
+    const needsDisambiguation = (connectionsByProvider.get(providerSlug)?.size ?? 0) > 1;
 
     for (const tool of providerConfig.tools) {
       const toolName = buildIntegrationToolName(
         providerSlug,
-        connection.id,
-        tool.id
+        tool.id,
+        needsDisambiguation ? connection.id : undefined
       );
 
       try {
