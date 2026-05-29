@@ -20,6 +20,11 @@ const WRITE_TOOLS = new Set([
   // Unified trash/restore (pages and drives)
   'trash',
   'restore',
+  // Explicit per-entity trash/restore (pages and drives)
+  'trash_page',
+  'trash_drive',
+  'restore_page',
+  'restore_drive',
   // Agent operations
   'update_agent_config',
   // Task operations
