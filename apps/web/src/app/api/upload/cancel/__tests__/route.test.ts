@@ -13,10 +13,13 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateActiveUploads: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const JOB_ID = 'user-1-slot-abc';
 
@@ -56,6 +59,7 @@ describe('POST /api/upload/cancel', () => {
     expect(res.status).toBe(200);
     expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(JOB_ID);
     expect(updateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    expect(auditRequest).toHaveBeenCalled();
   });
 
   it('does not release a slot the user does not own', async () => {

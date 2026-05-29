@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -34,6 +35,14 @@ export async function POST(request: Request) {
 
   uploadSemaphore.releaseUploadSlot(jobId);
   await updateActiveUploads(userId, -1);
+
+  auditRequest(request, {
+    eventType: 'data.write',
+    userId,
+    resourceType: 'file',
+    resourceId: jobId,
+    details: { action: 'upload-cancel' },
+  });
 
   return NextResponse.json({ success: true });
 }
