@@ -41,3 +41,29 @@ SET "denied_tools" = (
 )
 WHERE "denied_tools" IS NOT NULL
   AND "denied_tools" ?| array['get_issues', 'get_pr_diff', 'get_pr_reviews', 'get_pr_review_comments'];
+--> statement-breakpoint
+-- Also rewrite the tool ids inside the persisted builtin GitHub provider config.
+-- The full config (bundles, renamed tool names/descriptions) is refreshed lazily
+-- by GET /api/integrations/providers, but that may not run before chat/tool
+-- resolution after a deploy. Aligning the stored tool ids here ensures the
+-- remapped grants keep matching provider tools in that window (no lost access).
+UPDATE "integration_providers"
+SET "config" = jsonb_set(
+  "config",
+  '{tools}',
+  (
+    SELECT jsonb_agg(
+      CASE tool ->> 'id'
+        WHEN 'get_issues' THEN jsonb_set(tool, '{id}', '"list_issues"')
+        WHEN 'get_pr_diff' THEN jsonb_set(tool, '{id}', '"list_pr_files"')
+        WHEN 'get_pr_reviews' THEN jsonb_set(tool, '{id}', '"list_pr_reviews"')
+        WHEN 'get_pr_review_comments' THEN jsonb_set(tool, '{id}', '"list_pr_review_comments"')
+        ELSE tool
+      END
+    )
+    FROM jsonb_array_elements("config" -> 'tools') AS tool
+  )
+)
+WHERE "slug" = 'github'
+  AND "config" -> 'tools' IS NOT NULL
+  AND jsonb_typeof("config" -> 'tools') = 'array';
