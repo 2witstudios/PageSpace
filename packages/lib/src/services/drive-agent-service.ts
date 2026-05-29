@@ -238,23 +238,24 @@ export async function revokeAgentMembershipsGrantedBy(
 
 /**
  * Re-cap the agent memberships in `driveId` granted by `userId` when the user's
- * access is downgraded, reducing agents that now exceed what the user could
- * grant today. Caps DOWN only — it must never widen an agent's access.
+ * access is downgraded, bringing every agent they granted down to what they
+ * could grant today. Only ever caps DOWN — it must never widen an agent's reach.
  *
- * Only ADMIN agent memberships are reduced. An ADMIN agent has full access to
- * every page, so capping it to the granter's member-level ceiling (their custom
- * role, or plain MEMBER = view-only on all pages) is always strictly narrower.
- *
- * Custom-role agent memberships are deliberately left untouched. Rewriting a
- * restrictive custom role to plain MEMBER (or to a different custom role) could
- * *broaden* the agent's page reach — a plain MEMBER can view every page in the
- * drive, whereas a custom role grants only its listed pages — and the existing
- * role/customRoleId fields can't express the safe least-privilege intersection.
- * Preserving them guarantees recap is non-widening (a granter who tightens or
- * clears their own custom role never gains an agent broader page access).
+ * Let the granter's current ceiling be `{ MEMBER, granter.customRoleId }`. For
+ * each non-home membership the user granted:
+ *  - role ADMIN ⇒ reduce to the ceiling. ADMIN has full access to every page, so
+ *    capping to the ceiling (the granter's custom role, or plain MEMBER =
+ *    view-only on all pages) is always strictly narrower.
+ *  - already at the ceiling (role MEMBER and same customRoleId) ⇒ leave as is.
+ *  - otherwise (role MEMBER with a *different* customRoleId, including a custom
+ *    role when the granter now has none) ⇒ REVOKE. The grant is no longer one
+ *    the granter could make, and the role/customRoleId fields can't express the
+ *    safe least-privilege intersection (e.g. "view-only on this custom role's
+ *    pages"), so rewriting it risks widening — removing the membership is the
+ *    only representable non-widening reduction.
  *
  * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
- * Returns the affected agentPageIds.
+ * Returns the affected agentPageIds (both reduced and revoked).
  */
 export async function recapAgentMembershipsGrantedBy(
   driveId: string,
@@ -264,25 +265,43 @@ export async function recapAgentMembershipsGrantedBy(
   // Still able to grant ADMIN ⇒ nothing to reduce (we only ever cap downward).
   if (granter.maxRole === 'ADMIN') return [];
 
+  const ceilingCustomRoleId = granter.customRoleId ?? null;
+
   const rows = await db
-    .select({ id: driveAgentMembers.id, agentPageId: driveAgentMembers.agentPageId })
+    .select({
+      id: driveAgentMembers.id,
+      agentPageId: driveAgentMembers.agentPageId,
+      role: driveAgentMembers.role,
+      customRoleId: driveAgentMembers.customRoleId,
+    })
     .from(driveAgentMembers)
     .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
     .where(and(
       eq(driveAgentMembers.driveId, driveId),
       eq(driveAgentMembers.addedBy, userId),
       ne(pages.driveId, driveId),
-      eq(driveAgentMembers.role, 'ADMIN'),
     ));
 
-  if (rows.length === 0) return [];
+  const toReduce = rows.filter((r) => r.role === 'ADMIN');
+  // Member-level grants whose custom-role scope differs from what the granter
+  // can grant today — revoke them (their safe intersection isn't representable).
+  const toRevoke = rows.filter(
+    (r) => r.role !== 'ADMIN' && (r.customRoleId ?? null) !== ceilingCustomRoleId,
+  );
 
-  await db
-    .update(driveAgentMembers)
-    .set({ role: 'MEMBER', customRoleId: granter.customRoleId ?? null })
-    .where(inArray(driveAgentMembers.id, rows.map((r) => r.id)));
+  if (toReduce.length > 0) {
+    await db
+      .update(driveAgentMembers)
+      .set({ role: 'MEMBER', customRoleId: ceilingCustomRoleId })
+      .where(inArray(driveAgentMembers.id, toReduce.map((r) => r.id)));
+  }
+  if (toRevoke.length > 0) {
+    await db
+      .delete(driveAgentMembers)
+      .where(inArray(driveAgentMembers.id, toRevoke.map((r) => r.id)));
+  }
 
-  return rows.map((r) => r.agentPageId);
+  return [...toReduce, ...toRevoke].map((r) => r.agentPageId);
 }
 
 /**

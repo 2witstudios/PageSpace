@@ -264,30 +264,30 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(db.update).not.toHaveBeenCalled();
   });
 
-  it('downgrades ADMIN agents to the granter ceiling (plain MEMBER) and never widens', async () => {
+  it('reduces ADMIN agents to the granter ceiling (plain MEMBER) and never widens', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER, no custom role
-      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1' }]));    // ADMIN agent rows
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1', role: 'ADMIN', customRoleId: null }]));
     const captured: Record<string, unknown>[] = [];
     stubUpdate(captured);
+    stubDelete();
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
     expect(result).toEqual(['a1']);
     expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: null });
-    // Only ADMIN memberships are selected for reduction — custom-role memberships
-    // are preserved so recap can never broaden an agent's page reach.
-    expect(eq).toHaveBeenCalledWith(driveAgentMembers.role, 'ADMIN');
+    expect(db.delete).not.toHaveBeenCalled();
   });
 
   it('caps ADMIN agents to the granter\'s own custom role when the granter has one', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                  // drive lookup
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))   // membership → MEMBER + custom role
-      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1' }]));         // ADMIN agent rows
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1', role: 'ADMIN', customRoleId: null }]));
     const captured: Record<string, unknown>[] = [];
     stubUpdate(captured);
+    stubDelete();
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
@@ -295,16 +295,52 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: 'role_b' });
   });
 
-  it('is a no-op when a downgraded granter has no ADMIN agents (custom-role agents preserved)', async () => {
+  it('REVOKES a custom-role agent whose scope differs from the granter ceiling', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER
-      .mockReturnValueOnce(stubJoinSelect([]));                                   // no ADMIN agents to reduce
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                          // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))               // granter now plain MEMBER
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm2', agentPageId: 'a2', role: 'MEMBER', customRoleId: 'role_a' }]));
+    const updated: Record<string, unknown>[] = [];
+    stubUpdate(updated);
+    const where = stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    // Custom-role grant the plain-member granter can no longer back ⇒ deleted,
+    // never rewritten to plain MEMBER (which would broaden it to the whole drive).
+    expect(result).toEqual(['a2']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('leaves a custom-role agent untouched when it already matches the granter ceiling', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                              // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_same' }]))            // granter custom role
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm3', agentPageId: 'a3', role: 'MEMBER', customRoleId: 'role_same' }]));
     stubUpdate([]);
+    stubDelete();
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
     expect(result).toEqual([]);
     expect(db.update).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when a downgraded granter granted no agents', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER
+      .mockReturnValueOnce(stubJoinSelect([]));                                   // no agents granted
+    stubUpdate([]);
+    stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual([]);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
   });
 });
