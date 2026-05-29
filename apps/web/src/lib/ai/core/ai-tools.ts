@@ -11,6 +11,7 @@ import { activityTools } from '../tools/activity-tools';
 import { calendarReadTools } from '../tools/calendar-read-tools';
 import { calendarWriteTools } from '../tools/calendar-write-tools';
 import { channelTools } from '../tools/channel-tools';
+import { workflowTools } from '../tools/workflow-tools';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
 export const pageSpaceTools = {
@@ -27,6 +28,7 @@ export const pageSpaceTools = {
   ...calendarReadTools,
   ...calendarWriteTools,
   ...channelTools,
+  ...workflowTools,
 };
 
 export type PageSpaceTools = typeof pageSpaceTools;

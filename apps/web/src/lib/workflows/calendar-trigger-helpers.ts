@@ -1,22 +1,17 @@
 import type { db as DbType } from '@pagespace/db/db';
 import { eq, and, inArray, ne, gt, sql } from '@pagespace/db/operators';
-import { pages } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { expandOccurrences, type RecurrenceRule } from './recurrence-utils';
+import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
 
-const MAX_CONTEXT_PAGES = 10;
 const TRIGGER_HORIZON_DAYS = 180;
 
 type DbOrTx = typeof DbType | Parameters<Parameters<typeof DbType.transaction>[0]>[0];
 
-export interface CalendarAgentTriggerInput {
-  agentPageId: string;
-  prompt?: string;
-  instructionPageId?: string | null;
-  contextPageIds?: string[];
-}
+/** @deprecated Use AgentTriggerPayload from agent-trigger-shared. Kept as an alias for call sites. */
+export type CalendarAgentTriggerInput = AgentTriggerPayload;
 
 export interface CreateCalendarTriggerWorkflowParams {
   tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0];
@@ -106,60 +101,19 @@ export interface ValidateCalendarAgentTriggerParams {
 }
 
 /**
- * Pre-write validation for calendar agent triggers. Mirrors the checks
- * task-trigger-helpers does inline for tasks: at least a prompt or instruction
- * page, agent is an AI_CHAT in the same drive, instruction + context pages all
- * live in the same drive and aren't trashed, context list capped at 10.
- *
- * Both the REST POST and the AI create_calendar_event tool call this so the
- * two surfaces can never drift on what's accepted.
+ * Pre-write validation for calendar agent triggers. Thin wrapper over the
+ * shared validateAgentTrigger so the REST POST, the AI create_calendar_event
+ * tool, and the cron workflow tool can never drift on what's accepted.
  */
 export async function validateCalendarAgentTrigger(
   database: typeof DbType,
   params: ValidateCalendarAgentTriggerParams,
 ): Promise<{ agentPageId: string }> {
-  const { driveId, agentTrigger } = params;
-  const promptText = agentTrigger.prompt?.trim() ?? '';
-
-  if (!promptText && !agentTrigger.instructionPageId) {
-    throw new Error('Agent trigger needs either a prompt or instructionPageId');
-  }
-
-  const contextPageIds = agentTrigger.contextPageIds ?? [];
-  if (contextPageIds.length > MAX_CONTEXT_PAGES) {
-    throw new Error(`Agent trigger accepts at most ${MAX_CONTEXT_PAGES} context pages`);
-  }
-
-  const agent = await database.query.pages.findFirst({
-    where: and(eq(pages.id, agentTrigger.agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
-    columns: { id: true, driveId: true },
+  return validateAgentTrigger(database, {
+    driveId: params.driveId,
+    agentTrigger: params.agentTrigger,
+    entityLabel: 'event',
   });
-  if (!agent) throw new Error('Agent page not found or not an AI agent');
-  if (agent.driveId !== driveId) throw new Error('Agent must be in the same drive as the event');
-
-  if (agentTrigger.instructionPageId) {
-    const instrPage = await database.query.pages.findFirst({
-      where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
-      columns: { id: true },
-    });
-    if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
-  }
-
-  if (contextPageIds.length > 0) {
-    const validPages = await database.query.pages.findMany({
-      where: and(
-        inArray(pages.id, contextPageIds),
-        eq(pages.driveId, driveId),
-        eq(pages.isTrashed, false),
-      ),
-      columns: { id: true },
-    });
-    if (validPages.length !== contextPageIds.length) {
-      throw new Error('Some context pages were not found or are not in the same drive');
-    }
-  }
-
-  return { agentPageId: agent.id };
 }
 
 /**
