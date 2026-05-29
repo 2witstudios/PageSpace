@@ -17,9 +17,6 @@ const WRITE_TOOLS = new Set([
   'create_drive',
   'rename_drive',
   'update_drive_context',
-  // Unified trash/restore (pages and drives)
-  'trash',
-  'restore',
   // Explicit per-entity trash/restore (pages and drives)
   'trash_page',
   'trash_drive',

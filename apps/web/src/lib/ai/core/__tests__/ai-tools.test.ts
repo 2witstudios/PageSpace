@@ -26,8 +26,6 @@ vi.mock('../../tools/page-write-tools', () => ({
     replace_lines: { name: 'replace_lines', description: 'Replace lines' },
     create_page: { name: 'create_page', description: 'Create page' },
     rename_page: { name: 'rename_page', description: 'Rename page' },
-    trash: { name: 'trash', description: 'Trash page' },
-    restore: { name: 'restore', description: 'Restore page' },
     trash_page: { name: 'trash_page', description: 'Trash page' },
     trash_drive: { name: 'trash_drive', description: 'Trash drive' },
     restore_page: { name: 'restore_page', description: 'Restore page' },
