@@ -7,7 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
-import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
 import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
@@ -64,9 +64,24 @@ const sanitizeProviderBundles = (config: unknown): SafeProviderBundle[] => {
   }));
 };
 
+/**
+ * Tools a freshly enabled integration should grant when the caller does not
+ * specify any: the provider's recommended bundle (Read-only for GitHub), or its
+ * first bundle, falling back to null (all non-dangerous tools) for providers
+ * with no bundles. Starting least-privilege also means agents load fewer tools.
+ */
+const defaultAllowedToolsForProvider = (config: unknown): string[] | null => {
+  const bundles = sanitizeProviderBundles(config);
+  if (bundles.length === 0) return null;
+  const preferred = bundles.find((b) => b.recommended) ?? bundles[0];
+  return [...preferred.toolIds];
+};
+
 const createGrantSchema = z.object({
   connectionId: z.string().min(1),
-  allowedTools: z.array(z.string()).nullable().optional().default(null),
+  // Omitted (undefined) → default to the provider's recommended bundle.
+  // Explicit null → all non-dangerous tools (legacy behaviour, caller's choice).
+  allowedTools: z.array(z.string()).nullable().optional(),
   deniedTools: z.array(z.string()).nullable().optional().default(null),
   readOnly: z.boolean().optional().default(false),
   rateLimitOverride: z.object({
@@ -155,8 +170,9 @@ export async function POST(
 
     const { connectionId, allowedTools, deniedTools, readOnly, rateLimitOverride } = validation.data;
 
-    // Verify connection exists and is active
-    const connection = await getConnectionById(db, connectionId);
+    // Verify connection exists and is active (provider eager-loaded so we can
+    // derive the default bundle below).
+    const connection = await getConnectionWithProvider(db, connectionId);
     if (!connection) {
       return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
     }
@@ -182,10 +198,15 @@ export async function POST(
       return NextResponse.json({ error: 'Grant already exists for this connection' }, { status: 409 });
     }
 
+    const resolvedAllowedTools =
+      allowedTools === undefined
+        ? defaultAllowedToolsForProvider(connection.provider?.config)
+        : allowedTools;
+
     const grant = await createGrant(db, {
       agentId,
       connectionId,
-      allowedTools,
+      allowedTools: resolvedAllowedTools,
       deniedTools,
       readOnly,
       rateLimitOverride,

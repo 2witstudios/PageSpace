@@ -5,6 +5,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mockListGrantsByAgent = vi.hoisted(() => vi.fn());
+const mockCreateGrant = vi.hoisted(() => vi.fn());
+const mockFindGrant = vi.hoisted(() => vi.fn());
+const mockGetConnectionWithProvider = vi.hoisted(() => vi.fn());
+const mockGetDriveAccess = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -32,19 +36,22 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
-  getDriveAccess: vi.fn(),
+  getDriveAccess: mockGetDriveAccess,
 }));
 
 vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
   listGrantsByAgent: mockListGrantsByAgent,
-  createGrant: vi.fn(),
-  findGrant: vi.fn(),
+  createGrant: mockCreateGrant,
+  findGrant: mockFindGrant,
 }));
 vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
-  getConnectionById: vi.fn(),
+  getConnectionWithProvider: mockGetConnectionWithProvider,
+}));
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastAgentGrantChanged: vi.fn(),
 }));
 
-import { GET } from '../route';
+import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -231,5 +238,72 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.grants[0].connection.provider.tools).toEqual([]);
+  });
+});
+
+describe('POST /api/agents/[agentId]/integrations default bundle', () => {
+  const githubConnection = {
+    id: 'conn-1',
+    userId: mockUserId,
+    driveId: null,
+    status: 'active',
+    provider: {
+      slug: 'github',
+      name: 'GitHub',
+      config: {
+        toolBundles: [
+          { id: 'read_only', name: 'Read-only', description: 'reads', toolIds: ['list_repos', 'get_repo'], recommended: true },
+          { id: 'full', name: 'Full access', description: 'all', toolIds: ['list_repos', 'get_repo', 'create_issue'] },
+        ],
+      },
+    },
+  };
+
+  const postRequest = (body: Record<string, unknown>) =>
+    new Request('http://localhost/api/agents/agent-1/integrations', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    mockGetConnectionWithProvider.mockResolvedValue(githubConnection);
+    mockFindGrant.mockResolvedValue(null);
+    mockCreateGrant.mockImplementation(async (_db: unknown, input: Record<string, unknown>) => ({ id: 'grant-1', ...input }));
+  });
+
+  it('defaults allowedTools to the recommended bundle when none is provided', async () => {
+    const response = await POST(postRequest({ connectionId: 'conn-1' }), {
+      params: Promise.resolve({ agentId: mockAgentId }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(mockCreateGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ allowedTools: ['list_repos', 'get_repo'] })
+    );
+  });
+
+  it('respects an explicit allowedTools array over the default bundle', async () => {
+    await POST(postRequest({ connectionId: 'conn-1', allowedTools: ['create_issue'] }), {
+      params: Promise.resolve({ agentId: mockAgentId }),
+    });
+
+    expect(mockCreateGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ allowedTools: ['create_issue'] })
+    );
+  });
+
+  it('respects an explicit null (all tools) instead of applying the default bundle', async () => {
+    await POST(postRequest({ connectionId: 'conn-1', allowedTools: null }), {
+      params: Promise.resolve({ agentId: mockAgentId }),
+    });
+
+    expect(mockCreateGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ allowedTools: null })
+    );
   });
 });
