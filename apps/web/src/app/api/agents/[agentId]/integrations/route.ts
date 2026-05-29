@@ -8,13 +8,14 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
-import type { ToolDefinition } from '@pagespace/lib/integrations/types';
+import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 type SafeProviderTool = Pick<ToolDefinition, 'id' | 'name' | 'description' | 'category'>;
+type SafeProviderBundle = Pick<ToolBundle, 'id' | 'name' | 'description' | 'toolIds' | 'recommended'>;
 
 const VALID_CATEGORIES: ReadonlySet<ToolDefinition['category']> = new Set([
   'read',
@@ -31,6 +32,15 @@ const isWellFormedTool = (t: unknown): t is ToolDefinition =>
   typeof (t as ToolDefinition).description === 'string' &&
   VALID_CATEGORIES.has((t as ToolDefinition).category);
 
+const isWellFormedBundle = (b: unknown): b is ToolBundle =>
+  !!b &&
+  typeof b === 'object' &&
+  typeof (b as ToolBundle).id === 'string' &&
+  typeof (b as ToolBundle).name === 'string' &&
+  typeof (b as ToolBundle).description === 'string' &&
+  Array.isArray((b as ToolBundle).toolIds) &&
+  (b as ToolBundle).toolIds.every((id) => typeof id === 'string');
+
 const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
   const rawTools = (config as { tools?: unknown } | null)?.tools;
   if (!Array.isArray(rawTools)) return [];
@@ -39,6 +49,18 @@ const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
     name: t.name,
     description: t.description,
     category: t.category,
+  }));
+};
+
+const sanitizeProviderBundles = (config: unknown): SafeProviderBundle[] => {
+  const rawBundles = (config as { toolBundles?: unknown } | null)?.toolBundles;
+  if (!Array.isArray(rawBundles)) return [];
+  return rawBundles.filter(isWellFormedBundle).map((b) => ({
+    id: b.id,
+    name: b.name,
+    description: b.description,
+    toolIds: b.toolIds,
+    recommended: b.recommended,
   }));
 };
 
@@ -93,6 +115,7 @@ export async function GET(
             slug: g.connection.provider.slug,
             name: g.connection.provider.name,
             tools: sanitizeProviderTools(g.connection.provider.config),
+            toolBundles: sanitizeProviderBundles(g.connection.provider.config),
           } : null,
         } : null,
       })),

@@ -62,19 +62,28 @@ export async function GET(request: Request) {
       });
     }
 
-    // Strip config details for listing (security)
-    const safeProviders = providers.map((p) => ({
-      id: p.id,
-      slug: p.slug,
-      name: p.name,
-      description: p.description,
-      iconUrl: p.iconUrl,
-      documentationUrl: p.documentationUrl,
-      providerType: p.providerType,
-      isSystem: p.isSystem,
-      enabled: p.enabled,
-      createdAt: p.createdAt,
-    }));
+    // Strip config details for listing (security), but surface the two
+    // connect-time fields the dialog needs to explain what is being granted.
+    const safeProviders = providers.map((p) => {
+      const config = (p.config ?? null) as {
+        oauthScopeDescriptions?: Record<string, string>;
+        connectNotes?: string;
+      } | null;
+      return {
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        description: p.description,
+        iconUrl: p.iconUrl,
+        documentationUrl: p.documentationUrl,
+        providerType: p.providerType,
+        isSystem: p.isSystem,
+        enabled: p.enabled,
+        createdAt: p.createdAt,
+        oauthScopeDescriptions: config?.oauthScopeDescriptions ?? null,
+        connectNotes: config?.connectNotes ?? null,
+      };
+    });
 
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'integration_provider', resourceId: 'list', details: { providerCount: safeProviders.length } });
 

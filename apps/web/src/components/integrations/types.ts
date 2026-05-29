@@ -5,6 +5,15 @@
 
 export type ConnectionStatus = 'active' | 'expired' | 'error' | 'pending' | 'revoked';
 
+/** A named capability preset surfaced in the grant UI. */
+export interface SafeToolBundle {
+  id: string;
+  name: string;
+  description: string;
+  toolIds: string[];
+  recommended?: boolean;
+}
+
 export interface SafeProvider {
   id: string;
   slug: string;
@@ -16,6 +25,10 @@ export interface SafeProvider {
   isSystem: boolean;
   enabled: boolean;
   createdAt: string;
+  /** Plain-English description of each requested OAuth scope, keyed by scope. */
+  oauthScopeDescriptions?: Record<string, string> | null;
+  /** Identity/safety note shown before authorizing. */
+  connectNotes?: string | null;
 }
 
 export interface SafeConnection {
@@ -65,6 +78,7 @@ export interface SafeGrant {
         description: string;
         category: 'read' | 'write' | 'admin' | 'dangerous';
       }[];
+      toolBundles: SafeToolBundle[];
     } | null;
   } | null;
 }

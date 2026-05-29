@@ -72,7 +72,7 @@ const grantWithTools: SafeGrant = {
   readOnly: false,
   rateLimitOverride: null,
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools, toolBundles: [] } },
 };
 
 const grantNoTools: SafeGrant = {
@@ -84,7 +84,7 @@ const grantNoTools: SafeGrant = {
   readOnly: true,
   rateLimitOverride: { requestsPerMinute: 30 },
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools, toolBundles: [] } },
 };
 
 function mockHooksDefault(overrides: {
@@ -300,6 +300,7 @@ describe('AgentIntegrationsPanel', () => {
             ...githubProviderTools,
             { id: 'delete_repo', name: 'delete_repo', description: 'Delete a repository', category: 'dangerous' },
           ],
+          toolBundles: [],
         },
       },
     };
@@ -434,7 +435,7 @@ describe('AgentIntegrationsPanel', () => {
         id: 'conn-1',
         name: 'GitHub Integration',
         status: 'active',
-        provider: { slug: 'github', name: 'GitHub', tools: [] },
+        provider: { slug: 'github', name: 'GitHub', tools: [], toolBundles: [] },
       },
     };
     mockHooksDefault({
