@@ -24,6 +24,7 @@ import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { TaskRenderer } from './TaskRenderer';
+import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { ActionResultRenderer } from './ActionResultRenderer';
 import { DriveListRenderer } from './DriveListRenderer';
 import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
@@ -126,8 +127,10 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'create_page': 'Create',
   'rename_page': 'Rename',
   'send_channel_message': 'Send Message',
-  'trash': 'Trash',
-  'restore': 'Restore',
+  'trash_page': 'Trash',
+  'trash_drive': 'Trash Drive',
+  'restore_page': 'Restore',
+  'restore_drive': 'Restore Drive',
   'move_page': 'Move',
   'list_trash': 'List Trash'
 };
@@ -167,9 +170,11 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
         return <Plus className={iconClass} />;
       case 'rename_page':
         return <FilePlus className={iconClass} />;
-      case 'trash':
+      case 'trash_page':
+      case 'trash_drive':
         return <Trash className={iconClass} />;
-      case 'restore':
+      case 'restore_page':
+      case 'restore_drive':
         return <RotateCcw className={iconClass} />;
       case 'move_page':
         return <Move className={iconClass} />;
@@ -237,8 +242,8 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       if (params.currentTitle) return `${formattedToolName}: "${params.currentTitle}"`;
     }
 
-    // Trash/Restore
-    if (['trash', 'restore'].includes(toolName)) {
+    // Trash/Restore (per-entity verb tools)
+    if (['trash_page', 'trash_drive', 'restore_page', 'restore_drive'].includes(toolName)) {
       if (params.title || params.name) return `${formattedToolName}: "${params.title || params.name}"`;
     }
 
@@ -512,28 +517,28 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       );
     }
 
-    if (toolName === 'trash') {
+    if (toolName === 'trash_page' || toolName === 'trash_drive') {
       return (
         <ActionResultRenderer
           actionType="trash"
           success={result.success !== false}
-          title={result.title as string | undefined}
-          pageType={result.type as string | undefined}
+          title={(result.title || result.name) as string | undefined}
+          pageType={result.pageType as string | undefined}
           message={result.message as string | undefined}
           errorMessage={result.error as string | undefined}
         />
       );
     }
 
-    if (toolName === 'restore') {
+    if (toolName === 'restore_page' || toolName === 'restore_drive') {
       return (
         <ActionResultRenderer
           actionType="restore"
           success={result.success !== false}
-          title={result.title as string | undefined}
+          title={(result.title || result.name) as string | undefined}
           pageId={result.pageId as string | undefined}
           driveId={result.driveId as string | undefined}
-          pageType={result.type as string | undefined}
+          pageType={result.pageType as string | undefined}
           message={result.message as string | undefined}
           errorMessage={result.error as string | undefined}
         />
@@ -839,6 +844,6 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
 
   if (toolName === 'tool_search') return null;
 
-  if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
+  if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });

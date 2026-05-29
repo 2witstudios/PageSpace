@@ -17,13 +17,18 @@ const WRITE_TOOLS = new Set([
   'create_drive',
   'rename_drive',
   'update_drive_context',
-  // Unified trash/restore (pages and drives)
-  'trash',
-  'restore',
+  // Explicit per-entity trash/restore (pages and drives)
+  'trash_page',
+  'trash_drive',
+  'restore_page',
+  'restore_drive',
   // Agent operations
   'update_agent_config',
   // Task operations
   'update_task',
+  'create_task',
+  'delete_task',
+  'reorder_task',
   // Channel operations
   'send_channel_message',
   'delete_channel_message',

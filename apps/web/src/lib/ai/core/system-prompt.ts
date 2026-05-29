@@ -43,9 +43,10 @@ All other tools are listed below — call execute_tool({tool_name, parameters}) 
 const CATEGORY_MAP: Record<string, string> = {
   create_drive: 'drive', rename_drive: 'drive', update_drive_context: 'drive',
   list_trash: 'pages', list_conversations: 'pages', read_conversation: 'pages',
-  rename_page: 'pages', trash: 'pages', restore: 'pages', move_page: 'pages', edit_sheet_cells: 'pages',
+  rename_page: 'pages', move_page: 'pages', edit_sheet_cells: 'pages',
+  trash_page: 'pages', trash_drive: 'pages', restore_page: 'pages', restore_drive: 'pages',
   glob_search: 'search',
-  update_task: 'tasks', get_assigned_tasks: 'tasks',
+  update_task: 'tasks', create_task: 'tasks', delete_task: 'tasks', reorder_task: 'tasks', get_assigned_tasks: 'tasks',
   update_agent_config: 'agents', list_agents: 'agents', multi_drive_list_agents: 'agents', ask_agent: 'agents',
   web_search: 'search',
   get_activity: 'activity',

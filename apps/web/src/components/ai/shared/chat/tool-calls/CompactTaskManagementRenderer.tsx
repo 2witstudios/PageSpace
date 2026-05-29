@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle, ListTodo, Loader2, AlertCircle, ChevronRight, ChevronDown } from 'lucide-react';
+import { CheckCircle, ListTodo, Loader2, AlertCircle, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import { CompactTodoListMessage } from '../CompactTodoListMessage';
 
 interface Task {
@@ -76,7 +76,11 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
     const iconClass = "h-3 w-3 flex-shrink-0";
     switch (toolName) {
       case 'update_task':
+      case 'create_task':
+      case 'reorder_task':
         return <CheckCircle className={iconClass} />;
+      case 'delete_task':
+        return <Trash2 className={iconClass} />;
       default:
         return <ListTodo className={iconClass} />;
     }
@@ -87,6 +91,12 @@ export const CompactTaskManagementRenderer: React.FC<CompactTaskManagementRender
     switch (toolName) {
       case 'update_task':
         return 'Update Task';
+      case 'create_task':
+        return 'Create Task';
+      case 'delete_task':
+        return 'Delete Task';
+      case 'reorder_task':
+        return 'Reorder Task';
       default:
         return 'Task Management';
     }

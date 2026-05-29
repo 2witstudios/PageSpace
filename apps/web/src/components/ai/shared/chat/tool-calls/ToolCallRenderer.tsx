@@ -7,6 +7,7 @@ import {
 } from '@/components/ai/ui/tool';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { TaskRenderer } from './TaskRenderer';
+import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
@@ -192,8 +193,10 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'replace_lines': 'Edit Document',
   'create_page': 'Create Page',
   'rename_page': 'Rename Page',
-  'trash': 'Move to Trash',
-  'restore': 'Restore',
+  'trash_page': 'Move to Trash',
+  'trash_drive': 'Move Drive to Trash',
+  'restore_page': 'Restore',
+  'restore_drive': 'Restore Drive',
   'move_page': 'Move Page',
   'edit_sheet_cells': 'Edit Sheet',
   // Search tools
@@ -202,6 +205,9 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'multi_drive_search': 'Search All',
   // Task tools
   'update_task': 'Update Task',
+  'create_task': 'Create Task',
+  'delete_task': 'Delete Task',
+  'reorder_task': 'Reorder Task',
   'get_assigned_tasks': 'Assigned Tasks',
   // Agent tools
   'update_agent_config': 'Configure Agent',
@@ -498,28 +504,28 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
       );
     }
 
-    if (toolName === 'trash') {
+    if (toolName === 'trash_page' || toolName === 'trash_drive') {
       return (
         <ActionResultRenderer
           actionType="trash"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
+          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
+          pageType={parsedOutput.pageType as string | undefined}
           message={parsedOutput.message as string | undefined}
           errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
 
-    if (toolName === 'restore') {
+    if (toolName === 'restore_page' || toolName === 'restore_drive') {
       return (
         <ActionResultRenderer
           actionType="restore"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
+          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
           pageId={parsedOutput.pageId as string | undefined}
           driveId={parsedOutput.driveId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
+          pageType={parsedOutput.pageType as string | undefined}
           message={parsedOutput.message as string | undefined}
           errorMessage={parsedOutput.error as string | undefined}
         />
@@ -830,7 +836,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
 
   if (toolName === 'tool_search') return null;
 
-  if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
+  if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
   return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });
