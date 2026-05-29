@@ -8,9 +8,12 @@
 -- ids on deploy, so any grant still referencing the old ids would no longer
 -- match a provider tool and would silently lose those capabilities. Rewrite the
 -- old ids in stored allowed/denied tool arrays. Idempotent: a re-run matches no
--- rows. Mirrors 0091_migrate_create_pr_comment_tool_id.
+-- rows. Scoped to grants on GitHub connections only — the old ids are generic
+-- enough (e.g. get_issues) that a custom provider could legitimately use them,
+-- so we join through integration_connections -> integration_providers (slug
+-- 'github') before remapping. Mirrors 0091_migrate_create_pr_comment_tool_id.
 
-UPDATE "integration_tool_grants"
+UPDATE "integration_tool_grants" AS g
 SET "allowed_tools" = (
   SELECT jsonb_agg(
     CASE elem #>> '{}'
@@ -21,12 +24,16 @@ SET "allowed_tools" = (
       ELSE elem
     END
   )
-  FROM jsonb_array_elements("allowed_tools") AS elem
+  FROM jsonb_array_elements(g."allowed_tools") AS elem
 )
-WHERE "allowed_tools" IS NOT NULL
-  AND "allowed_tools" ?| array['get_issues', 'get_pr_diff', 'get_pr_reviews', 'get_pr_review_comments'];
+FROM "integration_connections" AS c
+JOIN "integration_providers" AS p ON p."id" = c."provider_id"
+WHERE g."connection_id" = c."id"
+  AND p."slug" = 'github'
+  AND g."allowed_tools" IS NOT NULL
+  AND g."allowed_tools" ?| array['get_issues', 'get_pr_diff', 'get_pr_reviews', 'get_pr_review_comments'];
 --> statement-breakpoint
-UPDATE "integration_tool_grants"
+UPDATE "integration_tool_grants" AS g
 SET "denied_tools" = (
   SELECT jsonb_agg(
     CASE elem #>> '{}'
@@ -37,10 +44,14 @@ SET "denied_tools" = (
       ELSE elem
     END
   )
-  FROM jsonb_array_elements("denied_tools") AS elem
+  FROM jsonb_array_elements(g."denied_tools") AS elem
 )
-WHERE "denied_tools" IS NOT NULL
-  AND "denied_tools" ?| array['get_issues', 'get_pr_diff', 'get_pr_reviews', 'get_pr_review_comments'];
+FROM "integration_connections" AS c
+JOIN "integration_providers" AS p ON p."id" = c."provider_id"
+WHERE g."connection_id" = c."id"
+  AND p."slug" = 'github'
+  AND g."denied_tools" IS NOT NULL
+  AND g."denied_tools" ?| array['get_issues', 'get_pr_diff', 'get_pr_reviews', 'get_pr_review_comments'];
 --> statement-breakpoint
 -- Also rewrite the tool ids inside the persisted builtin GitHub provider config.
 -- The full config (bundles, renamed tool names/descriptions) is refreshed lazily

@@ -122,27 +122,38 @@ export async function GET(
     const grants = await listGrantsByAgent(db, agentId);
 
     return NextResponse.json({
-      grants: grants.map((g) => ({
-        id: g.id,
-        agentId: g.agentId,
-        connectionId: g.connectionId,
-        allowedTools: g.allowedTools,
-        deniedTools: g.deniedTools,
-        readOnly: g.readOnly,
-        rateLimitOverride: g.rateLimitOverride,
-        createdAt: g.createdAt,
-        connection: g.connection ? {
-          id: g.connection.id,
-          name: g.connection.name,
-          status: g.connection.status,
-          provider: g.connection.provider ? {
-            slug: g.connection.provider.slug,
-            name: g.connection.provider.name,
-            tools: sanitizeProviderTools(g.connection.provider.config),
-            toolBundles: sanitizeProviderBundles(g.connection.provider.config),
+      grants: grants.map((g) => {
+        const provider = g.connection?.provider ?? null;
+        // Prefer the canonical builtin definition (current tools + bundles) over
+        // the persisted DB config, which on upgraded installs may lack bundles or
+        // carry stale tool names until GET /api/integrations/providers refreshes
+        // it. This is what the per-agent panel reads, so the presets must show
+        // immediately after deploy. Falls back to DB config for custom providers.
+        const providerConfig = provider
+          ? getBuiltinProvider(provider.slug) ?? provider.config
+          : null;
+        return {
+          id: g.id,
+          agentId: g.agentId,
+          connectionId: g.connectionId,
+          allowedTools: g.allowedTools,
+          deniedTools: g.deniedTools,
+          readOnly: g.readOnly,
+          rateLimitOverride: g.rateLimitOverride,
+          createdAt: g.createdAt,
+          connection: g.connection ? {
+            id: g.connection.id,
+            name: g.connection.name,
+            status: g.connection.status,
+            provider: provider ? {
+              slug: provider.slug,
+              name: provider.name,
+              tools: sanitizeProviderTools(providerConfig),
+              toolBundles: sanitizeProviderBundles(providerConfig),
+            } : null,
           } : null,
-        } : null,
-      })),
+        };
+      }),
     });
   } catch (error) {
     loggers.api.error('Error listing agent integration grants:', error as Error);

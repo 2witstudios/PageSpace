@@ -108,11 +108,11 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
         createdAt: new Date('2026-01-01T00:00:00Z'),
         connection: {
           id: 'conn-1',
-          name: 'GitHub Integration',
+          name: 'Acme Integration',
           status: 'active',
           provider: {
-            slug: 'github',
-            name: 'GitHub',
+            slug: 'acme',
+            name: 'Acme',
             config: {
               tools: [
                 {
@@ -160,6 +160,38 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     expect(provider.toolBundles).toEqual([
       { id: 'read_only', name: 'Read-only', description: 'reads', toolIds: ['list_repos'], recommended: true },
     ]);
+  });
+
+  it('returns canonical builtin tools and bundles for github even when the stored config is stale', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'GitHub',
+          status: 'active',
+          provider: { slug: 'github', name: 'GitHub', config: { tools: [] } },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+    const body = await response.json();
+    const provider = body.grants[0].connection.provider;
+    // Canonical github config surfaces despite the empty stored config.
+    expect(provider.toolBundles.map((b: { id: string }) => b.id)).toContain('read_only');
+    expect(provider.tools.map((t: { id: string }) => t.id)).toContain('list_issues');
+    expect(provider.tools.length).toBeGreaterThan(0);
   });
 
   it('drops malformed tool entries while keeping well-formed ones', async () => {
