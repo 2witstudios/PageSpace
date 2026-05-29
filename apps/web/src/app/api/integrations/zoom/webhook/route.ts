@@ -3,6 +3,8 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyZoomWebhookSignature, handleUrlValidationChallenge } from '@/lib/integrations/zoom/verify-webhook';
 import { processZoomWebhook } from '@/lib/integrations/zoom/process-webhook';
+import { findZoomConnectionByHost } from '@/lib/integrations/zoom/webhook-trigger-queries';
+import { fireZoomWebhookTriggers } from '@/lib/integrations/zoom/fire-webhook-triggers';
 
 export async function POST(request: Request) {
   if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
@@ -23,7 +25,10 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = JSON.parse(rawBody) as { event?: string; payload?: { plainToken?: string } };
+    const body = JSON.parse(rawBody) as {
+      event?: string;
+      payload?: { plainToken?: string; account_id?: string; object?: { host_id?: string } };
+    };
 
     // URL validation challenge: Zoom sends this to verify ownership of the endpoint.
     // Signature is verified above first — this response is HMAC-authenticated.
@@ -36,12 +41,27 @@ export async function POST(request: Request) {
     }
 
     // Return 200 immediately; process async so Zoom's retry logic sees success
-    after(() => {
-      processZoomWebhook(body).catch((err) => {
-        loggers.api.error('Zoom webhook processing failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+    after(async () => {
+      const hostId = body.payload?.object?.host_id;
+      const accountId = body.payload?.account_id;
+      if (!hostId || !accountId) {
+        loggers.api.warn('Zoom webhook: event missing host_id/account_id', { event: body.event });
+        return;
+      }
+
+      // Resolve the connection once and share it with both handlers, avoiding a
+      // duplicate lookup across transcript processing and trigger firing.
+      const connectionResult = await findZoomConnectionByHost(hostId, accountId);
+      if (!connectionResult.success) {
+        loggers.api.warn('Zoom webhook: no connection for host', { event: body.event });
+        return;
+      }
+      const connection = connectionResult.data;
+
+      await Promise.allSettled([
+        processZoomWebhook(body, connection),
+        fireZoomWebhookTriggers({ event: body.event ?? '', payload: body.payload }, connection),
+      ]);
     });
 
     return Response.json({ ok: true });
