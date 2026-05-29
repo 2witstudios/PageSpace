@@ -73,12 +73,9 @@ export async function POST(request: Request) {
   const key = buildS3Key(contentHash);
 
   const exists = await checkObjectExists(key);
-  if (exists) {
-    return NextResponse.json({ alreadyExists: true, key });
-  }
 
-  const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
-
+  // Reserve a slot in both paths so the client always has a jobId to pass to
+  // /complete — the dedup path skips the PUT but still creates a page record.
   const jobId = await uploadSemaphore.acquireUploadSlot(userId, quota.tier, fileSize);
   if (!jobId) {
     return NextResponse.json(
@@ -89,6 +86,11 @@ export async function POST(request: Request) {
 
   await updateActiveUploads(userId, 1);
 
+  if (exists) {
+    return NextResponse.json({ alreadyExists: true, jobId, key });
+  }
+
+  const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
   const expiresAt = new Date(Date.now() + PRESIGN_TTL * 1000).toISOString();
 
   auditRequest(request, {

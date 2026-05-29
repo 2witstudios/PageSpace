@@ -125,6 +125,29 @@ function mapResult(raw: MagikaResultShape | null | undefined): DetectedContentTy
   };
 }
 
+/**
+ * Byte-based detection — the single place that invokes Magika. Accepts the file
+ * bytes directly so callers that already hold the buffer (e.g. the S3-pull
+ * pipeline) don't have to round-trip through the filesystem.
+ */
+export async function detectContentTypeFromBytes(bytes: Buffer): Promise<DetectedContentType> {
+  try {
+    const magika = await getInstance();
+    if (!magika) return FALLBACK_DETECTION;
+
+    const raw = (await withTimeout(
+      magika.identifyBytes(new Uint8Array(bytes)),
+      DETECTION_TIMEOUT_MS,
+    )) as MagikaResultShape;
+    return mapResult(raw);
+  } catch (err) {
+    processorLogger.warn('content-detector classify failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return FALLBACK_DETECTION;
+  }
+}
+
 export async function detectContentType(filePath: string): Promise<DetectedContentType> {
   let bytes: Buffer;
   try {
@@ -137,22 +160,7 @@ export async function detectContentType(filePath: string): Promise<DetectedConte
     return FALLBACK_DETECTION;
   }
 
-  try {
-    const magika = await getInstance();
-    if (!magika) return FALLBACK_DETECTION;
-
-    const raw = (await withTimeout(
-      magika.identifyBytes(new Uint8Array(bytes)),
-      DETECTION_TIMEOUT_MS,
-    )) as MagikaResultShape;
-    return mapResult(raw);
-  } catch (err) {
-    processorLogger.warn('content-detector classify failed', {
-      tempPath: filePath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return FALLBACK_DETECTION;
-  }
+  return detectContentTypeFromBytes(bytes);
 }
 
 /** test-only helper: drops the memoised singleton and clears any backoff window */

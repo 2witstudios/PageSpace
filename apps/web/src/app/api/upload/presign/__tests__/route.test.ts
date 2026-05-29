@@ -155,6 +155,14 @@ describe('POST /api/upload/presign', () => {
       const body = await res.json();
       expect(body.key).toBe(`files/${VALID_HASH}/original`);
     });
+
+    it('still reserves a slot and returns a jobId on dedup so the client can call complete', async () => {
+      vi.mocked(checkObjectExists).mockResolvedValue(true);
+      const res = await POST(makeRequest(VALID_BODY));
+      const body = await res.json();
+      expect(body.jobId).toBe(MOCK_SLOT);
+      expect(uploadSemaphore.acquireUploadSlot).toHaveBeenCalled();
+    });
   });
 
   describe('happy path', () => {
