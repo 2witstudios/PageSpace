@@ -193,8 +193,10 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'replace_lines': 'Edit Document',
   'create_page': 'Create Page',
   'rename_page': 'Rename Page',
-  'trash': 'Move to Trash',
-  'restore': 'Restore',
+  'trash_page': 'Move to Trash',
+  'trash_drive': 'Move Drive to Trash',
+  'restore_page': 'Restore',
+  'restore_drive': 'Restore Drive',
   'move_page': 'Move Page',
   'edit_sheet_cells': 'Edit Sheet',
   // Search tools
@@ -502,28 +504,28 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
       );
     }
 
-    if (toolName === 'trash') {
+    if (toolName === 'trash_page' || toolName === 'trash_drive') {
       return (
         <ActionResultRenderer
           actionType="trash"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
+          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
+          pageType={parsedOutput.pageType as string | undefined}
           message={parsedOutput.message as string | undefined}
           errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
 
-    if (toolName === 'restore') {
+    if (toolName === 'restore_page' || toolName === 'restore_drive') {
       return (
         <ActionResultRenderer
           actionType="restore"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
+          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
           pageId={parsedOutput.pageId as string | undefined}
           driveId={parsedOutput.driveId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
+          pageType={parsedOutput.pageType as string | undefined}
           message={parsedOutput.message as string | undefined}
           errorMessage={parsedOutput.error as string | undefined}
         />

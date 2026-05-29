@@ -13,7 +13,7 @@ const baseline = {
   read_page: 'read_page',
   // write tools
   create_page: 'create_page',
-  trash: 'trash',
+  trash_page: 'trash_page',
   // web search
   web_search: 'web_search',
 } as const;
@@ -26,7 +26,7 @@ describe('buildPageAITools', () => {
     });
 
     expect(Object.keys(result).sort()).toEqual(
-      ['create_page', 'list_pages', 'read_page', 'trash', 'web_search']
+      ['create_page', 'list_pages', 'read_page', 'trash_page', 'web_search']
     );
   });
 
@@ -48,7 +48,7 @@ describe('buildPageAITools', () => {
     });
 
     expect(result.create_page).toBeUndefined();
-    expect(result.trash).toBeUndefined();
+    expect(result.trash_page).toBeUndefined();
     expect(result.read_page).toBe('read_page');
     expect(result.web_search).toBe('web_search');
   });
@@ -84,7 +84,7 @@ describe('filterToolsForReadOnly', () => {
   it('removes write tools when isReadOnly is true', () => {
     const result = filterToolsForReadOnly(baseline, true);
     expect(result.create_page).toBeUndefined();
-    expect(result.trash).toBeUndefined();
+    expect(result.trash_page).toBeUndefined();
     expect(result.read_page).toBe('read_page');
   });
 });
@@ -105,7 +105,6 @@ describe('filterToolsForWebSearch', () => {
 describe('isWriteTool / isWebSearchTool predicates', () => {
   it('classifies write tools correctly', () => {
     expect(isWriteTool('create_page')).toBe(true);
-    expect(isWriteTool('trash')).toBe(true);
     expect(isWriteTool('send_channel_message')).toBe(true);
     expect(isWriteTool('delete_channel_message')).toBe(true);
     expect(isWriteTool('read_page')).toBe(false);

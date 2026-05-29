@@ -543,56 +543,6 @@ describe('page-write-tools', () => {
     });
   });
 
-  describe('trash', () => {
-    it('has correct tool definition', () => {
-      expect(pageWriteTools.trash).toBeDefined();
-      expect(pageWriteTools.trash.description).toContain('trash');
-    });
-
-    it('requires user authentication', async () => {
-      const context = { toolCallId: '1', messages: [], experimental_context: {} };
-
-      await expect(
-        pageWriteTools.trash.execute!(
-          { type: 'page', id: 'page-1', withChildren: false },
-          context
-        )
-      ).rejects.toThrow('User authentication required');
-    });
-
-    it('requires confirmDriveName for trashing drives', async () => {
-      const context = {
-        toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-      };
-
-      await expect(
-        pageWriteTools.trash.execute!(
-          { type: 'drive', id: 'drive-1', withChildren: false },
-          context
-        )
-      ).rejects.toThrow('Drive name confirmation is required for trashing drives');
-    });
-  });
-
-  describe('restore', () => {
-    it('has correct tool definition', () => {
-      expect(pageWriteTools.restore).toBeDefined();
-      expect(pageWriteTools.restore.description).toContain('Restore');
-    });
-
-    it('requires user authentication', async () => {
-      const context = { toolCallId: '1', messages: [], experimental_context: {} };
-
-      await expect(
-        pageWriteTools.restore.execute!(
-          { type: 'page', id: 'page-1' },
-          context
-        )
-      ).rejects.toThrow('User authentication required');
-    });
-  });
-
   describe('trash_page', () => {
     it('has correct tool definition', () => {
       expect(pageWriteTools.trash_page).toBeDefined();
