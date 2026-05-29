@@ -7,6 +7,7 @@ import {
 } from '@/components/ai/ui/tool';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { TaskRenderer } from './TaskRenderer';
+import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
@@ -202,6 +203,9 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'multi_drive_search': 'Search All',
   // Task tools
   'update_task': 'Update Task',
+  'create_task': 'Create Task',
+  'delete_task': 'Delete Task',
+  'reorder_task': 'Reorder Task',
   'get_assigned_tasks': 'Assigned Tasks',
   // Agent tools
   'update_agent_config': 'Configure Agent',
@@ -830,7 +834,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
 
   if (toolName === 'tool_search') return null;
 
-  if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
+  if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
   return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });

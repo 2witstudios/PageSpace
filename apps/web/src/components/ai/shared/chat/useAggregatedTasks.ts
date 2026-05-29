@@ -1,6 +1,19 @@
 import { useMemo } from 'react';
 import { UIMessage } from 'ai';
 
+/**
+ * Tool names that emit the shared task/taskList/tasks response shape
+ * (serialized by task-helpers). update_task only updates fields now;
+ * create/delete/reorder are explicit verb tools that return the same shape,
+ * so every task-aware UI surface must treat all four equivalently.
+ */
+export const TASK_TOOL_NAMES = new Set([
+  'update_task',
+  'create_task',
+  'delete_task',
+  'reorder_task',
+]);
+
 export interface Task {
   id: string;
   title: string;
@@ -84,27 +97,27 @@ interface AggregatedTasksResult {
 }
 
 /**
- * Aggregates task data from all update_task tool calls in a conversation.
+ * Aggregates task data from all task tool calls in a conversation
+ * (update_task, create_task, delete_task, reorder_task — see TASK_TOOL_NAMES).
  * Returns the latest task list state and loading status.
  */
 export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult {
   return useMemo(() => {
     const taskMap = new Map<string, Task>();
     let latestTaskList: TaskList | null = null;
-    let currentTaskListId: string | null = null;
     const activeLoadingCalls = new Set<string>();
     let hasError = false;
     let errorMessage: string | undefined;
 
-    // Scan all messages for update_task tool outputs
+    // Scan all messages for task tool outputs (update/create/delete/reorder)
     for (const message of messages) {
       const parts = (message as { parts?: MessagePart[] }).parts;
       if (!parts) continue;
 
       for (const part of parts) {
-        // Check if this is an update_task tool call
+        // Check if this is a task tool call (any of the verb tools)
         const toolPart = part as ToolPart;
-        if (toolPart.toolName !== 'update_task') {
+        if (!toolPart.toolName || !TASK_TOOL_NAMES.has(toolPart.toolName)) {
           continue;
         }
 
@@ -129,15 +142,13 @@ export function useAggregatedTasks(messages: UIMessage[]): AggregatedTasksResult
               ? JSON.parse(toolPart.output)
               : toolPart.output as TaskManagementToolOutput;
 
-            if (output?.success && output.tasks) {
-              // Detect new task list - clear previous tasks when switching lists
-              const newTaskListId = output.taskListId || output.taskList?.id;
-              if (newTaskListId && newTaskListId !== currentTaskListId) {
-                taskMap.clear();
-                currentTaskListId = newTaskListId;
-              }
-
-              // Update task map with latest data (latest wins)
+            if (output?.success && Array.isArray(output.tasks)) {
+              // Every task tool (update/create/delete/reorder) returns the FULL
+              // task list for its parent page, so the latest successful snapshot
+              // is authoritative — rebuild the map rather than merge. Merging
+              // would leave a delete_task-removed task behind (it's absent from
+              // the new, shorter list) and never refresh the dropdown.
+              taskMap.clear();
               for (const task of output.tasks) {
                 taskMap.set(task.id, task);
               }

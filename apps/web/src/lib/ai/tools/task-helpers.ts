@@ -340,8 +340,7 @@ export interface CreateTaskParams {
  * Create a task on a TASK_LIST page: validates access + status, auto-creates the
  * task_list record, inserts a linked TASK_LIST page (holding the description /
  * sub-tasks) plus the task row, wires assignees and any agent trigger, then
- * broadcasts and returns the refreshed list. Shared by create_task and the
- * create branch of update_task.
+ * broadcasts and returns the refreshed list. Backs the create_task tool.
  */
 export async function createTask(
   context: ToolExecutionContext,
@@ -571,7 +570,7 @@ export async function createTask(
  * ON DELETE CASCADE on taskItemId, so deleting the task first wipes the trigger
  * rows and the helper's SELECT returns empty, leaking orphan workflows rows.
  * Returns the refreshed list so client UIs drop the deleted task immediately.
- * Shared by delete_task and the delete branch of update_task.
+ * Backs the delete_task tool.
  */
 export async function deleteTask(
   context: ToolExecutionContext,
@@ -694,8 +693,7 @@ export async function deleteTask(
 
 /**
  * Move a task to `position` within its list and re-densify peer positions to
- * 0..n-1. Returns the clamped index actually assigned. Shared by reorder_task
- * and the reorder branch of update_task.
+ * 0..n-1. Returns the clamped index actually assigned. Backs the reorder_task tool.
  */
 export async function reorderTaskPeers(
   taskListPageId: string,
