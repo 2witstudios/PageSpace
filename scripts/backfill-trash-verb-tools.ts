@@ -87,7 +87,7 @@ async function backfill(dryRun: boolean): Promise<void> {
   );
 }
 
-if (require.main === module) {
+if (import.meta.main) {
   const dryRun = process.argv.slice(2).includes('--dry-run');
   backfill(dryRun)
     .then(() => process.exit(0))

@@ -733,6 +733,17 @@ describe('page-write-tools', () => {
       ).rejects.toThrow('Drive name confirmation is required');
       expect(mockDriveRepo.trash).not.toHaveBeenCalled();
     });
+
+    it('schema rejects blank/whitespace confirmDriveName and trims valid input', () => {
+      const schema = pageWriteTools.trash_drive.inputSchema as {
+        safeParse: (v: unknown) => { success: boolean; data?: { confirmDriveName?: string } };
+      };
+      expect(schema.safeParse({ id: 'drive-1', confirmDriveName: '' }).success).toBe(false);
+      expect(schema.safeParse({ id: 'drive-1', confirmDriveName: '   ' }).success).toBe(false);
+      const ok = schema.safeParse({ id: 'drive-1', confirmDriveName: '  My Drive  ' });
+      expect(ok.success).toBe(true);
+      expect(ok.data?.confirmDriveName).toBe('My Drive');
+    });
   });
 
   describe('restore_page', () => {

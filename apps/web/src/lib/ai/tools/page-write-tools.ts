@@ -816,7 +816,11 @@ export const pageWriteTools = {
     description: 'Move an entire drive (workspace) to trash. This is destructive and affects all pages in the drive. Requires confirmDriveName to exactly match the drive name as a safety confirmation.',
     inputSchema: z.object({
       id: z.string().describe('The unique ID of the drive to trash'),
-      confirmDriveName: z.string().describe('The exact name of the drive — REQUIRED confirmation to prevent accidental drive deletion'),
+      confirmDriveName: z
+        .string()
+        .trim()
+        .min(1, 'confirmDriveName is required')
+        .describe('The exact name of the drive — REQUIRED confirmation to prevent accidental drive deletion'),
     }),
     execute: async ({ id, confirmDriveName }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
