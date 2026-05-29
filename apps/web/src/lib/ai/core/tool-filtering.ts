@@ -24,6 +24,9 @@ const WRITE_TOOLS = new Set([
   'update_agent_config',
   // Task operations
   'update_task',
+  'create_task',
+  'delete_task',
+  'reorder_task',
   // Channel operations
   'send_channel_message',
   // Calendar write operations

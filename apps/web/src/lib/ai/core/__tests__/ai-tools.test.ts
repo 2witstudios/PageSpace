@@ -44,6 +44,9 @@ vi.mock('../../tools/search-tools', () => ({
 vi.mock('../../tools/task-management-tools', () => ({
   taskManagementTools: {
     update_task: { name: 'update_task', description: 'Update task' },
+    create_task: { name: 'create_task', description: 'Create task' },
+    delete_task: { name: 'delete_task', description: 'Delete task' },
+    reorder_task: { name: 'reorder_task', description: 'Reorder task' },
   },
 }));
 
