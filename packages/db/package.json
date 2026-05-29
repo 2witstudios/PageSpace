@@ -175,6 +175,10 @@
       "types": "./dist/schema/zoom.d.ts",
       "default": "./dist/schema/zoom.js"
     },
+    "./schema/webhook-triggers": {
+      "types": "./dist/schema/webhook-triggers.d.ts",
+      "default": "./dist/schema/webhook-triggers.js"
+    },
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"

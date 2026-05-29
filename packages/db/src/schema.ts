@@ -37,6 +37,7 @@ export * from './schema/pending-connection-invites';
 export * from './schema/ai-streams';
 export * from './schema/share-links';
 export * from './schema/zoom';
+export * from './schema/webhook-triggers';
 export * from './schema/drafts';
 
 import * as auth from './schema/auth';
@@ -78,6 +79,7 @@ import * as pendingConnectionInvites from './schema/pending-connection-invites';
 import * as aiStreams from './schema/ai-streams';
 import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
+import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
 
 export const schema = {
@@ -120,5 +122,6 @@ export const schema = {
   ...aiStreams,
   ...shareLinks,
   ...zoom,
+  ...webhookTriggers,
   ...drafts,
 };

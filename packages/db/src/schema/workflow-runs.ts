@@ -14,6 +14,7 @@ export const workflowRunStatus = pgEnum('WorkflowRunStatus', [
 export const workflowRunSourceTable = pgEnum('WorkflowRunSourceTable', [
   'taskTriggers',
   'calendarTriggers',
+  'webhookTriggers',
   'cron',
   'manual',
 ]);

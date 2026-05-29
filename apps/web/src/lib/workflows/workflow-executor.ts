@@ -25,7 +25,8 @@ export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
   | { table: 'manual'; id: null; triggerAt: null }
   | { table: 'taskTriggers'; id: string; triggerAt: Date | null }
-  | { table: 'calendarTriggers'; id: string; triggerAt: Date };
+  | { table: 'calendarTriggers'; id: string; triggerAt: Date }
+  | { table: 'webhookTriggers'; id: string; triggerAt: Date | null };
 
 export interface WorkflowExecutionResult {
   success: boolean;
