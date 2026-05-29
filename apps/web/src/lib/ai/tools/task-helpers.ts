@@ -227,6 +227,27 @@ export function serializeTaskItem(t: EnrichedTaskItem) {
   };
 }
 
+/**
+ * Emit the `task_updated` event so collaborators and other clients see field
+ * edits and reorders. Shared by update_task and reorder_task so both surfaces
+ * broadcast the same payload shape.
+ */
+export async function broadcastTaskUpdated(params: {
+  taskId: string;
+  userId: string;
+  taskListPageId: string | null;
+  title: string;
+  note?: string;
+}): Promise<void> {
+  await broadcastTaskEvent({
+    type: 'task_updated',
+    taskId: params.taskId,
+    userId: params.userId,
+    pageId: params.taskListPageId || undefined,
+    data: { title: params.title, note: params.note },
+  });
+}
+
 /** Serialize the refreshed task list to the tool response shape. */
 export function serializeTaskList(
   tl: typeof taskLists.$inferSelect | undefined,
@@ -329,6 +350,12 @@ export async function createTask(
 ) {
   const { pageId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
 
+  // Reject blank/whitespace titles, matching the update path and REST task route.
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) {
+    throw new Error('Title cannot be empty');
+  }
+
   // Get the TASK_LIST page and verify access
   const taskListPage = await db.query.pages.findFirst({
     where: and(eq(pages.id, pageId), eq(pages.isTrashed, false)),
@@ -426,7 +453,7 @@ export async function createTask(
   const result = await db.transaction(async (tx) => {
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
-      title,
+      title: trimmedTitle,
       type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,

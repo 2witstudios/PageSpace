@@ -105,10 +105,12 @@ vi.mock('@/lib/tasks/completion-guard', () => ({
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { broadcastTaskEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../../core';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockBroadcastTaskEvent = vi.mocked(broadcastTaskEvent);
 
 const context = {
   toolCallId: '1',
@@ -198,6 +200,15 @@ describe('task verb tools', () => {
           task: expect.objectContaining({ id: 'new-task', title: 'New Task' }),
         }),
       );
+    });
+
+    it('rejects a blank/whitespace title', async () => {
+      await expect(
+        taskManagementTools.create_task.execute!(
+          { pageId: 'page-1', title: '   ' },
+          context
+        )
+      ).rejects.toThrow('Title cannot be empty');
     });
 
     it('rejects when the target page is not a TASK_LIST', async () => {
@@ -373,6 +384,10 @@ describe('task verb tools', () => {
       );
 
       expect(reorderTxMock).toHaveBeenCalled();
+      // Reorders must broadcast so collaborators/other clients see the move.
+      expect(mockBroadcastTaskEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'task_updated', taskId: 'task-2' }),
+      );
       expect(result).toEqual(
         expect.objectContaining({
           success: true,

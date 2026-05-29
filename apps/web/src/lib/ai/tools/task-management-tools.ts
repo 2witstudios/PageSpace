@@ -28,6 +28,7 @@ import {
   deleteTask,
   reorderTaskPeers,
   buildTaskListResponse,
+  broadcastTaskUpdated,
 } from './task-helpers';
 
 const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
@@ -388,13 +389,13 @@ Agent Triggers:
 
         resultTitle = trimmedTitle ?? existingTask.page?.title ?? '';
 
-        // Broadcast update event
-        await broadcastTaskEvent({
-          type: 'task_updated',
+        // Broadcast update event (shared with reorder_task for a consistent payload)
+        await broadcastTaskUpdated({
           taskId: resultTask.id,
           userId,
-          pageId: taskList.pageId || undefined,
-          data: { title: resultTitle, note },
+          taskListPageId: taskList.pageId,
+          title: resultTitle,
+          note,
         });
 
         return await buildTaskListResponse({
@@ -524,6 +525,13 @@ The position is clamped to the valid range. Returns the refreshed task list refl
         const { existingTask, taskList } = await resolveTaskForUpdate(ctx, userId, taskId);
         const clamped = await reorderTaskPeers(taskList.pageId!, taskId, position);
         const resultTitle = existingTask.page?.title ?? '';
+        // Broadcast so collaborators/other clients see the reorder, matching update_task.
+        await broadcastTaskUpdated({
+          taskId,
+          userId,
+          taskListPageId: taskList.pageId,
+          title: resultTitle,
+        });
         return await buildTaskListResponse({
           action: 'updated',
           parentPageId: taskList.pageId!,
