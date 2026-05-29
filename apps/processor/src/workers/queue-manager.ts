@@ -235,8 +235,10 @@ export class QueueManager {
     // Direct-to-S3 verified ingest: byte-verify (hash + Magika) before processing.
     await this.boss.work('pull-verify',
       async ([job]) => {
+        // runPullPipeline sets the page's real status (visual/completed/failed);
+        // this return is just the pg-boss job result.
         await runPullPipeline(job.data as PullVerifyJobData);
-        return { success: true } satisfies IngestResult;
+        return { success: true };
       }
     );
   }
