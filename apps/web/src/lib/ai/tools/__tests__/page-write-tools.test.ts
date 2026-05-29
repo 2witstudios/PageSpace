@@ -599,6 +599,38 @@ describe('page-write-tools', () => {
       );
     });
 
+    it('trashes a page given only an id (title is optional, fetched by id)', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.trash_page.execute!(
+        { id: 'page-1', withChildren: false },
+        context
+      ) as { success: boolean; message: string };
+
+      expect(result.success).toBe(true);
+      // Display title comes from the fetched page, not the (omitted) input param
+      expect(result.message).toContain('Test Page');
+    });
+
     it('rejects when the page is not found', async () => {
       mockPageRepo.findById.mockResolvedValue(null);
 

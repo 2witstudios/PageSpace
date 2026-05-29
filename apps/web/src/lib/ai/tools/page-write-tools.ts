@@ -775,7 +775,7 @@ export const pageWriteTools = {
     description: 'Move a page to trash (soft delete). Optionally trash all child pages recursively with withChildren.',
     inputSchema: z.object({
       id: z.string().describe('The unique ID of the page to trash'),
-      title: z.string().describe('The page title for display context'),
+      title: z.string().optional().describe('Optional page title for display/error context only — the real title is fetched by ID'),
       withChildren: z.boolean().optional().default(false).describe('Whether to trash all children recursively'),
     }),
     execute: async ({ id, title, withChildren = false }, { experimental_context: context }) => {
