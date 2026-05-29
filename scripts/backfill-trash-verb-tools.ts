@@ -56,8 +56,8 @@ async function backfill(dryRun: boolean): Promise<void> {
     scanned += 1;
 
     if (!Array.isArray(row.enabledTools)) {
-      // The ?| filter only matches jsonb arrays (or objects); this guards the
-      // unexpected (e.g. a jsonb scalar) rather than corrupting the value.
+      // The `@>` filter only matches jsonb arrays; this guards the unexpected
+      // (e.g. a jsonb scalar) rather than corrupting the value.
       console.warn(`⚠️  Skipping page ${row.id}: enabledTools is not an array.`);
       skipped += 1;
       continue;
