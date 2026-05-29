@@ -132,8 +132,14 @@ export async function PATCH(
     // Update role and customRoleId if provided
     const { oldRole } = await updateMemberRole(driveId, userId, role, customRoleId);
 
+    const roleChanged = Boolean(role) && role !== oldRole;
+    // `customRoleId` is only meaningful when present in the request body;
+    // `updateMemberRole` coerces falsy values to null when clearing it.
+    const oldCustomRoleId = memberData.customRole?.id ?? null;
+    const customRoleChanged = customRoleId !== undefined && (customRoleId || null) !== oldCustomRoleId;
+
     // Send notification if role changed (boundary obligation)
-    if (role && role !== oldRole) {
+    if (roleChanged) {
       await createDriveNotification(
         userId,
         driveId,
@@ -162,13 +168,19 @@ export async function PATCH(
       }, actorInfo);
 
       auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, previousRole: oldRole, newRole: role } });
+    }
 
-      // Cascade: re-cap the external agents this user granted in the drive to
-      // the role they can grant now. A downgrade (e.g. ADMIN→MEMBER) must pull
-      // down any agent they had elevated; an upgrade is a no-op.
+    // Cascade: re-cap the external agents this user granted in the drive to the
+    // grant they can make now. Triggered by ANY change to their grant ceiling —
+    // a standard-role change OR a custom-role change (tightened or cleared) —
+    // since both alter the driveAgentMembers row they could create today. A
+    // custom-role downgrade would otherwise leave agents with stale access to
+    // pages the user can no longer grant. recapAgentMembershipsGrantedBy never
+    // escalates beyond the user's own access.
+    if (roleChanged || customRoleChanged) {
       const recappedAgentIds = await recapAgentMembershipsGrantedBy(driveId, userId);
       if (recappedAgentIds.length > 0) {
-        auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, recappedAgentPageIds: recappedAgentIds, newCap: role, reason: 'member_downgrade' } });
+        auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, recappedAgentPageIds: recappedAgentIds, newCap: role ?? oldRole, reason: 'member_recap' } });
       }
     }
 

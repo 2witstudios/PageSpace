@@ -890,13 +890,35 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         expect.objectContaining({
           details: expect.objectContaining({
             recappedAgentPageIds: ['agent_1'],
-            reason: 'member_downgrade',
+            reason: 'member_recap',
           }),
         }),
       );
     });
 
-    it('should NOT re-cap agents when the role is unchanged', async () => {
+    it('should re-cap agents when only the custom role changes (role unchanged)', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test Drive' }),
+      }));
+      // Member stays MEMBER; the fixture has no prior custom role (id null).
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER' });
+      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+        method: 'PATCH',
+        // No `role` field — only the custom role is being changed.
+        body: JSON.stringify({ customRoleId: 'role_restrictive', permissions: [] }),
+      });
+      await PATCH(request, createContext(mockDriveId, mockTargetUserId));
+
+      expect(recapAgentMembershipsGrantedBy).toHaveBeenCalledWith(mockDriveId, mockTargetUserId);
+    });
+
+    it('should NOT re-cap agents when neither role nor custom role changes', async () => {
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
@@ -909,7 +931,30 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
+        // Same role, no customRoleId in body ⇒ nothing about the ceiling changed.
         body: JSON.stringify({ role: 'ADMIN', permissions: [] }),
+      });
+      await PATCH(request, createContext(mockDriveId, mockTargetUserId));
+
+      expect(recapAgentMembershipsGrantedBy).not.toHaveBeenCalled();
+    });
+
+    it('should NOT re-cap agents when the provided custom role equals the current one', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      // Member already holds the same custom role being "set".
+      vi.mocked(getDriveMemberDetails).mockResolvedValue({
+        ...createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' }),
+        customRole: { id: 'role_same', name: 'Same', color: null },
+      } as never);
+      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER' });
+      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ customRoleId: 'role_same', permissions: [] }),
       });
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
