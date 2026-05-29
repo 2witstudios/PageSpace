@@ -422,8 +422,8 @@ export const githubProvider: IntegrationProviderConfig = {
 
     // ─── Read Tools: Issues ──────────────────────────────────────────────
     {
-      id: 'get_issues',
-      name: 'Get Issues',
+      id: 'list_issues',
+      name: 'List Issues',
       description: 'List issues for a repository',
       category: 'read',
       inputSchema: {
@@ -673,8 +673,8 @@ export const githubProvider: IntegrationProviderConfig = {
       },
     },
     {
-      id: 'get_pr_diff',
-      name: 'Get PR Files',
+      id: 'list_pr_files',
+      name: 'List PR Files',
       description:
         'Get the list of files changed in a pull request, including patch diffs and change statistics',
       category: 'read',
@@ -730,8 +730,8 @@ export const githubProvider: IntegrationProviderConfig = {
       },
     },
     {
-      id: 'get_pr_reviews',
-      name: 'Get PR Reviews',
+      id: 'list_pr_reviews',
+      name: 'List PR Reviews',
       description: 'List reviews on a pull request',
       category: 'read',
       inputSchema: {
@@ -784,8 +784,8 @@ export const githubProvider: IntegrationProviderConfig = {
       },
     },
     {
-      id: 'get_pr_review_comments',
-      name: 'Get PR Review Comments',
+      id: 'list_pr_review_comments',
+      name: 'List PR Review Comments',
       description:
         'Get inline review comments on a pull request (comments on specific lines of code)',
       category: 'read',
@@ -1094,7 +1094,7 @@ export const githubProvider: IntegrationProviderConfig = {
                 line: {
                   type: 'integer',
                   description:
-                    'Line number in the diff to comment on (use get_pr_diff to find line numbers)',
+                    'Line number in the diff to comment on (use list_pr_files to find line numbers)',
                 },
                 side: {
                   type: 'string',
@@ -1262,13 +1262,13 @@ export const githubProvider: IntegrationProviderConfig = {
         'list_branches',
         'search_code',
         'get_commit',
-        'get_issues',
+        'list_issues',
         'list_issue_comments',
         'get_pull_request',
         'list_pull_requests',
-        'get_pr_diff',
-        'get_pr_reviews',
-        'get_pr_review_comments',
+        'list_pr_files',
+        'list_pr_reviews',
+        'list_pr_review_comments',
       ],
     },
     {
@@ -1278,9 +1278,9 @@ export const githubProvider: IntegrationProviderConfig = {
       toolIds: [
         'get_pull_request',
         'list_pull_requests',
-        'get_pr_diff',
-        'get_pr_reviews',
-        'get_pr_review_comments',
+        'list_pr_files',
+        'list_pr_reviews',
+        'list_pr_review_comments',
         'get_repo_content',
         'get_commit',
         'create_pr_review',
@@ -1293,7 +1293,7 @@ export const githubProvider: IntegrationProviderConfig = {
       name: 'Issue triage',
       description: 'Read, open, update, and comment on issues.',
       toolIds: [
-        'get_issues',
+        'list_issues',
         'list_issue_comments',
         'create_issue',
         'update_issue',
@@ -1312,13 +1312,13 @@ export const githubProvider: IntegrationProviderConfig = {
         'list_branches',
         'search_code',
         'get_commit',
-        'get_issues',
+        'list_issues',
         'list_issue_comments',
         'get_pull_request',
         'list_pull_requests',
-        'get_pr_diff',
-        'get_pr_reviews',
-        'get_pr_review_comments',
+        'list_pr_files',
+        'list_pr_reviews',
+        'list_pr_review_comments',
         'create_issue',
         'update_issue',
         'create_issue_comment',

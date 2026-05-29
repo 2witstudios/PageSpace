@@ -78,13 +78,13 @@ describe('githubProvider', () => {
       'list_branches',
       'search_code',
       'get_commit',
-      'get_issues',
+      'list_issues',
       'list_issue_comments',
       'get_pull_request',
       'list_pull_requests',
-      'get_pr_diff',
-      'get_pr_reviews',
-      'get_pr_review_comments',
+      'list_pr_files',
+      'list_pr_reviews',
+      'list_pr_review_comments',
     ];
 
     const writeToolIds = [
@@ -178,8 +178,8 @@ describe('githubProvider', () => {
     });
   });
 
-  describe('get_issues tool', () => {
-    const tool = findTool('get_issues');
+  describe('list_issues tool', () => {
+    const tool = findTool('list_issues');
 
     it('given the tool, should require owner and repo', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -519,8 +519,8 @@ describe('githubProvider', () => {
 
   // ─── New Tool Tests: PR Review ─────────────────────────────────────────
 
-  describe('get_pr_diff tool', () => {
-    const tool = findTool('get_pr_diff');
+  describe('list_pr_files tool', () => {
+    const tool = findTool('list_pr_files');
 
     it('given the tool, should require owner, repo, and pull_number', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -549,8 +549,8 @@ describe('githubProvider', () => {
     });
   });
 
-  describe('get_pr_reviews tool', () => {
-    const tool = findTool('get_pr_reviews');
+  describe('list_pr_reviews tool', () => {
+    const tool = findTool('list_pr_reviews');
 
     it('given the tool, should require owner, repo, and pull_number', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -564,8 +564,8 @@ describe('githubProvider', () => {
     });
   });
 
-  describe('get_pr_review_comments tool', () => {
-    const tool = findTool('get_pr_review_comments');
+  describe('list_pr_review_comments tool', () => {
+    const tool = findTool('list_pr_review_comments');
 
     it('given the tool, should require owner, repo, and pull_number', () => {
       const required = (tool.inputSchema as { required: string[] }).required;

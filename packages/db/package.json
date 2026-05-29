@@ -195,7 +195,8 @@
     "db:seed": "tsx src/seed.ts",
     "lint": "eslint src",
     "promote-admin": "tsx src/promote-admin.ts",
-    "migrate-pending-invites": "tsx src/migrate-pending-invites.ts"
+    "migrate-pending-invites": "tsx src/migrate-pending-invites.ts",
+    "migrate-github-tool-ids": "tsx src/migrate-github-tool-ids.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
