@@ -115,4 +115,25 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(isWebSearchTool('read_page')).toBe(false);
     expect(isWebSearchTool('create_page')).toBe(false);
   });
+
+  it('classifies workflow tools: writes are write tools, list is read', () => {
+    expect(isWriteTool('create_workflow')).toBe(true);
+    expect(isWriteTool('update_workflow')).toBe(true);
+    expect(isWriteTool('delete_workflow')).toBe(true);
+    expect(isWriteTool('list_workflow')).toBe(false);
+  });
+
+  it('excludes workflow write tools in read-only mode but keeps list_workflow', () => {
+    const tools = {
+      list_workflow: 'r',
+      create_workflow: 'w',
+      update_workflow: 'w',
+      delete_workflow: 'w',
+    };
+    const filtered = filterToolsForReadOnly(tools, true);
+    expect(filtered).toHaveProperty('list_workflow');
+    expect(filtered).not.toHaveProperty('create_workflow');
+    expect(filtered).not.toHaveProperty('update_workflow');
+    expect(filtered).not.toHaveProperty('delete_workflow');
+  });
 });
