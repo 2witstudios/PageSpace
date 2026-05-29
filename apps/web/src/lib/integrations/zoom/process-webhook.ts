@@ -1,6 +1,6 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
-import { zoomConnections } from '@pagespace/db/schema/zoom';
+import { zoomConnections, type ZoomConnection } from '@pagespace/db/schema/zoom';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
@@ -25,7 +25,10 @@ interface ZoomTranscriptPayload {
   };
 }
 
-export async function processZoomWebhook(body: unknown): Promise<void> {
+export async function processZoomWebhook(
+  body: unknown,
+  preResolvedConnection?: ZoomConnection,
+): Promise<void> {
   const event = body as ZoomTranscriptPayload;
 
   if (event?.event !== 'recording.transcript_completed') return;
@@ -38,9 +41,11 @@ export async function processZoomWebhook(body: unknown): Promise<void> {
   const { account_id } = event.payload;
   const { uuid: meetingUuid, host_id, host_email, topic, start_time, duration } = event.payload.object;
 
-  // Match the specific host user — host_id is the Zoom user ID of who ran the meeting.
-  // Using both host_id and account_id prevents cross-account collision.
-  const connection = await db.query.zoomConnections.findFirst({
+  // The webhook route resolves the connection once and shares it with both
+  // handlers; fall back to a self-contained lookup for direct callers/tests.
+  // Match the specific host user — host_id is the Zoom user ID of who ran the
+  // meeting. Using both host_id and account_id prevents cross-account collision.
+  const connection = preResolvedConnection ?? await db.query.zoomConnections.findFirst({
     where: and(
       eq(zoomConnections.zoomUserId, host_id),
       eq(zoomConnections.zoomAccountId, account_id),
