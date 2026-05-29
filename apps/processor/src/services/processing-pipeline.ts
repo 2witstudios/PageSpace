@@ -139,12 +139,15 @@ export async function generateImageVariants(bytes: Buffer): Promise<ImageVariant
 }
 
 async function withTempFile<T>(bytes: Buffer, suffix: string, work: (inputPath: string) => Promise<T>): Promise<T> {
-  const inputPath = path.join(os.tmpdir(), `pipeline-${crypto.randomUUID()}${suffix}`);
+  // mkdtemp creates a private (0700), unpredictably-named directory, avoiding the
+  // symlink/race hazards of writing a known-named file into the shared temp dir.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pipeline-'));
+  const inputPath = path.join(dir, `input${suffix}`);
   try {
     await fs.writeFile(inputPath, bytes);
     return await work(inputPath);
   } finally {
-    await fs.unlink(inputPath).catch(() => {});
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -169,16 +172,13 @@ export function extractVideoMetadata(bytes: Buffer): Promise<VideoMetadata> {
 /** Grab the first frame as a webp thumbnail via ffmpeg. Bytes in, thumbnail bytes out. */
 export function extractVideoThumbnail(bytes: Buffer): Promise<Buffer> {
   return withTempFile(bytes, '.video', async (inputPath) => {
+    // Thumbnail lands inside the same private temp dir, cleaned up by withTempFile.
     const thumbPath = `${inputPath}-thumb.webp`;
-    try {
-      await execFileAsync(
-        'ffmpeg',
-        ['-y', '-i', inputPath, '-vf', 'select=eq(n\\,0)', '-vframes', '1', '-f', 'webp', thumbPath],
-        { timeout: FFMPEG_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
-      );
-      return await fs.readFile(thumbPath);
-    } finally {
-      await fs.unlink(thumbPath).catch(() => {});
-    }
+    await execFileAsync(
+      'ffmpeg',
+      ['-y', '-i', inputPath, '-vf', 'select=eq(n\\,0)', '-vframes', '1', '-f', 'webp', thumbPath],
+      { timeout: FFMPEG_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+    );
+    return fs.readFile(thumbPath);
   });
 }

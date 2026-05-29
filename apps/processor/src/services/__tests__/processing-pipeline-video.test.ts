@@ -5,18 +5,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // are not mocked; only the subprocess + temp-file boundary is.
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
+  mkdtemp: vi.fn().mockResolvedValue('/tmp/pipeline-xxxx'),
   writeFile: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn(),
-  unlink: vi.fn().mockResolvedValue(undefined),
+  rm: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('child_process', () => ({ execFile: mocks.execFile }));
 vi.mock('util', () => ({ promisify: () => mocks.execFile }));
 vi.mock('fs/promises', () => ({
-  default: { writeFile: mocks.writeFile, readFile: mocks.readFile, unlink: mocks.unlink },
+  default: { mkdtemp: mocks.mkdtemp, writeFile: mocks.writeFile, readFile: mocks.readFile, rm: mocks.rm },
+  mkdtemp: mocks.mkdtemp,
   writeFile: mocks.writeFile,
   readFile: mocks.readFile,
-  unlink: mocks.unlink,
+  rm: mocks.rm,
 }));
 
 import { extractVideoMetadata, extractVideoThumbnail } from '../processing-pipeline';
@@ -25,8 +27,9 @@ const VIDEO_BYTES = Buffer.from('fake-mp4-bytes');
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.mkdtemp.mockResolvedValue('/tmp/pipeline-xxxx');
   mocks.writeFile.mockResolvedValue(undefined);
-  mocks.unlink.mockResolvedValue(undefined);
+  mocks.rm.mockResolvedValue(undefined);
 });
 
 describe('extractVideoMetadata', () => {
@@ -48,7 +51,7 @@ describe('extractVideoMetadata', () => {
   it('cleans up the temp input file even when ffprobe fails', async () => {
     mocks.execFile.mockRejectedValue(new Error('ffprobe boom'));
     await expect(extractVideoMetadata(VIDEO_BYTES)).rejects.toThrow();
-    expect(mocks.unlink).toHaveBeenCalled();
+    expect(mocks.rm).toHaveBeenCalled();
   });
 });
 
@@ -64,6 +67,6 @@ describe('extractVideoThumbnail', () => {
   it('cleans up temp files even when ffmpeg fails', async () => {
     mocks.execFile.mockRejectedValue(new Error('ffmpeg boom'));
     await expect(extractVideoThumbnail(VIDEO_BYTES)).rejects.toThrow();
-    expect(mocks.unlink).toHaveBeenCalled();
+    expect(mocks.rm).toHaveBeenCalled();
   });
 });

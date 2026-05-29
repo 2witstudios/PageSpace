@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { files, filePages } from '@pagespace/db/schema/storage';
@@ -102,6 +102,10 @@ export async function POST(request: Request) {
   if (!uploadSemaphore.verifySlotOwner(jobId, userId)) {
     return NextResponse.json({ error: 'Invalid or expired jobId' }, { status: 403 });
   }
+
+  // Scoped MCP tokens may only act on the drive they were granted for.
+  const scopeError = checkMCPCreateScope(auth, driveId);
+  if (scopeError) return scopeError;
 
   const drivePerms = await getUserDrivePermissions(userId, driveId);
   if (!drivePerms) {

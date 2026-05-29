@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && 'error' in r),
+  checkMCPCreateScope: vi.fn(() => null),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -235,7 +236,7 @@ describe('POST /api/upload/complete', () => {
   describe('slot leak prevention', () => {
     it('releases the slot even when the processor job enqueue fails', async () => {
       vi.mocked(enqueueProcessorJob).mockRejectedValue(new Error('processor down'));
-      const res = await POST(makeRequest(VALID_BODY));
+      await POST(makeRequest(VALID_BODY));
       // Response may vary but slot must be released
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
     });

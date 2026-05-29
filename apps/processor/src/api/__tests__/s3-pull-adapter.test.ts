@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   extractVideoThumbnail: vi.fn(),
 }));
 
-vi.mock('../../cache/content-store', () => ({
+vi.mock('../../server', () => ({
   contentStore: {
     getOriginal: mocks.getOriginal,
     deleteOriginal: mocks.deleteOriginal,

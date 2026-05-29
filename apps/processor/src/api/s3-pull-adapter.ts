@@ -1,4 +1,4 @@
-import { contentStore } from '../cache/content-store';
+import { contentStore } from '../server';
 import {
   setPageProcessing,
   setPageCompleted,

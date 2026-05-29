@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import {
   validateContentHash,
   validateFileSize,
@@ -7,7 +7,7 @@ import {
   buildS3Key,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { checkStorageQuota, getUserStorageQuota, updateActiveUploads } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -42,6 +42,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
+  // Scoped MCP tokens may only act on the drive they were granted for.
+  const scopeError = checkMCPCreateScope(auth, driveId);
+  if (scopeError) return scopeError;
+
   const drivePerms = await getUserDrivePermissions(userId, driveId);
   if (!drivePerms) {
     return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -68,6 +72,12 @@ export async function POST(request: Request) {
   const sizeResult = validateFileSize(fileSize, quota.tier);
   if (!sizeResult.ok) {
     return NextResponse.json({ error: sizeResult.error.message }, { status: 413 });
+  }
+
+  // Enforce remaining storage + file-count limits, not just per-file size.
+  const quotaCheck = await checkStorageQuota(userId, fileSize);
+  if (!quotaCheck.allowed) {
+    return NextResponse.json({ error: quotaCheck.reason, storageInfo: quotaCheck.quota }, { status: 413 });
   }
 
   const key = buildS3Key(contentHash);

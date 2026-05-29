@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && 'error' in r),
+  checkMCPCreateScope: vi.fn(() => null),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -12,6 +13,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: vi.fn(),
   updateActiveUploads: vi.fn(),
+  checkStorageQuota: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
@@ -30,9 +32,9 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { getUserStorageQuota, updateActiveUploads, checkStorageQuota } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 
@@ -69,6 +71,7 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuth());
   vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
   vi.mocked(getUserStorageQuota).mockResolvedValue(makeQuota());
+  vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: true });
   vi.mocked(checkObjectExists).mockResolvedValue(false);
   vi.mocked(issuePresignedPutUrl).mockResolvedValue(MOCK_URL);
   vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(MOCK_SLOT);
@@ -81,6 +84,26 @@ describe('POST /api/upload/presign', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: new Response(null, { status: 401 }) } as never);
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('scoped MCP tokens', () => {
+    it('returns the scope error when the MCP token is not scoped to the drive', async () => {
+      vi.mocked(checkMCPCreateScope).mockReturnValueOnce(
+        new Response(JSON.stringify({ error: 'scope' }), { status: 403 }) as never,
+      );
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(403);
+      expect(issuePresignedPutUrl).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('storage quota', () => {
+    it('returns 413 when the remaining storage/file-count quota is exceeded', async () => {
+      vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: false, reason: 'Quota exceeded' });
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(413);
+      expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
     });
   });
 
