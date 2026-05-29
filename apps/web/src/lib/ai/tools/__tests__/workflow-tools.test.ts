@@ -3,9 +3,9 @@ import { z } from 'zod';
 
 const {
   mockInsert, mockInsertValues, mockReturning,
-  mockSelect, mockSelectFrom, mockSelectWhere,
-  mockUpdate, mockUpdateSet, mockUpdateWhere,
-  mockDelete, mockDeleteWhere,
+  mockSelect, mockSelectWhere,
+  mockUpdate, mockUpdateSet,
+  mockDelete,
   mockCanActorAccessDrive,
   mockValidateAgentTrigger,
   mockValidateCron, mockValidateTimezone, mockGetNextRunDate, mockGetHumanReadableCron,
@@ -23,9 +23,9 @@ const {
   const mockDelete = vi.fn(() => ({ where: mockDeleteWhere }));
   return {
     mockInsert, mockInsertValues, mockReturning,
-    mockSelect, mockSelectFrom, mockSelectWhere,
-    mockUpdate, mockUpdateSet, mockUpdateWhere,
-    mockDelete, mockDeleteWhere,
+    mockSelect, mockSelectWhere,
+    mockUpdate, mockUpdateSet,
+    mockDelete,
     mockCanActorAccessDrive: vi.fn(),
     mockValidateAgentTrigger: vi.fn(),
     mockValidateCron: vi.fn(),
