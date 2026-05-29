@@ -69,6 +69,12 @@ export interface VideoProcessJobData {
   mimeType: string;
 }
 
+/** Direct-to-S3 verified ingest: pull bytes, hash/Magika gate, then process. */
+export interface PullVerifyJobData {
+  pageId: string;
+  contentHash: string;
+}
+
 export interface VideoProcessResult {
   success: boolean;
   duration?: number;
@@ -85,6 +91,7 @@ export type JobDataMap = {
   'text-extract': TextExtractJobData;
   'ocr-process': OCRJobData;
   'video-process': VideoProcessJobData;
+  'pull-verify': PullVerifyJobData;
   'siem-delivery': Record<string, never>;
 };
 

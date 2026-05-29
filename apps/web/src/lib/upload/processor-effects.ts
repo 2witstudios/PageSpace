@@ -8,7 +8,9 @@ export async function enqueueProcessorJob(
   pageId: string,
 ): Promise<void> {
   const { token } = await createUploadServiceToken({ userId, driveId, pageId });
-  const res = await fetch(`${PROCESSOR_URL}/api/ingest/by-page/${pageId}`, {
+  // /pull runs the zero-trust pull-verify pipeline (re-hash + Magika gate) rather
+  // than /by-page, which trusts the page's declared mimeType.
+  const res = await fetch(`${PROCESSOR_URL}/api/ingest/pull/${pageId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),

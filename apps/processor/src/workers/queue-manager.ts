@@ -9,6 +9,7 @@ import type {
   TextExtractJobData,
   OCRJobData,
   VideoProcessJobData,
+  PullVerifyJobData,
   TextExtractResult,
   IngestResult,
 } from '../types';
@@ -78,6 +79,7 @@ export class QueueManager {
 
     try {
       await this.boss.createQueue('ingest-file');
+      await this.boss.createQueue('pull-verify');
       await this.boss.createQueue('image-optimize');
       await this.boss.createQueue('text-extract');
       await this.boss.createQueue('ocr-process');
@@ -97,6 +99,7 @@ export class QueueManager {
     const { extractText } = await import('./text-extractor');
     const { processOCR } = await import('./ocr-processor');
     const { processVideo } = await import('./video-processor');
+    const { runPullPipeline } = await import('../api/s3-pull-adapter');
 
     // Unified ingestion worker
     await this.boss.work('ingest-file',
@@ -228,6 +231,14 @@ export class QueueManager {
 
     // Schedule SIEM delivery every 30 seconds
     await this.boss.schedule('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
+
+    // Direct-to-S3 verified ingest: byte-verify (hash + Magika) before processing.
+    await this.boss.work('pull-verify',
+      async ([job]) => {
+        await runPullPipeline(job.data as PullVerifyJobData);
+        return { success: true } satisfies IngestResult;
+      }
+    );
   }
 
   async addJob<Q extends QueueName>(
@@ -281,7 +292,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

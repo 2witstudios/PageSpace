@@ -59,6 +59,10 @@ vi.mock('../video-processor', () => ({
   isVideo: vi.fn().mockReturnValue(false),
 }));
 
+vi.mock('../../api/s3-pull-adapter', () => ({
+  runPullPipeline: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { QueueManager, mapJobState } from '../queue-manager';
 import { setPageProcessing, setPageCompleted, setPageFailed, setPageVisual } from '../../db';
 import { needsTextExtraction, extractText } from '../text-extractor';
@@ -103,15 +107,17 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(6);
+      expect(mockBossWork).toHaveBeenCalledTimes(7);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
       expect(mockBossWork.mock.calls[3][0]).toBe('ocr-process');
       expect(mockBossWork.mock.calls[4][0]).toBe('video-process');
       expect(mockBossWork.mock.calls[5][0]).toBe('siem-delivery');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(6);
+      expect(mockBossWork.mock.calls[6][0]).toBe('pull-verify');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(7);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('text-extract');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
