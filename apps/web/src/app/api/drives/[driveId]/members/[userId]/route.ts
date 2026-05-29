@@ -129,13 +129,15 @@ export async function PATCH(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Update role and customRoleId if provided
-    const { oldRole } = await updateMemberRole(driveId, userId, role, customRoleId);
+    // Update role and customRoleId if provided. `updateMemberRole` returns the
+    // pre-update values it read from the row (getDriveMemberDetails hardcodes
+    // customRole: null, so it cannot be used to detect a custom-role change).
+    const { oldRole, oldCustomRoleId } = await updateMemberRole(driveId, userId, role, customRoleId);
 
     const roleChanged = Boolean(role) && role !== oldRole;
     // `customRoleId` is only meaningful when present in the request body;
-    // `updateMemberRole` coerces falsy values to null when clearing it.
-    const oldCustomRoleId = memberData.customRole?.id ?? null;
+    // `updateMemberRole` coerces falsy values to null when clearing it, so a
+    // clear (customRoleId: null over a prior role) is a real change too.
     const customRoleChanged = customRoleId !== undefined && (customRoleId || null) !== oldCustomRoleId;
 
     // Send notification if role changed (boundary obligation)
