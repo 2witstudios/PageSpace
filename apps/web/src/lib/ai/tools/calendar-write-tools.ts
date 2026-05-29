@@ -12,6 +12,7 @@ import {
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -98,12 +99,7 @@ export const calendarWriteTools = {
       color: z.string().optional().describe('Color category (default, meeting, deadline, personal, travel, focus)'),
       attendeeIds: z.array(z.string()).optional().describe('User IDs to invite as attendees'),
       pageId: z.string().nullable().optional().describe('Optional page ID to link this event to'),
-      agentTrigger: z.object({
-        agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
-        prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
-        instructionPageId: z.string().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
-        contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
-      }).optional().describe('Schedule an AI agent to run when this event time arrives. Requires driveId.'),
+      agentTrigger: agentTriggerBaseSchema.optional().describe('Schedule an AI agent to run when this event time arrives. Requires driveId.'),
     }),
     execute: async (
       {
@@ -432,12 +428,7 @@ export const calendarWriteTools = {
       color: z.string().optional().describe('New color category'),
       pageId: z.string().nullable().optional().describe('Page ID to link to'),
       agentTrigger: z.union([
-        z.object({
-          agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
-          prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
-          instructionPageId: z.string().nullable().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
-          contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
-        }),
+        agentTriggerBaseSchema,
         z.null().describe('Pass null to remove an existing agent trigger.'),
       ]).optional().describe('Upsert (object) or remove (null) the event\'s agent trigger. Requires the event to live in a drive.'),
     }),

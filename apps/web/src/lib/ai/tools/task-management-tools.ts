@@ -17,6 +17,7 @@ import {
   createTaskTriggerWorkflow,
   disableTaskTriggers,
 } from '@/lib/workflows/task-trigger-helpers';
+import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
@@ -134,11 +135,7 @@ Agent Triggers:
       position: z.number().optional().describe('Position in the list. For new tasks, defaults to end. For existing tasks (taskId provided), moves the task to this index and re-densifies peer positions.'),
       agentTrigger: z.preprocess(
         normalizeTaskAgentTriggerInput,
-        z.object({
-          agentPageId: z.string().describe('ID of the AI agent page to execute'),
-          prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
-          instructionPageId: z.string().optional().describe('Page ID containing detailed instructions'),
-          contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
+        agentTriggerBaseSchema.extend({
           triggerType: z.enum(['due_date', 'completion']).default('due_date').describe('When to trigger: at due date or on completion'),
         }).optional()
       ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),

@@ -441,7 +441,7 @@ describe('task-trigger-helpers', () => {
       mockQueryPages.findFirst.mockResolvedValueOnce(null);
 
       await expect(createTaskTriggerWorkflow(validParams))
-        .rejects.toThrow('Agent trigger target not found or not an AI agent');
+        .rejects.toThrow('Agent page not found or not an AI agent');
     });
 
     it('given agent page in different drive, should throw', async () => {

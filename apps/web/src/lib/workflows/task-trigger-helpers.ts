@@ -1,17 +1,13 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, isNull } from '@pagespace/db/operators'
-import { pages } from '@pagespace/db/schema/core'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
 
-export interface AgentTriggerInput {
-  agentPageId: string;
-  prompt?: string;
-  instructionPageId?: string;
-  contextPageIds?: string[];
+export interface AgentTriggerInput extends AgentTriggerPayload {
   triggerType: 'due_date' | 'completion';
 }
 
@@ -76,40 +72,14 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
   if (triggerType === 'due_date' && !dueDate) {
     throw new Error('Due date is required for due_date triggers');
   }
-  if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
-    throw new Error('Agent trigger needs either a prompt or instructionPageId');
-  }
 
-  const triggerAgent = await database.query.pages.findFirst({
-    where: and(eq(pages.id, agentTrigger.agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
-    columns: { id: true, driveId: true },
+  await validateAgentTrigger(database, {
+    driveId,
+    agentTrigger,
+    entityLabel: 'task list',
   });
-  if (!triggerAgent) throw new Error('Agent trigger target not found or not an AI agent');
-  if (triggerAgent.driveId !== driveId) throw new Error('Agent must be in the same drive as the task list');
-
-  if (agentTrigger.instructionPageId) {
-    const instrPage = await database.query.pages.findFirst({
-      where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
-      columns: { id: true },
-    });
-    if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
-  }
 
   const contextPageIds = agentTrigger.contextPageIds ?? [];
-  if (contextPageIds.length > 0) {
-    const validPages = await database.query.pages.findMany({
-      where: and(
-        inArray(pages.id, contextPageIds),
-        eq(pages.driveId, driveId),
-        eq(pages.isTrashed, false),
-      ),
-      columns: { id: true },
-    });
-    if (validPages.length !== contextPageIds.length) {
-      throw new Error('Some context pages were not found or are not in the same drive');
-    }
-  }
-
   const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
   const nextRunAt = triggerType === 'due_date' && dueDate ? dueDate : null;
 
