@@ -17,10 +17,16 @@ export async function findZoomConnectionByHost(
   account_id: string,
 ): Promise<ZoomApiResult<ZoomConnection>> {
   try {
+    // Only active connections fire. A disconnected row is retained (tokens
+    // revoked, status='disconnected') but must never run workflows again;
+    // 'expired'/'error' are likewise broken states where downstream work
+    // (transcript token refresh) would fail anyway. Status only leaves
+    // 'active' on disconnect or a failed token refresh.
     const connection = await db.query.zoomConnections.findFirst({
       where: and(
         eq(zoomConnections.zoomUserId, host_id),
         eq(zoomConnections.zoomAccountId, account_id),
+        eq(zoomConnections.status, 'active'),
       ),
     });
     if (!connection) {

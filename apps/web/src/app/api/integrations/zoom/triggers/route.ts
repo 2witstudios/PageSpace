@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { zoomConnections } from '@pagespace/db/schema/zoom';
 import { webhookTriggers } from '@pagespace/db/schema/webhook-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
@@ -85,20 +85,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Only drive owners and admins can manage triggers' }, { status: 403 });
     }
 
-    const [trigger] = await db
+    // Idempotent create: the (connectionId, workflowId, eventType) unique
+    // constraint makes repeated POSTs no-ops rather than duplicate rows.
+    const [inserted] = await db
       .insert(webhookTriggers)
       .values({ workflowId, connectionId: connection.id, provider: 'zoom', eventType })
+      .onConflictDoNothing()
       .returning();
+
+    if (!inserted) {
+      const existing = await db.query.webhookTriggers.findFirst({
+        where: and(
+          eq(webhookTriggers.connectionId, connection.id),
+          eq(webhookTriggers.workflowId, workflowId),
+          eq(webhookTriggers.eventType, eventType),
+        ),
+      });
+      return NextResponse.json({ trigger: existing }, { status: 200 });
+    }
 
     loggers.api.info('Zoom webhook trigger created', { userId, workflowId, eventType });
     auditRequest(request, {
       eventType: 'data.write',
       userId,
       resourceType: 'zoom_webhook_trigger',
-      resourceId: trigger.id,
+      resourceId: inserted.id,
       details: { operation: 'create', workflowId, eventType },
     });
-    return NextResponse.json({ trigger }, { status: 201 });
+    return NextResponse.json({ trigger: inserted }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error creating Zoom webhook trigger', error as Error);
     return NextResponse.json({ error: 'Failed to create trigger' }, { status: 500 });

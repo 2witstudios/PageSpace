@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, index, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { workflows } from './workflows';
@@ -34,6 +34,13 @@ export const webhookTriggers = pgTable('webhook_triggers', {
     workflowIdx: index('webhook_triggers_workflow_id_idx').on(table.workflowId),
     providerEventIdx: index('webhook_triggers_provider_event_idx').on(table.provider, table.eventType, table.isEnabled),
     connectionIdx: index('webhook_triggers_connection_id_idx').on(table.connectionId),
+    // One wiring per (connection, workflow, event) — repeated POSTs are idempotent
+    // (the route uses onConflictDoNothing), preventing duplicate fan-out.
+    connectionWorkflowEventUnique: unique('webhook_triggers_connection_workflow_event_unique').on(
+      table.connectionId,
+      table.workflowId,
+      table.eventType,
+    ),
   };
 });
 

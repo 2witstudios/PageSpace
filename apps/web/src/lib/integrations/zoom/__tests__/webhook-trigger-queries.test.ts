@@ -7,7 +7,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/zoom', () => ({
-  zoomConnections: { zoomUserId: 'zoomUserId', zoomAccountId: 'zoomAccountId' },
+  zoomConnections: { zoomUserId: 'zoomUserId', zoomAccountId: 'zoomAccountId', status: 'status' },
 }));
 
 vi.mock('@pagespace/db/schema/webhook-triggers', () => ({
@@ -93,6 +93,14 @@ describe('findZoomConnectionByHost', () => {
     const result = await findZoomConnectionByHost('host_1', 'acct_1');
 
     expect(result).toEqual({ success: false, error: 'db down' });
+  });
+
+  it('scopes the lookup to active connections so disconnected rows never fire', async () => {
+    mockDb.query.zoomConnections.findFirst.mockResolvedValue(undefined);
+
+    await findZoomConnectionByHost('host_1', 'acct_1');
+
+    expect(eq).toHaveBeenCalledWith('status', 'active');
   });
 });
 
