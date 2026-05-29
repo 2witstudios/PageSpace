@@ -52,7 +52,8 @@ export function validateContentHash(hash: string): ValidationResult<string> {
       : 'Content hash must contain only hex characters (0-9, a-f)';
     return { ok: false, error: { message: msg } };
   }
-  return { ok: true, value: hash };
+  // Canonicalize to lowercase so the same digest always maps to one S3 key.
+  return { ok: true, value: hash.toLowerCase() };
 }
 
 export function validateFileSize(size: number, tier: SubscriptionTier): ValidationResult {

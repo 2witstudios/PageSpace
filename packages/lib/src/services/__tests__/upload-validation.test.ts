@@ -22,6 +22,12 @@ describe('validateContentHash', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('canonicalizes a mixed-case hash to lowercase so it maps to one S3 key', () => {
+    const result = validateContentHash('A'.repeat(64));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe('a'.repeat(64));
+  });
+
   it('returns err for a hash shorter than 64 chars', () => {
     const result = validateContentHash('a'.repeat(63));
     expect(result.ok).toBe(false);

@@ -60,7 +60,11 @@ export function isAllowedContentType(result: MagikaResult): boolean {
   return !BLOCKED_LABELS.has(result.label.toLowerCase());
 }
 
-export type ImageVariants = Record<string, Buffer>;
+export interface ImageVariant {
+  buffer: Buffer;
+  mimeType: string;
+}
+export type ImageVariants = Record<string, ImageVariant>;
 
 export interface VideoMetadata {
   duration?: number;
@@ -82,10 +86,9 @@ export async function extractTextContent(bytes: Buffer, contentType: string): Pr
   if (contentType === 'application/pdf') {
     return extractPdfText(bytes);
   }
-  if (
-    contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-    contentType === 'application/msword'
-  ) {
+  // mammoth only reads OOXML .docx — not legacy binary .doc. .doc falls through
+  // to null and is handled as a non-text (visual) file.
+  if (contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
     const result = await mammoth.extractRawText({ buffer: bytes });
     return cleanText(result.value);
   }
@@ -133,7 +136,7 @@ export async function generateImageVariants(bytes: Buffer): Promise<ImageVariant
     if (preset.format === 'jpeg') pipeline = pipeline.jpeg({ quality: preset.quality, progressive: true, mozjpeg: true });
     else if (preset.format === 'webp') pipeline = pipeline.webp({ quality: preset.quality, effort: 4 });
     else pipeline = pipeline.png({ quality: preset.quality, compressionLevel: 9, adaptiveFiltering: true });
-    variants[name] = await pipeline.toBuffer();
+    variants[name] = { buffer: await pipeline.toBuffer(), mimeType: `image/${preset.format}` };
   }
   return variants;
 }

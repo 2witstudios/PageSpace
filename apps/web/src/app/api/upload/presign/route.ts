@@ -94,22 +94,30 @@ export async function POST(request: Request) {
     );
   }
 
-  await updateActiveUploads(userId, 1);
+  // Once the slot is acquired, any failure before we return must release it,
+  // or the slot leaks until the semaphore's stale-slot sweep.
+  try {
+    await updateActiveUploads(userId, 1);
 
-  if (exists) {
-    return NextResponse.json({ alreadyExists: true, jobId, key });
+    if (exists) {
+      return NextResponse.json({ alreadyExists: true, jobId, key });
+    }
+
+    const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
+    const expiresAt = new Date(Date.now() + PRESIGN_TTL * 1000).toISOString();
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: 'file',
+      resourceId: contentHash,
+      details: { action: 'presign', driveId, filename, fileSize },
+    });
+
+    return NextResponse.json({ url, jobId, key, expiresAt });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await updateActiveUploads(userId, -1).catch(() => undefined);
+    throw err;
   }
-
-  const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
-  const expiresAt = new Date(Date.now() + PRESIGN_TTL * 1000).toISOString();
-
-  auditRequest(request, {
-    eventType: 'data.write',
-    userId,
-    resourceType: 'file',
-    resourceId: contentHash,
-    details: { action: 'presign', driveId, filename, fileSize },
-  });
-
-  return NextResponse.json({ url, jobId, key, expiresAt });
 }

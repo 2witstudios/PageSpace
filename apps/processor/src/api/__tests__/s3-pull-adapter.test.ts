@@ -61,7 +61,10 @@ beforeEach(() => {
   mocks.isAllowedContentType.mockReturnValue(true);
   mocks.detectContentType.mockResolvedValue({ label: 'pdf', mimeType: 'application/pdf', score: 0.9, source: 'magika' });
   mocks.extractTextContent.mockResolvedValue('extracted text');
-  mocks.generateImageVariants.mockResolvedValue({ thumbnail: Buffer.from('t'), preview: Buffer.from('p') });
+  mocks.generateImageVariants.mockResolvedValue({
+    thumbnail: { buffer: Buffer.from('t'), mimeType: 'image/webp' },
+    'ai-chat': { buffer: Buffer.from('j'), mimeType: 'image/jpeg' },
+  });
   mocks.extractVideoMetadata.mockResolvedValue({ duration: 10, width: 640, height: 480 });
   mocks.extractVideoThumbnail.mockResolvedValue(Buffer.from('thumb'));
 });
@@ -114,6 +117,16 @@ describe('runPullPipeline — zero-trust gates', () => {
     expect(mocks.setPageFailed).toHaveBeenCalled();
   });
 
+  it('still marks the page failed when deleting the rejected object throws', async () => {
+    mocks.getOriginal.mockResolvedValue(BYTES);
+    mocks.verifyContentHash.mockReturnValue(false);
+    mocks.deleteOriginal.mockRejectedValue(new Error('S3 down'));
+
+    await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
+
+    expect(mocks.setPageFailed).toHaveBeenCalled();
+  });
+
   it('does not delete or persist when verification passes and type is allowed', async () => {
     mocks.getOriginal.mockResolvedValue(BYTES);
     await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
@@ -139,7 +152,9 @@ describe('runPullPipeline — dispatch by detected type', () => {
     await runPullPipeline({ pageId: 'page-1', contentHash: HASH }, NO_WAIT);
 
     expect(mocks.generateImageVariants).toHaveBeenCalledWith(BYTES);
-    expect(mocks.saveCache).toHaveBeenCalled();
+    // each variant must be cached with its own MIME type, not a hardcoded one
+    expect(mocks.saveCache).toHaveBeenCalledWith(HASH, 'thumbnail', expect.anything(), 'image/webp');
+    expect(mocks.saveCache).toHaveBeenCalledWith(HASH, 'ai-chat', expect.anything(), 'image/jpeg');
     expect(mocks.setPageVisual).toHaveBeenCalledWith('page-1');
   });
 

@@ -28,12 +28,16 @@ export function useDirectUpload({
 }: UseDirectUploadOptions): UseDirectUploadReturn {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  // Ref guard: setIsUploading is async, so a second call can slip in before the
+  // flag commits. The ref blocks re-entrant batches synchronously.
+  const isUploadingRef = useRef(false);
   const onUploadedRef = useRef(onUploaded);
   onUploadedRef.current = onUploaded;
 
   const uploadFiles = useCallback(
     async (files: File[]) => {
-      if (files.length === 0) return;
+      if (files.length === 0 || isUploadingRef.current) return;
+      isUploadingRef.current = true;
       setIsUploading(true);
       setProgress(0);
 
@@ -47,6 +51,7 @@ export function useDirectUpload({
           }
         }
       } finally {
+        isUploadingRef.current = false;
         setIsUploading(false);
         setProgress(0);
       }

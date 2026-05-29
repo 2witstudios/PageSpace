@@ -50,16 +50,18 @@ describe('generateImageVariants', () => {
   it('produces a buffer for each standard preset from real image bytes', async () => {
     const variants = await generateImageVariants(await make300pxPng());
     for (const preset of ['ai-chat', 'ai-vision', 'thumbnail', 'preview']) {
-      expect(Buffer.isBuffer(variants[preset])).toBe(true);
-      expect(variants[preset].length).toBeGreaterThan(0);
+      expect(Buffer.isBuffer(variants[preset].buffer)).toBe(true);
+      expect(variants[preset].buffer.length).toBeGreaterThan(0);
     }
   }, 15000);
 
-  it('encodes the thumbnail preset as a real webp image capped at its max width', async () => {
+  it('reports each variant MIME type matching its encoded format', async () => {
     const variants = await generateImageVariants(await make300pxPng());
-    const meta = await sharp(variants.thumbnail).metadata();
-    expect(meta.format).toBe('webp');
-    expect(meta.width).toBeLessThanOrEqual(200);
+    expect(variants.thumbnail.mimeType).toBe('image/webp');
+    expect(variants['ai-chat'].mimeType).toBe('image/jpeg');
+    const thumbMeta = await sharp(variants.thumbnail.buffer).metadata();
+    expect(thumbMeta.format).toBe('webp');
+    expect(thumbMeta.width).toBeLessThanOrEqual(200);
   }, 15000);
 });
 

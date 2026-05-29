@@ -54,8 +54,8 @@ export async function fetchObjectFromS3(contentHash: string, opts: FetchOptions 
 
 const TEXT_EXTRACTABLE = new Set([
   'application/pdf',
+  // .docx only — mammoth cannot read legacy binary .doc (application/msword)
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/msword',
   'text/plain',
   'text/markdown',
   'text/csv',
@@ -78,8 +78,7 @@ export async function runPullPipeline(job: PullJob, fetchOpts: FetchOptions = {}
   // Zero-trust: the stored bytes must hash to the declared content hash.
   if (!verifyContentHash(bytes, contentHash)) {
     loggers.processor.warn('Content hash mismatch — deleting object', { pageId, contentHash });
-    await contentStore.deleteOriginal(contentHash);
-    await setPageFailed(pageId, 'Stored content does not match the declared hash');
+    await rejectAndFail(pageId, contentHash, 'Stored content does not match the declared hash');
     return;
   }
 
@@ -87,8 +86,7 @@ export async function runPullPipeline(job: PullJob, fetchOpts: FetchOptions = {}
   const detected = await detectContentType(bytes);
   if (!isAllowedContentType(detected)) {
     loggers.processor.warn('Disallowed content type — deleting object', { pageId, contentHash, label: detected.label });
-    await contentStore.deleteOriginal(contentHash);
-    await setPageFailed(pageId, `Disallowed content type: ${detected.label}`);
+    await rejectAndFail(pageId, contentHash, `Disallowed content type: ${detected.label}`);
     return;
   }
 
@@ -100,12 +98,26 @@ export async function runPullPipeline(job: PullJob, fetchOpts: FetchOptions = {}
   }
 }
 
+/**
+ * Delete the rejected object and mark the page failed. The delete is best-effort
+ * — a storage error must not prevent the page from being marked failed, or a
+ * rejected upload would linger in 'processing' forever.
+ */
+async function rejectAndFail(pageId: string, contentHash: string, reason: string): Promise<void> {
+  try {
+    await contentStore.deleteOriginal(contentHash);
+  } catch (err) {
+    loggers.processor.error('Failed to delete rejected object', err instanceof Error ? err : undefined, { pageId, contentHash });
+  }
+  await setPageFailed(pageId, reason);
+}
+
 async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mimeType: string): Promise<void> {
   if (mimeType.startsWith('image/')) {
     const variants = await generateImageVariants(bytes);
     await Promise.all(
-      Object.entries(variants).map(([preset, buf]) =>
-        contentStore.saveCache(contentHash, preset, buf, 'image/webp'),
+      Object.entries(variants).map(([preset, variant]) =>
+        contentStore.saveCache(contentHash, preset, variant.buffer, variant.mimeType),
       ),
     );
     await setPageVisual(pageId);

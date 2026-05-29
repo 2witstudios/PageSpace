@@ -146,7 +146,15 @@ class UploadSemaphore {
   }
 
   verifySlotOwner(slotId: string, userId: string): boolean {
-    return this.activeSlots.get(slotId)?.userId === userId;
+    const slot = this.activeSlots.get(slotId);
+    if (!slot || slot.userId !== userId) return false;
+    // Reject (and reclaim) slots past the timeout rather than waiting for the
+    // once-a-minute sweep — a stale jobId must not still authorize a completion.
+    if (Date.now() - slot.acquiredAt.getTime() > this.slotTimeout) {
+      this.releaseUploadSlot(slotId);
+      return false;
+    }
+    return true;
   }
 
   releaseUserSlots(userId: string): void {

@@ -151,27 +151,34 @@ export async function POST(request: Request) {
   }
 
   uploadSemaphore.releaseUploadSlot(jobId);
-  await updateActiveUploads(userId, -1);
 
+  // The page is committed. Everything below is best-effort bookkeeping — a
+  // failure here must not turn a successful upload into a 500 (which would make
+  // the client retry and duplicate the page).
   try {
-    await enqueueProcessorJob(userId, driveId, newPage.id);
+    await updateActiveUploads(userId, -1);
+
+    try {
+      await enqueueProcessorJob(userId, driveId, newPage.id);
+    } catch (err) {
+      console.error('Failed to enqueue processor job:', err);
+    }
+
+    await updateStorageUsage(userId, fileSize, { pageId: newPage.id, driveId, eventType: 'upload' });
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: 'file',
+      resourceId: contentHash,
+      details: { driveId, pageId: newPage.id },
+    });
+
+    const actorInfo = await getActorInfo(userId);
+    logFileActivity(userId, 'upload', { fileId: contentHash, fileName: title, fileType: mimeType, fileSize, driveId, pageId: newPage.id }, actorInfo);
   } catch (err) {
-    // Processor enqueue failure must not fail the upload response — page record is committed
-    console.error('Failed to enqueue processor job:', err);
+    console.error('Post-commit bookkeeping failed for upload:', err);
   }
-
-  await updateStorageUsage(userId, fileSize, { pageId: newPage.id, driveId, eventType: 'upload' });
-
-  auditRequest(request, {
-    eventType: 'data.write',
-    userId,
-    resourceType: 'file',
-    resourceId: contentHash,
-    details: { driveId, pageId: newPage.id },
-  });
-
-  const actorInfo = await getActorInfo(userId);
-  logFileActivity(userId, 'upload', { fileId: contentHash, fileName: title, fileType: mimeType, fileSize, driveId, pageId: newPage.id }, actorInfo);
 
   return NextResponse.json({ success: true, page: newPage });
 }
