@@ -12,6 +12,7 @@ import {
   getAgentAccessiblePagesInDrive,
   hasAgentDriveMembership,
 } from '@pagespace/lib/permissions/agent-permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 
 export function getAgentPageId(context: ToolExecutionContext): string | undefined {
   return context.chatSource?.type === 'page' ? context.chatSource.agentPageId : undefined;
@@ -61,6 +62,27 @@ export async function canActorAccessDrive(
   const agentPageId = getAgentPageId(context);
   if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
   return getUserDriveAccess(context.userId, driveId);
+}
+
+/**
+ * Whether the actor may manage drive-level resources that require elevated
+ * authority — currently standalone cron workflows. Mirrors the workflows REST
+ * API (apps/web/src/app/api/workflows/route.ts), which gates on owner/admin.
+ *
+ * User actors must be the drive owner or an admin (not merely a member or a
+ * page-permission grantee). Agent actors are gated by their drive membership —
+ * the same authority model used by every other agent write tool — since which
+ * agents may schedule workflows is controlled by the agent's enabledTools
+ * allowlist, configured by an owner/admin.
+ */
+export async function canActorManageDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  const agentPageId = getAgentPageId(context);
+  if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  const access = await checkDriveAccess(driveId, context.userId);
+  return access.isOwner || access.isAdmin;
 }
 
 export async function getActorAccessiblePagesInDrive(

@@ -5,7 +5,7 @@ import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { type ToolExecutionContext } from '../core';
-import { canActorAccessDrive } from './actor-permissions';
+import { canActorManageDrive } from './actor-permissions';
 import { agentTriggerBaseSchema, validateAgentTrigger } from '@/lib/workflows/agent-trigger-shared';
 import {
   validateCronExpression,
@@ -51,7 +51,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
       const userId = ctx?.userId;
       if (!userId) throw new Error('User authentication required');
 
-      if (!(await canActorAccessDrive(ctx, driveId))) {
+      if (!(await canActorManageDrive(ctx, driveId))) {
         throw new Error('No access to the specified drive');
       }
 
@@ -117,7 +117,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
     execute: async ({ driveId }, { experimental_context: context }) => {
       const ctx = context as ToolExecutionContext;
       if (!ctx?.userId) throw new Error('User authentication required');
-      if (!(await canActorAccessDrive(ctx, driveId))) {
+      if (!(await canActorManageDrive(ctx, driveId))) {
         throw new Error('No access to the specified drive');
       }
 
@@ -170,7 +170,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
 
       const [workflow] = await db.select().from(workflows).where(eq(workflows.id, workflowId));
       if (!workflow) throw new Error('Workflow not found');
-      if (!(await canActorAccessDrive(ctx, workflow.driveId))) {
+      if (!(await canActorManageDrive(ctx, workflow.driveId))) {
         throw new Error('No access to this workflow\'s drive');
       }
       if (!workflow.cronExpression) {
@@ -245,7 +245,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
 
       const [workflow] = await db.select().from(workflows).where(eq(workflows.id, workflowId));
       if (!workflow) throw new Error('Workflow not found');
-      if (!(await canActorAccessDrive(ctx, workflow.driveId))) {
+      if (!(await canActorManageDrive(ctx, workflow.driveId))) {
         throw new Error('No access to this workflow\'s drive');
       }
       if (!workflow.cronExpression) {

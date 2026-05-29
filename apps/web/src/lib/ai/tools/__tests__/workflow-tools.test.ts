@@ -6,7 +6,7 @@ const {
   mockSelect, mockSelectWhere,
   mockUpdate, mockUpdateSet,
   mockDelete,
-  mockCanActorAccessDrive,
+  mockCanActorManageDrive,
   mockValidateAgentTrigger,
   mockValidateCron, mockValidateTimezone, mockGetNextRunDate, mockGetHumanReadableCron,
 } = vi.hoisted(() => {
@@ -26,7 +26,7 @@ const {
     mockSelect, mockSelectWhere,
     mockUpdate, mockUpdateSet,
     mockDelete,
-    mockCanActorAccessDrive: vi.fn(),
+    mockCanActorManageDrive: vi.fn(),
     mockValidateAgentTrigger: vi.fn(),
     mockValidateCron: vi.fn(),
     mockValidateTimezone: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock('@pagespace/db/schema/workflows', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } },
 }));
-vi.mock('../actor-permissions', () => ({ canActorAccessDrive: mockCanActorAccessDrive }));
+vi.mock('../actor-permissions', () => ({ canActorManageDrive: mockCanActorManageDrive }));
 vi.mock('@/lib/workflows/agent-trigger-shared', () => ({
   validateAgentTrigger: mockValidateAgentTrigger,
   agentTriggerBaseSchema: z.object({
@@ -93,7 +93,7 @@ describe('create_workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReturning.mockResolvedValue([{ id: 'wf-1' }]);
-    mockCanActorAccessDrive.mockResolvedValue(true);
+    mockCanActorManageDrive.mockResolvedValue(true);
     mockValidateAgentTrigger.mockResolvedValue({ agentPageId: 'agent-1' });
     mockValidateCron.mockReturnValue({ valid: true });
     mockValidateTimezone.mockReturnValue({ valid: true });
@@ -137,7 +137,7 @@ describe('create_workflow', () => {
   });
 
   it('rejects when the actor has no access to the drive', async () => {
-    mockCanActorAccessDrive.mockResolvedValue(false);
+    mockCanActorManageDrive.mockResolvedValue(false);
     await expect(workflowTools.create_workflow.execute!(validArgs, ctx())).rejects.toThrow(/No access to the specified drive/);
     expect(mockInsert).not.toHaveBeenCalled();
   });
@@ -173,7 +173,7 @@ const TASK_BACKED = { ...STANDALONE, id: 'wf-2', cronExpression: null };
 describe('list_workflows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCanActorAccessDrive.mockResolvedValue(true);
+    mockCanActorManageDrive.mockResolvedValue(true);
     mockGetHumanReadableCron.mockReturnValue('At 09:00 AM, Monday through Friday');
     mockSelectWhere.mockResolvedValue([STANDALONE]);
   });
@@ -189,7 +189,7 @@ describe('list_workflows', () => {
   });
 
   it('rejects when the actor cannot access the drive', async () => {
-    mockCanActorAccessDrive.mockResolvedValue(false);
+    mockCanActorManageDrive.mockResolvedValue(false);
     await expect(workflowTools.list_workflows.execute!({ driveId: 'drive-1' }, ctx())).rejects.toThrow(/No access/);
   });
 });
@@ -197,7 +197,7 @@ describe('list_workflows', () => {
 describe('update_workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCanActorAccessDrive.mockResolvedValue(true);
+    mockCanActorManageDrive.mockResolvedValue(true);
     mockValidateAgentTrigger.mockResolvedValue({ agentPageId: 'agent-1' });
     mockValidateCron.mockReturnValue({ valid: true });
     mockValidateTimezone.mockReturnValue({ valid: true });
@@ -239,7 +239,7 @@ describe('update_workflow', () => {
 describe('delete_workflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCanActorAccessDrive.mockResolvedValue(true);
+    mockCanActorManageDrive.mockResolvedValue(true);
     mockSelectWhere.mockResolvedValue([STANDALONE]);
   });
 
