@@ -24,6 +24,7 @@ import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { TaskRenderer } from './TaskRenderer';
+import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { ActionResultRenderer } from './ActionResultRenderer';
 import { DriveListRenderer } from './DriveListRenderer';
 import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
@@ -839,6 +840,6 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
 
   if (toolName === 'tool_search') return null;
 
-  if (toolName === 'update_task') return <TaskRenderer part={resolvedPart} />;
+  if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });

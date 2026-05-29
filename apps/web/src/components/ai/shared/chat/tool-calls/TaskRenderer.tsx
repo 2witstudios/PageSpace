@@ -19,7 +19,7 @@ import { ExpandableTaskItem } from '../ExpandableTaskItem';
 
 interface TaskManagementToolOutput {
   success: boolean;
-  action?: 'created' | 'updated';
+  action?: 'created' | 'updated' | 'deleted';
   taskList?: TaskList;
   tasks?: Task[];
   task?: {
@@ -94,9 +94,10 @@ export const TaskRenderer: React.FC<TaskRendererProps> = memo(function TaskRende
 
     const action = parsedOutput.action || 'updated';
     const taskTitle = parsedOutput.task?.title;
+    const actionVerb = action === 'created' ? 'Created' : action === 'deleted' ? 'Deleted' : 'Updated';
 
     if (taskTitle) {
-      return `${action === 'created' ? 'Created' : 'Updated'} task: "${taskTitle}"`;
+      return `${actionVerb} task: "${taskTitle}"`;
     }
 
     if (parsedOutput.tasks?.length) {
