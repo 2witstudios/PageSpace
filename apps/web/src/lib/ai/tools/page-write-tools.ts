@@ -898,6 +898,175 @@ export const pageWriteTools = {
   }),
 
   /**
+   * Move a page to trash (soft delete)
+   */
+  trash_page: tool({
+    description: 'Move a page to trash (soft delete). Optionally trash all child pages recursively with withChildren.',
+    inputSchema: z.object({
+      id: z.string().describe('The unique ID of the page to trash'),
+      title: z.string().describe('The page title for display context'),
+      withChildren: z.boolean().optional().default(false).describe('Whether to trash all children recursively'),
+    }),
+    execute: async ({ id, title, withChildren = false }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const { page, childrenCount } = await trashPage(userId, id, withChildren, context as ToolExecutionContext);
+
+        return {
+          success: true,
+          type: 'page',
+          id: page.id,
+          title: page.title,
+          pageType: page.type,
+          childrenCount: withChildren ? childrenCount : undefined,
+          message: withChildren
+            ? `Successfully moved "${page.title}" and ${childrenCount} children to trash`
+            : `Successfully moved "${page.title}" to trash`,
+        };
+      } catch (error) {
+        pageWriteLogger.error('Failed to trash page', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(id),
+          title,
+        });
+        throw new Error(`Failed to trash page${title ? ` "${title}"` : ''}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Move a drive (workspace) to trash — destructive, requires name confirmation
+   */
+  trash_drive: tool({
+    description: 'Move an entire drive (workspace) to trash. This is destructive and affects all pages in the drive. Requires confirmDriveName to exactly match the drive name as a safety confirmation.',
+    inputSchema: z.object({
+      id: z.string().describe('The unique ID of the drive to trash'),
+      confirmDriveName: z.string().describe('The exact name of the drive — REQUIRED confirmation to prevent accidental drive deletion'),
+    }),
+    execute: async ({ id, confirmDriveName }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        if (!confirmDriveName) {
+          throw new Error('Drive name confirmation is required for trashing drives (confirmDriveName parameter)');
+        }
+        const drive = await trashDrive(userId, id, confirmDriveName);
+
+        // Log activity for AI-generated drive trash (fire-and-forget)
+        logDriveActivityAsync(userId, 'trash', {
+          id: drive.id,
+          name: drive.name,
+        }, context as ToolExecutionContext, {
+          previousValues: { isTrashed: false },
+          newValues: { isTrashed: true },
+        });
+
+        return {
+          success: true,
+          type: 'drive',
+          id: drive.id,
+          name: drive.name,
+          slug: drive.slug,
+          message: `Successfully moved workspace "${drive.name}" to trash`,
+          warning: 'The drive and all its pages are now inaccessible but can be restored',
+        };
+      } catch (error) {
+        pageWriteLogger.error('Failed to trash drive', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          driveId: maskIdentifier(id),
+        });
+        throw new Error(`Failed to trash drive: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Restore a page from trash
+   */
+  restore_page: tool({
+    description: 'Restore a trashed page back to its original location.',
+    inputSchema: z.object({
+      id: z.string().describe('The unique ID of the page to restore'),
+    }),
+    execute: async ({ id }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const page = await restorePage(userId, id, context as ToolExecutionContext);
+
+        return {
+          success: true,
+          type: 'page',
+          id: page.id,
+          title: page.title,
+          pageType: page.type,
+          message: `Successfully restored "${page.title}" from trash`,
+        };
+      } catch (error) {
+        pageWriteLogger.error('Failed to restore page', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(id),
+        });
+        throw new Error(`Failed to restore page: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Restore a drive (workspace) from trash
+   */
+  restore_drive: tool({
+    description: 'Restore a trashed drive (workspace) back to active state.',
+    inputSchema: z.object({
+      id: z.string().describe('The unique ID of the drive to restore'),
+    }),
+    execute: async ({ id }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const drive = await restoreDrive(userId, id);
+
+        // Log activity for AI-generated drive restore (fire-and-forget)
+        logDriveActivityAsync(userId, 'restore', {
+          id: drive.id,
+          name: drive.name,
+        }, context as ToolExecutionContext, {
+          previousValues: { isTrashed: true },
+          newValues: { isTrashed: false },
+        });
+
+        return {
+          success: true,
+          type: 'drive',
+          id: drive.id,
+          name: drive.name,
+          slug: drive.slug,
+          message: `Successfully restored workspace "${drive.name}" from trash`,
+        };
+      } catch (error) {
+        pageWriteLogger.error('Failed to restore drive', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          driveId: maskIdentifier(id),
+        });
+        throw new Error(`Failed to restore drive: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
    * Move a page to a different parent or reorder position
    */
   move_page: tool({
