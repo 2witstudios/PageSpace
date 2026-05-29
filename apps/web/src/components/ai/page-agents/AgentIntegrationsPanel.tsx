@@ -57,11 +57,24 @@ const activeBundleId = (
 ): string | null =>
   bundles.find((b) => setsEqual(allowed, new Set(bundleToolIds(b, tools))))?.id ?? null;
 
-/** Plain-English summary of what the agent can do with the enabled tools. */
-const capabilitySummary = (tools: ProviderTool[], allowed: Set<string>): string => {
-  const enabled = tools.filter((t) => allowed.has(t.id));
+/**
+ * Plain-English summary of what the agent can actually do. When read-only mode
+ * is on, the runtime gate drops non-read tools, so the summary mirrors that and
+ * counts only read tools — otherwise selecting a write bundle while read-only is
+ * on would misleadingly claim write access the agent can't exercise.
+ */
+const capabilitySummary = (
+  tools: ProviderTool[],
+  allowed: Set<string>,
+  readOnly: boolean
+): string => {
+  const enabled = tools.filter(
+    (t) => allowed.has(t.id) && (!readOnly || t.category === 'read')
+  );
   if (enabled.length === 0) {
-    return 'No tools enabled — this agent can’t use the integration.';
+    return readOnly
+      ? 'Read-only mode is on and no read tools are enabled — this agent can’t use the integration.'
+      : 'No tools enabled — this agent can’t use the integration.';
   }
   const names = enabled.map((t) => t.name);
   const shown = names.slice(0, 6).join(', ');
@@ -335,7 +348,7 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                         ) : (
                           <>
                             <p className="text-xs text-muted-foreground">
-                              {capabilitySummary(tools, allowed)}
+                              {capabilitySummary(tools, allowed, grant.readOnly)}
                             </p>
                             <div className="space-y-3">
                               {CATEGORY_ORDER.map((category) => {

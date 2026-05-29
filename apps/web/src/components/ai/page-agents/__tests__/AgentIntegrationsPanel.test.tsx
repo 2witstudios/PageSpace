@@ -603,4 +603,19 @@ describe('AgentIntegrationsPanel bundle presets', () => {
 
     expect(screen.queryByText('Custom')).not.toBeInTheDocument();
   });
+
+  it('omits write tools from the capability summary when read-only mode is on', () => {
+    const readOnlyWithWrite: SafeGrant = {
+      ...grantReadOnlyBundle,
+      id: 'grant-ro',
+      readOnly: true,
+      allowedTools: ['create_issue', 'list_repos'],
+    };
+    mockHooksDefault({ userConnections: [activeConnection], grants: [readOnlyWithWrite] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    const summary = screen.getByText(/this agent can use:/i);
+    expect(summary).toHaveTextContent('list_repos');
+    expect(summary).not.toHaveTextContent('create_issue');
+  });
 });
