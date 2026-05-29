@@ -7,6 +7,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders } from '@pagespace/lib/integrations/repositories/provider-repository';
 import { builtinProviderList } from '@pagespace/lib/integrations/providers/builtin-providers';
 
+import { sanitizeConnectMetadata } from '@/lib/integrations/connect-metadata';
+
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -62,19 +64,25 @@ export async function GET(request: Request) {
       });
     }
 
-    // Strip config details for listing (security)
-    const safeProviders = providers.map((p) => ({
-      id: p.id,
-      slug: p.slug,
-      name: p.name,
-      description: p.description,
-      iconUrl: p.iconUrl,
-      documentationUrl: p.documentationUrl,
-      providerType: p.providerType,
-      isSystem: p.isSystem,
-      enabled: p.enabled,
-      createdAt: p.createdAt,
-    }));
+    // Strip config details for listing (security), but surface the two
+    // connect-time fields the dialog needs to explain what is being granted.
+    const safeProviders = providers.map((p) => {
+      const { oauthScopeDescriptions, connectNotes } = sanitizeConnectMetadata(p.config);
+      return {
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        description: p.description,
+        iconUrl: p.iconUrl,
+        documentationUrl: p.documentationUrl,
+        providerType: p.providerType,
+        isSystem: p.isSystem,
+        enabled: p.enabled,
+        createdAt: p.createdAt,
+        oauthScopeDescriptions,
+        connectNotes,
+      };
+    });
 
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'integration_provider', resourceId: 'list', details: { providerCount: safeProviders.length } });
 

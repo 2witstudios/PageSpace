@@ -7,14 +7,16 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listGrantsByAgent, createGrant, findGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
-import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
-import type { ToolDefinition } from '@pagespace/lib/integrations/types';
+import { getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+import type { ToolDefinition, ToolBundle } from '@pagespace/lib/integrations/types';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 type SafeProviderTool = Pick<ToolDefinition, 'id' | 'name' | 'description' | 'category'>;
+type SafeProviderBundle = Pick<ToolBundle, 'id' | 'name' | 'description' | 'toolIds' | 'recommended'>;
 
 const VALID_CATEGORIES: ReadonlySet<ToolDefinition['category']> = new Set([
   'read',
@@ -31,6 +33,15 @@ const isWellFormedTool = (t: unknown): t is ToolDefinition =>
   typeof (t as ToolDefinition).description === 'string' &&
   VALID_CATEGORIES.has((t as ToolDefinition).category);
 
+const isWellFormedBundle = (b: unknown): b is ToolBundle =>
+  !!b &&
+  typeof b === 'object' &&
+  typeof (b as ToolBundle).id === 'string' &&
+  typeof (b as ToolBundle).name === 'string' &&
+  typeof (b as ToolBundle).description === 'string' &&
+  Array.isArray((b as ToolBundle).toolIds) &&
+  (b as ToolBundle).toolIds.every((id) => typeof id === 'string');
+
 const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
   const rawTools = (config as { tools?: unknown } | null)?.tools;
   if (!Array.isArray(rawTools)) return [];
@@ -42,9 +53,55 @@ const sanitizeProviderTools = (config: unknown): SafeProviderTool[] => {
   }));
 };
 
+const sanitizeProviderBundles = (config: unknown): SafeProviderBundle[] => {
+  const rawBundles = (config as { toolBundles?: unknown } | null)?.toolBundles;
+  if (!Array.isArray(rawBundles)) return [];
+  return rawBundles.filter(isWellFormedBundle).map((b) => ({
+    id: b.id,
+    name: b.name,
+    description: b.description,
+    toolIds: b.toolIds,
+    recommended: b.recommended,
+  }));
+};
+
+/**
+ * Tools a freshly enabled integration should grant when the caller does not
+ * specify any: the provider's recommended bundle (Read-only for GitHub), or its
+ * first bundle, falling back to null (all non-dangerous tools) for providers
+ * with no bundles. Starting least-privilege also means agents load fewer tools.
+ *
+ * Dangerous tools are never auto-granted as a default — enabling one must always
+ * be an explicit human choice — so they are stripped even if a bundle lists them.
+ */
+const defaultAllowedToolsForProvider = (config: unknown): string[] | null => {
+  const bundles = sanitizeProviderBundles(config);
+  if (bundles.length === 0) return null;
+  const preferred = bundles.find((b) => b.recommended) ?? bundles[0];
+  const dangerous = new Set(
+    sanitizeProviderTools(config)
+      .filter((t) => t.category === 'dangerous')
+      .map((t) => t.id)
+  );
+  return preferred.toolIds.filter((id) => !dangerous.has(id));
+};
+
+/**
+ * Resolve the config to read tools/bundles from. Prefer the canonical builtin
+ * definition (always current, carries toolBundles) over the persisted DB config,
+ * which on upgraded installs may lack bundles or carry stale tool names until
+ * GET /api/integrations/providers refreshes it. Falls back to the DB config for
+ * custom (non-builtin) providers.
+ */
+const resolveProviderConfig = (
+  provider: { slug: string; config: unknown } | null | undefined
+): unknown => (provider ? getBuiltinProvider(provider.slug) ?? provider.config : null);
+
 const createGrantSchema = z.object({
   connectionId: z.string().min(1),
-  allowedTools: z.array(z.string()).nullable().optional().default(null),
+  // Omitted (undefined) → default to the provider's recommended bundle.
+  // Explicit null → all non-dangerous tools (legacy behaviour, caller's choice).
+  allowedTools: z.array(z.string()).nullable().optional(),
   deniedTools: z.array(z.string()).nullable().optional().default(null),
   readOnly: z.boolean().optional().default(false),
   rateLimitOverride: z.object({
@@ -76,26 +133,33 @@ export async function GET(
     const grants = await listGrantsByAgent(db, agentId);
 
     return NextResponse.json({
-      grants: grants.map((g) => ({
-        id: g.id,
-        agentId: g.agentId,
-        connectionId: g.connectionId,
-        allowedTools: g.allowedTools,
-        deniedTools: g.deniedTools,
-        readOnly: g.readOnly,
-        rateLimitOverride: g.rateLimitOverride,
-        createdAt: g.createdAt,
-        connection: g.connection ? {
-          id: g.connection.id,
-          name: g.connection.name,
-          status: g.connection.status,
-          provider: g.connection.provider ? {
-            slug: g.connection.provider.slug,
-            name: g.connection.provider.name,
-            tools: sanitizeProviderTools(g.connection.provider.config),
+      grants: grants.map((g) => {
+        const provider = g.connection?.provider ?? null;
+        // The per-agent panel reads this, so presets must show immediately after
+        // deploy — use the canonical builtin config rather than possibly-stale DB.
+        const providerConfig = resolveProviderConfig(provider);
+        return {
+          id: g.id,
+          agentId: g.agentId,
+          connectionId: g.connectionId,
+          allowedTools: g.allowedTools,
+          deniedTools: g.deniedTools,
+          readOnly: g.readOnly,
+          rateLimitOverride: g.rateLimitOverride,
+          createdAt: g.createdAt,
+          connection: g.connection ? {
+            id: g.connection.id,
+            name: g.connection.name,
+            status: g.connection.status,
+            provider: provider ? {
+              slug: provider.slug,
+              name: provider.name,
+              tools: sanitizeProviderTools(providerConfig),
+              toolBundles: sanitizeProviderBundles(providerConfig),
+            } : null,
           } : null,
-        } : null,
-      })),
+        };
+      }),
     });
   } catch (error) {
     loggers.api.error('Error listing agent integration grants:', error as Error);
@@ -132,8 +196,9 @@ export async function POST(
 
     const { connectionId, allowedTools, deniedTools, readOnly, rateLimitOverride } = validation.data;
 
-    // Verify connection exists and is active
-    const connection = await getConnectionById(db, connectionId);
+    // Verify connection exists and is active (provider eager-loaded so we can
+    // derive the default bundle below).
+    const connection = await getConnectionWithProvider(db, connectionId);
     if (!connection) {
       return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
     }
@@ -159,10 +224,17 @@ export async function POST(
       return NextResponse.json({ error: 'Grant already exists for this connection' }, { status: 409 });
     }
 
+    // Without the canonical config, the default would fall back to null (all
+    // non-dangerous tools) on upgraded installs instead of the Read-only bundle.
+    const resolvedAllowedTools =
+      allowedTools === undefined
+        ? defaultAllowedToolsForProvider(resolveProviderConfig(connection.provider))
+        : allowedTools;
+
     const grant = await createGrant(db, {
       agentId,
       connectionId,
-      allowedTools,
+      allowedTools: resolvedAllowedTools,
       deniedTools,
       readOnly,
       rateLimitOverride,

@@ -72,7 +72,7 @@ const grantWithTools: SafeGrant = {
   readOnly: false,
   rateLimitOverride: null,
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools, toolBundles: [] } },
 };
 
 const grantNoTools: SafeGrant = {
@@ -84,7 +84,7 @@ const grantNoTools: SafeGrant = {
   readOnly: true,
   rateLimitOverride: { requestsPerMinute: 30 },
   createdAt: '2025-01-01T00:00:00Z',
-  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools } },
+  connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: { slug: 'github', name: 'GitHub', tools: githubProviderTools, toolBundles: [] } },
 };
 
 function mockHooksDefault(overrides: {
@@ -300,6 +300,7 @@ describe('AgentIntegrationsPanel', () => {
             ...githubProviderTools,
             { id: 'delete_repo', name: 'delete_repo', description: 'Delete a repository', category: 'dangerous' },
           ],
+          toolBundles: [],
         },
       },
     };
@@ -434,7 +435,7 @@ describe('AgentIntegrationsPanel', () => {
         id: 'conn-1',
         name: 'GitHub Integration',
         status: 'active',
-        provider: { slug: 'github', name: 'GitHub', tools: [] },
+        provider: { slug: 'github', name: 'GitHub', tools: [], toolBundles: [] },
       },
     };
     mockHooksDefault({
@@ -525,5 +526,96 @@ describe('AgentIntegrationsPanel', () => {
     render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
     expect(screen.getByText('User')).toBeInTheDocument();
     expect(screen.getByText('Drive')).toBeInTheDocument();
+  });
+});
+
+describe('AgentIntegrationsPanel bundle presets', () => {
+  const bundles = [
+    { id: 'read_only', name: 'Read-only', description: 'Reads only', toolIds: ['list_repos'], recommended: true },
+    { id: 'full', name: 'Full access', description: 'Everything', toolIds: ['create_issue', 'list_repos'] },
+  ];
+
+  const providerWithBundles = {
+    slug: 'github',
+    name: 'GitHub',
+    tools: githubProviderTools,
+    toolBundles: bundles,
+  };
+
+  const grantReadOnlyBundle: SafeGrant = {
+    id: 'grant-b',
+    agentId: 'agent-1',
+    connectionId: 'conn-1',
+    allowedTools: ['list_repos'],
+    deniedTools: null,
+    readOnly: false,
+    rateLimitOverride: null,
+    createdAt: '2025-01-01T00:00:00Z',
+    connection: { id: 'conn-1', name: 'GitHub Integration', status: 'active', provider: providerWithBundles },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders bundle preset buttons and category groups instead of Select All', () => {
+    mockHooksDefault({ userConnections: [activeConnection], grants: [grantReadOnlyBundle] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.getByRole('button', { name: 'Read-only' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Full access' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'None' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^select all$/i })).not.toBeInTheDocument();
+    // Category group headers
+    expect(screen.getByText('Read')).toBeInTheDocument();
+    expect(screen.getByText('Write')).toBeInTheDocument();
+    // Capability preview
+    expect(screen.getByText(/this agent can use:/i)).toBeInTheDocument();
+  });
+
+  it('applies a bundle\'s tool ids when its preset is clicked', async () => {
+    mockHooksDefault({ userConnections: [activeConnection], grants: [grantReadOnlyBundle] });
+    mockPut.mockResolvedValue({});
+    const user = userEvent.setup();
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: 'Full access' }));
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith(
+        '/api/agents/agent-1/integrations/grant-b',
+        expect.objectContaining({ allowedTools: ['create_issue', 'list_repos'] })
+      );
+    });
+  });
+
+  it('shows a Custom badge when the allowed set matches no bundle', () => {
+    const customGrant: SafeGrant = { ...grantReadOnlyBundle, id: 'grant-c', allowedTools: ['create_issue'] };
+    mockHooksDefault({ userConnections: [activeConnection], grants: [customGrant] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.getByText('Custom')).toBeInTheDocument();
+  });
+
+  it('does not show a Custom badge when the allowed set matches a bundle', () => {
+    mockHooksDefault({ userConnections: [activeConnection], grants: [grantReadOnlyBundle] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    expect(screen.queryByText('Custom')).not.toBeInTheDocument();
+  });
+
+  it('omits write tools from the capability summary when read-only mode is on', () => {
+    const readOnlyWithWrite: SafeGrant = {
+      ...grantReadOnlyBundle,
+      id: 'grant-ro',
+      readOnly: true,
+      allowedTools: ['create_issue', 'list_repos'],
+    };
+    mockHooksDefault({ userConnections: [activeConnection], grants: [readOnlyWithWrite] });
+    render(<AgentIntegrationsPanel pageId="agent-1" driveId="drive-1" />);
+
+    const summary = screen.getByText(/this agent can use:/i);
+    expect(summary).toHaveTextContent('list_repos');
+    expect(summary).not.toHaveTextContent('create_issue');
   });
 });

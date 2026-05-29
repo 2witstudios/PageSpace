@@ -23,9 +23,64 @@ interface AgentIntegrationsPanelProps {
 }
 
 type ProviderTool = NonNullable<NonNullable<SafeGrant['connection']>['provider']>['tools'][number];
+type ProviderBundle = NonNullable<NonNullable<SafeGrant['connection']>['provider']>['toolBundles'][number];
+type ToolCategory = ProviderTool['category'];
 
 const getProviderTools = (grant: SafeGrant): ProviderTool[] =>
   grant.connection?.provider?.tools ?? [];
+
+const getProviderBundles = (grant: SafeGrant): ProviderBundle[] =>
+  grant.connection?.provider?.toolBundles ?? [];
+
+const CATEGORY_ORDER: ToolCategory[] = ['read', 'write', 'admin', 'dangerous'];
+const CATEGORY_LABELS: Record<ToolCategory, string> = {
+  read: 'Read',
+  write: 'Write',
+  admin: 'Admin',
+  dangerous: 'Dangerous',
+};
+
+/** Bundle tool ids that actually exist on the provider's current tool list. */
+const bundleToolIds = (bundle: ProviderBundle, tools: ProviderTool[]): string[] => {
+  const valid = new Set(tools.map((t) => t.id));
+  return bundle.toolIds.filter((id) => valid.has(id));
+};
+
+const setsEqual = (a: Set<string>, b: Set<string>): boolean =>
+  a.size === b.size && [...a].every((x) => b.has(x));
+
+/** The id of the bundle exactly matching the allowed set, or null ("Custom"). */
+const activeBundleId = (
+  bundles: ProviderBundle[],
+  tools: ProviderTool[],
+  allowed: Set<string>
+): string | null =>
+  bundles.find((b) => setsEqual(allowed, new Set(bundleToolIds(b, tools))))?.id ?? null;
+
+/**
+ * Plain-English summary of what the agent can actually do. When read-only mode
+ * is on, the runtime gate drops non-read tools, so the summary mirrors that and
+ * counts only read tools — otherwise selecting a write bundle while read-only is
+ * on would misleadingly claim write access the agent can't exercise.
+ */
+const capabilitySummary = (
+  tools: ProviderTool[],
+  allowed: Set<string>,
+  readOnly: boolean
+): string => {
+  const enabled = tools.filter(
+    (t) => allowed.has(t.id) && (!readOnly || t.category === 'read')
+  );
+  if (enabled.length === 0) {
+    return readOnly
+      ? 'Read-only mode is on and no read tools are enabled — this agent can’t use the integration.'
+      : 'No tools enabled — this agent can’t use the integration.';
+  }
+  const names = enabled.map((t) => t.name);
+  const shown = names.slice(0, 6).join(', ');
+  const extra = names.length > 6 ? `, +${names.length - 6} more` : '';
+  return `This agent can use: ${shown}${extra}.`;
+};
 
 // When allowedTools is null, the runtime gate (is-tool-allowed.ts) permits every
 // non-dangerous tool but blocks dangerous ones until they are explicitly listed.
@@ -138,6 +193,11 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
     handleUpdateGrant(grant, { allowedTools: [] });
   };
 
+  const handleApplyBundle = (grant: SafeGrant, bundle: ProviderBundle) => {
+    const tools = getProviderTools(grant);
+    handleUpdateGrant(grant, { allowedTools: bundleToolIds(bundle, tools) });
+  };
+
   return (
     <Card className="mt-4">
       <CardHeader>
@@ -175,6 +235,8 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
               const isActive = connection.status === 'active';
               const tools = grant ? getProviderTools(grant) : [];
               const allowed = grant ? getEffectiveAllowed(grant, tools) : new Set<string>();
+              const bundles = grant ? getProviderBundles(grant) : [];
+              const activeBundle = grant ? activeBundleId(bundles, tools, allowed) : null;
 
               return (
                 <div key={connection.id} className="border rounded-lg">
@@ -220,64 +282,113 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                         />
                       </div>
 
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-2">
                           <Label className="text-xs">Tools</Label>
-                          <div className="flex space-x-2">
+                          {bundles.length === 0 && (
+                            <div className="flex space-x-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={updatingGrant === grant.id || tools.length === 0}
+                                onClick={() => handleSelectAllTools(grant)}
+                              >
+                                Select All
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={updatingGrant === grant.id || tools.length === 0}
+                                onClick={() => handleDeselectAllTools(grant)}
+                              >
+                                Deselect All
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+
+                        {bundles.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {bundles.map((bundle) => (
+                              <Button
+                                key={bundle.id}
+                                type="button"
+                                size="sm"
+                                variant={activeBundle === bundle.id ? 'default' : 'outline'}
+                                disabled={updatingGrant === grant.id || tools.length === 0}
+                                onClick={() => handleApplyBundle(grant, bundle)}
+                                title={bundle.description}
+                              >
+                                {bundle.name}
+                              </Button>
+                            ))}
                             <Button
                               type="button"
-                              variant="outline"
                               size="sm"
-                              disabled={updatingGrant === grant.id || tools.length === 0}
-                              onClick={() => handleSelectAllTools(grant)}
-                            >
-                              Select All
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
+                              variant={allowed.size === 0 ? 'default' : 'outline'}
                               disabled={updatingGrant === grant.id || tools.length === 0}
                               onClick={() => handleDeselectAllTools(grant)}
                             >
-                              Deselect All
+                              None
                             </Button>
+                            {activeBundle === null && allowed.size > 0 && (
+                              <Badge variant="secondary" className="text-[10px]">
+                                Custom
+                              </Badge>
+                            )}
                           </div>
-                        </div>
+                        )}
+
                         {tools.length === 0 ? (
                           <p className="text-xs text-muted-foreground py-2">
                             This integration does not expose any tools.
                           </p>
                         ) : (
                           <>
-                            <div className="space-y-2">
-                              {tools.map((tool) => {
-                                const id = `tool-${grant.id}-${tool.id}`;
+                            <p className="text-xs text-muted-foreground">
+                              {capabilitySummary(tools, allowed, grant.readOnly)}
+                            </p>
+                            <div className="space-y-3">
+                              {CATEGORY_ORDER.map((category) => {
+                                const toolsInCategory = tools.filter((t) => t.category === category);
+                                if (toolsInCategory.length === 0) return null;
                                 return (
-                                  <div
-                                    key={tool.id}
-                                    className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50"
-                                  >
-                                    <Checkbox
-                                      id={id}
-                                      checked={allowed.has(tool.id)}
-                                      disabled={updatingGrant === grant.id}
-                                      onCheckedChange={(checked) =>
-                                        handleToggleTool(grant, tool.id, checked === true)
-                                      }
-                                      className="mt-1"
-                                    />
-                                    <div className="flex-1">
-                                      <label
-                                        htmlFor={id}
-                                        className="text-sm font-medium cursor-pointer"
-                                      >
-                                        {tool.name}
-                                      </label>
-                                      <p className="text-xs text-muted-foreground">
-                                        {tool.description}
-                                      </p>
-                                    </div>
+                                  <div key={category} className="space-y-1">
+                                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                      {CATEGORY_LABELS[category]}
+                                    </p>
+                                    {toolsInCategory.map((tool) => {
+                                      const id = `tool-${grant.id}-${tool.id}`;
+                                      return (
+                                        <div
+                                          key={tool.id}
+                                          className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50"
+                                        >
+                                          <Checkbox
+                                            id={id}
+                                            checked={allowed.has(tool.id)}
+                                            disabled={updatingGrant === grant.id}
+                                            onCheckedChange={(checked) =>
+                                              handleToggleTool(grant, tool.id, checked === true)
+                                            }
+                                            className="mt-1"
+                                          />
+                                          <div className="flex-1">
+                                            <label
+                                              htmlFor={id}
+                                              className="text-sm font-medium cursor-pointer"
+                                            >
+                                              {tool.name}
+                                            </label>
+                                            <p className="text-xs text-muted-foreground">
+                                              {tool.description}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 );
                               })}

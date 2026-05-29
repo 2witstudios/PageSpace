@@ -16,6 +16,7 @@
 - [AI Chat Send Flash Fix](tasks/ai-chat-send-flash-fix.md) — eliminate stream-abort and flash on send; stabilise `chatConfig` deps and extend `invalidateTree` guard to cover all active states.
 - [E2E and Load Testing](tasks/e2e-and-load-testing.md) — Playwright e2e for core user journeys + k6 load scenarios with Grafana dashboard for API latency and Postgres pool monitoring.
 - [Task List Agent Triggers Follow-up](tasks/task-list-agent-triggers-followup.md) — close PR #1177 post-merge gaps: cross-surface discoverability via TaskDetailSheet, page-scoped task broadcasts for collaborative real-time, agent-parity (instructionPageId + contextPageIds) in the trigger dialog, "anchored to" clarity in the page-level Workflows dialog, and small polish + correctness fixes.
+- [GitHub Integration Clarity & Token-Efficiency Redesign](tasks/github-integration-clarity-redesign.md) — shared tool bundles (Read-only / Code review / Issue triage / Full) that drive one-click grant presets and load only needed tools; compact `int__github__list_repos` tool names (drop the random connection-id segment), consistent `list_`/`get_` verbs, redesigned connect dialog (identity + plain-English scopes), and a clear connection → visibility → per-agent-tools scope model.
 
 ## Drive Invites by Email — followups
 

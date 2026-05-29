@@ -120,6 +120,22 @@ export default function IntegrationsSettingsPage() {
         <p className="text-muted-foreground">
           Connect external APIs and services to your AI assistants.
         </p>
+        <div className="mt-4 rounded-lg border bg-muted/40 p-4 text-xs text-muted-foreground space-y-1.5">
+          <p className="font-medium text-foreground">How integrations work</p>
+          <p>
+            <span className="font-medium text-foreground">Connection</span> — sign in once;
+            agents act under your account on that service.
+          </p>
+          <p>
+            <span className="font-medium text-foreground">Visibility</span> — choose which
+            drives may use the connection.
+          </p>
+          <p>
+            <span className="font-medium text-foreground">Per-agent tools</span> — on each AI
+            Chat, pick exactly which tools that agent can use. This is where you cap what an
+            agent can do.
+          </p>
+        </div>
       </div>
 
       <div className="space-y-6">
