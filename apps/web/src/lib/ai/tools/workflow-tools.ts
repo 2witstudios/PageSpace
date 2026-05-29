@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
+import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { type ToolExecutionContext } from '../core';
@@ -105,6 +106,156 @@ The cron expression must not fire more often than every 5 minutes (the polling c
         nextRunAt: nextRunAt.toISOString(),
         summary: `Created workflow "${name}" — ${getHumanReadableCron(cronExpression)} (${tz}). Next run ${nextRunAt.toISOString()}.`,
       };
+    },
+  }),
+
+  list_workflow: tool({
+    description: 'List the standalone cron workflows in a drive. Does not include task- or calendar-bound triggers, which are managed via update_task / calendar tools.',
+    inputSchema: z.object({
+      driveId: z.string().describe('Drive to list workflows for'),
+    }),
+    execute: async ({ driveId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      if (!ctx?.userId) throw new Error('User authentication required');
+      if (!(await canActorAccessDrive(ctx, driveId))) {
+        throw new Error('No access to the specified drive');
+      }
+
+      const rows = await db
+        .select({
+          id: workflows.id,
+          name: workflows.name,
+          agentPageId: workflows.agentPageId,
+          cronExpression: workflows.cronExpression,
+          timezone: workflows.timezone,
+          isEnabled: workflows.isEnabled,
+          nextRunAt: workflows.nextRunAt,
+        })
+        .from(workflows)
+        .where(and(eq(workflows.driveId, driveId), isNotNull(workflows.cronExpression)));
+
+      return {
+        success: true,
+        workflows: rows.map((w) => ({
+          workflowId: w.id,
+          name: w.name,
+          agentPageId: w.agentPageId,
+          schedule: w.cronExpression ? getHumanReadableCron(w.cronExpression) : null,
+          cronExpression: w.cronExpression,
+          timezone: w.timezone,
+          isEnabled: w.isEnabled,
+          nextRunAt: w.nextRunAt ? w.nextRunAt.toISOString() : null,
+        })),
+        summary: `Found ${rows.length} workflow${rows.length === 1 ? '' : 's'} in this drive.`,
+      };
+    },
+  }),
+
+  update_workflow: tool({
+    description: `Update a standalone cron workflow: rename, reschedule (new cronExpression / timezone), pause or resume (isEnabled), or change which agent runs and with what context. Only standalone workflows can be edited here — task- and calendar-bound triggers are managed via their own tools.`,
+    inputSchema: z.object({
+      workflowId: z.string().describe('ID of the workflow to update'),
+      name: z.string().min(1).max(200).optional().describe('New name'),
+      cronExpression: z.string().optional().describe('New cron schedule (min 5-minute interval)'),
+      timezone: z.string().optional().describe('New IANA timezone'),
+      isEnabled: z.boolean().optional().describe('Pause (false) or resume (true) the workflow'),
+      agentTrigger: agentTriggerBaseSchema.partial().optional().describe('Change the agent and/or its prompt, instruction page, or context pages. Omitted fields are left unchanged.'),
+    }),
+    execute: async (
+      { workflowId, name, cronExpression, timezone, isEnabled, agentTrigger },
+      { experimental_context: context },
+    ) => {
+      const ctx = context as ToolExecutionContext;
+      if (!ctx?.userId) throw new Error('User authentication required');
+
+      const [workflow] = await db.select().from(workflows).where(eq(workflows.id, workflowId));
+      if (!workflow) throw new Error('Workflow not found');
+      if (!(await canActorAccessDrive(ctx, workflow.driveId))) {
+        throw new Error('No access to this workflow\'s drive');
+      }
+      if (!workflow.cronExpression) {
+        throw new Error('This workflow is managed by a task or calendar event; edit it there.');
+      }
+
+      const updates: Partial<typeof workflows.$inferInsert> = {};
+
+      if (name !== undefined) updates.name = name;
+      if (isEnabled !== undefined) updates.isEnabled = isEnabled;
+
+      if (agentTrigger) {
+        const merged = {
+          agentPageId: agentTrigger.agentPageId ?? workflow.agentPageId,
+          prompt: agentTrigger.prompt ?? workflow.prompt,
+          instructionPageId:
+            agentTrigger.instructionPageId !== undefined ? agentTrigger.instructionPageId : workflow.instructionPageId,
+          contextPageIds:
+            agentTrigger.contextPageIds !== undefined ? agentTrigger.contextPageIds : (workflow.contextPageIds ?? []),
+        };
+        await validateAgentTrigger(db, { driveId: workflow.driveId, agentTrigger: merged, entityLabel: 'workflow' });
+        updates.agentPageId = merged.agentPageId;
+        updates.prompt = merged.prompt?.trim() || DEFAULT_TRIGGER_PROMPT;
+        updates.instructionPageId = merged.instructionPageId ?? null;
+        updates.contextPageIds = merged.contextPageIds ?? [];
+      }
+
+      const effectiveCron = cronExpression ?? workflow.cronExpression;
+      const effectiveTz = timezone ?? workflow.timezone;
+
+      if (cronExpression !== undefined) {
+        const cronCheck = validateCronExpression(cronExpression);
+        if (!cronCheck.valid) throw new Error(cronCheck.error ?? 'Invalid cron expression');
+        updates.cronExpression = cronExpression;
+      }
+      if (timezone !== undefined) {
+        const tzCheck = validateTimezone(timezone);
+        if (!tzCheck.valid) throw new Error(tzCheck.error ?? `Invalid timezone: ${timezone}`);
+        updates.timezone = timezone;
+      }
+      // Reschedule the next run whenever the schedule or timezone changes, or
+      // when a paused workflow is resumed (a stale nextRunAt may be in the past).
+      if (cronExpression !== undefined || timezone !== undefined || isEnabled === true) {
+        updates.nextRunAt = getNextRunDate(effectiveCron, effectiveTz);
+      }
+
+      await db.update(workflows).set(updates).where(eq(workflows.id, workflowId));
+
+      logger.info('Updated cron workflow', { workflowId, fields: Object.keys(updates) });
+
+      return {
+        success: true,
+        workflowId,
+        schedule: getHumanReadableCron(effectiveCron),
+        timezone: effectiveTz,
+        isEnabled: updates.isEnabled ?? workflow.isEnabled,
+        nextRunAt: updates.nextRunAt ? updates.nextRunAt.toISOString() : (workflow.nextRunAt?.toISOString() ?? null),
+        summary: `Updated workflow ${workflowId}.`,
+      };
+    },
+  }),
+
+  delete_workflow: tool({
+    description: 'Delete a standalone cron workflow. Task- and calendar-bound triggers cannot be deleted here — remove them via their own tools.',
+    inputSchema: z.object({
+      workflowId: z.string().describe('ID of the workflow to delete'),
+    }),
+    execute: async ({ workflowId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      if (!ctx?.userId) throw new Error('User authentication required');
+
+      const [workflow] = await db.select().from(workflows).where(eq(workflows.id, workflowId));
+      if (!workflow) throw new Error('Workflow not found');
+      if (!(await canActorAccessDrive(ctx, workflow.driveId))) {
+        throw new Error('No access to this workflow\'s drive');
+      }
+      if (!workflow.cronExpression) {
+        throw new Error('This workflow is managed by a task or calendar event; remove it there.');
+      }
+
+      await db.delete(workflows).where(eq(workflows.id, workflowId));
+
+      logger.info('Deleted cron workflow', { workflowId, driveId: workflow.driveId });
+
+      return { success: true, workflowId, summary: `Deleted workflow "${workflow.name}".` };
     },
   }),
 };
