@@ -45,7 +45,7 @@ const CATEGORY_MAP: Record<string, string> = {
   list_trash: 'pages', list_conversations: 'pages', read_conversation: 'pages',
   rename_page: 'pages', trash: 'pages', restore: 'pages', move_page: 'pages', edit_sheet_cells: 'pages',
   glob_search: 'search',
-  update_task: 'tasks', get_assigned_tasks: 'tasks',
+  update_task: 'tasks', create_task: 'tasks', delete_task: 'tasks', reorder_task: 'tasks', get_assigned_tasks: 'tasks',
   update_agent_config: 'agents', list_agents: 'agents', multi_drive_list_agents: 'agents', ask_agent: 'agents',
   web_search: 'search',
   get_activity: 'activity',
