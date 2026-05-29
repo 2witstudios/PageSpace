@@ -145,6 +145,10 @@ class UploadSemaphore {
     }
   }
 
+  verifySlotOwner(slotId: string, userId: string): boolean {
+    return this.activeSlots.get(slotId)?.userId === userId;
+  }
+
   releaseUserSlots(userId: string): void {
     const userSlots: string[] = [];
     this.activeSlots.forEach((slot, slotId) => {
