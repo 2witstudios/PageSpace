@@ -3,24 +3,33 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskLists, taskItems, taskStatusConfigs, taskAssignees, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
-import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { broadcastTaskEvent } from '@/lib/websocket';
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { canActorEditPage } from './actor-permissions';
-import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
   syncTaskDueDateTrigger,
   cancelTaskDueDateTrigger,
   fireCompletionTrigger,
   createTaskTriggerWorkflow,
-  disableTaskTriggers,
 } from '@/lib/workflows/task-trigger-helpers';
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
+import {
+  normalizeTaskAgentTriggerInput,
+  getAiContextWithActor,
+  resolveTaskForUpdate,
+  syncTaskAssignees,
+  createTask,
+  deleteTask,
+  reorderTaskPeers,
+  buildTaskListResponse,
+  broadcastTaskUpdated,
+} from './task-helpers';
 
 const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
   todo: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
@@ -28,77 +37,15 @@ const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
   done: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
 };
 
-function normalizeTaskAgentTriggerInput(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return value;
-  }
-
-  const candidate = value as {
-    prompt?: unknown;
-    instructionPageId?: unknown;
-  };
-
-  const prompt = typeof candidate.prompt === 'string' ? candidate.prompt.trim() : '';
-  const instructionPageId = typeof candidate.instructionPageId === 'string' ? candidate.instructionPageId.trim() : '';
-
-  if (!prompt && !instructionPageId) {
-    return undefined;
-  }
-
-  return {
-    ...candidate,
-    ...(prompt ? { prompt } : {}),
-    ...(instructionPageId ? { instructionPageId } : {}),
-  };
-}
-
-// Helper: Extract AI attribution context with actor info for activity logging
-async function getAiContextWithActor(context: ToolExecutionContext) {
-  const actorInfo = await getActorInfo(context.userId);
-  // Build chain metadata (Tier 1)
-  const chainMetadata = {
-    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
-    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
-    ...(context.agentChain?.length && { agentChain: context.agentChain }),
-    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
-  };
-
-  return {
-    ...actorInfo,
-    isAiGenerated: true,
-    aiProvider: context.aiProvider,
-    aiModel: context.aiModel,
-    aiConversationId: context.conversationId,
-    metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
-  };
-}
-
-/**
- * Helper to verify page access for page-linked task lists
- */
-async function verifyPageAccess(context: ToolExecutionContext, pageId: string): Promise<boolean> {
-  return canActorEditPage(context, pageId);
-}
-
 export const taskManagementTools = {
   /**
-   * Update or create a task
-   * - If taskId is provided, updates the existing task
-   * - If taskId is not provided but taskListId or pageId is, creates a new task
+   * Update fields of an existing task (identified by taskId).
+   * Field-only: create/delete/reorder are separate verb tools.
    */
   update_task: tool({
-    description: `Update an existing task, create a new one, delete one, or reorder one on a TASK_LIST page.
+    description: `Update fields of an existing task (identified by taskId). To create a task use create_task; to delete use delete_task; to reorder use reorder_task.
 
-To UPDATE: provide taskId
-To CREATE: provide pageId (of a TASK_LIST page) and title
-To DELETE: provide taskId and delete: true (hard-removes the task and trashes its linked TASK_LIST page; any other field updates passed in the same call are ignored)
-To REORDER: provide taskId and position — moves the existing task to the given index and re-densifies peer positions in the task list. Combine with field updates freely (e.g., status + position in one call).
-
-When creating tasks:
-- A TASK_LIST page is automatically created as a child of the parent TASK_LIST page
-- This linked page stores the task description and any sub-tasks
-- The page title stays synced with the task title
-- DO NOT delete these pages directly - use this tool with delete: true to remove tasks
+Updatable fields: status, priority, assignees (assigneeId/assigneeAgentId/assigneeIds), dueDate, note, title, agentTrigger.
 
 Status:
 - Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
@@ -118,10 +65,8 @@ Agent Triggers:
 - triggerType 'due_date' fires when the due date arrives (requires dueDate)
 - triggerType 'completion' fires when the task is marked done`,
     inputSchema: z.object({
-      taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
-      pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
-      delete: z.boolean().optional().describe('When true (with taskId), hard-deletes the task and trashes its linked TASK_LIST page. Field updates passed in the same call are ignored.'),
-      title: z.string().optional().describe('Task title (required when creating)'),
+      taskId: z.string().optional().describe('ID of the existing task to update. Required — to create a new task use create_task instead.'),
+      title: z.string().optional().describe('New task title (renames the existing task)'),
       status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
       assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user). Legacy single-assignee field.'),
@@ -132,7 +77,6 @@ Agent Triggers:
       })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
-      position: z.number().optional().describe('Position in the list. For new tasks, defaults to end. For existing tasks (taskId provided), moves the task to this index and re-densifies peer positions.'),
       agentTrigger: z.preprocess(
         normalizeTaskAgentTriggerInput,
         agentTriggerBaseSchema.extend({
@@ -141,838 +85,402 @@ Agent Triggers:
       ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, delete: deleteTask, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
+      const { taskId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, agentTrigger } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
         throw new Error('User authentication required');
       }
 
-      // Determine if this is an update, create, or delete operation
-      const isUpdate = !!taskId;
-      const isDelete = isUpdate && deleteTask === true;
-
-      if (!isUpdate && !pageId) {
-        throw new Error('Either taskId (to update) or pageId (to create) must be provided');
-      }
-
-      if (!isUpdate && deleteTask === true) {
-        throw new Error('delete requires a taskId');
-      }
-
-      if (!isUpdate && !title) {
-        throw new Error('Title is required when creating a new task');
+      if (!taskId) {
+        throw new Error('taskId is required to update a task. To create a new task, use create_task.');
       }
 
       try {
-        let taskList: typeof taskLists.$inferSelect | undefined;
-        let resultTask;
+        // taskId resolves the existing task + its owning list
+        const { existingTask, taskList } = await resolveTaskForUpdate(
+          context as ToolExecutionContext,
+          userId,
+          taskId,
+        );
+
+        let resultTask: typeof taskItems.$inferSelect = existingTask;
         let resultTitle = '';
-        let message: string;
 
-        if (isUpdate) {
-          // UPDATE existing task
-          const existingTask = await db.query.taskItems.findFirst({
-            where: eq(taskItems.id, taskId),
-            with: {
-              page: { columns: { title: true, parentId: true } },
-            },
+        // Get driveId for agent validation (if task list has a page)
+        let taskListDriveId: string | undefined;
+        if (taskList.pageId) {
+          const taskListPage = await db.query.pages.findFirst({
+            where: eq(pages.id, taskList.pageId),
+            columns: { driveId: true },
+          });
+          taskListDriveId = taskListPage?.driveId;
+        }
+
+        // Validate assigneeAgentId if provided
+        if (assigneeAgentId) {
+          const agentPage = await db.query.pages.findFirst({
+            where: and(
+              eq(pages.id, assigneeAgentId),
+              eq(pages.type, 'AI_CHAT'),
+              eq(pages.isTrashed, false)
+            ),
+            columns: { id: true, driveId: true },
           });
 
-          if (!existingTask) {
-            throw new Error('Task not found');
+          if (!agentPage) {
+            throw new Error('Invalid agent ID - must be an AI agent page');
           }
 
-          taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.pageId, existingTask.page?.parentId ?? ''),
-          });
-
-          if (!taskList) {
-            throw new Error('Task list not found');
+          if (taskListDriveId && agentPage.driveId !== taskListDriveId) {
+            throw new Error('Agent must be in the same drive as the task list');
           }
+        }
 
-          // Verify permissions
-          if (taskList.pageId) {
-            const hasAccess = await verifyPageAccess(context as ToolExecutionContext, taskList.pageId);
-            if (!hasAccess) {
-              throw new Error('You do not have permission to update tasks on this page');
+        // Fetch status configs for rollup and validation
+        const validConfigs = await db.query.taskStatusConfigs.findMany({
+          where: eq(taskStatusConfigs.taskListId, taskList.id),
+          columns: { slug: true, group: true },
+        });
+
+        // Build update object — title is owned by the linked page, synced separately below.
+        const updateData: Partial<typeof taskItems.$inferInsert> = {};
+        let trimmedTitle: string | undefined;
+        if (title !== undefined) {
+          if (typeof title !== 'string' || title.trim().length === 0) {
+            throw new Error('Title cannot be empty');
+          }
+          trimmedTitle = title.trim();
+        }
+        if (status !== undefined) {
+          if (validConfigs.length > 0) {
+            const matched = validConfigs.find(c => c.slug === status);
+            if (!matched) {
+              throw new Error(`Invalid status "${status}". Valid: ${validConfigs.map(c => c.slug).join(', ')}`);
             }
-          } else if (taskList.userId !== userId) {
-            throw new Error('You do not have permission to update this task');
+            updateData.status = status;
+            updateData.completedAt = matched.group === 'done' ? new Date() : null;
+          } else {
+            updateData.status = status;
+            updateData.completedAt = status === 'completed' ? new Date() : null;
           }
-
-          // DELETE branch — short-circuits all field updates
-          if (isDelete) {
-            const taskListPageId = taskList.pageId;
-            const taskListId = taskList.id;
-            const linkedPageId = existingTask.pageId;
-            const existingTitle = existingTask.page?.title ?? '';
-            const actorInfo = await getActorInfo(userId);
-
-            // disableTaskTriggers MUST run BEFORE the taskItems delete:
-            // task_triggers has ON DELETE CASCADE on taskItemId, so deleting
-            // the task first wipes the trigger rows and the helper's SELECT
-            // returns empty — leaking orphan workflows rows.
-            await disableTaskTriggers(taskId, 'Task deleted via update_task');
-
-            // Trash linked TASK_LIST page and hard-delete the task row in one transaction.
-            // taskAssignees rows cascade-delete via FK on taskItems.
-            // applyPageMutation returns a deferredTrigger that callers passing their own tx
-            // must invoke after commit so downstream workflows tied to page activity fire.
-            let deferredTrigger: DeferredWorkflowTrigger | undefined;
-            try {
-              await db.transaction(async (tx) => {
-                const [linkedPage] = await tx
-                  .select({ revision: pages.revision })
-                  .from(pages)
-                  .where(eq(pages.id, linkedPageId))
-                  .limit(1);
-
-                if (linkedPage) {
-                  const mutationResult = await applyPageMutation({
-                    pageId: linkedPageId,
-                    operation: 'trash',
-                    updates: { isTrashed: true, trashedAt: new Date() },
-                    updatedFields: ['isTrashed', 'trashedAt'],
-                    expectedRevision: linkedPage.revision,
-                    context: {
-                      userId,
-                      actorEmail: actorInfo.actorEmail,
-                      actorDisplayName: actorInfo.actorDisplayName ?? undefined,
-                      isAiGenerated: true,
-                      aiProvider: (context as ToolExecutionContext).aiProvider,
-                      aiModel: (context as ToolExecutionContext).aiModel,
-                      aiConversationId: (context as ToolExecutionContext).conversationId,
-                      metadata: {
-                        taskId,
-                        taskListId,
-                        taskListPageId,
-                      },
-                    },
-                    tx,
-                  });
-                  deferredTrigger = mutationResult.deferredTrigger;
-                }
-
-                await tx.delete(taskItems).where(eq(taskItems.id, taskId));
-              });
-              deferredTrigger?.();
-            } catch (error) {
-              if (error instanceof PageRevisionMismatchError) {
-                throw new Error(`Linked page was modified concurrently — retry the delete: ${error.message}`);
-              }
-              throw error;
-            }
-
-            // Look up driveId for the page-trashed broadcast (best-effort)
-            let deletedDriveId: string | undefined;
-            if (taskListPageId) {
-              const taskListPage = await db.query.pages.findFirst({
-                where: eq(pages.id, taskListPageId),
-                columns: { driveId: true },
-              });
-              deletedDriveId = taskListPage?.driveId;
-            }
-
-            const broadcasts: Promise<void>[] = [
-              broadcastTaskEvent({
-                type: 'task_deleted',
-                taskId,
-                taskListId,
-                userId,
-                pageId: taskListPageId || undefined,
-                data: { id: taskId, title: existingTitle },
-              }),
-            ];
-            if (deletedDriveId) {
-              broadcasts.push(
-                broadcastPageEvent(
-                  createPageEventPayload(deletedDriveId, linkedPageId, 'trashed', {
-                    title: existingTitle,
-                    parentId: taskListPageId || undefined,
-                  }),
-                ),
-              );
-            }
-            await Promise.all(broadcasts);
-
-            // Return the refreshed task list + remaining tasks so client UIs
-            // (e.g. useAggregatedTasks → TasksDropdown) can drop the deleted
-            // task immediately instead of waiting for a subsequent tool call.
-            const remainingTasks = await db.query.taskItems.findMany({
-              where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
-                eq(pages.parentId, taskList.pageId!),
-                eq(pages.type, 'TASK_LIST'),
-                eq(pages.isTrashed, false),
-              ))),
-              orderBy: [asc(taskItems.position)],
-              with: {
-                assignee: { columns: { id: true, name: true, image: true } },
-                assigneeAgent: { columns: { id: true, title: true, type: true } },
-                page: { columns: { title: true } },
-                assignees: {
-                  with: {
-                    user: { columns: { id: true, name: true } },
-                    agentPage: { columns: { id: true, title: true } },
-                  },
-                },
-              },
-            });
-            const refreshedTaskList = await db.query.taskLists.findFirst({
-              where: eq(taskLists.id, taskListId),
-            });
-
-            return {
-              success: true,
-              action: 'deleted' as const,
-              task: {
-                id: existingTask.id,
-                title: existingTitle,
-                pageId: linkedPageId,
-              },
-              taskList: refreshedTaskList ? {
-                id: refreshedTaskList.id,
-                title: refreshedTaskList.title,
-                description: refreshedTaskList.description,
-                status: refreshedTaskList.status,
-                pageId: refreshedTaskList.pageId,
-                driveId: deletedDriveId,
-              } : null,
-              tasks: remainingTasks.map(t => ({
-                id: t.id,
-                title: t.page?.title ?? '',
-                status: t.status,
-                priority: t.priority,
-                assigneeId: t.assigneeId,
-                assigneeAgentId: t.assigneeAgentId,
-                dueDate: t.dueDate,
-                position: t.position,
-                completedAt: t.completedAt,
-                pageId: t.pageId,
-                assignee: t.assignee ? {
-                  id: t.assignee.id,
-                  name: t.assignee.name,
-                  image: t.assignee.image,
-                } : null,
-                assigneeAgent: t.assigneeAgent ? {
-                  id: t.assigneeAgent.id,
-                  title: t.assigneeAgent.title,
-                  type: t.assigneeAgent.type,
-                } : null,
-                assignees: t.assignees?.map(a => ({
-                  userId: a.userId,
-                  agentPageId: a.agentPageId,
-                  user: a.user ? { id: a.user.id, name: a.user.name } : null,
-                  agentPage: a.agentPage ? { id: a.agentPage.id, title: a.agentPage.title } : null,
-                })) || [],
-              })),
-              message: `Deleted task "${existingTitle}" and trashed its linked page`,
-            };
-          }
-
-          // Get driveId for agent validation (if task list has a page)
-          let taskListDriveId: string | undefined;
-          if (taskList.pageId) {
-            const taskListPage = await db.query.pages.findFirst({
-              where: eq(pages.id, taskList.pageId),
-              columns: { driveId: true },
-            });
-            taskListDriveId = taskListPage?.driveId;
-          }
-
-          // Validate assigneeAgentId if provided
-          if (assigneeAgentId) {
-            const agentPage = await db.query.pages.findFirst({
-              where: and(
-                eq(pages.id, assigneeAgentId),
-                eq(pages.type, 'AI_CHAT'),
-                eq(pages.isTrashed, false)
-              ),
-              columns: { id: true, driveId: true },
-            });
-
-            if (!agentPage) {
-              throw new Error('Invalid agent ID - must be an AI agent page');
-            }
-
-            if (taskListDriveId && agentPage.driveId !== taskListDriveId) {
-              throw new Error('Agent must be in the same drive as the task list');
-            }
-          }
-
-          // Fetch status configs for rollup and validation
-          const validConfigs = await db.query.taskStatusConfigs.findMany({
-            where: eq(taskStatusConfigs.taskListId, taskList.id),
-            columns: { slug: true, group: true },
-          });
-
-          // Build update object — title is owned by the linked page, synced separately below.
-          const updateData: Partial<typeof taskItems.$inferInsert> = {};
-          let trimmedTitle: string | undefined;
-          if (title !== undefined) {
-            if (typeof title !== 'string' || title.trim().length === 0) {
-              throw new Error('Title cannot be empty');
-            }
-            trimmedTitle = title.trim();
-          }
-          if (status !== undefined) {
-            if (validConfigs.length > 0) {
-              const matched = validConfigs.find(c => c.slug === status);
-              if (!matched) {
-                throw new Error(`Invalid status "${status}". Valid: ${validConfigs.map(c => c.slug).join(', ')}`);
-              }
-              updateData.status = status;
-              updateData.completedAt = matched.group === 'done' ? new Date() : null;
-            } else {
-              updateData.status = status;
-              updateData.completedAt = status === 'completed' ? new Date() : null;
-            }
-          }
-          // Completion guard: cannot mark a task done while it has incomplete sub-tasks
-          if (updateData.completedAt instanceof Date && existingTask.pageId) {
-            try {
-              await assertSubTasksComplete(existingTask.pageId);
-            } catch (error) {
-              if (error instanceof SubtasksIncompleteError) {
-                return {
-                  success: false,
-                  error: error.message,
-                  pending: error.pending,
-                  total: error.total,
-                };
-              }
-              throw error;
-            }
-          }
-
-          if (priority !== undefined) updateData.priority = priority;
-          if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
-          if (assigneeAgentId !== undefined) updateData.assigneeAgentId = assigneeAgentId;
-          if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
-
-          // Add note to metadata
-          if (note || status !== undefined) {
-            updateData.metadata = {
-              ...(existingTask.metadata as Record<string, unknown> || {}),
-              lastUpdate: {
-                at: new Date().toISOString(),
-                note,
-                ...(status !== undefined ? { statusChange: { from: existingTask.status, to: status } } : {}),
-              },
-            };
-          }
-
-          let updateTitleDeferred: DeferredWorkflowTrigger | undefined;
-          const aiContextForTitle = trimmedTitle !== undefined
-            ? await getAiContextWithActor(context as ToolExecutionContext)
-            : null;
+        }
+        // Completion guard: cannot mark a task done while it has incomplete sub-tasks
+        if (updateData.completedAt instanceof Date && existingTask.pageId) {
           try {
-            resultTask = await db.transaction(async (tx) => {
-              let updatedTask: typeof taskItems.$inferSelect = existingTask;
-              if (Object.keys(updateData).length > 0) {
-                [updatedTask] = await tx
-                  .update(taskItems)
-                  .set(updateData)
-                  .where(eq(taskItems.id, taskId))
-                  .returning();
-              }
-
-              // Sync title to the linked page (single source of truth).
-              if (trimmedTitle !== undefined && aiContextForTitle) {
-                const [linkedPage] = await tx
-                  .select({ revision: pages.revision })
-                  .from(pages)
-                  .where(eq(pages.id, existingTask.pageId))
-                  .limit(1);
-
-                if (linkedPage) {
-                  const mutationResult = await applyPageMutation({
-                    pageId: existingTask.pageId,
-                    operation: 'update',
-                    updates: { title: trimmedTitle },
-                    updatedFields: ['title'],
-                    expectedRevision: linkedPage.revision,
-                    context: {
-                      userId,
-                      actorEmail: aiContextForTitle.actorEmail,
-                      actorDisplayName: aiContextForTitle.actorDisplayName ?? undefined,
-                      isAiGenerated: true,
-                      aiProvider: (context as ToolExecutionContext).aiProvider,
-                      aiModel: (context as ToolExecutionContext).aiModel,
-                      aiConversationId: (context as ToolExecutionContext).conversationId,
-                      metadata: {
-                        taskId,
-                        taskListId: taskList?.id,
-                        taskListPageId: taskList?.pageId ?? undefined,
-                      },
-                    },
-                    tx,
-                  });
-                  updateTitleDeferred = mutationResult.deferredTrigger;
-                }
-              }
-
-              // Handle multiple assignees — Array.isArray treats [] as a full replace,
-              // matching the REST PATCH route so callers can clear all assignees.
-              if (Array.isArray(assigneeIds)) {
-                await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
-                const rows = assigneeIds
-                  .filter(a => a.id)
-                  .map(a => ({
-                    taskId,
-                    ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
-                  }));
-                if (rows.length > 0) {
-                  await tx.insert(taskAssignees).values(rows);
-                }
-
-                // Sync legacy fields
-                const firstUser = assigneeIds.find(a => a.type === 'user' && a.id);
-                const firstAgent = assigneeIds.find(a => a.type === 'agent' && a.id);
-                await tx.update(taskItems).set({
-                  assigneeId: firstUser?.id || null,
-                  assigneeAgentId: firstAgent?.id || null,
-                }).where(eq(taskItems.id, taskId));
-              } else if (assigneeId !== undefined || assigneeAgentId !== undefined) {
-                // Legacy single-assignee: sync to junction table
-                await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
-                const rows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
-                if (assigneeId) rows.push({ taskId, userId: assigneeId });
-                if (assigneeAgentId) rows.push({ taskId, agentPageId: assigneeAgentId });
-                if (rows.length > 0) await tx.insert(taskAssignees).values(rows);
-              }
-
-              return updatedTask;
-            });
-            updateTitleDeferred?.();
+            await assertSubTasksComplete(existingTask.pageId);
           } catch (error) {
-            if (error instanceof PageRevisionMismatchError) {
-              throw new Error(`Linked page was modified concurrently — retry the update: ${error.message}`);
+            if (error instanceof SubtasksIncompleteError) {
+              return {
+                success: false,
+                error: error.message,
+                pending: error.pending,
+                total: error.total,
+              };
             }
             throw error;
           }
+        }
 
-          // Reorder: when position is provided alongside taskId, move the task
-          // to the requested index and re-densify peer positions to 0..n-1.
-          if (position !== undefined) {
-            const peers = await db
-              .select({ id: taskItems.id, position: taskItems.position })
-              .from(taskItems)
-              .innerJoin(pages, eq(pages.id, taskItems.pageId))
-              .where(and(
-                eq(pages.parentId, taskList.pageId!),
-                eq(pages.type, 'TASK_LIST'),
-                eq(pages.isTrashed, false),
-              ))
-              .orderBy(asc(taskItems.position));
+        if (priority !== undefined) updateData.priority = priority;
+        if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
+        if (assigneeAgentId !== undefined) updateData.assigneeAgentId = assigneeAgentId;
+        if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
 
-            const filtered = peers.filter(p => p.id !== taskId);
-            const clamped = Math.max(0, Math.min(Math.trunc(position), filtered.length));
-            const reordered = [
-              ...filtered.slice(0, clamped).map(p => p.id),
-              taskId,
-              ...filtered.slice(clamped).map(p => p.id),
-            ];
+        // Add note to metadata
+        if (note || status !== undefined) {
+          updateData.metadata = {
+            ...(existingTask.metadata as Record<string, unknown> || {}),
+            lastUpdate: {
+              at: new Date().toISOString(),
+              note,
+              ...(status !== undefined ? { statusChange: { from: existingTask.status, to: status } } : {}),
+            },
+          };
+        }
 
-            await db.transaction(async (tx) => {
-              for (let i = 0; i < reordered.length; i++) {
-                await tx.update(taskItems)
-                  .set({ position: i })
-                  .where(eq(taskItems.id, reordered[i]));
+        let updateTitleDeferred: DeferredWorkflowTrigger | undefined;
+        const aiContextForTitle = trimmedTitle !== undefined
+          ? await getAiContextWithActor(context as ToolExecutionContext)
+          : null;
+        try {
+          resultTask = await db.transaction(async (tx) => {
+            let updatedTask: typeof taskItems.$inferSelect = existingTask;
+            if (Object.keys(updateData).length > 0) {
+              [updatedTask] = await tx
+                .update(taskItems)
+                .set(updateData)
+                .where(eq(taskItems.id, taskId))
+                .returning();
+            }
+
+            // Sync title to the linked page (single source of truth).
+            if (trimmedTitle !== undefined && aiContextForTitle) {
+              const [linkedPage] = await tx
+                .select({ revision: pages.revision })
+                .from(pages)
+                .where(eq(pages.id, existingTask.pageId))
+                .limit(1);
+
+              if (linkedPage) {
+                const mutationResult = await applyPageMutation({
+                  pageId: existingTask.pageId,
+                  operation: 'update',
+                  updates: { title: trimmedTitle },
+                  updatedFields: ['title'],
+                  expectedRevision: linkedPage.revision,
+                  context: {
+                    userId,
+                    actorEmail: aiContextForTitle.actorEmail,
+                    actorDisplayName: aiContextForTitle.actorDisplayName ?? undefined,
+                    isAiGenerated: true,
+                    aiProvider: (context as ToolExecutionContext).aiProvider,
+                    aiModel: (context as ToolExecutionContext).aiModel,
+                    aiConversationId: (context as ToolExecutionContext).conversationId,
+                    metadata: {
+                      taskId,
+                      taskListId: taskList?.id,
+                      taskListPageId: taskList?.pageId ?? undefined,
+                    },
+                  },
+                  tx,
+                });
+                updateTitleDeferred = mutationResult.deferredTrigger;
               }
-            });
-
-            // Reflect the densified position on resultTask so the response is accurate
-            resultTask = { ...resultTask, position: clamped };
-          }
-
-          // Update task list status based on task completion
-          if (status !== undefined) {
-            const doneStatusSlugs = validConfigs.length > 0
-              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
-              : new Set(['completed']);
-            const inProgressSlugs = validConfigs.length > 0
-              ? new Set(validConfigs.filter(c => c.group === 'in_progress').map(c => c.slug))
-              : new Set(['in_progress']);
-
-            const siblingTasks = await db
-              .select({ id: taskItems.id, status: taskItems.status })
-              .from(taskItems)
-              .innerJoin(pages, eq(pages.id, taskItems.pageId))
-              .where(and(
-                eq(pages.parentId, taskList.pageId!),
-                eq(pages.type, 'TASK_LIST'),
-                eq(pages.isTrashed, false),
-              ));
-
-            const allCompleted = siblingTasks.every(t =>
-              t.id === taskId ? doneStatusSlugs.has(status) : doneStatusSlugs.has(t.status)
-            );
-
-            if (allCompleted) {
-              await db.update(taskLists).set({ status: 'completed' }).where(eq(taskLists.id, taskList.id));
-            } else if (inProgressSlugs.has(status)) {
-              await db.update(taskLists).set({ status: 'in_progress' }).where(and(
-                eq(taskLists.id, taskList.id),
-                eq(taskLists.status, 'pending')
-              ));
             }
-          }
 
-          // Create agent trigger workflow BEFORE firing cascades so the workflow
-          // exists when fireCompletionTrigger looks for it
-          if (agentTrigger) {
-            if (!taskListDriveId) {
-              return { success: false, error: 'Agent triggers require a drive-based task list' };
-            }
-            await createTaskTriggerWorkflow({
-              database: db,
-              driveId: taskListDriveId,
-              userId,
-              taskId,
-              taskMetadata: resultTask.metadata as Record<string, unknown> | null,
-              agentTrigger,
-              dueDate: resultTask.dueDate,
-              timezone: (context as ToolExecutionContext).timezone || 'UTC',
-            });
-          }
+            // Replace assignees (array = full replace; legacy single fields otherwise).
+            await syncTaskAssignees(tx, taskId, { assigneeIds, assigneeId, assigneeAgentId });
 
-          // Task trigger cascades
-          if (dueDate !== undefined) {
-            void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
-          }
-          if (status !== undefined) {
-            const completedSlugs = validConfigs.length > 0
-              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
-              : new Set(['completed']);
-            if (completedSlugs.has(status) && !existingTask.completedAt) {
-              void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');
-              void fireCompletionTrigger(taskId);
-            }
-          }
-
-          resultTitle = trimmedTitle ?? existingTask.page?.title ?? '';
-
-          // Broadcast update event
-          await broadcastTaskEvent({
-            type: 'task_updated',
-            taskId: resultTask.id,
-            userId,
-            pageId: taskList.pageId || undefined,
-            data: { title: resultTitle, note },
+            return updatedTask;
           });
-
-          message = `Updated task "${resultTitle}"`;
-        } else {
-          // CREATE new task - requires pageId of a TASK_LIST page
-
-          // Get the TASK_LIST page and verify access
-          const taskListPage = await db.query.pages.findFirst({
-            where: and(eq(pages.id, pageId!), eq(pages.isTrashed, false)),
-            columns: { id: true, driveId: true, type: true, title: true },
-          });
-
-          if (!taskListPage) {
-            throw new Error('Page not found');
+          updateTitleDeferred?.();
+        } catch (error) {
+          if (error instanceof PageRevisionMismatchError) {
+            throw new Error(`Linked page was modified concurrently — retry the update: ${error.message}`);
           }
+          throw error;
+        }
 
-          if (taskListPage.type !== 'TASK_LIST') {
-            throw new Error('Page must be a TASK_LIST page to add tasks');
-          }
+        // Update task list status based on task completion
+        if (status !== undefined) {
+          const doneStatusSlugs = validConfigs.length > 0
+            ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
+            : new Set(['completed']);
+          const inProgressSlugs = validConfigs.length > 0
+            ? new Set(validConfigs.filter(c => c.group === 'in_progress').map(c => c.slug))
+            : new Set(['in_progress']);
 
-          const hasAccess = await verifyPageAccess(context as ToolExecutionContext, pageId!);
-          if (!hasAccess) {
-            throw new Error('You do not have permission to add tasks to this page');
-          }
-
-          // Find or create task_list record for this page
-          taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.pageId, pageId!),
-          });
-
-          if (!taskList) {
-            // Auto-create task_list record for this page
-            const [newTaskList] = await db.insert(taskLists).values({
-              userId,
-              pageId: pageId!,
-              title: taskListPage.title,
-              status: 'pending',
-              metadata: {
-                createdAt: new Date().toISOString(),
-                autoCreated: true,
-              },
-            }).returning();
-            taskList = newTaskList;
-          }
-
-          // Determine position for new task
-          const existingTasks = await db
-            .select({ position: taskItems.position })
+          const siblingTasks = await db
+            .select({ id: taskItems.id, status: taskItems.status })
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
             .where(and(
-              eq(pages.parentId, pageId!),
+              eq(pages.parentId, taskList.pageId!),
               eq(pages.type, 'TASK_LIST'),
               eq(pages.isTrashed, false),
-            ))
-            .orderBy(desc(taskItems.position));
+            ));
 
-          const nextTaskPosition = position ?? (existingTasks.length > 0 ? (existingTasks[0]?.position || 0) + 1 : 0);
+          const allCompleted = siblingTasks.every(t =>
+            t.id === taskId ? doneStatusSlugs.has(status) : doneStatusSlugs.has(t.status)
+          );
 
-          // Get next page position for the child document
-          const lastChildPage = await db.query.pages.findFirst({
-            where: and(eq(pages.parentId, pageId!), eq(pages.isTrashed, false)),
-            orderBy: [desc(pages.position)],
-          });
-          const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
-
-          // Validate assigneeAgentId if provided
-          if (assigneeAgentId) {
-            const agentPage = await db.query.pages.findFirst({
-              where: and(
-                eq(pages.id, assigneeAgentId),
-                eq(pages.type, 'AI_CHAT'),
-                eq(pages.isTrashed, false)
-              ),
-              columns: { id: true, driveId: true },
-            });
-
-            if (!agentPage) {
-              throw new Error('Invalid agent ID - must be an AI agent page');
-            }
-
-            if (agentPage.driveId !== taskListPage.driveId) {
-              throw new Error('Agent must be in the same drive as the task list');
-            }
+          if (allCompleted) {
+            await db.update(taskLists).set({ status: 'completed' }).where(eq(taskLists.id, taskList.id));
+          } else if (inProgressSlugs.has(status)) {
+            await db.update(taskLists).set({ status: 'in_progress' }).where(and(
+              eq(taskLists.id, taskList.id),
+              eq(taskLists.status, 'pending')
+            ));
           }
-
-          // Validate custom status if provided
-          const resolvedStatus = status || 'pending';
-          const statusConfigsForList = await db.query.taskStatusConfigs.findMany({
-            where: eq(taskStatusConfigs.taskListId, taskList!.id),
-            columns: { slug: true, group: true },
-          });
-          if (statusConfigsForList.length > 0 && status) {
-            const matched = statusConfigsForList.find(c => c.slug === status);
-            if (!matched) {
-              throw new Error(`Invalid status "${status}". Valid: ${statusConfigsForList.map(c => c.slug).join(', ')}`);
-            }
-          }
-
-          // Create task list page and task in transaction
-          const result = await db.transaction(async (tx) => {
-            // Create task list page (description + sub-tasks live here)
-            const [taskPage] = await tx.insert(pages).values({
-              title: title!,
-              type: 'TASK_LIST',
-              parentId: pageId!,
-              driveId: taskListPage.driveId,
-              content: '',
-              position: nextPagePosition,
-              updatedAt: new Date(),
-            }).returning();
-
-            // Create task with link to the page
-            const primaryUserId = assigneeId || (assigneeIds?.find(a => a.type === 'user')?.id) || null;
-            const primaryAgentId = assigneeAgentId || (assigneeIds?.find(a => a.type === 'agent')?.id) || null;
-
-            const [newTask] = await tx.insert(taskItems).values({
-              userId,
-              pageId: taskPage.id,
-              status: resolvedStatus,
-              priority: priority || 'medium',
-              assigneeId: primaryUserId,
-              assigneeAgentId: primaryAgentId,
-              dueDate: dueDate ? new Date(dueDate) : null,
-              position: nextTaskPosition,
-              metadata: {
-                createdAt: new Date().toISOString(),
-                note,
-              },
-            }).returning();
-
-            // Create multiple assignees in junction table
-            const assigneeRows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
-            if (assigneeIds && assigneeIds.length > 0) {
-              for (const a of assigneeIds) {
-                if (a.type === 'user') assigneeRows.push({ taskId: newTask.id, userId: a.id });
-                else if (a.type === 'agent') assigneeRows.push({ taskId: newTask.id, agentPageId: a.id });
-              }
-            } else {
-              if (primaryUserId) assigneeRows.push({ taskId: newTask.id, userId: primaryUserId });
-              if (primaryAgentId) assigneeRows.push({ taskId: newTask.id, agentPageId: primaryAgentId });
-            }
-            if (assigneeRows.length > 0) {
-              await tx.insert(taskAssignees).values(assigneeRows);
-            }
-
-            // Create agent trigger workflow if requested
-            if (agentTrigger) {
-              if (!taskListPage.driveId) {
-                throw new Error('Agent triggers require a drive-based task list');
-              }
-              await createTaskTriggerWorkflow({
-                database: tx,
-                driveId: taskListPage.driveId,
-                userId,
-                taskId: newTask.id,
-                taskMetadata: newTask.metadata as Record<string, unknown> | null,
-                agentTrigger,
-                dueDate: dueDate ? new Date(dueDate) : null,
-                timezone: (context as ToolExecutionContext).timezone || 'UTC',
-              });
-            }
-
-            return { task: newTask, page: taskPage };
-          });
-
-          resultTask = result.task;
-          const createdPage = result.page;
-          resultTitle = createdPage.title;
-
-          // Broadcast creation events
-          await Promise.all([
-            broadcastTaskEvent({
-              type: 'task_added',
-              taskId: resultTask.id,
-              taskListId: taskList.id,
-              userId,
-              pageId: pageId!,
-              data: { title: resultTitle, priority: resultTask.priority, pageId: createdPage.id },
-            }),
-            broadcastPageEvent(
-              createPageEventPayload(taskListPage.driveId, createdPage.id, 'created', {
-                parentId: pageId,
-                title: resultTitle,
-                type: 'TASK_LIST',
-              }),
-            ),
-          ]);
-
-          // Log activity for AI-generated task/page creation
-          const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
-          logPageActivity(userId, 'create', {
-            id: createdPage.id,
-            title: resultTitle,
-            driveId: taskListPage.driveId,
-          }, {
-            ...aiContext,
-            metadata: {
-              ...aiContext.metadata,
-              taskId: resultTask.id,
-              taskTitle: resultTitle,
-            },
-          });
-
-          message = `Created task "${resultTitle}" with linked document page`;
         }
 
-        // Get all tasks for response with assignee relations
-        const allTasks = await db.query.taskItems.findMany({
-          where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
-            eq(pages.parentId, pageId!),
-            eq(pages.type, 'TASK_LIST'),
-            eq(pages.isTrashed, false),
-          ))),
-          orderBy: [asc(taskItems.position)],
-          with: {
-            assignee: {
-              columns: {
-                id: true,
-                name: true,
-                image: true,
-              },
-            },
-            assigneeAgent: {
-              columns: {
-                id: true,
-                title: true,
-                type: true,
-              },
-            },
-            page: {
-              columns: { title: true },
-            },
-            assignees: {
-              with: {
-                user: { columns: { id: true, name: true } },
-                agentPage: { columns: { id: true, title: true } },
-              },
-            },
-          },
-        });
-
-        // Refresh task list with page info for driveId
-        const refreshedTaskList = await db.query.taskLists.findFirst({
-          where: eq(taskLists.id, taskList!.id),
-        });
-
-        // Get driveId from the associated page
-        let driveId: string | undefined;
-        if (refreshedTaskList?.pageId) {
-          const taskListPage = await db.query.pages.findFirst({
-            where: eq(pages.id, refreshedTaskList.pageId),
-            columns: { driveId: true },
-          });
-          driveId = taskListPage?.driveId;
-        }
-
-        return {
-          success: true,
-          action: isUpdate ? 'updated' : 'created',
-          task: {
-            id: resultTask.id,
-            title: resultTitle,
-            status: resultTask.status,
-            priority: resultTask.priority,
-            assigneeId: resultTask.assigneeId,
-            assigneeAgentId: resultTask.assigneeAgentId,
+        // Create agent trigger workflow BEFORE firing cascades so the workflow
+        // exists when fireCompletionTrigger looks for it
+        if (agentTrigger) {
+          if (!taskListDriveId) {
+            return { success: false, error: 'Agent triggers require a drive-based task list' };
+          }
+          await createTaskTriggerWorkflow({
+            database: db,
+            driveId: taskListDriveId,
+            userId,
+            taskId,
+            taskMetadata: resultTask.metadata as Record<string, unknown> | null,
+            agentTrigger,
             dueDate: resultTask.dueDate,
-            position: resultTask.position,
-            completedAt: resultTask.completedAt,
-            pageId: resultTask.pageId,
-          },
-          taskList: refreshedTaskList ? {
-            id: refreshedTaskList.id,
-            title: refreshedTaskList.title,
-            description: refreshedTaskList.description,
-            status: refreshedTaskList.status,
-            pageId: refreshedTaskList.pageId,
-            driveId,
-          } : null,
-          tasks: allTasks.map(t => ({
-            id: t.id,
-            title: t.page?.title ?? '',
-            status: t.status,
-            priority: t.priority,
-            assigneeId: t.assigneeId,
-            assigneeAgentId: t.assigneeAgentId,
-            dueDate: t.dueDate,
-            position: t.position,
-            completedAt: t.completedAt,
-            pageId: t.pageId,
-            assignee: t.assignee ? {
-              id: t.assignee.id,
-              name: t.assignee.name,
-              image: t.assignee.image,
-            } : null,
-            assigneeAgent: t.assigneeAgent ? {
-              id: t.assigneeAgent.id,
-              title: t.assigneeAgent.title,
-              type: t.assigneeAgent.type,
-            } : null,
-            assignees: t.assignees?.map(a => ({
-              userId: a.userId,
-              agentPageId: a.agentPageId,
-              user: a.user ? { id: a.user.id, name: a.user.name } : null,
-              agentPage: a.agentPage ? { id: a.agentPage.id, title: a.agentPage.title } : null,
-            })) || [],
-          })),
-          message,
-        };
+            timezone: (context as ToolExecutionContext).timezone || 'UTC',
+          });
+        }
+
+        // Task trigger cascades
+        if (dueDate !== undefined) {
+          void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
+        }
+        if (status !== undefined) {
+          const completedSlugs = validConfigs.length > 0
+            ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
+            : new Set(['completed']);
+          if (completedSlugs.has(status) && !existingTask.completedAt) {
+            void cancelTaskDueDateTrigger(taskId, 'Task completed before due date');
+            void fireCompletionTrigger(taskId);
+          }
+        }
+
+        resultTitle = trimmedTitle ?? existingTask.page?.title ?? '';
+
+        // Broadcast update event (shared with reorder_task for a consistent payload)
+        await broadcastTaskUpdated({
+          taskId: resultTask.id,
+          userId,
+          taskListPageId: taskList.pageId,
+          title: resultTitle,
+          note,
+        });
+
+        return await buildTaskListResponse({
+          action: 'updated',
+          parentPageId: taskList.pageId!,
+          taskListId: taskList.id,
+          resultTask,
+          resultTitle,
+          message: `Updated task "${resultTitle}"`,
+        });
       } catch (error) {
         console.error('Error in update_task:', error);
-        throw new Error(`Failed to ${isUpdate ? 'update' : 'create'} task: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to update task: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Create a task on a TASK_LIST page.
+   * Explicit create verb — no update/delete/reorder inference.
+   */
+  create_task: tool({
+    description: `Create a new task on a TASK_LIST page.
+
+A linked TASK_LIST page is automatically created as a child to hold the task description and any sub-tasks; its title stays synced with the task title. DO NOT delete that page directly — use delete_task instead.
+
+Status:
+- Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
+- Use a status slug that exists in the task list's configuration (read_page on the TASK_LIST page returns availableStatuses); create new slugs with create_task_status first.
+
+Assignment:
+- Use assigneeIds array to assign multiple users and/or agents — each entry: { type: 'user'|'agent', id: 'string' }
+- Or use legacy assigneeId/assigneeAgentId for single assignment.
+
+Agent Triggers:
+- Provide agentTrigger with agentPageId and either prompt or instructionPageId to schedule an AI agent at the due date (triggerType 'due_date', requires dueDate) or on completion (triggerType 'completion'). Requires a drive-based task list.`,
+    inputSchema: z.object({
+      pageId: z.string().describe('TASK_LIST page ID to add the task to'),
+      title: z.string().describe('Task title'),
+      status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status). Defaults to pending.'),
+      priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority (defaults to medium)'),
+      assigneeId: z.string().nullable().optional().describe('User ID to assign. Legacy single-assignee field.'),
+      assigneeAgentId: z.string().nullable().optional().describe('Agent page ID to assign. Legacy single-assignee field.'),
+      assigneeIds: z.array(z.object({
+        type: z.enum(['user', 'agent']),
+        id: z.string(),
+      })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
+      dueDate: z.string().nullable().optional().describe('Due date in ISO format'),
+      note: z.string().optional().describe('Note stored in task metadata'),
+      position: z.number().optional().describe('Position in the list (defaults to end)'),
+      agentTrigger: z.preprocess(
+        normalizeTaskAgentTriggerInput,
+        agentTriggerBaseSchema.extend({
+          triggerType: z.enum(['due_date', 'completion']).default('due_date').describe('When to trigger: at due date or on completion'),
+        }).optional()
+      ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
+    }),
+    execute: async (params, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        return await createTask(ctx, userId, params);
+      } catch (error) {
+        console.error('Error in create_task:', error);
+        throw new Error(`Failed to create task: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Delete a task and trash its linked TASK_LIST page.
+   * Explicit delete verb — hard-removes the task.
+   */
+  delete_task: tool({
+    description: `Hard-delete a task and trash its linked TASK_LIST page.
+
+This permanently removes the task row and moves its linked page to the trash. Returns the refreshed task list so clients can drop the deleted task immediately.`,
+    inputSchema: z.object({
+      taskId: z.string().describe('ID of the task to delete'),
+    }),
+    execute: async ({ taskId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const { existingTask, taskList } = await resolveTaskForUpdate(ctx, userId, taskId);
+        return await deleteTask(ctx, userId, existingTask, taskList, 'Task deleted via delete_task');
+      } catch (error) {
+        console.error('Error in delete_task:', error);
+        throw new Error(`Failed to delete task: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Move a task to a new position and re-densify peer positions.
+   * Explicit reorder verb.
+   */
+  reorder_task: tool({
+    description: `Move a task to a new index in its list and re-densify peer positions to 0..n-1.
+
+The position is clamped to the valid range. Returns the refreshed task list reflecting the new ordering.`,
+    inputSchema: z.object({
+      taskId: z.string().describe('ID of the task to move'),
+      position: z.number().describe('Target index in the list (0-based; clamped to the list length)'),
+    }),
+    execute: async ({ taskId, position }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const { existingTask, taskList } = await resolveTaskForUpdate(ctx, userId, taskId);
+        const clamped = await reorderTaskPeers(taskList.pageId!, taskId, position);
+        const resultTitle = existingTask.page?.title ?? '';
+        // Broadcast so collaborators/other clients see the reorder, matching update_task.
+        await broadcastTaskUpdated({
+          taskId,
+          userId,
+          taskListPageId: taskList.pageId,
+          title: resultTitle,
+        });
+        return await buildTaskListResponse({
+          action: 'updated',
+          parentPageId: taskList.pageId!,
+          taskListId: taskList.id,
+          resultTask: { ...existingTask, position: clamped },
+          resultTitle,
+          message: `Reordered task "${resultTitle}" to position ${clamped}`,
+        });
+      } catch (error) {
+        console.error('Error in reorder_task:', error);
+        throw new Error(`Failed to reorder task: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

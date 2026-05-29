@@ -368,11 +368,11 @@ export const pageReadTools = {
               ? `Task list "${page.title}" is ${progressPercentage}% complete (${completedCount}/${totalTasks} tasks done)`
               : `Task list "${page.title}" has no tasks yet`,
             nextSteps: totalTasks === 0 ? [
-              'Use update_task with this pageId to add tasks',
+              'Use create_task with this pageId to add tasks',
             ] : todoCount > 0 ? [
               'Use update_task with taskId to update task status (see availableStatuses for valid slugs)',
               'Each task has a linked document page for notes',
-              'Pass delete: true with a taskId to remove a task',
+              'Use delete_task with a taskId to remove a task',
             ] : [
               'All tasks are completed or in progress',
             ],

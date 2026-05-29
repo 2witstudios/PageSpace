@@ -80,7 +80,7 @@ WORKSPACE RULES:
 
 TASK MANAGEMENT:
 • Use create_page with type TASK_LIST to create task lists
-• Use update_task with pageId to add tasks - each task creates a linked DOCUMENT page
+• Use create_task with a TASK_LIST pageId to add tasks - each task creates a linked DOCUMENT page
 • Use read_page on TASK_LIST pages to view tasks and progress
 
 ${hasDriveContext ? `

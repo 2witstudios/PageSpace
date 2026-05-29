@@ -26,8 +26,10 @@ vi.mock('../../tools/page-write-tools', () => ({
     replace_lines: { name: 'replace_lines', description: 'Replace lines' },
     create_page: { name: 'create_page', description: 'Create page' },
     rename_page: { name: 'rename_page', description: 'Rename page' },
-    trash: { name: 'trash', description: 'Trash page' },
-    restore: { name: 'restore', description: 'Restore page' },
+    trash_page: { name: 'trash_page', description: 'Trash page' },
+    trash_drive: { name: 'trash_drive', description: 'Trash drive' },
+    restore_page: { name: 'restore_page', description: 'Restore page' },
+    restore_drive: { name: 'restore_drive', description: 'Restore drive' },
     move_page: { name: 'move_page', description: 'Move page' },
     edit_sheet_cells: { name: 'edit_sheet_cells', description: 'Edit sheet cells' },
   },
@@ -44,6 +46,9 @@ vi.mock('../../tools/search-tools', () => ({
 vi.mock('../../tools/task-management-tools', () => ({
   taskManagementTools: {
     update_task: { name: 'update_task', description: 'Update task' },
+    create_task: { name: 'create_task', description: 'Create task' },
+    delete_task: { name: 'delete_task', description: 'Delete task' },
+    reorder_task: { name: 'reorder_task', description: 'Reorder task' },
   },
 }));
 
