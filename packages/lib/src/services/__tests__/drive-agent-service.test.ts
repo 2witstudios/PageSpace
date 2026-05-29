@@ -36,7 +36,7 @@ vi.mock('../../permissions/membership-queries', () => ({
 
 import { addAgentToDrive } from '../drive-agent-service';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage, getUserDriveAccess } from '../../permissions/permissions';
+import { canUserEditPage, getUserDriveAccess } from '../../permissions/permissions';
 import { customRoleBelongsToDrive } from '../../permissions/membership-queries';
 
 const USER = 'user_aaaaaaaaaaaaaaaaaaaaaa';
@@ -86,11 +86,16 @@ describe('addAgentToDrive', () => {
     expect(res).toMatchObject({ ok: false, status: 400 });
   });
 
-  it('403 when the user cannot view the agent', async () => {
+  // Regression: view-only access to a shared agent must NOT be enough to bind it
+  // to a drive. Running the agent is gated by edit access, so a view-only granter
+  // could otherwise leak a private drive to everyone who can run the agent.
+  it('403 when the user can only view (not edit) the agent', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect(AI_CHAT_PAGE));
-    vi.mocked(canUserViewPage).mockResolvedValue(false);
+    vi.mocked(canUserEditPage).mockResolvedValue(false);
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 403 });
+    // Drive access must never be consulted once the agent gate fails.
+    expect(getUserDriveAccess).not.toHaveBeenCalled();
   });
 
   it('403 when the user has no access to the target drive', async () => {
@@ -98,7 +103,7 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))                 // agent lookup
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }])) // drive lookup
       .mockReturnValueOnce(stubSelect([]));                           // no membership
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
     vi.mocked(getUserDriveAccess).mockResolvedValue(false);
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 403 });
@@ -108,7 +113,7 @@ describe('addAgentToDrive', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))            // agent lookup
       .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));   // drive lookup → owner
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
 
@@ -122,7 +127,7 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))                 // agent lookup
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }])) // drive lookup
       .mockReturnValueOnce(stubSelect([]));                           // no drive membership
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
     vi.mocked(getUserDriveAccess).mockResolvedValue(true); // page-level access
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
@@ -137,7 +142,7 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))                            // agent lookup
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))          // drive lookup
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }])); // member
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, requestedRole: 'ADMIN' });
     expect(res).toMatchObject({ ok: false, status: 403 });
@@ -148,7 +153,7 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]));
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     const res = await addAgentToDrive({
       actingUserId: USER,
@@ -164,7 +169,7 @@ describe('addAgentToDrive', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
       .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
     stubInsert([], { throwCode: '23505' });
 
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });

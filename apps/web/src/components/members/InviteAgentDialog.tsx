@@ -77,7 +77,8 @@ export function InviteAgentDialog({
         <DialogHeader>
           <DialogTitle>Invite an agent</DialogTitle>
           <DialogDescription>
-            Give an AI agent access to this drive. It can be an agent from any drive you can access.
+            Give an AI agent access to this drive. You can invite any agent you manage; the
+            granted role is capped at your own access to this drive.
           </DialogDescription>
         </DialogHeader>
 

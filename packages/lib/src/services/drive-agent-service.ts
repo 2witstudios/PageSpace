@@ -13,7 +13,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
-import { canUserViewPage, canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
+import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
 import { customRoleBelongsToDrive } from '../permissions/membership-queries';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
@@ -103,9 +103,14 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
     return { ok: false, status: 400, error: 'agentPageId must reference an AI_CHAT page' };
   }
 
-  // The acting user must be able to use the agent (e.g. a hub agent they can view but don't own).
-  if (!(await canUserViewPage(actingUserId, agentPageId))) {
-    return { ok: false, status: 403, error: 'You do not have access to this agent' };
+  // The acting user must *control* the agent (edit access), not merely view it.
+  // Membership is a property of the agent shared by everyone who can run it
+  // (running is gated by `canUserEditPage` in the chat route), so attaching the
+  // agent to a drive must require the same control. A view-only granter could
+  // otherwise bind a shared agent to a private drive and leak that drive's
+  // content to every user who can run the agent.
+  if (!(await canUserEditPage(actingUserId, agentPageId))) {
+    return { ok: false, status: 403, error: 'You do not have permission to manage this agent' };
   }
 
   const granter = await resolveGranterAccess(actingUserId, driveId);
