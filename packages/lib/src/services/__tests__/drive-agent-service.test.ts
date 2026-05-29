@@ -5,19 +5,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: vi.fn(), insert: vi.fn(), delete: vi.fn() },
+  db: { select: vi.fn(), insert: vi.fn(), delete: vi.fn(), update: vi.fn() },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
+  or: vi.fn((...args: unknown[]) => ({ or: args })),
+  ne: vi.fn((_a: unknown, _b: unknown) => 'ne'),
   isNotNull: vi.fn((_a: unknown) => 'isNotNull'),
+  inArray: vi.fn((_a: unknown, _b: unknown) => 'inArray'),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', type: 'type', driveId: 'driveId' },
   drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveAgentMembers: { id: 'id', driveId: 'driveId', agentPageId: 'agentPageId', role: 'role', customRoleId: 'customRoleId' },
+  driveAgentMembers: { id: 'id', driveId: 'driveId', agentPageId: 'agentPageId', role: 'role', customRoleId: 'customRoleId', addedBy: 'addedBy' },
   driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', customRoleId: 'customRoleId', acceptedAt: 'acceptedAt' },
 }));
 vi.mock('../../permissions/permissions', () => ({
@@ -34,8 +37,15 @@ vi.mock('../../permissions/membership-queries', () => ({
 // Imports after mocks
 // ---------------------------------------------------------------------------
 
-import { addAgentToDrive } from '../drive-agent-service';
+import {
+  addAgentToDrive,
+  revokeAgentMembershipsGrantedBy,
+  recapAgentMembershipsGrantedBy,
+} from '../drive-agent-service';
 import { db } from '@pagespace/db/db';
+import { eq, ne } from '@pagespace/db/operators';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
 import { canUserEditPage, getUserDriveAccess } from '../../permissions/permissions';
 import { customRoleBelongsToDrive } from '../../permissions/membership-queries';
 
@@ -174,5 +184,110 @@ describe('addAgentToDrive', () => {
 
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 409 });
+  });
+});
+
+// select(...).from(...).innerJoin(...).where(...) resolving to rows (no .limit).
+function stubJoinSelect(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      innerJoin: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(rows),
+      }),
+    }),
+  } as unknown as ReturnType<typeof db.select>;
+}
+
+// delete(...).where(...) → resolves; returns the captured where() mock.
+function stubDelete() {
+  const where = vi.fn().mockResolvedValue(undefined);
+  vi.mocked(db.delete).mockReturnValue({ where } as unknown as ReturnType<typeof db.delete>);
+  return where;
+}
+
+// update(...).set(values).where(...) → resolves; captures the set() value.
+function stubUpdate(captured: Record<string, unknown>[]) {
+  const where = vi.fn().mockResolvedValue(undefined);
+  vi.mocked(db.update).mockReturnValue({
+    set: vi.fn((v: Record<string, unknown>) => {
+      captured.push(v);
+      return { where };
+    }),
+  } as unknown as ReturnType<typeof db.update>);
+  return where;
+}
+
+describe('revokeAgentMembershipsGrantedBy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('deletes the non-home memberships the user granted and returns their agent ids', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(
+      stubJoinSelect([
+        { id: 'm1', agentPageId: 'a1' },
+        { id: 'm2', agentPageId: 'a2' },
+      ]),
+    );
+    const where = stubDelete();
+
+    const result = await revokeAgentMembershipsGrantedBy(db, DRIVE, USER);
+
+    expect(result).toEqual(['a1', 'a2']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    // Scoped to the granting user and excludes the agent's home drive.
+    expect(eq).toHaveBeenCalledWith(driveAgentMembers.addedBy, USER);
+    expect(eq).toHaveBeenCalledWith(driveAgentMembers.driveId, DRIVE);
+    expect(ne).toHaveBeenCalledWith(pages.driveId, DRIVE);
+  });
+
+  it('is a no-op (no delete) when the user granted no agent memberships here', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubJoinSelect([]));
+    stubDelete();
+
+    const result = await revokeAgentMembershipsGrantedBy(db, DRIVE, USER);
+
+    expect(result).toEqual([]);
+    expect(db.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('recapAgentMembershipsGrantedBy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('is a no-op when the user can still grant ADMIN (drive owner)', async () => {
+    // resolveGranterAccess: drive lookup → owner ⇒ maxRole ADMIN.
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual([]);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('downgrades elevated agents to plain MEMBER when the granter is now a MEMBER', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1' }]));    // elevated agent rows
+    const captured: Record<string, unknown>[] = [];
+    stubUpdate(captured);
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a1']);
+    expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: null });
+  });
+
+  it('is a no-op when a downgraded granter has no elevated agents', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER
+      .mockReturnValueOnce(stubJoinSelect([]));                                   // nothing above the cap
+    stubUpdate([]);
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual([]);
+    expect(db.update).not.toHaveBeenCalled();
   });
 });

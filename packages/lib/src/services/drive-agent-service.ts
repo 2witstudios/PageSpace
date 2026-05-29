@@ -10,7 +10,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, isNotNull } from '@pagespace/db/operators';
+import { eq, and, or, ne, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
@@ -197,6 +197,81 @@ export async function removeAgentFromDrive(input: {
 
   if (deleted.length === 0) return { ok: false, status: 404, error: 'Membership not found' };
   return { ok: true };
+}
+
+/** A Drizzle transaction handle, accepted alongside the module-level `db`. */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Revoke every non-home agent membership in `driveId` that was granted by
+ * `userId`. Called when that user is removed from the drive: the grant's
+ * authorization basis (`addedBy`) is gone, so the agent loses the access it
+ * inherited too. The agent's home drive is never touched (it can't be removed,
+ * and a home-drive membership has `pages.driveId === driveAgentMembers.driveId`).
+ *
+ * Accepts a transaction so it can run atomically with the member removal.
+ * Returns the agentPageIds whose membership was revoked (for audit logging).
+ */
+export async function revokeAgentMembershipsGrantedBy(
+  executor: Tx | typeof db,
+  driveId: string,
+  userId: string,
+): Promise<string[]> {
+  const rows = await executor
+    .select({ id: driveAgentMembers.id, agentPageId: driveAgentMembers.agentPageId })
+    .from(driveAgentMembers)
+    .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+    .where(and(
+      eq(driveAgentMembers.driveId, driveId),
+      eq(driveAgentMembers.addedBy, userId),
+      ne(pages.driveId, driveId),
+    ));
+
+  if (rows.length === 0) return [];
+
+  await executor
+    .delete(driveAgentMembers)
+    .where(inArray(driveAgentMembers.id, rows.map((r) => r.id)));
+
+  return rows.map((r) => r.agentPageId);
+}
+
+/**
+ * Re-cap the agent memberships in `driveId` granted by `userId` to the role that
+ * user could grant *today*. Called when the user's role is downgraded: an agent
+ * they previously elevated (to ADMIN or a custom role) must drop to the user's
+ * new ceiling, mirroring the add-time capping in `addAgentToDrive`. Never
+ * escalates. The agent's home drive is excluded. Returns affected agentPageIds.
+ */
+export async function recapAgentMembershipsGrantedBy(
+  driveId: string,
+  userId: string,
+): Promise<string[]> {
+  const granter = await resolveGranterAccess(userId, driveId);
+  // Still able to grant ADMIN ⇒ nothing to reduce (we only ever cap downward).
+  if (granter.maxRole === 'ADMIN') return [];
+
+  // maxRole is MEMBER: any membership above plain MEMBER (ADMIN role or a custom
+  // role) exceeds what this user could grant now.
+  const rows = await db
+    .select({ id: driveAgentMembers.id, agentPageId: driveAgentMembers.agentPageId })
+    .from(driveAgentMembers)
+    .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+    .where(and(
+      eq(driveAgentMembers.driveId, driveId),
+      eq(driveAgentMembers.addedBy, userId),
+      ne(pages.driveId, driveId),
+      or(eq(driveAgentMembers.role, 'ADMIN'), isNotNull(driveAgentMembers.customRoleId)),
+    ));
+
+  if (rows.length === 0) return [];
+
+  await db
+    .update(driveAgentMembers)
+    .set({ role: 'MEMBER', customRoleId: granter.customRoleId ?? null })
+    .where(inArray(driveAgentMembers.id, rows.map((r) => r.id)));
+
+  return rows.map((r) => r.agentPageId);
 }
 
 /**
