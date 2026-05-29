@@ -735,6 +735,75 @@ describe('githubProvider', () => {
     });
   });
 
+  // ─── Tool Bundles ──────────────────────────────────────────────────────
+
+  describe('tool bundles', () => {
+    const bundles = githubProvider.toolBundles!;
+    const toolIds = new Set(githubProvider.tools.map((t) => t.id));
+
+    it('given the provider, should define read_only, code_review, issue_triage, and full bundles', () => {
+      expect(bundles).toBeDefined();
+      const ids = bundles.map((b) => b.id);
+      expect(ids).toEqual(['read_only', 'code_review', 'issue_triage', 'full']);
+    });
+
+    it('given every bundle, should reference only tool ids that exist on the provider', () => {
+      for (const bundle of bundles) {
+        for (const id of bundle.toolIds) {
+          expect(toolIds.has(id), `bundle ${bundle.id} references unknown tool ${id}`).toBe(true);
+        }
+      }
+    });
+
+    it('given the bundles, should mark exactly one as recommended', () => {
+      const recommended = bundles.filter((b) => b.recommended);
+      expect(recommended).toHaveLength(1);
+      expect(recommended[0].id).toBe('read_only');
+    });
+
+    it('given the read_only bundle, should contain only read-category tools', () => {
+      const readOnly = bundles.find((b) => b.id === 'read_only')!;
+      for (const id of readOnly.toolIds) {
+        expect(findTool(id).category).toBe('read');
+      }
+    });
+
+    it('given the read_only bundle, should contain every read-category tool', () => {
+      const readOnly = bundles.find((b) => b.id === 'read_only')!;
+      const allReadIds = githubProvider.tools.filter((t) => t.category === 'read').map((t) => t.id);
+      expect(new Set(readOnly.toolIds)).toEqual(new Set(allReadIds));
+    });
+
+    it('given the full bundle, should contain every tool', () => {
+      const full = bundles.find((b) => b.id === 'full')!;
+      expect(new Set(full.toolIds)).toEqual(toolIds);
+    });
+
+    it('given bundle toolIds, should have no duplicates', () => {
+      for (const bundle of bundles) {
+        expect(new Set(bundle.toolIds).size, `bundle ${bundle.id} has duplicate tool ids`).toBe(
+          bundle.toolIds.length
+        );
+      }
+    });
+  });
+
+  describe('connect metadata', () => {
+    it('given the provider, should describe every requested OAuth scope in plain English', () => {
+      const { authMethod } = githubProvider;
+      if (authMethod.type !== 'oauth2') throw new Error('unexpected auth type');
+      const descriptions = githubProvider.oauthScopeDescriptions!;
+      expect(descriptions).toBeDefined();
+      for (const scope of authMethod.config.scopes) {
+        expect(descriptions[scope], `missing description for scope ${scope}`).toBeTruthy();
+      }
+    });
+
+    it('given the provider, should include an identity note for the connect dialog', () => {
+      expect(githubProvider.connectNotes).toBeTruthy();
+    });
+  });
+
   // ─── Schema Compatibility ──────────────────────────────────────────────
 
   describe('schema compatibility', () => {
