@@ -86,6 +86,17 @@ const defaultAllowedToolsForProvider = (config: unknown): string[] | null => {
   return preferred.toolIds.filter((id) => !dangerous.has(id));
 };
 
+/**
+ * Resolve the config to read tools/bundles from. Prefer the canonical builtin
+ * definition (always current, carries toolBundles) over the persisted DB config,
+ * which on upgraded installs may lack bundles or carry stale tool names until
+ * GET /api/integrations/providers refreshes it. Falls back to the DB config for
+ * custom (non-builtin) providers.
+ */
+const resolveProviderConfig = (
+  provider: { slug: string; config: unknown } | null | undefined
+): unknown => (provider ? getBuiltinProvider(provider.slug) ?? provider.config : null);
+
 const createGrantSchema = z.object({
   connectionId: z.string().min(1),
   // Omitted (undefined) → default to the provider's recommended bundle.
@@ -124,14 +135,9 @@ export async function GET(
     return NextResponse.json({
       grants: grants.map((g) => {
         const provider = g.connection?.provider ?? null;
-        // Prefer the canonical builtin definition (current tools + bundles) over
-        // the persisted DB config, which on upgraded installs may lack bundles or
-        // carry stale tool names until GET /api/integrations/providers refreshes
-        // it. This is what the per-agent panel reads, so the presets must show
-        // immediately after deploy. Falls back to DB config for custom providers.
-        const providerConfig = provider
-          ? getBuiltinProvider(provider.slug) ?? provider.config
-          : null;
+        // The per-agent panel reads this, so presets must show immediately after
+        // deploy — use the canonical builtin config rather than possibly-stale DB.
+        const providerConfig = resolveProviderConfig(provider);
         return {
           id: g.id,
           agentId: g.agentId,
@@ -218,16 +224,11 @@ export async function POST(
       return NextResponse.json({ error: 'Grant already exists for this connection' }, { status: 409 });
     }
 
-    // Prefer the canonical builtin provider definition (always current, carries
-    // toolBundles) over the persisted DB config, which on upgraded installs may
-    // not yet have bundles until GET /api/integrations/providers refreshes it.
-    // Without this, the default would fall back to null (all non-dangerous tools)
-    // instead of the intended Read-only bundle.
-    const canonicalConfig =
-      getBuiltinProvider(connection.provider?.slug ?? '') ?? connection.provider?.config;
+    // Without the canonical config, the default would fall back to null (all
+    // non-dangerous tools) on upgraded installs instead of the Read-only bundle.
     const resolvedAllowedTools =
       allowedTools === undefined
-        ? defaultAllowedToolsForProvider(canonicalConfig)
+        ? defaultAllowedToolsForProvider(resolveProviderConfig(connection.provider))
         : allowedTools;
 
     const grant = await createGrant(db, {
