@@ -112,6 +112,13 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(isWriteTool('web_search')).toBe(false);
   });
 
+  it('classifies explicit per-entity trash/restore tools as writes', () => {
+    expect(isWriteTool('trash_page')).toBe(true);
+    expect(isWriteTool('trash_drive')).toBe(true);
+    expect(isWriteTool('restore_page')).toBe(true);
+    expect(isWriteTool('restore_drive')).toBe(true);
+  });
+
   it('classifies web search tools correctly', () => {
     expect(isWebSearchTool('web_search')).toBe(true);
     expect(isWebSearchTool('read_page')).toBe(false);

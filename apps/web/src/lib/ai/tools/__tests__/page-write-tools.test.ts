@@ -115,6 +115,10 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
+}));
+
 import { pageWriteTools } from '../page-write-tools';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permissions';
@@ -586,6 +590,309 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+  });
+
+  describe('trash_page', () => {
+    it('has correct tool definition', () => {
+      expect(pageWriteTools.trash_page).toBeDefined();
+      expect(pageWriteTools.trash_page.description).toContain('trash');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageWriteTools.trash_page.execute!(
+          { id: 'page-1', title: 'Test Page', withChildren: false },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('trashes a page successfully', async () => {
+      // Arrange
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act
+      const result = await pageWriteTools.trash_page.execute!(
+        { id: 'page-1', title: 'Test Page', withChildren: false },
+        context
+      ) as { success: boolean; type: string; id: string; message: string };
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('page');
+      expect(result.id).toBe('page-1');
+      expect(result.message).toContain('to trash');
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'page-1', operation: 'trash' })
+      );
+    });
+
+    it('rejects when the page is not found', async () => {
+      mockPageRepo.findById.mockResolvedValue(null);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.trash_page.execute!(
+          { id: 'missing', title: 'Ghost', withChildren: false },
+          context
+        )
+      ).rejects.toThrow('not found');
+    });
+  });
+
+  describe('trash_drive', () => {
+    it('has correct tool definition', () => {
+      expect(pageWriteTools.trash_drive).toBeDefined();
+      expect(pageWriteTools.trash_drive.description).toContain('drive');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageWriteTools.trash_drive.execute!(
+          { id: 'drive-1', confirmDriveName: 'My Drive' },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('trashes a drive when confirmDriveName matches', async () => {
+      // Arrange
+      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+        id: 'drive-1',
+        name: 'My Drive',
+        slug: 'my-drive',
+        ownerId: 'user-123',
+        isTrashed: false,
+        trashedAt: null,
+      });
+      mockDriveRepo.trash.mockResolvedValue(undefined);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Act
+      const result = await pageWriteTools.trash_drive.execute!(
+        { id: 'drive-1', confirmDriveName: 'My Drive' },
+        context
+      ) as { success: boolean; type: string; id: string; name: string };
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('drive');
+      expect(result.name).toBe('My Drive');
+      expect(mockDriveRepo.trash).toHaveBeenCalledWith('drive-1');
+    });
+
+    it('rejects when confirmDriveName does not match the drive name', async () => {
+      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+        id: 'drive-1',
+        name: 'My Drive',
+        slug: 'my-drive',
+        ownerId: 'user-123',
+        isTrashed: false,
+        trashedAt: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.trash_drive.execute!(
+          { id: 'drive-1', confirmDriveName: 'Wrong Name' },
+          context
+        )
+      ).rejects.toThrow('Drive name confirmation failed');
+      expect(mockDriveRepo.trash).not.toHaveBeenCalled();
+    });
+
+    it('rejects when confirmDriveName is missing', async () => {
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.trash_drive.execute!(
+          { id: 'drive-1', confirmDriveName: '' },
+          context
+        )
+      ).rejects.toThrow('Drive name confirmation is required');
+      expect(mockDriveRepo.trash).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restore_page', () => {
+    it('has correct tool definition', () => {
+      expect(pageWriteTools.restore_page).toBeDefined();
+      expect(pageWriteTools.restore_page.description).toContain('Restore');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageWriteTools.restore_page.execute!(
+          { id: 'page-1' },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('restores a trashed page successfully', async () => {
+      mockPageRepo.findTrashedById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Trashed Page',
+        type: 'DOCUMENT',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: true,
+        trashedAt: new Date(),
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.restore_page.execute!(
+        { id: 'page-1' },
+        context
+      ) as { success: boolean; type: string; id: string; message: string };
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('page');
+      expect(result.id).toBe('page-1');
+      expect(result.message).toContain('restored');
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'page-1', operation: 'restore' })
+      );
+    });
+
+    it('rejects when the trashed page is not found', async () => {
+      mockPageRepo.findTrashedById.mockResolvedValue(null);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.restore_page.execute!(
+          { id: 'missing' },
+          context
+        )
+      ).rejects.toThrow('not found');
+    });
+  });
+
+  describe('restore_drive', () => {
+    it('has correct tool definition', () => {
+      expect(pageWriteTools.restore_drive).toBeDefined();
+      expect(pageWriteTools.restore_drive.description).toContain('Restore');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageWriteTools.restore_drive.execute!(
+          { id: 'drive-1' },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('restores a trashed drive successfully', async () => {
+      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+        id: 'drive-1',
+        name: 'My Drive',
+        slug: 'my-drive',
+        ownerId: 'user-123',
+        isTrashed: true,
+        trashedAt: new Date(),
+      });
+      mockDriveRepo.restore.mockResolvedValue({
+        id: 'drive-1',
+        name: 'My Drive',
+        slug: 'my-drive',
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.restore_drive.execute!(
+        { id: 'drive-1' },
+        context
+      ) as { success: boolean; type: string; id: string; name: string };
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('drive');
+      expect(result.name).toBe('My Drive');
+      expect(mockDriveRepo.restore).toHaveBeenCalledWith('drive-1');
+    });
+
+    it('rejects when the drive is not in trash', async () => {
+      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+        id: 'drive-1',
+        name: 'My Drive',
+        slug: 'my-drive',
+        ownerId: 'user-123',
+        isTrashed: false,
+        trashedAt: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.restore_drive.execute!(
+          { id: 'drive-1' },
+          context
+        )
+      ).rejects.toThrow('not in trash');
+      expect(mockDriveRepo.restore).not.toHaveBeenCalled();
     });
   });
 
