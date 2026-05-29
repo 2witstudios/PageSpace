@@ -8,6 +8,12 @@
  * (sub-PR 3), every agent currently allowed `update_task` must also be granted
  * the new verbs so it does not lose create/delete/reorder ability.
  *
+ * The runtime grants a tool purely via `Array.includes(name)`, so a legacy or
+ * mixed array (e.g. containing non-string junk alongside `"update_task"`) still
+ * grants `update_task` at runtime. This transform mirrors that: it acts on any
+ * array that contains the string `"update_task"`, regardless of what else is in
+ * it, and preserves every existing entry untouched.
+ *
  * This module is intentionally dependency-free so it can be unit-tested without
  * touching the database.
  */
@@ -22,12 +28,15 @@ export const TASK_VERB_TOOLS = ['create_task', 'delete_task', 'reorder_task'] as
  * Add the task verb tools to an enabledTools allowlist when it grants
  * `update_task`.
  *
- * - If `update_task` is absent, the array is returned unchanged.
- * - Existing entries and their order are preserved; only missing verbs are
- *   appended (in {@link TASK_VERB_TOOLS} order).
+ * Mirrors runtime allowlist semantics (`Array.includes`):
+ * - If the array does not contain the string `"update_task"`, it is returned
+ *   unchanged.
+ * - Otherwise the missing verbs are appended (in {@link TASK_VERB_TOOLS}
+ *   order). All existing entries — including any non-string values — are
+ *   preserved in place; nothing is dropped or reordered.
  * - Idempotent: a second call on the result produces no further changes.
  */
-export function addTaskVerbTools(tools: string[]): string[] {
+export function addTaskVerbTools(tools: unknown[]): unknown[] {
   if (!tools.includes(TRIGGER_TOOL)) {
     return tools;
   }
@@ -38,13 +47,4 @@ export function addTaskVerbTools(tools: string[]): string[] {
   }
 
   return [...tools, ...missing];
-}
-
-/**
- * Type guard for a JSONB `enabledTools` value that is a plain array of strings.
- * `enabledTools` is nullable (unrestricted agents) and historically loosely
- * typed, so callers must validate before transforming.
- */
-export function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }

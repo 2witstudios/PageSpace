@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   addTaskVerbTools,
-  isStringArray,
   TASK_VERB_TOOLS,
   TRIGGER_TOOL,
 } from '../lib/task-verb-tools';
@@ -42,6 +41,27 @@ describe('addTaskVerbTools', () => {
     ]);
   });
 
+  it('appends verbs to a mixed array containing update_task, keeping non-string entries', () => {
+    // Mirrors runtime: the allowlist grants update_task via Array.includes,
+    // so a legacy/mixed array must still receive the verbs without dropping junk.
+    const input = ['update_task', 123, 'read_page'];
+    const result = addTaskVerbTools(input);
+    expect(result).toEqual([
+      'update_task',
+      123,
+      'read_page',
+      'create_task',
+      'delete_task',
+      'reorder_task',
+    ]);
+  });
+
+  it('is a no-op for a mixed array that does not contain update_task', () => {
+    const input = ['read_page', 42, { tool: 'x' }];
+    const result = addTaskVerbTools(input);
+    expect(result).toEqual(input);
+  });
+
   it('is idempotent across repeated application', () => {
     const once = addTaskVerbTools([TRIGGER_TOOL]);
     const twice = addTaskVerbTools(once);
@@ -54,19 +74,5 @@ describe('addTaskVerbTools', () => {
 
   it('exposes the expected verb tool names', () => {
     expect(TASK_VERB_TOOLS).toEqual(['create_task', 'delete_task', 'reorder_task']);
-  });
-});
-
-describe('isStringArray', () => {
-  it('accepts an array of strings', () => {
-    expect(isStringArray(['update_task'])).toBe(true);
-    expect(isStringArray([])).toBe(true);
-  });
-
-  it('rejects null, non-arrays, and arrays with non-string entries', () => {
-    expect(isStringArray(null)).toBe(false);
-    expect(isStringArray('update_task')).toBe(false);
-    expect(isStringArray({ 0: 'update_task' })).toBe(false);
-    expect(isStringArray(['update_task', 42])).toBe(false);
   });
 });

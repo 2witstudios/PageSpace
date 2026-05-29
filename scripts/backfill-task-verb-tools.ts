@@ -27,11 +27,7 @@
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { eq, sql } from '@pagespace/db/operators';
-import {
-  addTaskVerbTools,
-  isStringArray,
-  TRIGGER_TOOL,
-} from './lib/task-verb-tools';
+import { addTaskVerbTools, TRIGGER_TOOL } from './lib/task-verb-tools';
 
 async function backfill(dryRun: boolean): Promise<void> {
   console.log(
@@ -51,10 +47,10 @@ async function backfill(dryRun: boolean): Promise<void> {
   for (const row of rows) {
     scanned += 1;
 
-    if (!isStringArray(row.enabledTools)) {
-      // Defensive: the @> filter matches jsonb arrays, but guard against any
-      // legacy non-string entries rather than corrupting the value.
-      console.warn(`⚠️  Skipping page ${row.id}: enabledTools is not a string array.`);
+    if (!Array.isArray(row.enabledTools)) {
+      // The @> filter only matches jsonb arrays; this guards the unexpected
+      // (e.g. a jsonb scalar) rather than corrupting the value.
+      console.warn(`⚠️  Skipping page ${row.id}: enabledTools is not an array.`);
       skipped += 1;
       continue;
     }
