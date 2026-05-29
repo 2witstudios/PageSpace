@@ -106,7 +106,7 @@ import { canActorEditPage } from '../actor-permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
-import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { channelMessageRepository, type ChannelMessageRow } from '@pagespace/lib/services/channel-message-repository';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanActorEditPage = vi.mocked(canActorEditPage);
@@ -157,7 +157,15 @@ describe('channel-tools', () => {
       isActive: true,
       aiMeta: null,
       createdAt: new Date('2026-02-10T12:00:00.000Z'),
-    });
+      fileId: null,
+      attachmentMeta: null,
+      editedAt: null,
+      parentId: null,
+      replyCount: 0,
+      lastReplyAt: null,
+      mirroredFromId: null,
+      quotedMessageId: null,
+    } satisfies ChannelMessageRow);
     mockSoftDeleteChannelMessage.mockResolvedValue(1);
     mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
@@ -569,7 +577,15 @@ describe('channel-tools', () => {
         isActive: true,
         aiMeta: null,
         createdAt: new Date(),
-      });
+        fileId: null,
+        attachmentMeta: null,
+        editedAt: null,
+        parentId: null,
+        replyCount: 0,
+        lastReplyAt: null,
+        mirroredFromId: null,
+        quotedMessageId: null,
+      } satisfies ChannelMessageRow);
 
       const context = {
         toolCallId: '1', messages: [],
@@ -633,7 +649,15 @@ describe('channel-tools', () => {
         isActive: true,
         aiMeta: { senderType: 'global_assistant', senderName: 'Test User' },
         createdAt: new Date(),
-      });
+        fileId: null,
+        attachmentMeta: null,
+        editedAt: null,
+        parentId: null,
+        replyCount: 0,
+        lastReplyAt: null,
+        mirroredFromId: null,
+        quotedMessageId: null,
+      } satisfies ChannelMessageRow);
 
       const context = {
         toolCallId: '1', messages: [],
