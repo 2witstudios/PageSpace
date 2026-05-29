@@ -306,4 +306,35 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
       expect.objectContaining({ allowedTools: null })
     );
   });
+
+  it('never auto-grants a dangerous tool via the default bundle', async () => {
+    mockGetConnectionWithProvider.mockResolvedValue({
+      id: 'conn-1',
+      userId: mockUserId,
+      driveId: null,
+      status: 'active',
+      provider: {
+        slug: 'risky',
+        name: 'Risky',
+        config: {
+          tools: [
+            { id: 'read_thing', name: 'read_thing', description: 'reads', category: 'read' },
+            { id: 'nuke', name: 'nuke', description: 'deletes everything', category: 'dangerous' },
+          ],
+          toolBundles: [
+            { id: 'default', name: 'Default', description: 'all', toolIds: ['read_thing', 'nuke'], recommended: true },
+          ],
+        },
+      },
+    });
+
+    await POST(postRequest({ connectionId: 'conn-1' }), {
+      params: Promise.resolve({ agentId: mockAgentId }),
+    });
+
+    expect(mockCreateGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ allowedTools: ['read_thing'] })
+    );
+  });
 });

@@ -69,12 +69,20 @@ const sanitizeProviderBundles = (config: unknown): SafeProviderBundle[] => {
  * specify any: the provider's recommended bundle (Read-only for GitHub), or its
  * first bundle, falling back to null (all non-dangerous tools) for providers
  * with no bundles. Starting least-privilege also means agents load fewer tools.
+ *
+ * Dangerous tools are never auto-granted as a default — enabling one must always
+ * be an explicit human choice — so they are stripped even if a bundle lists them.
  */
 const defaultAllowedToolsForProvider = (config: unknown): string[] | null => {
   const bundles = sanitizeProviderBundles(config);
   if (bundles.length === 0) return null;
   const preferred = bundles.find((b) => b.recommended) ?? bundles[0];
-  return [...preferred.toolIds];
+  const dangerous = new Set(
+    sanitizeProviderTools(config)
+      .filter((t) => t.category === 'dangerous')
+      .map((t) => t.id)
+  );
+  return preferred.toolIds.filter((id) => !dangerous.has(id));
 };
 
 const createGrantSchema = z.object({
