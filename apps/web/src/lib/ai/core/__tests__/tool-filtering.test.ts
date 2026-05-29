@@ -106,6 +106,8 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
   it('classifies write tools correctly', () => {
     expect(isWriteTool('create_page')).toBe(true);
     expect(isWriteTool('trash')).toBe(true);
+    expect(isWriteTool('send_channel_message')).toBe(true);
+    expect(isWriteTool('delete_channel_message')).toBe(true);
     expect(isWriteTool('read_page')).toBe(false);
     expect(isWriteTool('web_search')).toBe(false);
   });

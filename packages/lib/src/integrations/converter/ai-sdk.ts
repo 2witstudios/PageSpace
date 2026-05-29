@@ -4,8 +4,10 @@
  * Converts integration ToolDefinitions into Vercel AI SDK tool objects
  * that route execution through the sandbox executor.
  *
- * Tool naming convention mirrors MCP: int__{providerSlug}__{connectionShortId}__{toolId}
- * This is AI-provider-safe (no colons, only alphanumeric + underscores + hyphens).
+ * Tool naming convention mirrors MCP: int__{providerSlug}__{toolId} (with an
+ * optional __{connectionShortId} disambiguation segment for agents holding more
+ * than one connection per provider). Every segment is AI-provider-safe (no
+ * colons, only alphanumeric + underscores + hyphens).
  */
 
 import { z } from 'zod';
@@ -16,6 +18,7 @@ import type {
   ToolCallResult,
   ToolGrant,
 } from '../types';
+import { isToolAllowed } from '../validation/is-tool-allowed';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -63,34 +66,46 @@ const INT_TOOL_PREFIX = 'int__';
 
 /**
  * Build a namespaced integration tool name.
- * Format: int__{providerSlug}__{connectionShortId}__{toolId}
+ *
+ * Format: `int__{providerSlug}__{toolId}`. When an agent holds more than one
+ * connection for the same provider, pass `connectionId` to append a
+ * `__{shortId}` segment so the names stay unique. The common single-connection
+ * case carries no connection id — that segment was meaningless to the model and
+ * pure token noise.
+ *
+ * Every segment is drawn from `[a-zA-Z0-9_-]` (the connection short id is a
+ * cuid2 prefix), so generated names satisfy the AI-provider tool-name charset
+ * (`^[a-zA-Z0-9_-]+$`) that Google/OpenAI/Azure and our own validators enforce.
  */
 export function buildIntegrationToolName(
   providerSlug: string,
-  connectionId: string,
-  toolId: string
+  toolId: string,
+  connectionId?: string
 ): string {
-  const shortId = connectionId.slice(0, 8);
-  return `${INT_TOOL_PREFIX}${providerSlug}__${shortId}__${toolId}`;
+  const base = `${INT_TOOL_PREFIX}${providerSlug}__${toolId}`;
+  return connectionId ? `${base}__${connectionId.slice(0, 8)}` : base;
 }
 
 /**
- * Parse a namespaced integration tool name back to components.
+ * Parse a namespaced integration tool name into `{ providerSlug, toolId }` for
+ * display lookups. Tool ids may themselves contain `__`, which is preserved by
+ * joining the remaining segments. In the rare multi-connection case the trailing
+ * disambiguation segment is left as part of `toolId`; callers resolve the tool
+ * by exact id and fall back gracefully when it does not match.
  */
 export function parseIntegrationToolName(
   name: string
-): { providerSlug: string; connectionShortId: string; toolId: string } | null {
+): { providerSlug: string; toolId: string } | null {
   if (!name.startsWith(INT_TOOL_PREFIX)) return null;
 
-  const rest = name.slice(INT_TOOL_PREFIX.length);
-  const parts = rest.split('__');
-  if (parts.length < 3) return null;
+  const parts = name.slice(INT_TOOL_PREFIX.length).split('__');
+  if (parts.length < 2) return null;
 
-  return {
-    providerSlug: parts[0],
-    connectionShortId: parts[1],
-    toolId: parts.slice(2).join('__'),
-  };
+  const providerSlug = parts[0];
+  const toolId = parts.slice(1).join('__');
+  if (!providerSlug || !toolId) return null;
+
+  return { providerSlug, toolId };
 }
 
 /**
@@ -230,6 +245,19 @@ export function convertIntegrationToolsToAISDK(
 ): Record<string, CoreTool> {
   const tools: Record<string, CoreTool> = {};
 
+  // Count distinct connections per provider so single-connection providers
+  // (the common case) get clean names and only genuine collisions across two+
+  // connections of the same provider carry a disambiguation segment.
+  const connectionsByProvider = new Map<string, Set<string>>();
+  for (const grant of grants) {
+    const conn = grant.connection;
+    if (!conn || conn.status !== 'active' || !conn.provider?.config) continue;
+    const slug = conn.provider.slug;
+    const set = connectionsByProvider.get(slug) ?? new Set<string>();
+    set.add(conn.id);
+    connectionsByProvider.set(slug, set);
+  }
+
   for (const grant of grants) {
     const connection = grant.connection;
     if (!connection) continue;
@@ -238,12 +266,25 @@ export function convertIntegrationToolsToAISDK(
 
     const providerConfig = connection.provider.config;
     const providerSlug = connection.provider.slug;
+    const needsDisambiguation = (connectionsByProvider.get(providerSlug)?.size ?? 0) > 1;
 
     for (const tool of providerConfig.tools) {
+      // Only expose tools the grant actually permits. Filtering here (not just
+      // at execution time) keeps disallowed tools out of the model's context —
+      // the least-privilege default bundle then translates into fewer tokens,
+      // not just blocked calls.
+      const permitted = isToolAllowed(tool.id, {
+        providerTools: providerConfig.tools,
+        grantAllowedTools: grant.allowedTools,
+        grantDeniedTools: grant.deniedTools,
+        grantReadOnly: grant.readOnly,
+      });
+      if (!permitted.allowed) continue;
+
       const toolName = buildIntegrationToolName(
         providerSlug,
-        connection.id,
-        tool.id
+        tool.id,
+        needsDisambiguation ? connection.id : undefined
       );
 
       try {

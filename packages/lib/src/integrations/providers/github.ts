@@ -23,6 +23,12 @@ export const githubProvider: IntegrationProviderConfig = {
       pkceRequired: false,
     },
   },
+  oauthScopeDescriptions: {
+    repo: 'Read and write code, issues, and pull requests on any repository your GitHub account can access',
+    'read:user': 'Read your GitHub profile (username and avatar)',
+  },
+  connectNotes:
+    'Agents you grant this connection act as you on GitHub — anything they do (comments, reviews, issues) appears under your GitHub account. You choose exactly which actions each agent can take after connecting.',
   baseUrl: 'https://api.github.com',
   defaultHeaders: {
     'Accept': 'application/vnd.github.v3+json',
@@ -416,8 +422,8 @@ export const githubProvider: IntegrationProviderConfig = {
 
     // ─── Read Tools: Issues ──────────────────────────────────────────────
     {
-      id: 'get_issues',
-      name: 'Get Issues',
+      id: 'list_issues',
+      name: 'List Issues',
       description: 'List issues for a repository',
       category: 'read',
       inputSchema: {
@@ -667,8 +673,8 @@ export const githubProvider: IntegrationProviderConfig = {
       },
     },
     {
-      id: 'get_pr_diff',
-      name: 'Get PR Files',
+      id: 'list_pr_files',
+      name: 'List PR Files',
       description:
         'Get the list of files changed in a pull request, including patch diffs and change statistics',
       category: 'read',
@@ -724,8 +730,8 @@ export const githubProvider: IntegrationProviderConfig = {
       },
     },
     {
-      id: 'get_pr_reviews',
-      name: 'Get PR Reviews',
+      id: 'list_pr_reviews',
+      name: 'List PR Reviews',
       description: 'List reviews on a pull request',
       category: 'read',
       inputSchema: {
@@ -778,8 +784,8 @@ export const githubProvider: IntegrationProviderConfig = {
       },
     },
     {
-      id: 'get_pr_review_comments',
-      name: 'Get PR Review Comments',
+      id: 'list_pr_review_comments',
+      name: 'List PR Review Comments',
       description:
         'Get inline review comments on a pull request (comments on specific lines of code)',
       category: 'read',
@@ -1088,7 +1094,7 @@ export const githubProvider: IntegrationProviderConfig = {
                 line: {
                   type: 'integer',
                   description:
-                    'Line number in the diff to comment on (use get_pr_diff to find line numbers)',
+                    'Line number in the diff to comment on (use list_pr_files to find line numbers)',
                 },
                 side: {
                   type: 'string',
@@ -1240,6 +1246,85 @@ export const githubProvider: IntegrationProviderConfig = {
         maxLength: 500,
       },
       rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+  ],
+  toolBundles: [
+    {
+      id: 'read_only',
+      name: 'Read-only',
+      description: 'Browse repositories, code, branches, commits, issues, and pull requests. No writes.',
+      recommended: true,
+      toolIds: [
+        'list_repos',
+        'get_repo',
+        'get_repo_content',
+        'get_repo_tree',
+        'list_branches',
+        'search_code',
+        'get_commit',
+        'list_issues',
+        'list_issue_comments',
+        'get_pull_request',
+        'list_pull_requests',
+        'list_pr_files',
+        'list_pr_reviews',
+        'list_pr_review_comments',
+      ],
+    },
+    {
+      id: 'code_review',
+      name: 'Code review',
+      description: 'Read pull requests and code, then post reviews, inline comments, and replies.',
+      toolIds: [
+        'get_pull_request',
+        'list_pull_requests',
+        'list_pr_files',
+        'list_pr_reviews',
+        'list_pr_review_comments',
+        'get_repo_content',
+        'get_commit',
+        'create_pr_review',
+        'create_pr_review_comment',
+        'create_issue_comment',
+      ],
+    },
+    {
+      id: 'issue_triage',
+      name: 'Issue triage',
+      description: 'Read, open, update, and comment on issues.',
+      toolIds: [
+        'list_issues',
+        'list_issue_comments',
+        'create_issue',
+        'update_issue',
+        'create_issue_comment',
+      ],
+    },
+    {
+      id: 'full',
+      name: 'Full access',
+      description: 'Every GitHub tool — read and write across repos, issues, and pull requests.',
+      toolIds: [
+        'list_repos',
+        'get_repo',
+        'get_repo_content',
+        'get_repo_tree',
+        'list_branches',
+        'search_code',
+        'get_commit',
+        'list_issues',
+        'list_issue_comments',
+        'get_pull_request',
+        'list_pull_requests',
+        'list_pr_files',
+        'list_pr_reviews',
+        'list_pr_review_comments',
+        'create_issue',
+        'update_issue',
+        'create_issue_comment',
+        'create_pr_review',
+        'create_pr_review_comment',
+      ],
     },
   ],
 };
