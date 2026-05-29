@@ -45,7 +45,7 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
   uploadSemaphore: {
-    verifySlotOwner: vi.fn(),
+    getSlotMetadata: vi.fn(),
     releaseUploadSlot: vi.fn(),
   },
 }));
@@ -108,15 +108,14 @@ function makeRequest(body: Record<string, unknown>) {
   });
 }
 
+// Only jobId/title/parentId are read from the body now; the rest is trusted slot metadata.
 const VALID_BODY = {
   jobId: MOCK_JOB_ID,
-  contentHash: VALID_HASH,
-  driveId: 'drive-1',
   title: 'photo.jpg',
-  mimeType: 'image/jpeg',
-  fileSize: 2048,
   parentId: null,
 };
+
+const SLOT_META = { contentHash: VALID_HASH, driveId: 'drive-1', fileSize: 2048, mimeType: 'image/jpeg' };
 
 const MOCK_PAGE = { id: 'page-abc', title: 'photo.jpg', type: 'FILE', driveId: 'drive-1', contentHash: VALID_HASH };
 
@@ -125,7 +124,7 @@ beforeEach(() => {
   capturedPageValues = undefined;
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuth());
   vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
-  vi.mocked(uploadSemaphore.verifySlotOwner).mockReturnValue(true);
+  vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue(SLOT_META);
   vi.mocked(enqueueProcessorJob).mockResolvedValue(undefined);
   vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
 
@@ -142,10 +141,18 @@ describe('POST /api/upload/complete', () => {
   });
 
   describe('jobId verification', () => {
-    it('returns 403 when jobId does not belong to the authenticated user', async () => {
-      vi.mocked(uploadSemaphore.verifySlotOwner).mockReturnValue(false);
+    it('returns 403 when the jobId has no reserved slot for the user', async () => {
+      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue(null);
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(403);
+    });
+
+    it('uses the slot metadata (not the request body) for the trusted upload params', async () => {
+      // Body lies about the drive; the route must use the reserved drive-1 instead.
+      const res = await POST(makeRequest({ ...VALID_BODY, driveId: 'attacker-drive', contentHash: 'f'.repeat(64) }));
+      expect(res.status).toBe(200);
+      expect(capturedPageValues?.driveId).toBe('drive-1');
+      expect(capturedPageValues?.contentHash).toBe(VALID_HASH);
     });
 
     it('returns 400 when required fields are missing', async () => {

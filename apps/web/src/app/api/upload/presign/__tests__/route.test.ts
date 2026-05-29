@@ -211,7 +211,12 @@ describe('POST /api/upload/presign', () => {
 
     it('reserves an upload slot via acquireUploadSlot', async () => {
       await POST(makeRequest(VALID_BODY));
-      expect(uploadSemaphore.acquireUploadSlot).toHaveBeenCalledWith('user-1', 'free', 1024);
+      expect(uploadSemaphore.acquireUploadSlot).toHaveBeenCalledWith('user-1', 'free', 1024, {
+        contentHash: VALID_HASH,
+        driveId: 'drive-1',
+        fileSize: 1024,
+        mimeType: 'image/jpeg',
+      });
     });
 
     it('increments activeUploads after acquiring the slot', async () => {

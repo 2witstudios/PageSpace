@@ -58,6 +58,8 @@ export async function POST(request: Request) {
   if (!hashResult.ok) {
     return NextResponse.json({ error: hashResult.error.message }, { status: 400 });
   }
+  // Use the canonicalized (lowercased) hash everywhere downstream.
+  const canonicalHash = hashResult.value;
 
   const mimeResult = validateMimeTypeDeclaration(mimeType);
   if (!mimeResult.ok) {
@@ -80,13 +82,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: quotaCheck.reason, storageInfo: quotaCheck.quota }, { status: 413 });
   }
 
-  const key = buildS3Key(contentHash);
+  const key = buildS3Key(canonicalHash);
 
   const exists = await checkObjectExists(key);
 
   // Reserve a slot in both paths so the client always has a jobId to pass to
   // /complete — the dedup path skips the PUT but still creates a page record.
-  const jobId = await uploadSemaphore.acquireUploadSlot(userId, quota.tier, fileSize);
+  // The slot carries the server-trusted upload params so /complete can't be
+  // tricked with a divergent hash/drive/size/mime.
+  const jobId = await uploadSemaphore.acquireUploadSlot(userId, quota.tier, fileSize, {
+    contentHash: canonicalHash,
+    driveId,
+    fileSize,
+    mimeType,
+  });
   if (!jobId) {
     return NextResponse.json(
       { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
@@ -110,7 +119,7 @@ export async function POST(request: Request) {
       eventType: 'data.write',
       userId,
       resourceType: 'file',
-      resourceId: contentHash,
+      resourceId: canonicalHash,
       details: { action: 'presign', driveId, filename, fileSize },
     });
 

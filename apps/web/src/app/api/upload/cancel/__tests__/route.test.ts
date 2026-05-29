@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && 'error' in r),
+  checkMCPCreateScope: vi.fn(() => null),
 }));
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
-  uploadSemaphore: { verifySlotOwner: vi.fn(), releaseUploadSlot: vi.fn() },
+  uploadSemaphore: { verifySlotOwner: vi.fn(), getSlotMetadata: vi.fn(), releaseUploadSlot: vi.fn() },
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
@@ -39,6 +40,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuth());
   vi.mocked(uploadSemaphore.verifySlotOwner).mockReturnValue(true);
+  vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({ contentHash: 'a'.repeat(64), driveId: 'drive-1', fileSize: 1024, mimeType: 'image/jpeg' });
   vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
 });
 

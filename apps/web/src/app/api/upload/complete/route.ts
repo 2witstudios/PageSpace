@@ -16,12 +16,10 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 interface CompleteRequestBody {
   jobId: string;
-  contentHash: string;
-  driveId: string;
   title: string;
-  mimeType: string;
-  fileSize: number;
   parentId?: string | null;
+  // contentHash / driveId / mimeType / fileSize are intentionally NOT read from
+  // the body — they are taken from the presign-reserved slot (see getSlotMetadata).
 }
 
 interface NewPageRecord {
@@ -93,15 +91,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { jobId, contentHash, driveId, title, mimeType, fileSize, parentId } = body;
+  const { jobId, title, parentId } = body;
 
-  if (!jobId || !contentHash || !driveId || !title || !mimeType || typeof fileSize !== 'number') {
+  if (!jobId || !title) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
-  if (!uploadSemaphore.verifySlotOwner(jobId, userId)) {
+  // contentHash / driveId / fileSize / mimeType come from the slot reserved at
+  // presign time — never from the client body — so a verified jobId can't be
+  // replayed against a different drive, hash, size, or MIME type.
+  const reserved = uploadSemaphore.getSlotMetadata(jobId, userId);
+  if (!reserved) {
     return NextResponse.json({ error: 'Invalid or expired jobId' }, { status: 403 });
   }
+  const { contentHash, driveId, fileSize, mimeType } = reserved;
 
   // Scoped MCP tokens may only act on the drive they were granted for.
   const scopeError = checkMCPCreateScope(auth, driveId);

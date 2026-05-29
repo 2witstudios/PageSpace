@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { updateActiveUploads } from '@pagespace/lib/services/storage-limits';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -29,8 +29,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing jobId' }, { status: 400 });
   }
 
+  const reserved = uploadSemaphore.getSlotMetadata(jobId, userId);
   if (!uploadSemaphore.verifySlotOwner(jobId, userId)) {
     return NextResponse.json({ error: 'Invalid or expired jobId' }, { status: 403 });
+  }
+
+  // A drive-scoped MCP token may only cancel uploads within its scope.
+  if (reserved) {
+    const scopeError = checkMCPCreateScope(auth, reserved.driveId);
+    if (scopeError) return scopeError;
   }
 
   uploadSemaphore.releaseUploadSlot(jobId);

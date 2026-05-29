@@ -179,6 +179,31 @@ describe('upload-semaphore', () => {
     });
   });
 
+  describe('getSlotMetadata', () => {
+    const META = { contentHash: 'a'.repeat(64), driveId: 'drive-1', fileSize: 1024, mimeType: 'image/jpeg' };
+
+    it('returns the metadata captured at acquire time for the owning user', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024, META);
+      expect(uploadSemaphore.getSlotMetadata(slot!, 'user-1')).toEqual(META);
+    });
+
+    it('returns null for a different user', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024, META);
+      expect(uploadSemaphore.getSlotMetadata(slot!, 'user-2')).toBeNull();
+    });
+
+    it('returns null for an expired slot', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024, META);
+      vi.advanceTimersByTime(11 * 60 * 1000);
+      expect(uploadSemaphore.getSlotMetadata(slot!, 'user-1')).toBeNull();
+    });
+
+    it('returns null when a slot was acquired without metadata', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+      expect(uploadSemaphore.getSlotMetadata(slot!, 'user-1')).toBeNull();
+    });
+  });
+
   describe('reset', () => {
     it('resets all state', async () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
