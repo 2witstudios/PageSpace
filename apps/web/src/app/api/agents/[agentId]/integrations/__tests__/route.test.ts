@@ -133,6 +133,9 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
                   execution: { type: 'http', config: { method: 'POST', pathTemplate: '/repos/{owner}/{repo}/issues' } },
                 },
               ],
+              toolBundles: [
+                { id: 'read_only', name: 'Read-only', description: 'reads', toolIds: ['list_repos'], recommended: true },
+              ],
             },
           },
         },
@@ -154,6 +157,9 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     expect(provider.tools[0]).not.toHaveProperty('execution');
     expect(provider.tools[0]).not.toHaveProperty('inputSchema');
     expect(provider.tools[0]).not.toHaveProperty('rateLimit');
+    expect(provider.toolBundles).toEqual([
+      { id: 'read_only', name: 'Read-only', description: 'reads', toolIds: ['list_repos'], recommended: true },
+    ]);
   });
 
   it('drops malformed tool entries while keeping well-formed ones', async () => {

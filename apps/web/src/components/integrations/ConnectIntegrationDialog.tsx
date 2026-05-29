@@ -48,7 +48,7 @@ export function ConnectIntegrationDialog({
 
   const isOAuth = provider?.providerType === 'builtin';
   const requiresApiKey = !isOAuth;
-  const scopeDescriptions = Object.values(provider?.oauthScopeDescriptions ?? {});
+  const scopeDescriptions = Object.entries(provider?.oauthScopeDescriptions ?? {});
 
   const handleConnect = async () => {
     if (!provider) return;
@@ -124,8 +124,8 @@ export function ConnectIntegrationDialog({
             <div className="space-y-2">
               <Label>Access requested</Label>
               <ul className="space-y-1.5">
-                {scopeDescriptions.map((description) => (
-                  <li key={description} className="flex gap-2 text-xs text-muted-foreground">
+                {scopeDescriptions.map(([scope, description]) => (
+                  <li key={scope} className="flex gap-2 text-xs text-muted-foreground">
                     <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-muted-foreground" />
                     <span>{description}</span>
                   </li>
