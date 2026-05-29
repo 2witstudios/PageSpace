@@ -239,20 +239,28 @@ export async function revokeAgentMembershipsGrantedBy(
 /**
  * Re-cap the agent memberships in `driveId` granted by `userId` when the user's
  * access is downgraded, bringing every agent they granted down to what they
- * could grant today. Only ever caps DOWN — it must never widen an agent's reach.
+ * could grant today. Only ever caps DOWN — it must never widen an agent's reach,
+ * and never leave it with more than the downgraded granter.
  *
- * Let the granter's current ceiling be `{ MEMBER, granter.customRoleId }`. For
- * each non-home membership the user granted:
- *  - role ADMIN ⇒ reduce to the ceiling. ADMIN has full access to every page, so
- *    capping to the ceiling (the granter's custom role, or plain MEMBER =
- *    view-only on all pages) is always strictly narrower.
- *  - already at the ceiling (role MEMBER and same customRoleId) ⇒ leave as is.
- *  - otherwise (role MEMBER with a *different* customRoleId, including a custom
- *    role when the granter now has none) ⇒ REVOKE. The grant is no longer one
- *    the granter could make, and the role/customRoleId fields can't express the
- *    safe least-privilege intersection (e.g. "view-only on this custom role's
- *    pages"), so rewriting it risks widening — removing the membership is the
- *    only representable non-widening reduction.
+ * Key asymmetry: a plain MEMBER agent membership resolves to `canView: true` on
+ * EVERY page (`resolveRolePermissions` with no custom role), including private
+ * pages — whereas a plain MEMBER *user* only sees non-private pages. So a plain
+ * MEMBER membership row cannot represent "what a plain member may actually see",
+ * which makes it unsafe as a recap target.
+ *
+ * The only representable, provably-safe member-level ceiling is the granter's
+ * own custom role (an explicit per-page matrix). So, for each non-home membership
+ * the user granted, with the granter now capped at MEMBER:
+ *  - granter HAS a custom role B:
+ *      - role ADMIN          ⇒ reduce to B (B ⊆ full access ⇒ strictly narrower).
+ *      - role MEMBER + cid==B ⇒ leave as is (already the granter's grant).
+ *      - anything else        ⇒ REVOKE (stale/▲ scope, not representable safely).
+ *  - granter has NO custom role (plain member):
+ *      - role ADMIN          ⇒ REVOKE. Reducing to plain MEMBER would let the
+ *        agent read every page (incl. private) the plain-member granter cannot.
+ *      - role MEMBER + cid==null ⇒ leave as is (already a plain-member grant,
+ *        i.e. exactly what addAgentToDrive yields for a plain-member granter).
+ *      - role MEMBER + custom role ⇒ REVOKE (stale custom role).
  *
  * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
  * Returns the affected agentPageIds (both reduced and revoked).
@@ -282,12 +290,21 @@ export async function recapAgentMembershipsGrantedBy(
       ne(pages.driveId, driveId),
     ));
 
-  const toReduce = rows.filter((r) => r.role === 'ADMIN');
-  // Member-level grants whose custom-role scope differs from what the granter
-  // can grant today — revoke them (their safe intersection isn't representable).
-  const toRevoke = rows.filter(
-    (r) => r.role !== 'ADMIN' && (r.customRoleId ?? null) !== ceilingCustomRoleId,
-  );
+  const toReduce: typeof rows = [];
+  const toRevoke: typeof rows = [];
+  for (const r of rows) {
+    const atCeiling = r.role !== 'ADMIN' && (r.customRoleId ?? null) === ceilingCustomRoleId;
+    if (atCeiling) continue; // already exactly the granter's current grant
+    if (r.role === 'ADMIN' && ceilingCustomRoleId !== null) {
+      // Representable reduction: cap full access down to the granter's custom role.
+      toReduce.push(r);
+    } else {
+      // ADMIN when the ceiling is plain MEMBER (can't express non-private/explicit
+      // access), or a member-level grant whose scope differs from the granter's —
+      // not representable as a safe cap, so revoke.
+      toRevoke.push(r);
+    }
+  }
 
   if (toReduce.length > 0) {
     await db

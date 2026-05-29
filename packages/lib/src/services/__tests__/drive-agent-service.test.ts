@@ -264,20 +264,23 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(db.update).not.toHaveBeenCalled();
   });
 
-  it('reduces ADMIN agents to the granter ceiling (plain MEMBER) and never widens', async () => {
+  it('REVOKES ADMIN agents when the granter is now a plain MEMBER (no representable cap)', async () => {
+    // A plain MEMBER agent membership resolves to canView on every page incl.
+    // private ones, which a plain-member granter cannot grant — so reducing
+    // ADMIN→plain MEMBER would over-grant. Revoke instead.
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER, no custom role
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → plain MEMBER
       .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1', role: 'ADMIN', customRoleId: null }]));
-    const captured: Record<string, unknown>[] = [];
-    stubUpdate(captured);
-    stubDelete();
+    stubUpdate([]);
+    const where = stubDelete();
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
     expect(result).toEqual(['a1']);
-    expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: null });
-    expect(db.delete).not.toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
   });
 
   it('caps ADMIN agents to the granter\'s own custom role when the granter has one', async () => {
@@ -324,6 +327,22 @@ describe('recapAgentMembershipsGrantedBy', () => {
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
+    expect(result).toEqual([]);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
+  });
+
+  it('leaves an existing plain-MEMBER agent untouched under a plain-MEMBER granter', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                            // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))                 // granter plain MEMBER
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm4', agentPageId: 'a4', role: 'MEMBER', customRoleId: null }]));
+    stubUpdate([]);
+    stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    // Already exactly what a plain-member granter could create — not touched.
     expect(result).toEqual([]);
     expect(db.update).not.toHaveBeenCalled();
     expect(db.delete).not.toHaveBeenCalled();
