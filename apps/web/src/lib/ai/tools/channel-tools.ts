@@ -9,6 +9,7 @@ import { eq, and, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { type ToolExecutionContext } from '../core';
@@ -259,6 +260,108 @@ export const channelTools = {
           channelId: maskIdentifier(channelId),
         });
         throw new Error(`Failed to send channel message: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Delete a message from a channel
+   */
+  delete_channel_message: tool({
+    description:
+      'Delete a message from a channel. Can only delete messages that were sent by or on behalf of the authenticated user (including AI-generated messages). Use this to clean up test messages, remove erroneous posts, or manage channel content.',
+    inputSchema: z.object({
+      channelId: z.string().describe('The unique ID of the channel page containing the message'),
+      messageId: z.string().describe('The unique ID of the message to delete'),
+    }),
+    execute: async ({ channelId, messageId }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Verify the channel exists
+        const channel = await db.query.pages.findFirst({
+          where: and(eq(pages.id, channelId), eq(pages.isTrashed, false)),
+          columns: { id: true, title: true, type: true },
+        });
+        if (!channel) {
+          throw new Error(`Channel with ID "${channelId}" not found`);
+        }
+
+        if (channel.type !== 'CHANNEL') {
+          return {
+            success: false,
+            error: 'Page is not a channel',
+            message: `This page is a ${channel.type}. Use delete_channel_message only on CHANNEL pages.`,
+          };
+        }
+
+        // Check edit permissions
+        const canEdit = await canActorEditPage(context as ToolExecutionContext, channel.id);
+        if (!canEdit) {
+          throw new Error('Insufficient permissions to delete messages in this channel');
+        }
+
+        // Verify the message exists in this channel
+        const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId: channelId });
+        if (!message) {
+          return {
+            success: false,
+            error: 'Message not found',
+            message: `Message "${messageId}" was not found in channel "${channel.title}". It may have already been deleted.`,
+          };
+        }
+
+        // Only the user who authored (or triggered) the message may delete it
+        if (message.userId !== userId) {
+          return {
+            success: false,
+            error: 'Permission denied',
+            message: 'You can only delete messages that were sent by or on behalf of you.',
+          };
+        }
+
+        const deleted = await channelMessageRepository.softDeleteChannelMessage(messageId);
+        if (deleted === 0) {
+          return {
+            success: false,
+            error: 'Message already deleted',
+            message: `Message "${messageId}" has already been deleted.`,
+          };
+        }
+
+        // Broadcast deletion to real-time channel (fire-and-forget)
+        if (process.env.INTERNAL_REALTIME_URL) {
+          const requestBody = JSON.stringify({
+            channelId,
+            event: 'message_deleted',
+            payload: { messageId },
+          });
+          fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+            method: 'POST',
+            headers: createSignedBroadcastHeaders(requestBody),
+            body: requestBody,
+          }).catch(() => {
+            channelLogger.error('Failed to broadcast message_deleted from delete_channel_message tool');
+          });
+        }
+
+        return {
+          success: true,
+          messageId,
+          channelId,
+          channelTitle: channel.title,
+          message: `Successfully deleted message from channel "${channel.title}"`,
+        };
+      } catch (error) {
+        channelLogger.error('Failed to delete channel message', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          channelId: maskIdentifier(channelId),
+          messageId: maskIdentifier(messageId),
+        });
+        throw new Error(`Failed to delete channel message: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
