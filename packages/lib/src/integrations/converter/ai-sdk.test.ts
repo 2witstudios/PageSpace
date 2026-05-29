@@ -19,14 +19,19 @@ describe('buildIntegrationToolName', () => {
     expect(result).toBe('int__github__list_repos');
   });
 
-  it('should append a ~-prefixed 8-char disambiguator when a connectionId is given', () => {
+  it('should append an 8-char connection-id segment when a connectionId is given', () => {
     const result = buildIntegrationToolName('github', 'list_repos', 'abc123def456');
-    expect(result).toBe('int__github__list_repos__~abc123de');
+    expect(result).toBe('int__github__list_repos__abc123de');
+  });
+
+  it('should produce only provider-safe characters when disambiguating', () => {
+    const result = buildIntegrationToolName('github', 'list_repos', 'abc123def456');
+    expect(result).toMatch(/^[a-zA-Z0-9_-]+$/);
   });
 
   it('should truncate the disambiguator connectionId to 8 chars', () => {
     const result = buildIntegrationToolName('slack', 'send_message', 'longconnectionidhere');
-    expect(result).toContain('__~longconn');
+    expect(result).toContain('__longconn');
   });
 });
 
@@ -39,29 +44,11 @@ describe('parseIntegrationToolName', () => {
     });
   });
 
-  it('should parse a disambiguated tool name and recover the connection short id', () => {
-    const result = parseIntegrationToolName('int__github__list_repos__~abc123de');
-    expect(result).toEqual({
-      providerSlug: 'github',
-      toolId: 'list_repos',
-      connectionShortId: 'abc123de',
-    });
-  });
-
   it('should handle tool IDs with double underscores', () => {
     const result = parseIntegrationToolName('int__github__list__all__repos');
     expect(result).toEqual({
       providerSlug: 'github',
       toolId: 'list__all__repos',
-    });
-  });
-
-  it('should handle double-underscore tool IDs alongside a disambiguator', () => {
-    const result = parseIntegrationToolName('int__github__list__all__repos__~abc123de');
-    expect(result).toEqual({
-      providerSlug: 'github',
-      toolId: 'list__all__repos',
-      connectionShortId: 'abc123de',
     });
   });
 
@@ -256,12 +243,13 @@ describe('convertIntegrationToolsToAISDK', () => {
     );
 
     const toolNames = Object.keys(tools);
-    // Two connections × two tools, all uniquely named via the ~ disambiguator.
+    // Two connections × two tools, all uniquely named via the connection-id segment.
     expect(toolNames).toHaveLength(4);
     expect(new Set(toolNames).size).toBe(4);
-    expect(toolNames).toContain('int__github__list_repos__~conn1234');
-    expect(toolNames).toContain('int__github__list_repos__~conn9999');
-    expect(toolNames.every((n) => /__~conn/.test(n))).toBe(true);
+    expect(toolNames).toContain('int__github__list_repos__conn1234');
+    expect(toolNames).toContain('int__github__list_repos__conn9999');
+    // All generated names must satisfy the AI-provider tool-name charset.
+    expect(toolNames.every((n) => /^[a-zA-Z0-9_-]+$/.test(n))).toBe(true);
   });
 
   it('should prefix descriptions with provider name', () => {

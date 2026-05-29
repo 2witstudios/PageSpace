@@ -60,17 +60,19 @@ export interface CoreTool {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const INT_TOOL_PREFIX = 'int__';
-/** Sentinel prefix for the optional connection-disambiguation segment. */
-const CONN_DISAMBIGUATOR = '~';
 
 /**
  * Build a namespaced integration tool name.
  *
  * Format: `int__{providerSlug}__{toolId}`. When an agent holds more than one
  * connection for the same provider, pass `connectionId` to append a
- * `__~{shortId}` disambiguation segment so the names stay unique. The common
- * single-connection case carries no connection id — the segment was meaningless
- * to the model and pure token noise.
+ * `__{shortId}` segment so the names stay unique. The common single-connection
+ * case carries no connection id — that segment was meaningless to the model and
+ * pure token noise.
+ *
+ * Every segment is drawn from `[a-zA-Z0-9_-]` (the connection short id is a
+ * cuid2 prefix), so generated names satisfy the AI-provider tool-name charset
+ * (`^[a-zA-Z0-9_-]+$`) that Google/OpenAI/Azure and our own validators enforce.
  */
 export function buildIntegrationToolName(
   providerSlug: string,
@@ -78,40 +80,29 @@ export function buildIntegrationToolName(
   connectionId?: string
 ): string {
   const base = `${INT_TOOL_PREFIX}${providerSlug}__${toolId}`;
-  return connectionId
-    ? `${base}__${CONN_DISAMBIGUATOR}${connectionId.slice(0, 8)}`
-    : base;
+  return connectionId ? `${base}__${connectionId.slice(0, 8)}` : base;
 }
 
 /**
- * Parse a namespaced integration tool name back to components. The
- * `connectionShortId` is present only for names that carry the disambiguation
- * segment. Tool ids may themselves contain `__`, which is preserved.
+ * Parse a namespaced integration tool name into `{ providerSlug, toolId }` for
+ * display lookups. Tool ids may themselves contain `__`, which is preserved by
+ * joining the remaining segments. In the rare multi-connection case the trailing
+ * disambiguation segment is left as part of `toolId`; callers resolve the tool
+ * by exact id and fall back gracefully when it does not match.
  */
 export function parseIntegrationToolName(
   name: string
-): { providerSlug: string; toolId: string; connectionShortId?: string } | null {
+): { providerSlug: string; toolId: string } | null {
   if (!name.startsWith(INT_TOOL_PREFIX)) return null;
 
   const parts = name.slice(INT_TOOL_PREFIX.length).split('__');
   if (parts.length < 2) return null;
 
   const providerSlug = parts[0];
-  const toolParts = parts.slice(1);
-
-  let connectionShortId: string | undefined;
-  const last = toolParts[toolParts.length - 1];
-  if (toolParts.length > 1 && last.startsWith(CONN_DISAMBIGUATOR)) {
-    connectionShortId = last.slice(CONN_DISAMBIGUATOR.length);
-    toolParts.pop();
-  }
-
-  const toolId = toolParts.join('__');
+  const toolId = parts.slice(1).join('__');
   if (!providerSlug || !toolId) return null;
 
-  return connectionShortId
-    ? { providerSlug, toolId, connectionShortId }
-    : { providerSlug, toolId };
+  return { providerSlug, toolId };
 }
 
 /**
