@@ -264,11 +264,11 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(db.update).not.toHaveBeenCalled();
   });
 
-  it('downgrades elevated agents to plain MEMBER when the granter is now a MEMBER', async () => {
+  it('downgrades ADMIN agents to the granter ceiling (plain MEMBER) and never widens', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER
-      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1' }]));    // elevated agent rows
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER, no custom role
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1' }]));    // ADMIN agent rows
     const captured: Record<string, unknown>[] = [];
     stubUpdate(captured);
 
@@ -276,13 +276,30 @@ describe('recapAgentMembershipsGrantedBy', () => {
 
     expect(result).toEqual(['a1']);
     expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: null });
+    // Only ADMIN memberships are selected for reduction — custom-role memberships
+    // are preserved so recap can never broaden an agent's page reach.
+    expect(eq).toHaveBeenCalledWith(driveAgentMembers.role, 'ADMIN');
   });
 
-  it('is a no-op when a downgraded granter has no elevated agents', async () => {
+  it('caps ADMIN agents to the granter\'s own custom role when the granter has one', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                  // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))   // membership → MEMBER + custom role
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm1', agentPageId: 'a1' }]));         // ADMIN agent rows
+    const captured: Record<string, unknown>[] = [];
+    stubUpdate(captured);
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a1']);
+    expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: 'role_b' });
+  });
+
+  it('is a no-op when a downgraded granter has no ADMIN agents (custom-role agents preserved)', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))  // membership → MEMBER
-      .mockReturnValueOnce(stubJoinSelect([]));                                   // nothing above the cap
+      .mockReturnValueOnce(stubJoinSelect([]));                                   // no ADMIN agents to reduce
     stubUpdate([]);
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);

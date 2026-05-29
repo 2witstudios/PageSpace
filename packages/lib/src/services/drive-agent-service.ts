@@ -10,7 +10,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, or, ne, isNotNull, inArray } from '@pagespace/db/operators';
+import { eq, and, ne, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
@@ -237,11 +237,24 @@ export async function revokeAgentMembershipsGrantedBy(
 }
 
 /**
- * Re-cap the agent memberships in `driveId` granted by `userId` to the role that
- * user could grant *today*. Called when the user's role is downgraded: an agent
- * they previously elevated (to ADMIN or a custom role) must drop to the user's
- * new ceiling, mirroring the add-time capping in `addAgentToDrive`. Never
- * escalates. The agent's home drive is excluded. Returns affected agentPageIds.
+ * Re-cap the agent memberships in `driveId` granted by `userId` when the user's
+ * access is downgraded, reducing agents that now exceed what the user could
+ * grant today. Caps DOWN only — it must never widen an agent's access.
+ *
+ * Only ADMIN agent memberships are reduced. An ADMIN agent has full access to
+ * every page, so capping it to the granter's member-level ceiling (their custom
+ * role, or plain MEMBER = view-only on all pages) is always strictly narrower.
+ *
+ * Custom-role agent memberships are deliberately left untouched. Rewriting a
+ * restrictive custom role to plain MEMBER (or to a different custom role) could
+ * *broaden* the agent's page reach — a plain MEMBER can view every page in the
+ * drive, whereas a custom role grants only its listed pages — and the existing
+ * role/customRoleId fields can't express the safe least-privilege intersection.
+ * Preserving them guarantees recap is non-widening (a granter who tightens or
+ * clears their own custom role never gains an agent broader page access).
+ *
+ * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
+ * Returns the affected agentPageIds.
  */
 export async function recapAgentMembershipsGrantedBy(
   driveId: string,
@@ -251,8 +264,6 @@ export async function recapAgentMembershipsGrantedBy(
   // Still able to grant ADMIN ⇒ nothing to reduce (we only ever cap downward).
   if (granter.maxRole === 'ADMIN') return [];
 
-  // maxRole is MEMBER: any membership above plain MEMBER (ADMIN role or a custom
-  // role) exceeds what this user could grant now.
   const rows = await db
     .select({ id: driveAgentMembers.id, agentPageId: driveAgentMembers.agentPageId })
     .from(driveAgentMembers)
@@ -261,7 +272,7 @@ export async function recapAgentMembershipsGrantedBy(
       eq(driveAgentMembers.driveId, driveId),
       eq(driveAgentMembers.addedBy, userId),
       ne(pages.driveId, driveId),
-      or(eq(driveAgentMembers.role, 'ADMIN'), isNotNull(driveAgentMembers.customRoleId)),
+      eq(driveAgentMembers.role, 'ADMIN'),
     ));
 
   if (rows.length === 0) return [];
