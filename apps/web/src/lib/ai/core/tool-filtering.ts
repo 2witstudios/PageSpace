@@ -26,6 +26,7 @@ const WRITE_TOOLS = new Set([
   'update_task',
   // Channel operations
   'send_channel_message',
+  'delete_channel_message',
   // Calendar write operations
   'create_calendar_event',
   'update_calendar_event',
