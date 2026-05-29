@@ -98,6 +98,15 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/workflow-tools', () => ({
+  workflowTools: {
+    create_workflow: { name: 'create_workflow', description: 'Create workflow' },
+    list_workflow: { name: 'list_workflow', description: 'List workflows' },
+    update_workflow: { name: 'update_workflow', description: 'Update workflow' },
+    delete_workflow: { name: 'delete_workflow', description: 'Delete workflow' },
+  },
+}));
+
 vi.mock('../../tools/member-tools', () => ({
   memberTools: {
     list_drive_members: { name: 'list_drive_members', description: 'List drive members' },
@@ -120,6 +129,7 @@ import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
 import { channelTools } from '../../tools/channel-tools';
+import { workflowTools } from '../../tools/workflow-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -142,6 +152,7 @@ describe('ai-tools', () => {
         ...calendarReadTools,
         ...calendarWriteTools,
         ...channelTools,
+        ...workflowTools,
       });
     });
 
@@ -160,6 +171,7 @@ describe('ai-tools', () => {
         Object.keys(calendarReadTools),
         Object.keys(calendarWriteTools),
         Object.keys(channelTools),
+        Object.keys(workflowTools),
       ];
 
       const allKeys = moduleKeysets.flat();

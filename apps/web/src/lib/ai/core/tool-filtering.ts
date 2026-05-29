@@ -33,6 +33,10 @@ const WRITE_TOOLS = new Set([
   'rsvp_calendar_event',
   'invite_calendar_attendees',
   'remove_calendar_attendee',
+  // Workflow (cron) operations
+  'create_workflow',
+  'update_workflow',
+  'delete_workflow',
 ]);
 
 // Web search tools (excluded when web search is disabled)
@@ -151,6 +155,8 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     'web_fetch',
     // Agent communication
     'ask_agent',
+    // Workflow read
+    'list_workflow',
     // Write tools
     ...Array.from(WRITE_TOOLS),
   ];
