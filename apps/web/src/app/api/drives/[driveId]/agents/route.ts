@@ -6,7 +6,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
+import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -211,52 +211,19 @@ export async function POST(
 
     const { agentPageId, role, customRoleId } = parsed.data;
 
-    // Verify agentPageId is an AI_CHAT page belonging to this drive
-    const agentPage = await db
-      .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
-      .from(pages)
-      .where(eq(pages.id, agentPageId))
-      .limit(1);
+    // The agent's home drive may differ from this drive. The service authorizes
+    // the caller against the agent + drive and caps the granted role at the
+    // caller's own access.
+    const result = await addAgentToDrive({
+      actingUserId: userId,
+      agentPageId,
+      driveId,
+      requestedRole: role,
+      requestedCustomRoleId: customRoleId ?? null,
+    });
 
-    if (agentPage.length === 0) {
-      return NextResponse.json({ error: 'Agent page not found' }, { status: 404 });
-    }
-    if (agentPage[0].type !== 'AI_CHAT') {
-      return NextResponse.json({ error: 'agentPageId must reference an AI_CHAT page' }, { status: 400 });
-    }
-    if (agentPage[0].driveId !== driveId) {
-      return NextResponse.json({ error: 'Agent page does not belong to this drive' }, { status: 400 });
-    }
-
-    // Validate customRoleId if provided
-    if (customRoleId) {
-      const roleExists = await db
-        .select({ id: driveRoles.id })
-        .from(driveRoles)
-        .where(and(eq(driveRoles.id, customRoleId), eq(driveRoles.driveId, driveId)))
-        .limit(1);
-      if (roleExists.length === 0) {
-        return NextResponse.json({ error: 'Custom role not found in this drive' }, { status: 404 });
-      }
-    }
-
-    let newMember;
-    try {
-      [newMember] = await db
-        .insert(driveAgentMembers)
-        .values({
-          driveId,
-          agentPageId,
-          role,
-          customRoleId: customRoleId ?? null,
-          addedBy: userId,
-        })
-        .returning();
-    } catch (err) {
-      if ((err as { code?: string }).code === '23505') {
-        return NextResponse.json({ error: 'Agent is already a member of this drive' }, { status: 409 });
-      }
-      throw err;
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
     auditRequest(request, {
@@ -267,7 +234,7 @@ export async function POST(
       details: { agentPageId, role, customRoleId },
     });
 
-    return NextResponse.json({ success: true, member: newMember }, { status: 201 });
+    return NextResponse.json({ success: true, member: result.member }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error adding drive agent member:', error as Error);
     return NextResponse.json({ error: 'Failed to add agent member' }, { status: 500 });

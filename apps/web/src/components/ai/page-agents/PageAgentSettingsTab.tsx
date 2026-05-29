@@ -14,6 +14,7 @@ import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
 import { AI_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
+import { AgentDrivesCard } from './AgentDrivesCard';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -665,6 +666,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             )}
           </CardContent>
         </Card>
+
+        {/* Drives this agent can access */}
+        <AgentDrivesCard agentPageId={pageId} />
 
         {/* Tool Permissions */}
         <Card>

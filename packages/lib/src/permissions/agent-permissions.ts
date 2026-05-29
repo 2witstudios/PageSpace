@@ -48,7 +48,7 @@ export async function getAgentAccessiblePagesInDrive(
 
   const { role, customRoleId } = membership;
 
-  if (role === 'ADMIN') {
+  if (role === 'ADMIN' || role === 'OWNER') {
     const allPages = await db
       .select({
         id: pages.id,
@@ -93,7 +93,26 @@ export async function getAgentAccessiblePagesInDrive(
         permissions: resolveRolePermissions('MEMBER', customPerms, p.id),
       }));
     }
+    // Custom role with no resolvable permissions ⇒ no access.
+    return [];
   }
 
-  return [];
+  // Plain MEMBER (no custom role): blanket view-only over the drive's pages,
+  // consistent with getAgentAccessLevel granting a member canView on any page.
+  const memberPages = await db
+    .select({
+      id: pages.id,
+      title: pages.title,
+      type: pages.type,
+      parentId: pages.parentId,
+      position: pages.position,
+      isTrashed: pages.isTrashed,
+    })
+    .from(pages)
+    .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+
+  return memberPages.map((p) => ({
+    ...p,
+    permissions: resolveRolePermissions('MEMBER', null, p.id),
+  }));
 }
