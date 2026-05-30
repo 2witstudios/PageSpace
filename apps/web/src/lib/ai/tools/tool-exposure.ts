@@ -17,6 +17,12 @@ export type ToolExposureMode = 'upfront' | 'search';
  * The input `tools` is assumed to already be allowlist-filtered, so a blocked tool
  * can never appear in the catalog or the execute_tool dispatch map.
  *
+ * `alwaysUpfront` names tools that must stay directly callable even in search mode
+ * (and are kept out of the tool_search catalog). This is for runtime overrides such
+ * as `web_search`, which is toggled on independently of the saved allowlist —
+ * deferring it behind execute_tool would trip that tool's allowlist check and reject
+ * it whenever the agent's saved enabledTools omit it.
+ *
  * If search mode is requested but there are no non-core tools to defer, the upfront
  * set is returned unchanged (no point adding tool_search/execute_tool scaffolding —
  * or a discovery prompt — when there is nothing to discover).
@@ -24,26 +30,37 @@ export type ToolExposureMode = 'upfront' | 'search';
 export function applyToolExposureMode(
   tools: ToolSet,
   mode: ToolExposureMode,
+  alwaysUpfront: ReadonlySet<string> = new Set(),
 ): { tools: ToolSet; toolDiscoveryPrompt: string } {
   if (mode !== 'search') {
     return { tools, toolDiscoveryPrompt: '' };
   }
 
+  // Tools forced upfront (e.g. the web_search runtime override) are excluded from
+  // both the deferral split and the searchable catalog.
+  const deferrable = Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !alwaysUpfront.has(name))
+  ) as ToolSet;
+
   const nonCoreTools = Object.fromEntries(
-    Object.entries(tools).filter(([name]) => !CORE_TOOL_NAMES.has(name))
+    Object.entries(deferrable).filter(([name]) => !CORE_TOOL_NAMES.has(name))
   ) as ToolSet;
 
   if (Object.keys(nonCoreTools).length === 0) {
     return { tools, toolDiscoveryPrompt: '' };
   }
 
+  const upfrontOverrides = Object.fromEntries(
+    Object.entries(tools).filter(([name]) => alwaysUpfront.has(name))
+  ) as ToolSet;
   const coreTools = Object.fromEntries(
-    Object.entries(tools).filter(([name]) => CORE_TOOL_NAMES.has(name))
+    Object.entries(deferrable).filter(([name]) => CORE_TOOL_NAMES.has(name))
   ) as ToolSet;
 
   const searchTools: ToolSet = {
     ...coreTools,
-    tool_search: createToolSearchTool(tools),
+    ...upfrontOverrides,
+    tool_search: createToolSearchTool(deferrable),
     execute_tool: createExecuteTool(nonCoreTools),
   };
 

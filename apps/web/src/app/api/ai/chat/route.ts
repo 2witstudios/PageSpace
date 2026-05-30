@@ -55,6 +55,9 @@ import {
   getUserPersonalization,
 } from '@/lib/ai/core';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+
+// Runtime-toggled tools that must stay directly callable even in search mode.
+const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -572,8 +575,12 @@ export async function POST(request: Request) {
     // schema directly. 'search' mirrors the Global Assistant — only core tools go
     // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
     // already been applied above, so search mode can never discover a blocked tool.
+    // web_search is a runtime override (added by the webSearchEnabled toggle above,
+    // independent of the saved allowlist), so it must stay directly callable in
+    // search mode too — routing it through execute_tool would hit that tool's
+    // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
     const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
-    const exposure = applyToolExposureMode(filteredTools, toolExposureMode);
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
 

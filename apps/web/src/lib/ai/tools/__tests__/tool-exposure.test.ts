@@ -120,4 +120,76 @@ describe('applyToolExposureMode', () => {
       expect(result.toolDiscoveryPrompt).toBe('');
     });
   });
+
+  describe('alwaysUpfront overrides (e.g. web_search runtime toggle)', () => {
+    it('keeps an always-upfront tool directly callable instead of behind execute_tool', () => {
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'), // core
+        send_channel_message: makeTool('Send a channel message'), // non-core
+        web_search: makeTool('Search the web'), // runtime override
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(['web_search']));
+
+      // web_search stays directly callable, NOT deferred behind execute_tool.
+      expect(result.tools.web_search).toBeDefined();
+      // The genuinely non-core tool is still deferred.
+      expect(result.tools.send_channel_message).toBeUndefined();
+      expect(result.tools.tool_search).toBeDefined();
+      expect(result.tools.execute_tool).toBeDefined();
+    });
+
+    it('does not reject an always-upfront tool via execute_tool when the allowlist omits it', async () => {
+      // Mirrors the real bug: agent allowlist excludes web_search, but the runtime
+      // toggle injected it. enabledTools (the saved allowlist) does NOT contain it.
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'),
+        send_channel_message: makeTool('Send a channel message'),
+        web_search: makeTool('Search the web'),
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(['web_search']));
+
+      // web_search is reachable directly (no execute_tool / allowlist gate involved).
+      expect(result.tools.web_search).toBeDefined();
+      // It is NOT in the execute_tool dispatch map: even with an allowlist that
+      // permits it (so the allowlist gate passes), execute_tool can't find it —
+      // proving it is served upfront, not deferred.
+      const execTool = result.tools.execute_tool as Tool;
+      const out = (await (execTool.execute as (a: unknown, o: unknown) => Promise<unknown>)(
+        { tool_name: 'web_search', parameters: {} },
+        { experimental_context: { enabledTools: ['read_page', 'web_search'] } }
+      )) as { error?: string };
+      expect(out.error).toMatch(/Unknown tool "web_search"/);
+    });
+
+    it('excludes always-upfront tools from the tool_search catalog', async () => {
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'),
+        send_channel_message: makeTool('Send a channel message'),
+        web_search: makeTool('Search the web'),
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(['web_search']));
+      const searchTool = result.tools.tool_search as Tool;
+      const found = (await (searchTool.execute as (a: unknown, o: unknown) => Promise<unknown>)(
+        { query: 'web' },
+        {}
+      )) as { tools: Array<{ name: string }> };
+      expect(found.tools.map((t) => t.name)).not.toContain('web_search');
+    });
+
+    it('treats search mode as a no-op when only core tools and always-upfront tools remain', () => {
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'), // core
+        web_search: makeTool('Search the web'), // override
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(['web_search']));
+
+      expect(result.tools).toBe(tools);
+      expect(result.toolDiscoveryPrompt).toBe('');
+      expect(result.tools.tool_search).toBeUndefined();
+    });
+  });
 });
