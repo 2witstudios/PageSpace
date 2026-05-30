@@ -155,6 +155,7 @@ const mockPage = {
   visibleToGlobalAssistant: true,
   includePageTree: false,
   pageTreeScope: 'children',
+  toolExposureMode: 'search',
   revision: 5,
 };
 
@@ -279,6 +280,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.visibleToGlobalAssistant).toBe(true);
       expect(body.includePageTree).toBe(false);
       expect(body.pageTreeScope).toBe('children');
+      expect(body.toolExposureMode).toBe('search');
     });
 
     it('returns available tools list', async () => {
@@ -656,6 +658,37 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
       // pageTreeScope should not be in the updates since the value was invalid
       // and no other fields were passed, so no mutation should occur
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('updates toolExposureMode with valid value "upfront"', async () => {
+      await PATCH(createPatchRequest({ toolExposureMode: 'upfront' }), mockParams);
+
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            toolExposureMode: 'upfront',
+          }),
+        })
+      );
+    });
+
+    it('updates toolExposureMode with valid value "search"', async () => {
+      await PATCH(createPatchRequest({ toolExposureMode: 'search' }), mockParams);
+
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            toolExposureMode: 'search',
+          }),
+        })
+      );
+    });
+
+    it('ignores invalid toolExposureMode values', async () => {
+      await PATCH(createPatchRequest({ toolExposureMode: 'invalid' }), mockParams);
+
+      // Invalid value is not persisted, and with no other fields no mutation occurs
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
 

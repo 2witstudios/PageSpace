@@ -85,6 +85,7 @@ export async function GET(
       visibleToGlobalAssistant: page.visibleToGlobalAssistant ?? true,
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
+      toolExposureMode: page.toolExposureMode ?? 'upfront',
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -119,6 +120,7 @@ export async function PATCH(
       visibleToGlobalAssistant,
       includePageTree,
       pageTreeScope,
+      toolExposureMode,
       expectedRevision,
     } = body;
 
@@ -196,6 +198,13 @@ export async function PATCH(
       // Validate scope value
       if (pageTreeScope === 'children' || pageTreeScope === 'drive') {
         updateData.pageTreeScope = pageTreeScope;
+      }
+    }
+
+    if (toolExposureMode !== undefined) {
+      // Validate mode value
+      if (toolExposureMode === 'upfront' || toolExposureMode === 'search') {
+        updateData.toolExposureMode = toolExposureMode;
       }
     }
 

@@ -53,7 +53,12 @@ import {
   parseMCPToolName,
   sanitizeToolNamesForProvider,
   getUserPersonalization,
+  buildNonCoreToolNamesPrompt,
+  TOOL_DISCOVERY_PROMPT,
 } from '@/lib/ai/core';
+import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
+import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
+import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -567,11 +572,36 @@ export async function POST(request: Request) {
       filteredTools = { ...filteredTools, web_search: webSearchToolDef };
     }
 
+    // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
+    // schema directly. 'search' mirrors the Global Assistant — only core tools go
+    // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
+    // already been applied above, so search mode can never discover a blocked tool.
+    const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+    let toolDiscoveryPrompt = '';
+    if (toolExposureMode === 'search') {
+      const catalog = filteredTools;
+      const coreTools = Object.fromEntries(
+        Object.entries(catalog).filter(([name]) => CORE_TOOL_NAMES.has(name))
+      ) as ToolSet;
+      const nonCoreTools = Object.fromEntries(
+        Object.entries(catalog).filter(([name]) => !CORE_TOOL_NAMES.has(name))
+      ) as ToolSet;
+      filteredTools = {
+        ...coreTools,
+        tool_search: createToolSearchTool(catalog),
+        execute_tool: createExecuteTool(nonCoreTools),
+      } as ToolSet;
+      const nonCoreNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
+      toolDiscoveryPrompt = '\n\n' + TOOL_DISCOVERY_PROMPT
+        + (nonCoreNamesPrompt ? '\n\n' + nonCoreNamesPrompt : '');
+    }
+
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
       totalTools: Object.keys(pageSpaceTools).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
+      toolExposureMode,
       enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
@@ -861,7 +891,7 @@ export async function POST(request: Request) {
         execute: async ({ writer }) => {
           const aiResult = streamText({
             model,
-            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt,
+            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
             messages: modelMessages,
             tools: filteredTools,
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],

@@ -29,8 +29,9 @@ export const agentTools = {
       includeDrivePrompt: z.boolean().optional().describe('Include drive-level AI instructions in the agent\'s context.'),
       includePageTree: z.boolean().optional().describe('Include page tree structure in the agent\'s context.'),
       pageTreeScope: z.enum(['children', 'drive']).optional().describe('Scope for page tree: "children" or "drive".'),
+      toolExposureMode: z.enum(['upfront', 'search']).optional().describe('How tools are exposed to the agent: "upfront" sends every enabled tool schema directly, "search" sends only core tools plus tool_search/execute_tool so the model discovers the rest on demand.'),
     }),
-    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope }, { experimental_context: context }) => {
+    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, toolExposureMode }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -70,6 +71,7 @@ export const agentTools = {
           includeDrivePrompt?: boolean;
           includePageTree?: boolean;
           pageTreeScope?: 'children' | 'drive';
+          toolExposureMode?: 'upfront' | 'search';
         }
 
         const updateData: AgentUpdateData = {};
@@ -100,6 +102,9 @@ export const agentTools = {
         }
         if (pageTreeScope !== undefined) {
           updateData.pageTreeScope = pageTreeScope;
+        }
+        if (toolExposureMode !== undefined) {
+          updateData.toolExposureMode = toolExposureMode;
         }
 
         const updatedFields = Object.keys(updateData);

@@ -202,6 +202,7 @@ export interface AgentConfigUpdate {
   includeDrivePrompt?: boolean;
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
+  toolExposureMode?: 'upfront' | 'search';
 }
 
 export interface UpdatedAgent {
