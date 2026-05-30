@@ -122,21 +122,34 @@ export function useFileDrop({
       const uploadedPages: UploadedPage[] = [];
       const totalFiles = files.length;
 
+      // For a before/after drop, chain each subsequent file after the previous
+      // one so a multi-file drop preserves the dragged order instead of
+      // inverting it (every file would otherwise resolve against the same node).
+      let nextPosition = position;
+      let nextAfterNodeId = afterNodeId;
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         try {
           const page = await uploadFileToS3(
             file,
-            { driveId, parentId: targetParentId, position, afterNodeId },
+            { driveId, parentId: targetParentId, position: nextPosition, afterNodeId: nextAfterNodeId },
             (pct) => setState(prev => ({
               ...prev,
               uploadProgress: ((i + pct / 100) / totalFiles) * 100,
             })),
           );
           uploadedPages.push(page);
-          setState(prev => ({ ...prev, uploadProgress: ((i + 1) / totalFiles) * 100 }));
+          if (nextPosition === 'before' || nextPosition === 'after') {
+            nextPosition = 'after';
+            nextAfterNodeId = page.id;
+          }
         } catch (error) {
           toast.error(error instanceof Error ? error.message : `Failed to upload ${file.name}`);
+        } finally {
+          // Advance the bar per file, whether it succeeded or failed, so it
+          // never stalls mid-file on a failure.
+          setState(prev => ({ ...prev, uploadProgress: ((i + 1) / totalFiles) * 100 }));
         }
       }
 

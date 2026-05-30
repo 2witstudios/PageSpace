@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
-import { eq, isNull } from '@pagespace/db/operators';
+import { and, eq, isNull } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
@@ -37,7 +37,10 @@ async function resolveUploadPosition(
   position: 'before' | 'after' | null | undefined,
   afterNodeId: string | null | undefined,
 ): Promise<number> {
-  const siblingWhere = parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId);
+  const parentWhere = parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId);
+  // Match the page tree, which only renders non-trashed siblings, so the
+  // fractional math is computed against the same set the user sees.
+  const siblingWhere = and(parentWhere, eq(pages.isTrashed, false));
 
   // Common case (plain append): a single indexed lookup of the last sibling.
   const appendToEnd = async (): Promise<number> => {
@@ -65,7 +68,9 @@ async function resolveUploadPosition(
   const target = siblings[targetIndex];
 
   if (position === 'before') {
-    const prevPos = targetIndex > 0 ? siblings[targetIndex - 1].position : 0;
+    // Anchor below the target when it's the first sibling, so we don't collide
+    // with a first sibling sitting at position 0 ((0 + 0) / 2 === 0).
+    const prevPos = targetIndex > 0 ? siblings[targetIndex - 1].position : target.position - 1;
     return (prevPos + target.position) / 2;
   }
 

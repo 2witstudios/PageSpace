@@ -27,6 +27,7 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn(),
   eq: vi.fn(),
   isNull: vi.fn(),
   desc: vi.fn(),
@@ -272,6 +273,12 @@ describe('POST /api/upload/complete', () => {
       ]);
       await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'sibling' }));
       expect(capturedPageValues?.position).toBe(3); // (2 + 4) / 2
+    });
+
+    it('anchors below the target when inserting before the first sibling (no position-0 collision)', async () => {
+      mockFindMany.mockResolvedValue([{ id: 'first', position: 0 }]);
+      await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'first' }));
+      expect(capturedPageValues?.position).toBe(-0.5); // ((0 - 1) + 0) / 2
     });
 
     it('inserts at the midpoint after a target node', async () => {

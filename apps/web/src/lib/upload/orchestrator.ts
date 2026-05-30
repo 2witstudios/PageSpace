@@ -127,12 +127,15 @@ export async function uploadFileToS3(
 ): Promise<UploadedPage> {
   const contentHash = await computeContentHash(file);
   const mimeType = file.type || 'application/octet-stream';
-  const title = target.title?.trim() || file.name;
+  // Some drop/paste sources yield a File with an empty name; presign requires a
+  // non-empty filename and /complete a non-empty title, so fall back to a label.
+  const filename = file.name || 'Untitled';
+  const title = target.title?.trim() || filename;
 
   const presign = await callPresign({
     contentHash,
     driveId: target.driveId,
-    filename: file.name,
+    filename,
     mimeType,
     fileSize: file.size,
   });
