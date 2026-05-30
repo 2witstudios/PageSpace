@@ -180,3 +180,54 @@ describe('POST /ingest/by-page/:pageId', () => {
     expect(response.body.error).toContain('Invalid content hash');
   });
 });
+
+describe('POST /ingest/pull/:pageId (verified direct-to-S3 ingest)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsValidContentHash.mockReturnValue(true);
+    mockGetPageForIngestion.mockResolvedValue({
+      id: 'page-1',
+      contentHash: VALID_HASH,
+      mimeType: 'image/png',
+      originalFileName: 'photo.png',
+    });
+    mockAssertFileAccess.mockResolvedValue({ allowed: true });
+    mockAddJob.mockResolvedValue('pull-job-1');
+  });
+
+  it('returns 401 when no auth', async () => {
+    const response = await request(createApp()).post('/ingest/pull/page-1');
+    expect(response.status).toBe(401);
+  });
+
+  it('returns 403 when page binding mismatches', async () => {
+    const app = createApp({ userId: 'user-1', resourceBinding: { type: 'page', id: 'other-page' } });
+    const response = await request(app).post('/ingest/pull/page-1');
+    expect(response.status).toBe(403);
+  });
+
+  it('returns 404 when page not found', async () => {
+    mockGetPageForIngestion.mockResolvedValue(null);
+    const response = await request(createApp({ userId: 'user-1' })).post('/ingest/pull/page-1');
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 400 when contentHash is invalid', async () => {
+    mockIsValidContentHash.mockReturnValue(false);
+    const response = await request(createApp({ userId: 'user-1' })).post('/ingest/pull/page-1');
+    expect(response.status).toBe(400);
+  });
+
+  it('returns 403 when assertFileAccess throws', async () => {
+    mockAssertFileAccess.mockRejectedValue(new Error('Access denied'));
+    const response = await request(createApp({ userId: 'user-1' })).post('/ingest/pull/page-1');
+    expect(response.status).toBe(403);
+  });
+
+  it('enqueues the pull-verify job (not ingest-file) with pageId + contentHash', async () => {
+    const response = await request(createApp({ userId: 'user-1' })).post('/ingest/pull/page-1');
+    expect(response.status).toBe(200);
+    expect(response.body.jobId).toBe('pull-job-1');
+    expect(mockAddJob).toHaveBeenCalledWith('pull-verify', { pageId: 'page-1', contentHash: VALID_HASH });
+  });
+});

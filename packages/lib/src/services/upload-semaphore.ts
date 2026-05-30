@@ -1,10 +1,23 @@
 import { STORAGE_TIERS } from './storage-limits';
 import { loggers } from '../logging/logger-config';
 
+/**
+ * Server-trusted upload parameters captured at presign time. /complete reads
+ * these from the slot instead of trusting the client request body, so a client
+ * cannot presign for one drive/hash/size and complete with another.
+ */
+export interface UploadSlotMetadata {
+  contentHash: string;
+  driveId: string;
+  fileSize: number;
+  mimeType: string;
+}
+
 interface UploadSlot {
   userId: string;
   acquiredAt: Date;
   fileSize: number;
+  metadata?: UploadSlotMetadata;
 }
 
 class UploadSemaphore {
@@ -42,7 +55,8 @@ class UploadSemaphore {
   async acquireUploadSlot(
     userId: string,
     tier: keyof typeof STORAGE_TIERS,
-    fileSize: number
+    fileSize: number,
+    metadata?: UploadSlotMetadata
   ): Promise<string | null> {
     if (this.globalPermits <= 0) {
       loggers.api.debug('Upload rejected: global limit reached', {
@@ -63,7 +77,7 @@ class UploadSemaphore {
 
     const slotId = `${userId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     this.userPermits.set(userId, currentUserUploads + 1);
-    this.activeSlots.set(slotId, { userId, acquiredAt: new Date(), fileSize });
+    this.activeSlots.set(slotId, { userId, acquiredAt: new Date(), fileSize, metadata });
     this.globalPermits = Math.max(0, this.globalLimit - this.activeSlots.size);
 
     loggers.api.info('Upload slot granted', {
@@ -143,6 +157,28 @@ class UploadSemaphore {
       });
       staleSlots.forEach(slotId => this.releaseUploadSlot(slotId));
     }
+  }
+
+  verifySlotOwner(slotId: string, userId: string): boolean {
+    const slot = this.activeSlots.get(slotId);
+    if (!slot || slot.userId !== userId) return false;
+    // Reject (and reclaim) slots past the timeout rather than waiting for the
+    // once-a-minute sweep — a stale jobId must not still authorize a completion.
+    if (Date.now() - slot.acquiredAt.getTime() > this.slotTimeout) {
+      this.releaseUploadSlot(slotId);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Return the server-trusted metadata captured at presign time for a slot the
+   * user owns (and that hasn't expired). Returns null otherwise. Callers use
+   * this instead of trusting client-supplied upload parameters.
+   */
+  getSlotMetadata(slotId: string, userId: string): UploadSlotMetadata | null {
+    if (!this.verifySlotOwner(slotId, userId)) return null;
+    return this.activeSlots.get(slotId)?.metadata ?? null;
   }
 
   releaseUserSlots(userId: string): void {

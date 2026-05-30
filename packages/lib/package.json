@@ -167,6 +167,11 @@
       "import": "./dist/services/upload-semaphore.js",
       "require": "./dist/services/upload-semaphore.js"
     },
+    "./services/upload-validation": {
+      "types": "./dist/services/upload-validation.d.ts",
+      "import": "./dist/services/upload-validation.js",
+      "require": "./dist/services/upload-validation.js"
+    },
     "./services/memory-monitor": {
       "types": "./dist/services/memory-monitor.d.ts",
       "import": "./dist/services/memory-monitor.js",
