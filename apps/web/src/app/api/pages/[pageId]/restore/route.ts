@@ -9,7 +9,7 @@ import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
+import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -71,11 +71,10 @@ async function recursivelyRestore(
     if (moveResult.deferredTrigger) triggers.push(moveResult.deferredTrigger);
 
     // Re-parenting an orphan back under a restored TASK_LIST must restore its task_items row.
-    await syncTaskItemOnMove(tx, {
-      movedPageId: child.id,
-      movedPageType: child.type,
-      oldParentId: null,
-      newParentId: pageId,
+    await ensureTaskItemForPage(tx, {
+      pageId: child.id,
+      pageType: child.type,
+      parentId: pageId,
       userId: context.userId,
     });
   }
