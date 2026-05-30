@@ -13,6 +13,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
+import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -136,6 +137,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       statusConfigs,
     });
   }
+
+  // Self-heal: any TASK_LIST child missing its task_items row (created or moved via a
+  // path that skipped the sync) gets backfilled here so it always shows up as a task.
+  await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
 
   // Build query - include assignees relation
   const query = db.query.taskItems.findMany({
