@@ -65,7 +65,7 @@ vi.mock('@pagespace/db/db', () => {
   // 1. childPages: await db.select().from(pages).where(...)           — thenable chain
   // 2. triggerRows: await db.select().from(triggers).where().groupBy()
   // 3. subTaskRows: await db.select().from(items).innerJoin().where().groupBy()
-  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id' }]) => {
+  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id', pageId: 'child-page-id' }]) => {
     const chain: Record<string, unknown> = {
       then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
         Promise.resolve(result).then(resolve, reject),
@@ -196,7 +196,7 @@ describe('Task API Routes', () => {
   const mockTaskListId = 'tasklist-789';
 
   // Build a thenable select chain that resolves to `result`
-  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id' }]) => {
+  const makeSelectChain = (result: unknown[] = [{ id: 'child-page-id', pageId: 'child-page-id' }]) => {
     const chain: Record<string, unknown> = {
       then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
         Promise.resolve(result).then(resolve, reject),
@@ -352,8 +352,9 @@ describe('Task API Routes', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      // childPages query returns only the non-trashed page (DB filters isTrashed=false)
-      vi.mocked(db.select).mockImplementationOnce(() => makeSelectChain([{ id: 'p-1' }]) as never);
+      // childPages query returns only the non-trashed page (DB filters isTrashed=false).
+      // The same shape feeds the self-heal existence check (reads pageId) so it's a no-op.
+      vi.mocked(db.select).mockImplementation(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never);
       // taskItems.findMany only receives p-1 in its inArray clause, returns the active task
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([activeTask] as never);
 

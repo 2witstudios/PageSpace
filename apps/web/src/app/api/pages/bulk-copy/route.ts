@@ -12,6 +12,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createId } from '@paralleldrive/cuid2';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -190,6 +191,14 @@ export async function POST(request: Request) {
           contentHash: page.contentHash,
         });
 
+        // A TASK_LIST copied under a TASK_LIST parent must appear as a task.
+        await ensureTaskItemForPage(tx, {
+          pageId: newPageId,
+          pageType: page.type,
+          parentId: targetParentId,
+          userId,
+        });
+
         copiedCount += 1;
         nextPosition += 1;
 
@@ -199,7 +208,8 @@ export async function POST(request: Request) {
             tx,
             page.id,
             newPageId,
-            targetDriveId
+            targetDriveId,
+            userId
           );
           copiedCount += childCount;
         }
@@ -253,7 +263,8 @@ async function copyChildrenRecursively(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   sourceParentId: string,
   newParentId: string,
-  targetDriveId: string
+  targetDriveId: string,
+  userId: string
 ): Promise<number> {
   const children = await tx.query.pages.findMany({
     where: and(
@@ -306,6 +317,14 @@ async function copyChildrenRecursively(
       contentHash: child.contentHash,
     });
 
+    // A TASK_LIST copied under a TASK_LIST parent must appear as a task.
+    await ensureTaskItemForPage(tx, {
+      pageId: newChildId,
+      pageType: child.type,
+      parentId: newParentId,
+      userId,
+    });
+
     copiedCount += 1;
 
     // Recursively copy grandchildren
@@ -313,7 +332,8 @@ async function copyChildrenRecursively(
       tx,
       child.id,
       newChildId,
-      targetDriveId
+      targetDriveId,
+      userId
     );
     copiedCount += grandchildCount;
   }
