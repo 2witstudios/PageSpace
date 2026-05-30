@@ -3,7 +3,7 @@ import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { resolveRolePermissions } from './resolve-role-permissions';
-import { fetchDriveIdForPage, fetchCustomRolePermissions } from './membership-queries';
+import { fetchCustomRolePermissions } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
 
 async function fetchAgentMembership(agentPageId: string, driveId: string) {
@@ -15,17 +15,37 @@ async function fetchAgentMembership(agentPageId: string, driveId: string) {
   return rows[0] ?? null;
 }
 
+async function fetchPageDriveAndPrivacy(
+  targetPageId: string,
+): Promise<{ driveId: string; isPrivate: boolean }> {
+  const rows = await db
+    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate })
+    .from(pages)
+    .where(eq(pages.id, targetPageId))
+    .limit(1);
+  // No page row ⇒ treat targetPageId as a drive id (drive-as-root-node pattern).
+  return rows[0] ?? { driveId: targetPageId, isPrivate: false };
+}
+
 export async function getAgentAccessLevel(
   agentPageId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
-  const driveId = await fetchDriveIdForPage(targetPageId);
+  const { driveId, isPrivate } = await fetchPageDriveAndPrivacy(targetPageId);
   const membership = await fetchAgentMembership(agentPageId, driveId);
   if (!membership) return null;
 
   const customPerms = membership.customRoleId
     ? await fetchCustomRolePermissions(membership.customRoleId, driveId)
     : null;
+
+  // Mirror user-side membership semantics: a plain MEMBER (no resolvable custom
+  // role) sees only non-private pages, so an agent never out-reads the member who
+  // granted it. ADMIN/OWNER and explicit custom-role grants keep the same parity
+  // they already have with the user-side paths.
+  if (!customPerms && membership.role !== 'ADMIN' && membership.role !== 'OWNER' && isPrivate) {
+    return null;
+  }
 
   return resolveRolePermissions(membership.role, customPerms, targetPageId);
 }
@@ -97,8 +117,9 @@ export async function getAgentAccessiblePagesInDrive(
     return [];
   }
 
-  // Plain MEMBER (no custom role): blanket view-only over the drive's pages,
-  // consistent with getAgentAccessLevel granting a member canView on any page.
+  // Plain MEMBER (no custom role): view-only over the drive's non-private pages —
+  // the same set a plain MEMBER *user* sees, consistent with getAgentAccessLevel
+  // denying a plain member access to private pages.
   const memberPages = await db
     .select({
       id: pages.id,
@@ -109,7 +130,7 @@ export async function getAgentAccessiblePagesInDrive(
       isTrashed: pages.isTrashed,
     })
     .from(pages)
-    .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+    .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false), eq(pages.isPrivate, false)));
 
   return memberPages.map((p) => ({
     ...p,
