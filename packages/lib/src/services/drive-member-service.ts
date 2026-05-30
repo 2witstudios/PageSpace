@@ -377,14 +377,15 @@ export async function updateMemberRole(
   targetUserId: string,
   role: 'ADMIN' | 'MEMBER',
   customRoleId?: string | null
-): Promise<{ oldRole: string }> {
+): Promise<{ oldRole: string; oldCustomRoleId: string | null }> {
   const [existing] = await db
-    .select({ role: driveMembers.role })
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
     .from(driveMembers)
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)))
     .limit(1);
 
   const oldRole = existing?.role || 'MEMBER';
+  const oldCustomRoleId = existing?.customRoleId ?? null;
 
   const updateData: { role?: 'OWNER' | 'ADMIN' | 'MEMBER'; customRoleId?: string | null } = {};
   if (role) {
@@ -401,7 +402,7 @@ export async function updateMemberRole(
       .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, targetUserId)));
   }
 
-  return { oldRole };
+  return { oldRole, oldCustomRoleId };
 }
 
 /**

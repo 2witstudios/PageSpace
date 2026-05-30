@@ -8,7 +8,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId' },
+  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate', isTrashed: 'isTrashed' },
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/operators', () => ({
 
 import { getAgentAccessLevel, getAgentAccessiblePagesInDrive, hasAgentDriveMembership } from '../agent-permissions';
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,6 +111,35 @@ describe('getAgentAccessLevel — page targets', () => {
 
     const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('denies a plain MEMBER agent access to a private page (mirrors plain-member user)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))   // page lookup → private
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]));  // membership
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toBeNull();
+  });
+
+  it('still grants an ADMIN agent access to a private page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('honours an explicit custom-role grant on a private page', async () => {
+    const perms = { [TARGET_PAGE_ID]: { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 });
 
@@ -211,18 +241,21 @@ describe('getAgentAccessiblePagesInDrive', () => {
     expect(await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID)).toEqual([]);
   });
 
-  it('grants a plain MEMBER (no custom role) view-only access to every page', async () => {
+  it('grants a plain MEMBER (no custom role) view-only access to non-private pages only', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }])) // membership
       .mockReturnValueOnce(stubSelectList([
         { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
         { id: 'p2', title: 'B', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
-      ])); // page enumeration
+      ])); // page enumeration (non-private only)
 
     const result = await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID);
     expect(result).toHaveLength(2);
     expect(result.every((p) => p.permissions.canView)).toBe(true);
     expect(result.every((p) => !p.permissions.canEdit)).toBe(true);
+    // The enumeration filters out private pages, so the agent never out-reads the
+    // plain member who granted it.
+    expect(eq).toHaveBeenCalledWith('isPrivate', false);
   });
 
   it('grants an ADMIN full access to every page', async () => {

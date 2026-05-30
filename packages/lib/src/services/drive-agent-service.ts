@@ -10,11 +10,12 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, isNotNull } from '@pagespace/db/operators';
+import { eq, and, ne, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
-import { customRoleBelongsToDrive } from '../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
+import type { CustomRolePerms } from '../permissions/membership-queries';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
@@ -197,6 +198,169 @@ export async function removeAgentFromDrive(input: {
 
   if (deleted.length === 0) return { ok: false, status: 404, error: 'Membership not found' };
   return { ok: true };
+}
+
+/** A Drizzle transaction handle, accepted alongside the module-level `db`. */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Revoke every non-home agent membership in `driveId` that was granted by
+ * `userId`. Called when that user is removed from the drive: the grant's
+ * authorization basis (`addedBy`) is gone, so the agent loses the access it
+ * inherited too. The agent's home drive is never touched (it can't be removed,
+ * and a home-drive membership has `pages.driveId === driveAgentMembers.driveId`).
+ *
+ * Accepts a transaction so it can run atomically with the member removal.
+ * Returns the agentPageIds whose membership was revoked (for audit logging).
+ */
+export async function revokeAgentMembershipsGrantedBy(
+  executor: Tx | typeof db,
+  driveId: string,
+  userId: string,
+): Promise<string[]> {
+  const rows = await executor
+    .select({ id: driveAgentMembers.id, agentPageId: driveAgentMembers.agentPageId })
+    .from(driveAgentMembers)
+    .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+    .where(and(
+      eq(driveAgentMembers.driveId, driveId),
+      eq(driveAgentMembers.addedBy, userId),
+      ne(pages.driveId, driveId),
+    ));
+
+  if (rows.length === 0) return [];
+
+  await executor
+    .delete(driveAgentMembers)
+    .where(inArray(driveAgentMembers.id, rows.map((r) => r.id)));
+
+  return rows.map((r) => r.agentPageId);
+}
+
+/**
+ * True when every grant in `sub` is matched (≥) by `sup` — i.e. role `sub` can
+ * see/do nothing role `sup` cannot. Pages `sub` grants nothing on impose no
+ * constraint.
+ */
+function customRoleSubset(sub: CustomRolePerms, sup: CustomRolePerms): boolean {
+  for (const [pageId, p] of Object.entries(sub)) {
+    if (!p.canView && !p.canEdit && !p.canShare) continue;
+    const s = sup[pageId];
+    if (!s) return false;
+    if ((p.canView && !s.canView) || (p.canEdit && !s.canEdit) || (p.canShare && !s.canShare)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether an agent's MEMBER-level grant (`agentCustomRoleId`) is still within the
+ * granter's current cap (`capCustomRoleId`), both at MEMBER rank. Lets recap skip
+ * an agent on a lateral/widening custom-role change (the agent's old role is a
+ * subset of the granter's new role) instead of needlessly revoking it.
+ *
+ * Only the custom-role-vs-custom-role case is compared precisely (a cheap matrix
+ * subset). Cases involving plain MEMBER (null) on either side are conservatively
+ * treated as NOT within: plain MEMBER spans every non-private page in the drive —
+ * a scope not expressed as a per-page matrix — so we fail closed (revoke) rather
+ * than enumerate the drive's pages on a security path.
+ */
+async function memberGrantWithinCap(
+  agentCustomRoleId: string | null,
+  capCustomRoleId: string | null,
+  driveId: string,
+): Promise<boolean> {
+  // Only "both plain MEMBER" is provably within without comparing matrices.
+  if (agentCustomRoleId === null || capCustomRoleId === null) {
+    return agentCustomRoleId === capCustomRoleId;
+  }
+  const [agentPerms, capPerms] = await Promise.all([
+    fetchCustomRolePermissions(agentCustomRoleId, driveId),
+    fetchCustomRolePermissions(capCustomRoleId, driveId),
+  ]);
+  // An unresolvable custom role resolves as plain MEMBER (drive-wide), which is
+  // not a provable subset of a scoped cap ⇒ fail closed.
+  if (!agentPerms || !capPerms) return false;
+  return customRoleSubset(agentPerms, capPerms);
+}
+
+/**
+ * Re-cap the agent memberships in `driveId` granted by `userId` when the user's
+ * access is downgraded, bringing every agent they granted down to exactly what
+ * they could grant today. Only ever caps DOWN — never widens an agent's reach,
+ * never leaves it with more than the downgraded granter.
+ *
+ * Agent access is bottlenecked by the granting user's access: a plain MEMBER
+ * agent membership now resolves to the same view a plain MEMBER *user* gets
+ * (non-private pages only — see `agent-permissions.ts`). For each non-home
+ * membership the user granted, with the granter now capped at MEMBER:
+ *  - role ADMIN ⇒ REDUCE to `{ role: 'MEMBER', customRoleId: <granter's cap> }`.
+ *    ADMIN is full access ⊋ any MEMBER cap, so this strictly narrows.
+ *  - role MEMBER, customRoleId === the granter's ⇒ leave (already exactly what
+ *    the granter could grant today).
+ *  - role MEMBER, customRoleId differs ⇒ keep ONLY if the agent's grant is
+ *    provably ⊆ the granter's new grant (`memberGrantWithinCap`) — e.g. the
+ *    granter moved to a *broader* custom role, so the agent still sits under
+ *    them. Otherwise REVOKE. We never rewrite a member row to a different role
+ *    (that could widen — a custom-role matrix is incomparable to the cap), and
+ *    we never revoke an agent that's still within the granter (no false revoke
+ *    on a lateral/widening change).
+ *
+ * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
+ * Returns the affected agentPageIds (both reduced and revoked).
+ */
+export async function recapAgentMembershipsGrantedBy(
+  driveId: string,
+  userId: string,
+): Promise<string[]> {
+  const granter = await resolveGranterAccess(userId, driveId);
+  // Still able to grant ADMIN ⇒ nothing to cap down (we only ever cap downward).
+  if (granter.maxRole === 'ADMIN') return [];
+
+  const capCustomRoleId = granter.customRoleId ?? null;
+
+  const rows = await db
+    .select({
+      id: driveAgentMembers.id,
+      agentPageId: driveAgentMembers.agentPageId,
+      role: driveAgentMembers.role,
+      customRoleId: driveAgentMembers.customRoleId,
+    })
+    .from(driveAgentMembers)
+    .innerJoin(pages, eq(driveAgentMembers.agentPageId, pages.id))
+    .where(and(
+      eq(driveAgentMembers.driveId, driveId),
+      eq(driveAgentMembers.addedBy, userId),
+      ne(pages.driveId, driveId),
+    ));
+
+  // ADMIN agents always exceed a MEMBER cap ⇒ reduce them to the cap.
+  const toReduce = rows.filter((r) => r.role === 'ADMIN');
+  // MEMBER agents whose custom role differs from the cap: keep iff provably within.
+  const memberMismatch = rows.filter(
+    (r) => r.role !== 'ADMIN' && (r.customRoleId ?? null) !== capCustomRoleId,
+  );
+  const withinCap = await Promise.all(
+    memberMismatch.map((r) =>
+      memberGrantWithinCap(r.customRoleId ?? null, capCustomRoleId, driveId),
+    ),
+  );
+  const toRevoke = memberMismatch.filter((_, i) => !withinCap[i]);
+
+  if (toReduce.length > 0) {
+    await db
+      .update(driveAgentMembers)
+      .set({ role: 'MEMBER', customRoleId: capCustomRoleId })
+      .where(inArray(driveAgentMembers.id, toReduce.map((r) => r.id)));
+  }
+  if (toRevoke.length > 0) {
+    await db
+      .delete(driveAgentMembers)
+      .where(inArray(driveAgentMembers.id, toRevoke.map((r) => r.id)));
+  }
+
+  return [...toReduce, ...toRevoke].map((r) => r.agentPageId);
 }
 
 /**

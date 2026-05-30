@@ -10,6 +10,10 @@ import {
   updateMemberPermissions,
   getDriveRecipientUserIds,
 } from '@pagespace/lib/services/drive-member-service';
+import {
+  revokeAgentMembershipsGrantedBy,
+  recapAgentMembershipsGrantedBy,
+} from '@pagespace/lib/services/drive-agent-service';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
   broadcastDriveMemberEvent,
@@ -125,11 +129,19 @@ export async function PATCH(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Update role and customRoleId if provided
-    const { oldRole } = await updateMemberRole(driveId, userId, role, customRoleId);
+    // Update role and customRoleId if provided. `updateMemberRole` returns the
+    // pre-update values it read from the row (getDriveMemberDetails hardcodes
+    // customRole: null, so it cannot be used to detect a custom-role change).
+    const { oldRole, oldCustomRoleId } = await updateMemberRole(driveId, userId, role, customRoleId);
+
+    const roleChanged = Boolean(role) && role !== oldRole;
+    // `customRoleId` is only meaningful when present in the request body;
+    // `updateMemberRole` coerces falsy values to null when clearing it, so a
+    // clear (customRoleId: null over a prior role) is a real change too.
+    const customRoleChanged = customRoleId !== undefined && (customRoleId || null) !== oldCustomRoleId;
 
     // Send notification if role changed (boundary obligation)
-    if (role && role !== oldRole) {
+    if (roleChanged) {
       await createDriveNotification(
         userId,
         driveId,
@@ -158,6 +170,20 @@ export async function PATCH(
       }, actorInfo);
 
       auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, previousRole: oldRole, newRole: role } });
+    }
+
+    // Cascade: re-cap the external agents this user granted in the drive to the
+    // grant they can make now. Triggered by ANY change to their grant ceiling —
+    // a standard-role change OR a custom-role change (tightened or cleared) —
+    // since both alter the driveAgentMembers row they could create today. A
+    // custom-role downgrade would otherwise leave agents with stale access to
+    // pages the user can no longer grant. recapAgentMembershipsGrantedBy never
+    // escalates beyond the user's own access.
+    if (roleChanged || customRoleChanged) {
+      const recappedAgentIds = await recapAgentMembershipsGrantedBy(driveId, userId);
+      if (recappedAgentIds.length > 0) {
+        auditRequest(request, { eventType: 'authz.role.assigned', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, recappedAgentPageIds: recappedAgentIds, newCap: role ?? oldRole, reason: 'member_recap' } });
+      }
     }
 
     // Update permissions
@@ -234,6 +260,7 @@ export async function DELETE(
 
     // Remove member and their permissions in a transaction
     // Fix 12: Log permissions BEFORE deletion for rollback support
+    let revokedAgentIds: string[] = [];
     await db.transaction(async (tx) => {
       // Get all pages in this drive
       const drivePages = await tx.select({ id: pages.id, title: pages.title })
@@ -297,6 +324,11 @@ export async function DELETE(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, targetUserId)
         ));
+
+      // Cascade: revoke the external agent memberships this user granted in the
+      // drive. Their access was capped at this user's, so it must not outlive
+      // their membership. (Home-drive memberships are preserved.)
+      revokedAgentIds = await revokeAgentMembershipsGrantedBy(tx, driveId, targetUserId);
     });
 
     trackDriveOperation(currentUserId, 'remove_member', driveId, {
@@ -319,6 +351,12 @@ export async function DELETE(
     }, actorInfo);
 
     auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId } });
+
+    // Audit the cascaded agent-membership revocations (the user's external
+    // agents lost their inherited drive access alongside the user).
+    if (revokedAgentIds.length > 0) {
+      auditRequest(request, { eventType: 'authz.permission.revoked', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId, revokedAgentPageIds: revokedAgentIds, reason: 'member_removal' } });
+    }
 
     // Fan out member_removed to owner + remaining accepted members so any admin
     // watching the members page sees the row disappear without a manual refresh.
