@@ -19,7 +19,7 @@ import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, create
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
+import { replaceLines } from '@/lib/editor/line-edit';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -433,36 +433,25 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to edit this document');
         }
 
-        // Format content for AI line-based editing, then split into lines.
-        // CODE and markdown pages have natural line structure (and CODE may contain
-        // raw HTML/XML that addLineBreaksForAI would mangle); HTML documents need it.
+        // Apply the line edit. CODE and markdown pages have natural line
+        // structure (and CODE may contain raw HTML/XML that addLineBreaksForAI
+        // would mangle); HTML documents are normalized for line-based editing.
+        // oldContent is normalized identically to newContent so a small edit
+        // diffs as a small change rather than a full-document replacement.
         const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const formattedContent = isRawText
-          ? (page.content || '')
-          : addLineBreaksForAI(page.content || '');
-        const lines = formattedContent.split('\n');
-        
-        // Validate line numbers
-        if (startLine < 1 || startLine > lines.length || endLine < startLine || endLine > lines.length) {
-          throw new Error(`Invalid line range: ${startLine}-${endLine}. Document has ${lines.length} lines.`);
-        }
-
-        const isDeletion = content.length === 0;
-
-        // Replace lines (convert to 0-based indexing)
-        const replacementSegment = isDeletion ? [] : [content];
-        const newLines = [
-          ...lines.slice(0, startLine - 1),
-          ...replacementSegment,
-          ...lines.slice(endLine),
-        ];
-
-        const newContent = newLines.join('\n');
+        const { oldContent, newContent, newLineCount, changeType } = replaceLines({
+          content: page.content,
+          startLine,
+          endLine,
+          replacement: content,
+          isRawText,
+        });
+        const isDeletion = changeType === 'deletion';
 
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
           metadata: {
             linesChanged: endLine - startLine + 1,
-            changeType: isDeletion ? 'deletion' : 'replacement',
+            changeType,
           },
         });
 
@@ -488,10 +477,10 @@ export const pageWriteTools = {
           title: page.title,
           type: page.type,
           contentMode: page.contentMode || 'html',
-          oldContent: page.content,
+          oldContent,
           newContent,
           linesReplaced: endLine - startLine + 1,
-          newLineCount: newLines.length,
+          newLineCount,
           message: isDeletion
             ? `Successfully removed lines ${startLine}-${endLine}`
             : `Successfully replaced lines ${startLine}-${endLine}`,
@@ -500,8 +489,8 @@ export const pageWriteTools = {
             : `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
           stats: {
             linesChanged: endLine - startLine + 1,
-            totalLines: newLines.length,
-            changeType: isDeletion ? 'deletion' : 'replacement'
+            totalLines: newLineCount,
+            changeType
           },
           nextSteps: [
             'Review the updated content to ensure it meets requirements',
