@@ -266,7 +266,6 @@ describe('POST /api/upload/complete', () => {
     });
 
     it('inserts at the midpoint before a target node', async () => {
-      mockFindFirst.mockResolvedValue({ id: 'sibling', position: 4 });
       mockFindMany.mockResolvedValue([
         { id: 'a', position: 2 },
         { id: 'sibling', position: 4 },
@@ -276,7 +275,6 @@ describe('POST /api/upload/complete', () => {
     });
 
     it('inserts at the midpoint after a target node', async () => {
-      mockFindFirst.mockResolvedValue({ id: 'sibling', position: 4 });
       mockFindMany.mockResolvedValue([
         { id: 'sibling', position: 4 },
         { id: 'b', position: 8 },
@@ -285,11 +283,10 @@ describe('POST /api/upload/complete', () => {
       expect(capturedPageValues?.position).toBe(6); // (4 + 8) / 2
     });
 
-    it('falls back to appending when afterNodeId is unknown', async () => {
-      // First findFirst (target lookup) misses; second (last sibling) hits.
-      mockFindFirst
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce({ id: 'last', position: 9 });
+    it('falls back to appending when afterNodeId is not among the siblings', async () => {
+      // 'ghost' isn't in the sibling set, so resolution appends after the last.
+      mockFindMany.mockResolvedValue([{ id: 'a', position: 2 }]);
+      mockFindFirst.mockResolvedValue({ id: 'last', position: 9 });
       await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'ghost' }));
       expect(capturedPageValues?.position).toBe(10);
     });

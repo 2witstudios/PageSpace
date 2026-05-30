@@ -39,6 +39,7 @@ async function resolveUploadPosition(
 ): Promise<number> {
   const siblingWhere = parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId);
 
+  // Common case (plain append): a single indexed lookup of the last sibling.
   const appendToEnd = async (): Promise<number> => {
     const lastPage = await db.query.pages.findFirst({
       where: siblingWhere,
@@ -47,28 +48,30 @@ async function resolveUploadPosition(
     return lastPage ? lastPage.position + 1 : 0;
   };
 
-  if (!afterNodeId || (position !== 'before' && position !== 'after')) {
+  if ((position !== 'before' && position !== 'after') || !afterNodeId) {
     return appendToEnd();
   }
 
-  const targetNode = await db.query.pages.findFirst({ where: eq(pages.id, afterNodeId) });
-  if (!targetNode) return appendToEnd();
-
+  // Resolve the target from the sibling set itself, so an afterNodeId that
+  // belongs to a different parent (or doesn't exist) falls back to appending
+  // rather than landing at an arbitrary position.
   const siblings = await db.query.pages.findMany({
     where: siblingWhere,
     orderBy: (p, { asc }) => [asc(p.position)],
   });
   const targetIndex = siblings.findIndex((s) => s.id === afterNodeId);
+  if (targetIndex === -1) return appendToEnd();
+
+  const target = siblings[targetIndex];
 
   if (position === 'before') {
-    const prevSibling = targetIndex > 0 ? siblings[targetIndex - 1] : null;
-    const prevPos = prevSibling?.position ?? 0;
-    return (prevPos + targetNode.position) / 2;
+    const prevPos = targetIndex > 0 ? siblings[targetIndex - 1].position : 0;
+    return (prevPos + target.position) / 2;
   }
 
   const nextSibling = siblings[targetIndex + 1];
-  const nextPos = nextSibling?.position ?? targetNode.position + 2;
-  return (targetNode.position + nextPos) / 2;
+  const nextPos = nextSibling ? nextSibling.position : target.position + 2;
+  return (target.position + nextPos) / 2;
 }
 
 interface NewPageRecord {
