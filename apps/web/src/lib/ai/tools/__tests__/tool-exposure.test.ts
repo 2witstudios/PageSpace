@@ -81,8 +81,11 @@ describe('applyToolExposureMode', () => {
       expect(out).toEqual({ ok: true });
     });
 
-    it('cannot reach a tool that was filtered out of the catalog (allowlist enforcement)', async () => {
-      // delete_task is NOT in the catalog (excluded by the agent allowlist upstream).
+    it('a tool absent from the catalog is unreachable via execute_tool', async () => {
+      // delete_task was excluded by the agent allowlist upstream, so it never enters
+      // the catalog. The model therefore cannot dispatch it through execute_tool —
+      // this proves catalog/dispatch-map exclusion (the enabledTools gate itself is
+      // covered by execute-tool's own tests).
       const allowlistFiltered: ToolSet = {
         read_page: makeTool('Read a page'),
         send_channel_message: makeTool('Send a channel message'),
@@ -177,6 +180,24 @@ describe('applyToolExposureMode', () => {
         {}
       )) as { tools: Array<{ name: string }> };
       expect(found.tools.map((t) => t.name)).not.toContain('web_search');
+    });
+
+    it('keeps a tool that is both core and always-upfront exactly once (no drop, no duplicate)', () => {
+      // read_page is a core tool AND named in alwaysUpfront — the overlap must not
+      // drop it or list it twice in the resulting toolset.
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'), // core + always-upfront
+        send_channel_message: makeTool('Send a channel message'), // non-core, forces a split
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(['read_page']));
+
+      expect(result.tools.read_page).toBeDefined();
+      // Present exactly once (object keys are unique, but assert the count of the name).
+      expect(Object.keys(result.tools).filter((k) => k === 'read_page')).toHaveLength(1);
+      // Still split because a genuine non-core tool remains.
+      expect(result.tools.tool_search).toBeDefined();
+      expect(result.tools.execute_tool).toBeDefined();
     });
 
     it('treats search mode as a no-op when only core tools and always-upfront tools remain', () => {
