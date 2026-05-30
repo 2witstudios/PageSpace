@@ -63,6 +63,33 @@ export interface ApplyPageMutationResult {
 
 const STRICT_REVISION = process.env.PAGE_REVISION_STRICT === 'true';
 
+/**
+ * Update fields whose effect is fully captured by the page state hash
+ * (see {@link computePageStateHash}). When an update touches only these
+ * fields and the resulting hash is unchanged, nothing meaningful changed and
+ * the mutation can be treated as a no-op. Fields outside this set (e.g.
+ * `isPrivate`, `contentMode`, file metadata) are not part of the hash, so an
+ * update touching them always takes the normal path and is recorded.
+ */
+const STATE_HASHED_UPDATE_FIELDS = new Set<string>([
+  'title',
+  'content',
+  'parentId',
+  'position',
+  'isTrashed',
+  'type',
+  'aiProvider',
+  'aiModel',
+  'systemPrompt',
+  'enabledTools',
+  'isPaginated',
+  'includeDrivePrompt',
+  'agentDefinition',
+  'visibleToGlobalAssistant',
+  'includePageTree',
+  'pageTreeScope',
+]);
+
 export async function applyPageMutation({
   pageId,
   operation,
@@ -161,6 +188,32 @@ export async function applyPageMutation({
 
   const stateHashAfter = computePageStateHash(nextPageState);
 
+  const safeUpdatedFields = updatedFields
+    ?? Object.keys(updates).filter((key) => key !== 'expectedRevision');
+
+  // No-op guard: when an update touches only fields captured by the page state
+  // hash and that hash is unchanged, nothing actually changed. This happens when
+  // a page is merely opened and an editor re-emits its loaded content. Skipping
+  // here avoids a spurious revision bump, page version, and 'update' activity log
+  // so that visiting a page is never recorded as an edit in Activity or Pulse.
+  const touchesOnlyHashedFields = safeUpdatedFields.every(
+    (field) => STATE_HASHED_UPDATE_FIELDS.has(field)
+  );
+  if (touchesOnlyHashedFields && stateHashBefore === stateHashAfter) {
+    return {
+      pageId,
+      driveId: currentPage.driveId,
+      nextRevision: currentPage.revision,
+      stateHashBefore,
+      stateHashAfter,
+      contentRefBefore: contentRefBefore ?? null,
+      contentRefAfter: contentRefAfter ?? null,
+      contentFormatBefore,
+      contentFormatAfter,
+      deferredTrigger: undefined,
+    };
+  }
+
   const shouldSnapshotBefore = updates.content !== undefined;
   let contentSnapshotRef: string | null = null;
   let contentSnapshotSize = 0;
@@ -170,9 +223,6 @@ export async function applyPageMutation({
     contentSnapshotRef = stored.ref;
     contentSnapshotSize = stored.size;
   }
-
-  const safeUpdatedFields = updatedFields
-    ?? Object.keys(updates).filter((key) => key !== 'expectedRevision');
 
   const previousValues: Record<string, unknown> = {};
   const newValues: Record<string, unknown> = {};
