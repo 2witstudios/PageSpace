@@ -244,15 +244,20 @@ export async function revokeAgentMembershipsGrantedBy(
  *
  * Agent access is bottlenecked by the granting user's access: a plain MEMBER
  * agent membership now resolves to the same view a plain MEMBER *user* gets
- * (non-private pages only — see `agent-permissions.ts`), and a custom-role
- * membership is gated by that role's explicit per-page matrix. So once the
- * granter is capped at MEMBER, every membership they granted is reduced to
- * `{ role: 'MEMBER', customRoleId: <the granter's own custom role, or null> }` —
- * precisely what `addAgentToDrive` would assign for this granter today. No revoke
- * is needed: a plain-MEMBER row can no longer over-read the granter.
+ * (non-private pages only — see `agent-permissions.ts`), so capping a full-access
+ * agent down to the granter's level is a safe, pure narrowing. For each non-home
+ * membership the user granted, with the granter now capped at MEMBER:
+ *  - role ADMIN ⇒ REDUCE to `{ role: 'MEMBER', customRoleId: <granter's cap> }`.
+ *    ADMIN is full access ⊇ any MEMBER cap, so this strictly narrows.
+ *  - role MEMBER, customRoleId === the granter's ⇒ leave as is (already exactly
+ *    what the granter could grant today).
+ *  - role MEMBER, customRoleId differs ⇒ REVOKE. A custom-role matrix is
+ *    incomparable to the new cap (it may scope to fewer pages, or grant private/
+ *    edit access the cap doesn't), so rewriting it could *widen* the agent.
+ *    Revoke rather than guess — recap must never widen.
  *
  * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
- * Returns the affected agentPageIds.
+ * Returns the affected agentPageIds (both reduced and revoked).
  */
 export async function recapAgentMembershipsGrantedBy(
   driveId: string,
@@ -279,12 +284,17 @@ export async function recapAgentMembershipsGrantedBy(
       ne(pages.driveId, driveId),
     ));
 
-  // Reduce every membership that exceeds the granter's current grant down to it.
-  // "Already at the cap" = a plain-MEMBER row carrying the granter's own custom
-  // role (or none); those are left untouched.
-  const toReduce = rows.filter(
-    (r) => r.role !== 'MEMBER' || (r.customRoleId ?? null) !== capCustomRoleId,
-  );
+  const toReduce: typeof rows = [];
+  const toRevoke: typeof rows = [];
+  for (const r of rows) {
+    const cid = r.customRoleId ?? null;
+    if (r.role === 'MEMBER' && cid === capCustomRoleId) continue; // already the granter's grant
+    if (r.role === 'ADMIN') {
+      toReduce.push(r); // full access ⊇ cap ⇒ pure narrowing
+    } else {
+      toRevoke.push(r); // mismatched custom role ⇒ not provably a subset of the cap
+    }
+  }
 
   if (toReduce.length > 0) {
     await db
@@ -292,8 +302,13 @@ export async function recapAgentMembershipsGrantedBy(
       .set({ role: 'MEMBER', customRoleId: capCustomRoleId })
       .where(inArray(driveAgentMembers.id, toReduce.map((r) => r.id)));
   }
+  if (toRevoke.length > 0) {
+    await db
+      .delete(driveAgentMembers)
+      .where(inArray(driveAgentMembers.id, toRevoke.map((r) => r.id)));
+  }
 
-  return toReduce.map((r) => r.agentPageId);
+  return [...toReduce, ...toRevoke].map((r) => r.agentPageId);
 }
 
 /**

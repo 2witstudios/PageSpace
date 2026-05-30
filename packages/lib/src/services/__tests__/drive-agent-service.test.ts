@@ -297,23 +297,42 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: 'role_b' });
   });
 
-  it('reduces a custom-role agent whose scope differs from the granter down to the granter grant', async () => {
+  it('REVOKES a custom-role agent whose scope differs from the granter cap', async () => {
+    // A custom-role matrix is incomparable to plain MEMBER (it may scope to fewer
+    // pages, or grant private/edit access the cap doesn't), so rewriting it could
+    // widen the agent. Revoke rather than guess.
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                          // drive lookup
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))               // granter now plain MEMBER
       .mockReturnValueOnce(stubJoinSelect([{ id: 'm2', agentPageId: 'a2', role: 'MEMBER', customRoleId: 'role_a' }]));
-    const captured: Record<string, unknown>[] = [];
-    stubUpdate(captured);
-    stubDelete();
+    stubUpdate([]);
+    const where = stubDelete();
 
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
-    // Stale custom role the plain-member granter can no longer back ⇒ reset to the
-    // granter's own grant (plain MEMBER, no custom role). A plain-MEMBER row now
-    // only reaches non-private pages, so this narrows rather than broadens.
     expect(result).toEqual(['a2']);
-    expect(captured[0]).toEqual({ role: 'MEMBER', customRoleId: null });
-    expect(db.delete).not.toHaveBeenCalled();
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('REVOKES a plain-MEMBER agent when the granter cap is a (narrower) custom role', async () => {
+    // agent {MEMBER,null} sees all non-private pages; the granter's custom-role cap
+    // may be narrower (or otherwise incomparable), so rewriting null→role could
+    // widen or skew the agent. Revoke instead.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                              // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))               // granter custom role
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm5', agentPageId: 'a5', role: 'MEMBER', customRoleId: null }]));
+    stubUpdate([]);
+    const where = stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a5']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
   });
 
   it('leaves a custom-role agent untouched when it already matches the granter ceiling', async () => {
