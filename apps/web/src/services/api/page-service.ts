@@ -17,6 +17,7 @@ import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monito
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { ensureTaskItemForPage } from './task-sync-service';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -760,6 +761,15 @@ export const pageService = {
       pageData.stateHash = stateHash;
 
       const [page] = await tx.insert(pages).values(pageData).returning();
+
+      // Keep the task-list membership invariant: a TASK_LIST created under a
+      // TASK_LIST parent must have its task_items row, no matter the entry point.
+      await ensureTaskItemForPage(tx, {
+        pageId: page.id,
+        pageType: page.type,
+        parentId: page.parentId,
+        userId,
+      });
 
       if (isAIChatPage(params.type as PageTypeEnum)) {
         await tx.insert(driveAgentMembers).values({

@@ -59,8 +59,14 @@ vi.mock('@pagespace/db/db', () => {
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
   const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
   const txQueryPagesFindMany = vi.fn().mockResolvedValue([]);
+  // Children-to-reparent lookup added by the task_items sync. Resolves to no children
+  // so the per-child syncTaskItemOnMove loop is a no-op in these tests.
+  const txSelectWhere = vi.fn().mockResolvedValue([]);
+  const txSelectFrom = vi.fn().mockReturnValue({ where: txSelectWhere });
+  const txSelect = vi.fn().mockReturnValue({ from: txSelectFrom });
   const tx = {
     update: txUpdate,
+    select: txSelect,
     query: { pages: { findMany: txQueryPagesFindMany } },
   };
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
@@ -73,11 +79,12 @@ vi.mock('@pagespace/db/db', () => {
       },
       transaction,
     },
-    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction },
+    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction },
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  and: vi.fn((...conds: unknown[]) => conds),
   inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -95,11 +102,14 @@ import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
 
-const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
+const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;
   txUpdateSet: ReturnType<typeof vi.fn>;
   txUpdateWhere: ReturnType<typeof vi.fn>;
   txQueryPagesFindMany: ReturnType<typeof vi.fn>;
+  txSelect: ReturnType<typeof vi.fn>;
+  txSelectFrom: ReturnType<typeof vi.fn>;
+  txSelectWhere: ReturnType<typeof vi.fn>;
   transaction: ReturnType<typeof vi.fn>;
 };
 
@@ -160,9 +170,14 @@ function setupSuccessScenario() {
   txUpdateSet.mockReturnValue({ where: txUpdateWhere });
   txUpdate.mockReturnValue({ set: txUpdateSet });
   txQueryPagesFindMany.mockResolvedValue([]);
+  // Children-to-reparent lookup added by the task_items sync; no children by default.
+  txSelectWhere.mockResolvedValue([]);
+  txSelectFrom.mockReturnValue({ where: txSelectWhere });
+  txSelect.mockReturnValue({ from: txSelectFrom });
   mockTransaction.mockImplementation(async (fn: (t: unknown) => Promise<void>) => {
     await fn({
       update: txUpdate,
+      select: txSelect,
       query: { pages: { findMany: txQueryPagesFindMany } },
     });
   });

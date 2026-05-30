@@ -1,18 +1,101 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, desc } from '@pagespace/db/operators'
+import { eq, and, desc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
+import {
+  TASK_LIST_TYPE,
+  shouldHaveTaskItem,
+  resolveTaskItemSyncAction,
+  buildTaskItemInsert,
+  selectMissingTaskItemPageIds,
+} from './task-membership'
 
 type Tx = typeof db
 
 /**
- * Sync task_items membership when a page is moved.
+ * Imperative shells over the pure membership logic in `task-membership.ts`.
  *
- * Invariant: every TASK_LIST page whose pages.parentId points to another TASK_LIST page
- * must have exactly one task_items row with pageId = that page's id.
- *
- * - Moving INTO a TASK_LIST parent → create the task_items row (idempotent)
- * - Moving OUT OF a TASK_LIST parent → delete the task_items row
+ * Invariant: every TASK_LIST page whose `pages.parentId` points to another TASK_LIST
+ * page must have exactly one `task_items` row with pageId = that page's id. These shells
+ * are the single place that enforces it; the pure functions decide what to do.
+ */
+
+async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
+  const [page] = await tx
+    .select({ type: pages.type })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1)
+  return page?.type ?? null
+}
+
+/**
+ * Create the `task_items` row for a page under a known TASK_LIST parent.
+ * Idempotent — does nothing if the row already exists. Ensures the parent's
+ * `task_lists` row and default status configs exist first.
+ */
+async function addTaskItemUnderParent(
+  tx: Tx,
+  params: { pageId: string; parentId: string; userId: string },
+): Promise<void> {
+  const { pageId, parentId, userId } = params
+
+  let taskList = await tx.query.taskLists.findFirst({
+    where: eq(taskLists.pageId, parentId),
+  })
+
+  if (!taskList) {
+    const [created] = await tx.insert(taskLists).values({
+      userId,
+      pageId: parentId,
+      title: 'Task List',
+      status: 'pending',
+    }).returning()
+    taskList = created
+
+    await tx.insert(taskStatusConfigs).values(
+      DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
+    )
+  }
+
+  const existing = await tx.query.taskItems.findFirst({
+    where: eq(taskItems.pageId, pageId),
+  })
+  if (existing) return
+
+  const lastChild = await tx.query.pages.findFirst({
+    where: and(eq(pages.parentId, parentId), eq(pages.isTrashed, false)),
+    orderBy: [desc(pages.position)],
+  })
+
+  await tx.insert(taskItems).values(
+    buildTaskItemInsert({ pageId, userId, lastChildPosition: lastChild?.position ?? null }),
+  )
+}
+
+/**
+ * Ensure a freshly created or re-parented page has its `task_items` row when it is a
+ * TASK_LIST nested under a TASK_LIST. No-op otherwise. Use from every page-creation path.
+ */
+export async function ensureTaskItemForPage(
+  tx: Tx,
+  params: { pageId: string; pageType: string; parentId: string | null; userId: string },
+): Promise<void> {
+  const { pageId, pageType, parentId, userId } = params
+
+  // Short-circuit before any I/O: only TASK_LIST pages with a parent can qualify.
+  if (pageType !== TASK_LIST_TYPE || !parentId) return
+
+  const parentType = await getPageType(tx, parentId)
+  if (!shouldHaveTaskItem({ pageType, parentType })) return
+
+  await addTaskItemUnderParent(tx, { pageId, parentId, userId })
+}
+
+/**
+ * Sync `task_items` membership when a page is moved.
+ * - Moving INTO a TASK_LIST parent → create the row (idempotent)
+ * - Moving OUT OF a TASK_LIST parent → delete the row
  */
 export async function syncTaskItemOnMove(
   tx: Tx,
@@ -26,72 +109,58 @@ export async function syncTaskItemOnMove(
 ): Promise<void> {
   const { movedPageId, movedPageType, oldParentId, newParentId, userId } = params
 
-  if (movedPageType !== 'TASK_LIST') return
+  // Cheap guards before any parent lookups.
+  if (movedPageType !== TASK_LIST_TYPE || oldParentId === newParentId) return
 
-  // No parent change — just a position reorder within the same parent, nothing to sync
-  if (oldParentId === newParentId) return
+  const oldParentType = oldParentId ? await getPageType(tx, oldParentId) : null
+  const newParentType = newParentId ? await getPageType(tx, newParentId) : null
 
-  // Remove from old parent if it was a TASK_LIST
-  if (oldParentId) {
-    const [oldParent] = await tx
-      .select({ type: pages.type })
-      .from(pages)
-      .where(eq(pages.id, oldParentId))
-      .limit(1)
+  const action = resolveTaskItemSyncAction({
+    movedPageType,
+    oldParentId,
+    newParentId,
+    oldParentType,
+    newParentType,
+  })
 
-    if (oldParent?.type === 'TASK_LIST') {
-      await tx.delete(taskItems).where(eq(taskItems.pageId, movedPageId))
-    }
+  if (action.shouldRemove) {
+    await tx.delete(taskItems).where(eq(taskItems.pageId, movedPageId))
   }
 
-  // Add to new parent if it's a TASK_LIST
-  if (newParentId) {
-    const [newParent] = await tx
-      .select({ type: pages.type })
-      .from(pages)
-      .where(eq(pages.id, newParentId))
-      .limit(1)
-
-    if (newParent?.type !== 'TASK_LIST') return
-
-    // Get or create task_lists row for the new parent page
-    let taskList = await tx.query.taskLists.findFirst({
-      where: eq(taskLists.pageId, newParentId),
-    })
-
-    if (!taskList) {
-      const [created] = await tx.insert(taskLists).values({
-        userId,
-        pageId: newParentId,
-        title: 'Task List',
-        status: 'pending',
-      }).returning()
-      taskList = created
-
-      await tx.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
-      )
-    }
-
-    // Idempotent: skip if task_items row already exists
-    const existing = await tx.query.taskItems.findFirst({
-      where: eq(taskItems.pageId, movedPageId),
-    })
-    if (existing) return
-
-    // Position after the last task in the new parent
-    const lastChild = await tx.query.pages.findFirst({
-      where: and(eq(pages.parentId, newParentId), eq(pages.isTrashed, false)),
-      orderBy: [desc(pages.position)],
-    })
-    const position = (lastChild?.position ?? 0) + 1
-
-    await tx.insert(taskItems).values({
-      userId,
-      pageId: movedPageId,
-      status: 'pending',
-      priority: 'medium',
-      position,
-    })
+  if (action.shouldAdd && newParentId) {
+    await addTaskItemUnderParent(tx, { pageId: movedPageId, parentId: newParentId, userId })
   }
+}
+
+/**
+ * Self-heal: ensure every given TASK_LIST child of `parentId` has a `task_items` row.
+ * Backfills rows missed by any creation/move path (or created before this invariant
+ * was enforced). Caller is responsible for passing only TASK_LIST children of `parentId`.
+ *
+ * Reads on the connection first and only opens a transaction when something is actually
+ * missing, so the common (nothing-to-heal) case on this hot read path stays cheap.
+ */
+export async function backfillMissingTaskItems(
+  database: Tx,
+  params: { parentId: string; childPageIds: string[]; userId: string },
+): Promise<void> {
+  const { parentId, childPageIds, userId } = params
+  if (childPageIds.length === 0) return
+
+  const existingRows = await database
+    .select({ pageId: taskItems.pageId })
+    .from(taskItems)
+    .where(inArray(taskItems.pageId, childPageIds))
+
+  const missing = selectMissingTaskItemPageIds({
+    childPageIds,
+    existingTaskItemPageIds: existingRows.map(r => r.pageId),
+  })
+  if (missing.length === 0) return
+
+  await database.transaction(async (tx) => {
+    for (const pageId of missing) {
+      await addTaskItemUnderParent(tx, { pageId, parentId, userId })
+    }
+  })
 }

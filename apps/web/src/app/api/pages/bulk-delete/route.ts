@@ -4,12 +4,13 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { eq, inArray } from '@pagespace/db/operators'
+import { and, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -95,13 +96,30 @@ export async function DELETE(request: Request) {
         if (trashChildren) {
           await trashChildrenRecursively(tx, page.id, now);
         } else {
-          // Move children to parent's parent
+          // Move children up to the deleted page's parent. Sync task_items per child so
+          // a TASK_LIST leaving a deleted TASK_LIST loses its row (or gains one if the
+          // new grandparent is also a TASK_LIST).
+          const children = await tx
+            .select({ id: pages.id, type: pages.type })
+            .from(pages)
+            .where(and(eq(pages.parentId, page.id), eq(pages.isTrashed, false)));
+
           await tx.update(pages)
             .set({
               parentId: page.parentId,
               updatedAt: now,
             })
             .where(eq(pages.parentId, page.id));
+
+          for (const child of children) {
+            await syncTaskItemOnMove(tx, {
+              movedPageId: child.id,
+              movedPageType: child.type,
+              oldParentId: page.id,
+              newParentId: page.parentId,
+              userId,
+            });
+          }
         }
       }
     });
