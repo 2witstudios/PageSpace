@@ -69,7 +69,8 @@ function makeTx(config: {
         const isTaskItems = table?.pageId === 'taskItems.pageId';
         if (isTaskItems) taskItemInserts.push(vals as Record<string, unknown>);
         else if (table?.pageId === 'taskLists.pageId') taskListInserts.push(vals as Record<string, unknown>);
-        return { returning: () => Promise.resolve([{ id: 'tasklist-1' }]) };
+        // taskItems insert is awaited via .onConflictDoNothing(); taskLists via .returning().
+        return { onConflictDoNothing: () => Promise.resolve(), returning: () => Promise.resolve([{ id: 'tasklist-1' }]) };
       },
     })),
     query: {

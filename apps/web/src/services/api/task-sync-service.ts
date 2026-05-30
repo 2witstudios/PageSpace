@@ -68,9 +68,12 @@ async function addTaskItemUnderParent(
     orderBy: [desc(pages.position)],
   })
 
+  // ON CONFLICT DO NOTHING guards the self-heal race: concurrent GETs on a legacy list
+  // can both pass the findFirst check above, and task_items.pageId is unique — without
+  // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
   await tx.insert(taskItems).values(
     buildTaskItemInsert({ pageId, userId, lastChildPosition: lastChild?.position ?? null }),
-  )
+  ).onConflictDoNothing({ target: taskItems.pageId })
 }
 
 /**
