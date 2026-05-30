@@ -74,6 +74,15 @@ vi.mock('@/lib/upload/processor-effects', () => ({
   enqueueProcessorJob: vi.fn(),
 }));
 
+const mockCheckObjectExists = vi.fn();
+vi.mock('@/lib/upload/s3-effects', () => ({
+  checkObjectExists: (...args: unknown[]) => mockCheckObjectExists(...args),
+}));
+
+vi.mock('@pagespace/lib/services/upload-validation', () => ({
+  buildS3Key: (hash: string) => `files/${hash}/original`,
+}));
+
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
@@ -84,9 +93,19 @@ import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 // Captures the values passed to tx.insert(pages).values(...) for assertion
 let capturedPageValues: Record<string, unknown> | undefined;
 
+// resolveUploadPosition runs on the transaction executor, so the tx must expose
+// the same query mocks as db.query.
+const txQuery = {
+  pages: {
+    findFirst: (...args: unknown[]) => mockFindFirst(...args),
+    findMany: (...args: unknown[]) => mockFindMany(...args),
+  },
+};
+
 function makeTxImpl() {
   return async (fn: (tx: unknown) => Promise<unknown>) => {
     const tx = {
+      query: txQuery,
       insert: (table: unknown) => ({
         values: (vals: Record<string, unknown>) => {
           if (table === 'pages') capturedPageValues = vals;
@@ -140,6 +159,8 @@ beforeEach(() => {
   // Default sibling lookups: empty list (new page lands at position 0).
   mockFindFirst.mockResolvedValue(undefined);
   mockFindMany.mockResolvedValue([]);
+  // Default: the uploaded object is present in storage.
+  mockCheckObjectExists.mockResolvedValue(true);
 
   mockTransaction.mockImplementation(makeTxImpl());
 });
@@ -195,6 +216,46 @@ describe('POST /api/upload/complete', () => {
     });
   });
 
+  describe('object verification', () => {
+    it('returns 409 and creates no page when the uploaded object is missing from storage', async () => {
+      mockCheckObjectExists.mockResolvedValue(false);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(409);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('releases the slot when the object is missing', async () => {
+      mockCheckObjectExists.mockResolvedValue(false);
+      await POST(makeRequest(VALID_BODY));
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+  });
+
+  describe('parent validation', () => {
+    it('returns 400 when the parent page belongs to a different drive', async () => {
+      mockFindFirst.mockResolvedValueOnce({ id: 'parent-x', driveId: 'other-drive', isTrashed: false });
+      const res = await POST(makeRequest({ ...VALID_BODY, parentId: 'parent-x' }));
+      expect(res.status).toBe(400);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when the parent page is trashed', async () => {
+      mockFindFirst.mockResolvedValueOnce({ id: 'parent-x', driveId: 'drive-1', isTrashed: true });
+      const res = await POST(makeRequest({ ...VALID_BODY, parentId: 'parent-x' }));
+      expect(res.status).toBe(400);
+    });
+
+    it('accepts a parent in the reserved drive', async () => {
+      // 1st findFirst = parent lookup; 2nd = sibling append lookup (none).
+      mockFindFirst
+        .mockResolvedValueOnce({ id: 'parent-x', driveId: 'drive-1', isTrashed: false })
+        .mockResolvedValueOnce(undefined);
+      const res = await POST(makeRequest({ ...VALID_BODY, parentId: 'parent-x' }));
+      expect(res.status).toBe(200);
+      expect(capturedPageValues?.parentId).toBe('parent-x');
+    });
+  });
+
   describe('page record', () => {
     it('stores the raw content hash in filePath, not the S3 key', async () => {
       await POST(makeRequest(VALID_BODY));
@@ -230,6 +291,7 @@ describe('POST /api/upload/complete', () => {
       const callOrder: string[] = [];
       mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
+          query: txQuery,
           insert: () => ({
             values: () => ({
               returning: vi.fn().mockResolvedValue([MOCK_PAGE]),
