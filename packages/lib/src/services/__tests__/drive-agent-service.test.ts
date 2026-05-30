@@ -31,6 +31,7 @@ vi.mock('../../permissions/permissions', () => ({
 }));
 vi.mock('../../permissions/membership-queries', () => ({
   customRoleBelongsToDrive: vi.fn(),
+  fetchCustomRolePermissions: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ import { eq, ne } from '@pagespace/db/operators';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
 import { canUserEditPage, getUserDriveAccess } from '../../permissions/permissions';
-import { customRoleBelongsToDrive } from '../../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../../permissions/membership-queries';
 
 const USER = 'user_aaaaaaaaaaaaaaaaaaaaaa';
 const AGENT = 'agent_bbbbbbbbbbbbbbbbbbbbbb';
@@ -330,6 +331,50 @@ describe('recapAgentMembershipsGrantedBy', () => {
     const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
 
     expect(result).toEqual(['a5']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('LEAVES a custom-role agent whose role is a subset of the granter\'s new (broader) custom role', async () => {
+    // The granter moved laterally to a broader custom role (role_b ⊇ role_a). The
+    // agent still sits under the granter, so it must NOT be revoked or rewritten.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                          // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))            // granter now role_b
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm6', agentPageId: 'a6', role: 'MEMBER', customRoleId: 'role_a' }]));
+    vi.mocked(fetchCustomRolePermissions)
+      .mockResolvedValueOnce({ pageX: { canView: true, canEdit: false, canShare: false } })     // role_a (agent)
+      .mockResolvedValueOnce({                                                                  // role_b (cap) ⊇ role_a
+        pageX: { canView: true, canEdit: true, canShare: false },
+        pageY: { canView: true, canEdit: false, canShare: false },
+      });
+    stubUpdate([]);
+    stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual([]);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
+  });
+
+  it('REVOKES a custom-role agent whose role is NOT a subset of the granter\'s new custom role', async () => {
+    // The granter moved to role_c, which drops pages role_a granted. The agent now
+    // exceeds the granter, and the scopes are not representable as one another ⇒ revoke.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))                          // drive lookup
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_c' }]))            // granter now role_c
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm7', agentPageId: 'a7', role: 'MEMBER', customRoleId: 'role_a' }]));
+    vi.mocked(fetchCustomRolePermissions)
+      .mockResolvedValueOnce({ pageX: { canView: true, canEdit: false, canShare: false } })     // role_a (agent)
+      .mockResolvedValueOnce({ pageZ: { canView: true, canEdit: false, canShare: false } });    // role_c (cap), no pageX
+    stubUpdate([]);
+    const where = stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a7']);
     expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
     expect(where).toHaveBeenCalledTimes(1);
     expect(db.update).not.toHaveBeenCalled();

@@ -14,7 +14,8 @@ import { eq, and, ne, isNotNull, inArray } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
-import { customRoleBelongsToDrive } from '../permissions/membership-queries';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
+import type { CustomRolePerms } from '../permissions/membership-queries';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
@@ -237,6 +238,54 @@ export async function revokeAgentMembershipsGrantedBy(
 }
 
 /**
+ * True when every grant in `sub` is matched (≥) by `sup` — i.e. role `sub` can
+ * see/do nothing role `sup` cannot. Pages `sub` grants nothing on impose no
+ * constraint.
+ */
+function customRoleSubset(sub: CustomRolePerms, sup: CustomRolePerms): boolean {
+  for (const [pageId, p] of Object.entries(sub)) {
+    if (!p.canView && !p.canEdit && !p.canShare) continue;
+    const s = sup[pageId];
+    if (!s) return false;
+    if ((p.canView && !s.canView) || (p.canEdit && !s.canEdit) || (p.canShare && !s.canShare)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether an agent's MEMBER-level grant (`agentCustomRoleId`) is still within the
+ * granter's current cap (`capCustomRoleId`), both at MEMBER rank. Lets recap skip
+ * an agent on a lateral/widening custom-role change (the agent's old role is a
+ * subset of the granter's new role) instead of needlessly revoking it.
+ *
+ * Only the custom-role-vs-custom-role case is compared precisely (a cheap matrix
+ * subset). Cases involving plain MEMBER (null) on either side are conservatively
+ * treated as NOT within: plain MEMBER spans every non-private page in the drive —
+ * a scope not expressed as a per-page matrix — so we fail closed (revoke) rather
+ * than enumerate the drive's pages on a security path.
+ */
+async function memberGrantWithinCap(
+  agentCustomRoleId: string | null,
+  capCustomRoleId: string | null,
+  driveId: string,
+): Promise<boolean> {
+  // Only "both plain MEMBER" is provably within without comparing matrices.
+  if (agentCustomRoleId === null || capCustomRoleId === null) {
+    return agentCustomRoleId === capCustomRoleId;
+  }
+  const [agentPerms, capPerms] = await Promise.all([
+    fetchCustomRolePermissions(agentCustomRoleId, driveId),
+    fetchCustomRolePermissions(capCustomRoleId, driveId),
+  ]);
+  // An unresolvable custom role resolves as plain MEMBER (drive-wide), which is
+  // not a provable subset of a scoped cap ⇒ fail closed.
+  if (!agentPerms || !capPerms) return false;
+  return customRoleSubset(agentPerms, capPerms);
+}
+
+/**
  * Re-cap the agent memberships in `driveId` granted by `userId` when the user's
  * access is downgraded, bringing every agent they granted down to exactly what
  * they could grant today. Only ever caps DOWN — never widens an agent's reach,
@@ -244,17 +293,19 @@ export async function revokeAgentMembershipsGrantedBy(
  *
  * Agent access is bottlenecked by the granting user's access: a plain MEMBER
  * agent membership now resolves to the same view a plain MEMBER *user* gets
- * (non-private pages only — see `agent-permissions.ts`), so capping a full-access
- * agent down to the granter's level is a safe, pure narrowing. For each non-home
+ * (non-private pages only — see `agent-permissions.ts`). For each non-home
  * membership the user granted, with the granter now capped at MEMBER:
  *  - role ADMIN ⇒ REDUCE to `{ role: 'MEMBER', customRoleId: <granter's cap> }`.
- *    ADMIN is full access ⊇ any MEMBER cap, so this strictly narrows.
- *  - role MEMBER, customRoleId === the granter's ⇒ leave as is (already exactly
- *    what the granter could grant today).
- *  - role MEMBER, customRoleId differs ⇒ REVOKE. A custom-role matrix is
- *    incomparable to the new cap (it may scope to fewer pages, or grant private/
- *    edit access the cap doesn't), so rewriting it could *widen* the agent.
- *    Revoke rather than guess — recap must never widen.
+ *    ADMIN is full access ⊋ any MEMBER cap, so this strictly narrows.
+ *  - role MEMBER, customRoleId === the granter's ⇒ leave (already exactly what
+ *    the granter could grant today).
+ *  - role MEMBER, customRoleId differs ⇒ keep ONLY if the agent's grant is
+ *    provably ⊆ the granter's new grant (`memberGrantWithinCap`) — e.g. the
+ *    granter moved to a *broader* custom role, so the agent still sits under
+ *    them. Otherwise REVOKE. We never rewrite a member row to a different role
+ *    (that could widen — a custom-role matrix is incomparable to the cap), and
+ *    we never revoke an agent that's still within the granter (no false revoke
+ *    on a lateral/widening change).
  *
  * No-op when the user can still grant ADMIN. Excludes the agent's home drive.
  * Returns the affected agentPageIds (both reduced and revoked).
@@ -284,17 +335,18 @@ export async function recapAgentMembershipsGrantedBy(
       ne(pages.driveId, driveId),
     ));
 
-  const toReduce: typeof rows = [];
-  const toRevoke: typeof rows = [];
-  for (const r of rows) {
-    const cid = r.customRoleId ?? null;
-    if (r.role === 'MEMBER' && cid === capCustomRoleId) continue; // already the granter's grant
-    if (r.role === 'ADMIN') {
-      toReduce.push(r); // full access ⊇ cap ⇒ pure narrowing
-    } else {
-      toRevoke.push(r); // mismatched custom role ⇒ not provably a subset of the cap
-    }
-  }
+  // ADMIN agents always exceed a MEMBER cap ⇒ reduce them to the cap.
+  const toReduce = rows.filter((r) => r.role === 'ADMIN');
+  // MEMBER agents whose custom role differs from the cap: keep iff provably within.
+  const memberMismatch = rows.filter(
+    (r) => r.role !== 'ADMIN' && (r.customRoleId ?? null) !== capCustomRoleId,
+  );
+  const withinCap = await Promise.all(
+    memberMismatch.map((r) =>
+      memberGrantWithinCap(r.customRoleId ?? null, capCustomRoleId, driveId),
+    ),
+  );
+  const toRevoke = memberMismatch.filter((_, i) => !withinCap[i]);
 
   if (toReduce.length > 0) {
     await db
