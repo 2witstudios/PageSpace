@@ -11,10 +11,18 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 const mockTransaction = vi.fn();
+const mockFindFirst = vi.fn();
+const mockFindMany = vi.fn();
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     transaction: (...args: unknown[]) => mockTransaction(...args),
+    query: {
+      pages: {
+        findFirst: (...args: unknown[]) => mockFindFirst(...args),
+        findMany: (...args: unknown[]) => mockFindMany(...args),
+      },
+    },
   },
 }));
 
@@ -128,6 +136,10 @@ beforeEach(() => {
   vi.mocked(enqueueProcessorJob).mockResolvedValue(undefined);
   vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
 
+  // Default sibling lookups: empty list (new page lands at position 0).
+  mockFindFirst.mockResolvedValue(undefined);
+  mockFindMany.mockResolvedValue([]);
+
   mockTransaction.mockImplementation(makeTxImpl());
 });
 
@@ -237,6 +249,49 @@ describe('POST /api/upload/complete', () => {
       const txIdx = callOrder.indexOf('tx-complete');
       const enqIdx = callOrder.indexOf('enqueue');
       expect(txIdx).toBeLessThan(enqIdx);
+    });
+  });
+
+  describe('tree ordering (position)', () => {
+    it('appends after the last sibling (last.position + 1) by default', async () => {
+      mockFindFirst.mockResolvedValue({ id: 'last', position: 5 });
+      await POST(makeRequest(VALID_BODY));
+      expect(capturedPageValues?.position).toBe(6);
+    });
+
+    it('uses position 0 for the first page in an empty sibling list', async () => {
+      mockFindFirst.mockResolvedValue(undefined);
+      await POST(makeRequest(VALID_BODY));
+      expect(capturedPageValues?.position).toBe(0);
+    });
+
+    it('inserts at the midpoint before a target node', async () => {
+      mockFindFirst.mockResolvedValue({ id: 'sibling', position: 4 });
+      mockFindMany.mockResolvedValue([
+        { id: 'a', position: 2 },
+        { id: 'sibling', position: 4 },
+      ]);
+      await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'sibling' }));
+      expect(capturedPageValues?.position).toBe(3); // (2 + 4) / 2
+    });
+
+    it('inserts at the midpoint after a target node', async () => {
+      mockFindFirst.mockResolvedValue({ id: 'sibling', position: 4 });
+      mockFindMany.mockResolvedValue([
+        { id: 'sibling', position: 4 },
+        { id: 'b', position: 8 },
+      ]);
+      await POST(makeRequest({ ...VALID_BODY, position: 'after', afterNodeId: 'sibling' }));
+      expect(capturedPageValues?.position).toBe(6); // (4 + 8) / 2
+    });
+
+    it('falls back to appending when afterNodeId is unknown', async () => {
+      // First findFirst (target lookup) misses; second (last sibling) hits.
+      mockFindFirst
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({ id: 'last', position: 9 });
+      await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'ghost' }));
+      expect(capturedPageValues?.position).toBe(10);
     });
   });
 

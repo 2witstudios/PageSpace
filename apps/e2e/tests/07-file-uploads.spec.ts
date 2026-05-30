@@ -13,18 +13,47 @@ test.describe('File uploads', () => {
     await expect(page.getByRole('button', { name: /Create page/i })).toBeVisible();
   });
 
-  test('upload button click triggers POST /api/upload with file and driveId', async ({
+  test('upload button click drives the direct-to-S3 flow (presign → PUT → complete)', async ({
     page,
     driveId,
   }) => {
-    let capturedFormData: { driveId?: string; fileName?: string } = {};
+    // The browser hashes the file, asks /presign for a scoped PUT, uploads the
+    // bytes straight to Tigris, then calls /complete to create the page record.
+    const FAKE_PUT_URL =
+      `https://fly.storage.tigris.dev/pagespace-files/files/${FAKE_CONTENT_HASH}/original` +
+      `?X-Amz-Signature=fakesig&X-Amz-Expires=900`;
 
-    await page.route('**/api/upload', async (route) => {
-      const postData = route.request().postData() ?? '';
-      capturedFormData = {
-        driveId: postData.includes(driveId) ? driveId : undefined,
-        fileName: postData.includes('test-upload.pdf') ? 'test-upload.pdf' : undefined,
-      };
+    let presignBody: { driveId?: string; filename?: string } = {};
+    let putHit = false;
+    let completeHit = false;
+
+    // The early client-side quota guard — keep it green so the flow proceeds.
+    await page.route('**/api/storage/check', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    );
+
+    await page.route('**/api/upload/presign', async (route) => {
+      const json = (route.request().postDataJSON() ?? {}) as { driveId?: string; filename?: string };
+      presignBody = { driveId: json.driveId, filename: json.filename };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jobId: 'job-e2e-1',
+          key: `files/${FAKE_CONTENT_HASH}/original`,
+          url: FAKE_PUT_URL,
+          alreadyExists: false,
+        }),
+      });
+    });
+
+    await page.route(FAKE_PUT_URL, async (route) => {
+      putHit = true;
+      await route.fulfill({ status: 200, body: '' });
+    });
+
+    await page.route('**/api/upload/complete', async (route) => {
+      completeHit = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -39,8 +68,6 @@ test.describe('File uploads', () => {
             fileSize: 1024,
             driveId,
           },
-          message: 'File uploaded and processed successfully.',
-          processingStatus: 'completed',
         }),
       });
     });
@@ -57,10 +84,12 @@ test.describe('File uploads', () => {
       buffer: Buffer.from('%PDF-1.4 minimal'),
     });
 
-    await page.waitForResponse('**/api/upload');
+    await page.waitForResponse('**/api/upload/complete');
 
-    expect(capturedFormData.driveId).toBe(driveId);
-    expect(capturedFormData.fileName).toBe('test-upload.pdf');
+    expect(presignBody.driveId).toBe(driveId);
+    expect(presignBody.filename).toBe('test-upload.pdf');
+    expect(putHit).toBe(true);
+    expect(completeHit).toBe(true);
   });
 
   // ── Auth guards ──────────────────────────────────────────────────────────────
@@ -85,32 +114,36 @@ test.describe('File uploads', () => {
     expect(response.status()).toBe(404);
   });
 
-  // ── Upload validation ────────────────────────────────────────────────────────
+  // ── Upload validation (presign contract) ─────────────────────────────────────
 
-  test('POST /api/upload returns 400 when no file is provided', async ({ page, driveId }) => {
-    const response = await page.request.post('/api/upload', {
-      multipart: {
-        driveId,
-      },
+  test('POST /api/upload/presign returns 400 when required fields are missing', async ({ page, driveId }) => {
+    const csrf = await page.request.get('/api/auth/csrf');
+    const { csrfToken } = (await csrf.json()) as { csrfToken: string };
+
+    const response = await page.request.post('/api/upload/presign', {
+      headers: { 'X-CSRF-Token': csrfToken },
+      data: { driveId }, // missing contentHash / filename / mimeType / fileSize
     });
     expect(response.status()).toBe(400);
     const body = (await response.json()) as { error?: string };
-    expect(body.error).toMatch(/no file/i);
+    expect(body.error).toMatch(/missing required fields/i);
   });
 
-  test('POST /api/upload returns 400 when no driveId is provided', async ({ page }) => {
-    const response = await page.request.post('/api/upload', {
-      multipart: {
-        file: {
-          name: 'test.pdf',
-          mimeType: 'application/pdf',
-          buffer: Buffer.from('%PDF-1.4'),
-        },
+  test('POST /api/upload/presign returns 400 for an invalid content hash', async ({ page, driveId }) => {
+    const csrf = await page.request.get('/api/auth/csrf');
+    const { csrfToken } = (await csrf.json()) as { csrfToken: string };
+
+    const response = await page.request.post('/api/upload/presign', {
+      headers: { 'X-CSRF-Token': csrfToken },
+      data: {
+        contentHash: 'not-a-valid-sha256-hash',
+        driveId,
+        filename: 'test.pdf',
+        mimeType: 'application/pdf',
+        fileSize: 1024,
       },
     });
     expect(response.status()).toBe(400);
-    const body = (await response.json()) as { error?: string };
-    expect(body.error).toMatch(/drive/i);
   });
 
   // ── Presigned URL redirect ───────────────────────────────────────────────────

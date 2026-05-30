@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
+import { eq, isNull } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
@@ -18,8 +19,56 @@ interface CompleteRequestBody {
   jobId: string;
   title: string;
   parentId?: string | null;
+  // Tree ordering: drop a file before/after a sibling. Omitted = append at end.
+  position?: 'before' | 'after' | null;
+  afterNodeId?: string | null;
   // contentHash / driveId / mimeType / fileSize are intentionally NOT read from
   // the body — they are taken from the presign-reserved slot (see getSlotMetadata).
+}
+
+/**
+ * Resolve the fractional `position` for a newly uploaded page among its
+ * siblings. Ported from the legacy multipart route so drop-between-nodes
+ * ordering in the page tree survives the direct-to-S3 cutover. An unknown
+ * afterNodeId or no position falls back to appending at the end of the list.
+ */
+async function resolveUploadPosition(
+  parentId: string | null,
+  position: 'before' | 'after' | null | undefined,
+  afterNodeId: string | null | undefined,
+): Promise<number> {
+  const siblingWhere = parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId);
+
+  const appendToEnd = async (): Promise<number> => {
+    const lastPage = await db.query.pages.findFirst({
+      where: siblingWhere,
+      orderBy: (p, { desc }) => [desc(p.position)],
+    });
+    return lastPage ? lastPage.position + 1 : 0;
+  };
+
+  if (!afterNodeId || (position !== 'before' && position !== 'after')) {
+    return appendToEnd();
+  }
+
+  const targetNode = await db.query.pages.findFirst({ where: eq(pages.id, afterNodeId) });
+  if (!targetNode) return appendToEnd();
+
+  const siblings = await db.query.pages.findMany({
+    where: siblingWhere,
+    orderBy: (p, { asc }) => [asc(p.position)],
+  });
+  const targetIndex = siblings.findIndex((s) => s.id === afterNodeId);
+
+  if (position === 'before') {
+    const prevSibling = targetIndex > 0 ? siblings[targetIndex - 1] : null;
+    const prevPos = prevSibling?.position ?? 0;
+    return (prevPos + targetNode.position) / 2;
+  }
+
+  const nextSibling = siblings[targetIndex + 1];
+  const nextPos = nextSibling?.position ?? targetNode.position + 2;
+  return (targetNode.position + nextPos) / 2;
 }
 
 interface NewPageRecord {
@@ -49,6 +98,7 @@ function buildPageRecord(params: {
   fileSize: number;
   userId: string;
   parentId?: string | null;
+  position: number;
 }): NewPageRecord {
   return {
     id: createId(),
@@ -56,7 +106,7 @@ function buildPageRecord(params: {
     type: PageType.FILE,
     content: '',
     processingStatus: 'pending',
-    position: Date.now(),
+    position: params.position,
     driveId: params.driveId,
     parentId: params.parentId ?? null,
     fileSize: params.fileSize,
@@ -91,7 +141,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { jobId, title, parentId } = body;
+  const { jobId, title, parentId, position, afterNodeId } = body;
 
   if (!jobId || !title) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -118,7 +168,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
   }
 
-  const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId });
+  const resolvedParentId = parentId ?? null;
+  const calculatedPosition = await resolveUploadPosition(resolvedParentId, position, afterNodeId);
+  const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId: resolvedParentId, position: calculatedPosition });
 
   let newPage: typeof pages.$inferSelect;
   try {

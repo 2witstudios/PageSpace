@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { FilesEmptyState } from '../FilesEmptyState';
 
 const hoisted = vi.hoisted(() => ({
-  fetchWithAuth: vi.fn(),
+  uploadFileToS3: vi.fn(),
   toastError: vi.fn(),
   startEditing: vi.fn(),
   endEditing: vi.fn(),
@@ -16,8 +16,8 @@ vi.mock('@/stores/useUIStore', () => ({
     selector({ openQuickCreate: hoisted.openQuickCreate }),
 }));
 
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: hoisted.fetchWithAuth,
+vi.mock('@/lib/upload/orchestrator', () => ({
+  uploadFileToS3: hoisted.uploadFileToS3,
 }));
 
 vi.mock('sonner', () => ({
@@ -36,16 +36,10 @@ vi.mock('@/stores/useEditingStore', () => ({
   },
 }));
 
-const okResponse = () =>
-  ({ ok: true, json: async () => ({ page: { id: 'new-page' } }) }) as Response;
-
-const errorResponse = (message: string) =>
-  ({ ok: false, json: async () => ({ error: message }) }) as Response;
-
 describe('FilesEmptyState', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.fetchWithAuth.mockResolvedValue(okResponse());
+    hoisted.uploadFileToS3.mockResolvedValue({ id: 'new-page' });
   });
 
   it('renders read-only message and no CTAs when user has no drive role', () => {
@@ -136,7 +130,7 @@ describe('FilesEmptyState', () => {
     expect(panel.getAttribute('data-drop-active')).toBe('true');
   });
 
-  it('uploads each dropped file via POST /api/upload with driveId and parentId', async () => {
+  it('uploads each dropped file via uploadFileToS3 with driveId and parentId', async () => {
     const onMutate = vi.fn();
     render(
       <FilesEmptyState driveId="drive-7" parentId="page-42" canWrite={true} onMutate={onMutate} />
@@ -151,18 +145,13 @@ describe('FilesEmptyState', () => {
     });
 
     await waitFor(() => {
-      expect(hoisted.fetchWithAuth).toHaveBeenCalledTimes(2);
+      expect(hoisted.uploadFileToS3).toHaveBeenCalledTimes(2);
     });
 
-    const [firstCall, secondCall] = hoisted.fetchWithAuth.mock.calls;
-    expect(firstCall[0]).toBe('/api/upload');
-    const firstBody = firstCall[1].body as FormData;
-    expect(firstBody.get('driveId')).toBe('drive-7');
-    expect(firstBody.get('parentId')).toBe('page-42');
-    expect((firstBody.get('file') as File).name).toBe('one.txt');
-
-    const secondBody = secondCall[1].body as FormData;
-    expect((secondBody.get('file') as File).name).toBe('two.md');
+    const [firstCall, secondCall] = hoisted.uploadFileToS3.mock.calls;
+    expect((firstCall[0] as File).name).toBe('one.txt');
+    expect(firstCall[1]).toEqual({ driveId: 'drive-7', parentId: 'page-42' });
+    expect((secondCall[0] as File).name).toBe('two.md');
     expect(onMutate).toHaveBeenCalled();
   });
 
@@ -179,12 +168,11 @@ describe('FilesEmptyState', () => {
     });
 
     await waitFor(() => {
-      expect(hoisted.fetchWithAuth).toHaveBeenCalledTimes(1);
+      expect(hoisted.uploadFileToS3).toHaveBeenCalledTimes(1);
     });
-    const body = hoisted.fetchWithAuth.mock.calls[0][1].body as FormData;
-    expect((body.get('file') as File).name).toBe('hi.txt');
-    expect(body.get('driveId')).toBe('drive-7');
-    expect(body.get('parentId')).toBeNull();
+    const [fileArg, target] = hoisted.uploadFileToS3.mock.calls[0];
+    expect((fileArg as File).name).toBe('hi.txt');
+    expect(target).toEqual({ driveId: 'drive-7', parentId: null });
   });
 
   it('ignores drops when the user lacks drive role', async () => {
@@ -200,7 +188,7 @@ describe('FilesEmptyState', () => {
       fireEvent.drop(panel, { dataTransfer: { files: [file], types: ['Files'] } });
     });
 
-    expect(hoisted.fetchWithAuth).not.toHaveBeenCalled();
+    expect(hoisted.uploadFileToS3).not.toHaveBeenCalled();
   });
 
   it('registers and releases an editing-store session around the upload batch', async () => {
@@ -226,9 +214,9 @@ describe('FilesEmptyState', () => {
   });
 
   it('shows a toast.error for a failed upload but continues the batch', async () => {
-    hoisted.fetchWithAuth
-      .mockResolvedValueOnce(errorResponse('too large'))
-      .mockResolvedValueOnce(okResponse());
+    hoisted.uploadFileToS3
+      .mockRejectedValueOnce(new Error('too large'))
+      .mockResolvedValueOnce({ id: 'ok-page' });
 
     render(
       <FilesEmptyState driveId="drive-7" parentId={null} canWrite={true} onMutate={vi.fn()} />
@@ -243,7 +231,7 @@ describe('FilesEmptyState', () => {
     });
 
     await waitFor(() => {
-      expect(hoisted.fetchWithAuth).toHaveBeenCalledTimes(2);
+      expect(hoisted.uploadFileToS3).toHaveBeenCalledTimes(2);
     });
     expect(hoisted.toastError).toHaveBeenCalledWith(expect.stringContaining('too large'));
   });

@@ -32,6 +32,9 @@ export interface CompleteParams {
   mimeType: string;
   fileSize: number;
   parentId?: string | null;
+  // Tree ordering: drop a file before/after a sibling node. Omitted = append.
+  position?: 'before' | 'after' | null;
+  afterNodeId?: string | null;
 }
 
 export interface UploadedPage {
@@ -110,6 +113,11 @@ export function uploadToTigris(
 export interface UploadTarget {
   driveId: string;
   parentId?: string | null;
+  /** Override the page title; defaults to the file name. */
+  title?: string;
+  /** Tree ordering on drop. Omitted = append at the end of the sibling list. */
+  position?: 'before' | 'after' | null;
+  afterNodeId?: string | null;
 }
 
 export async function uploadFileToS3(
@@ -119,6 +127,7 @@ export async function uploadFileToS3(
 ): Promise<UploadedPage> {
   const contentHash = await computeContentHash(file);
   const mimeType = file.type || 'application/octet-stream';
+  const title = target.title?.trim() || file.name;
 
   const presign = await callPresign({
     contentHash,
@@ -138,10 +147,12 @@ export async function uploadFileToS3(
       jobId: presign.jobId,
       contentHash,
       driveId: target.driveId,
-      title: file.name,
+      title,
       mimeType,
       fileSize: file.size,
       parentId: target.parentId ?? null,
+      position: target.position ?? null,
+      afterNodeId: target.afterNodeId ?? null,
     });
     return completion.page;
   } catch (err) {
