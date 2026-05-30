@@ -127,6 +127,7 @@ export const pageAgentRepository = {
       enabledTools: agent.enabledTools as string[] | null,
       aiProvider: agent.aiProvider,
       aiModel: agent.aiModel,
+      toolExposureMode: agent.toolExposureMode,
       isTrashed: agent.isTrashed,
     };
   },
@@ -189,6 +190,7 @@ export interface AgentDetails {
   enabledTools: string[] | null;
   aiProvider: string | null;
   aiModel: string | null;
+  toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
 }
 
