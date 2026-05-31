@@ -237,6 +237,16 @@ export const useFavorites = create<FavoritesState>()(
         pageIds: state.pageIds,
         driveIds: state.driveIds,
       }),
+      // Force `isSynced` back to false on every rehydrate. Not persisting it is
+      // not enough: users upgrading from a build that DID persist it still have
+      // `isSynced: true` in localStorage, and the default merge would restore it —
+      // causing the load-time revalidation to be skipped. Overriding here
+      // guarantees every load revalidates against the server.
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<FavoritesState>),
+        isSynced: false,
+      }),
     }
   )
 );
