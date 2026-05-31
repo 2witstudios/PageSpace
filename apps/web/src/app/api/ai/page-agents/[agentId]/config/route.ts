@@ -76,6 +76,7 @@ export async function PUT(
       aiModel,
       agentDefinition,
       visibleToGlobalAssistant,
+      toolExposureMode,
       expectedRevision,
     } = body;
 
@@ -172,6 +173,16 @@ export async function PUT(
       updateData.visibleToGlobalAssistant = Boolean(visibleToGlobalAssistant);
       updatedFields.push('visibleToGlobalAssistant');
     }
+    if (toolExposureMode !== undefined) {
+      if (toolExposureMode !== 'upfront' && toolExposureMode !== 'search') {
+        return NextResponse.json(
+          { error: 'toolExposureMode must be "upfront" or "search"' },
+          { status: 400 }
+        );
+      }
+      updateData.toolExposureMode = toolExposureMode;
+      updatedFields.push('toolExposureMode');
+    }
 
     if (updatedFields.length === 0) {
       return NextResponse.json(
@@ -250,7 +261,8 @@ export async function PUT(
         enabledTools: responseEnabledTools,
         aiProvider: aiProvider || agent.aiProvider || 'default',
         aiModel: aiModel || agent.aiModel || 'default',
-        hasSystemPrompt: !!(systemPrompt || agent.systemPrompt)
+        hasSystemPrompt: !!(systemPrompt || agent.systemPrompt),
+        toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront'
       },
       stats: {
         pageType: 'AI_CHAT',
