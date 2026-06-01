@@ -119,7 +119,17 @@ vi.mock('../../tools/member-tools', () => ({
   },
 }));
 
-import { pageSpaceTools, corePageSpaceTools } from '../ai-tools';
+// Stub the sandbox tools so the builder can be exercised without loading the DB
+// module graph or the real Vercel client.
+vi.mock('../../tools/sandbox-tools', () => ({
+  buildSandboxTools: () => ({
+    bash: { name: 'bash', description: 'Run a shell command' },
+    writeFile: { name: 'writeFile', description: 'Write a file' },
+    readFile: { name: 'readFile', description: 'Read a file' },
+  }),
+}));
+
+import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools } from '../ai-tools';
 import { CORE_TOOL_NAMES } from '../stub-tools';
 import { memberTools } from '../../tools/member-tools';
 import { driveTools } from '../../tools/drive-tools';
@@ -204,6 +214,46 @@ describe('ai-tools', () => {
           throw new Error(`Tool "${name}" is ${tool}`);
         }
       }
+    });
+
+    it('omits the code-execution tools by default (flag off)', () => {
+      expect(pageSpaceTools).not.toHaveProperty('bash');
+      expect(pageSpaceTools).not.toHaveProperty('writeFile');
+      expect(pageSpaceTools).not.toHaveProperty('readFile');
+    });
+  });
+
+  describe('buildPageSpaceTools code-execution gating', () => {
+    it('given the flag disabled, should not register bash/writeFile/readFile or call the factory', () => {
+      let built = false;
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: false,
+        sandboxToolsFactory: () => {
+          built = true;
+          return { bash: {}, writeFile: {}, readFile: {} } as never;
+        },
+      });
+      expect(tools).not.toHaveProperty('bash');
+      expect(tools).not.toHaveProperty('writeFile');
+      expect(tools).not.toHaveProperty('readFile');
+      expect(built).toBe(false);
+    });
+
+    it('given the flag enabled, should register bash/writeFile/readFile alongside the base tools', () => {
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () =>
+          ({
+            bash: { name: 'bash' },
+            writeFile: { name: 'writeFile' },
+            readFile: { name: 'readFile' },
+          }) as never,
+      });
+      expect(tools).toHaveProperty('bash');
+      expect(tools).toHaveProperty('writeFile');
+      expect(tools).toHaveProperty('readFile');
+      // Base tools remain present.
+      expect(tools).toHaveProperty('list_drives');
     });
   });
 
