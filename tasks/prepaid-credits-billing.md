@@ -62,6 +62,8 @@ Signed-cron route (`api/cron/reconcile-credits`) over the pure `computeBackfillA
 
 > **Operational follow-up (deploy repo, out of this PR's scope):** like every other cron route, `api/cron/reconcile-credits` is only a signed endpoint — the schedule lives in `PageSpace-Deploy` (`fly/fly.cron.toml` / the `pagespace-cron` image). It must be registered there for the backfill (and thus the "pending settles once a balance exists" guarantee) to actually run.
 
+> **Retention follow-up (out of this PR's scope):** `creditLedger` currently uses `ON DELETE CASCADE` on `userId`, matching the dominant repo convention (cascade is used 136× across the schema) and the existing user-deletion flow. Because the ledger is billing provenance, a future data-retention/anonymization policy should decide whether deleting a user should instead anonymize or retain ledger rows (disputes, accounting) rather than cascade-delete them. Switching to `RESTRICT`/`NO ACTION` now would break user deletion, so it's deferred to that policy decision (likely alongside the funding task).
+
 ---
 
 ## Funding (Stripe = payment collector)
