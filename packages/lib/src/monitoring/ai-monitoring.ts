@@ -160,6 +160,10 @@ export const AI_PRICING = {
   'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
   'x-ai/grok-4.20-multi-agent': { input: 2.00, output: 6.00 },
   'x-ai/grok-build-0.1': { input: 1.00, output: 2.00 },
+  // Delisted from OpenRouter + removed from the selectable catalog, but pricing is kept
+  // as a superset so any lingering saved selection still meters correctly (not $0).
+  'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
+  'x-ai/grok-4': { input: 3.00, output: 15.00 },
 
   // OpenRouter - Other (source: openrouter.ai/api/v1/models)
   'inception/mercury-2': { input: 0.25, output: 0.75 },
