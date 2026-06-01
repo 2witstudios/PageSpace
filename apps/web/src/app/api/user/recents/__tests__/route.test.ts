@@ -1,6 +1,8 @@
 /**
- * Security audit tests for /api/user/recents
- * Verifies auditRequest is called for GET.
+ * Tests for /api/user/recents
+ * - Verifies auditRequest is called for GET (security audit).
+ * - Verifies the optional driveId param triggers server-side drive scoping
+ *   (join path) and maps rows correctly.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -9,6 +11,17 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
+// Chainable mock for db.select()...innerJoin()...limit() (the driveId branch).
+// `selectRows` is mutated per-test to control what the query resolves to.
+let selectRows: unknown[] = [];
+const selectChain = {
+  from: vi.fn(() => selectChain),
+  innerJoin: vi.fn(() => selectChain),
+  where: vi.fn(() => selectChain),
+  orderBy: vi.fn(() => selectChain),
+  limit: vi.fn(() => Promise.resolve(selectRows)),
+};
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -16,14 +29,20 @@ vi.mock('@pagespace/db/db', () => ({
         findMany: vi.fn().mockResolvedValue([]),
       },
     },
+    select: vi.fn(() => selectChain),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  and: vi.fn(),
   desc: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/page-views', () => ({
-  userPageViews: { userId: 'userId', viewedAt: 'viewedAt' },
+  userPageViews: { userId: 'userId', pageId: 'pageId', viewedAt: 'viewedAt' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', title: 'title', type: 'type', driveId: 'driveId', isTrashed: 'isTrashed' },
+  drives: { id: 'id', name: 'name', isTrashed: 'isTrashed' },
 }));
 
 vi.mock('@pagespace/lib/client-safe', () => ({
@@ -54,6 +73,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { GET } from '../route';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -73,6 +93,7 @@ const mockAuth = () => {
 describe('GET /api/user/recents audit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    selectRows = [];
     mockAuth();
   });
 
@@ -84,5 +105,59 @@ describe('GET /api/user/recents audit', () => {
       req,
       { eventType: 'data.read', userId: mockUserId, resourceType: 'recents', resourceId: 'self' }
     );
+  });
+});
+
+describe('GET /api/user/recents driveId scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectRows = [];
+    mockAuth();
+  });
+
+  it('uses the server-side join path and maps drive-scoped rows', async () => {
+    selectRows = [
+      {
+        id: 'page_1',
+        title: 'Spec',
+        type: 'DOCUMENT',
+        driveId: 'drive_1',
+        driveName: 'Marketing',
+        viewedAt: new Date('2026-01-02T03:04:05.000Z'),
+      },
+    ];
+
+    const req = new Request('http://localhost/api/user/recents?driveId=drive_1&limit=6');
+    const res = await GET(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.recents).toEqual([
+      {
+        id: 'page_1',
+        title: 'Spec',
+        type: 'DOCUMENT',
+        driveId: 'drive_1',
+        driveName: 'Marketing',
+        viewedAt: '2026-01-02T03:04:05.000Z',
+      },
+    ]);
+    // Confirms the join branch was taken rather than the global relational path.
+    expect(selectChain.innerJoin).toHaveBeenCalledTimes(2);
+    expect(db.query.userPageViews.findMany).not.toHaveBeenCalled();
+  });
+
+  it('drops rows with unrecognized page types', async () => {
+    selectRows = [
+      { id: 'p1', title: 'Known', type: 'DOCUMENT', driveId: 'd1', driveName: 'D', viewedAt: new Date() },
+      { id: 'p2', title: 'Mystery', type: 'NOT_A_TYPE', driveId: 'd1', driveName: 'D', viewedAt: new Date() },
+    ];
+
+    const req = new Request('http://localhost/api/user/recents?driveId=d1');
+    const res = await GET(req);
+    const body = await res.json();
+
+    expect(body.recents).toHaveLength(1);
+    expect(body.recents[0].id).toBe('p1');
   });
 });
