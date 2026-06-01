@@ -46,6 +46,35 @@ describe('env-validation', () => {
       }
     });
 
+    it('given a blank SANDBOX_SESSION_SECRET placeholder, should still parse (fail-closed at runtime, not at startup)', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        SANDBOX_SESSION_SECRET: '',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given a too-short non-empty SANDBOX_SESSION_SECRET, should fail validation', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        SANDBOX_SESSION_SECRET: 'short',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(
+          result.error.issues.some((i) => i.path.includes('SANDBOX_SESSION_SECRET')),
+        ).toBe(true);
+      }
+    });
+
     it('given invalid DATABASE_URL format, should fail validation', () => {
       const invalidEnv = {
         DATABASE_URL: 'not-a-valid-url',
