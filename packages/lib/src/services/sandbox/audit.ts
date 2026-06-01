@@ -64,14 +64,6 @@ export interface CodeExecutionAuditRecord {
 
 /** Cap on the code stored in the audit record. */
 const MAX_AUDITED_CODE_LENGTH = 4000;
-/**
- * Redact over a window larger than the storage cap, then truncate. A secret
- * that begins before the cap but extends past it is fully seen (and collapsed)
- * here before truncation — otherwise a cut-off closing quote would defeat
- * SECRET_ASSIGNMENT and leak a prefix into the immutable log. The window also
- * bounds the regex input so scanning stays cheap.
- */
-const REDACTION_SCAN_LIMIT = 16_000;
 const REDACTED = '***REDACTED***';
 
 // Best-effort redaction — audit hygiene / defense-in-depth, NOT the security
@@ -84,7 +76,7 @@ const SECRET_ASSIGNMENT =
 // `Authorization: Bearer <token>`.
 const BEARER_TOKEN = /\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{8,}/g;
 // Standalone high-entropy tokens (provider key prefixes, long hex/base64). Kept
-// as a single non-ambiguous run so matching stays linear over the scan window.
+// as a single non-ambiguous run so matching stays linear over the whole input.
 const STANDALONE_TOKEN = /\b[A-Za-z0-9_]{24,}\b/g;
 
 function redactSecrets(code: string): string {
@@ -112,20 +104,17 @@ export function buildAuditRecord({
   aiProvider,
   aiModel,
 }: CodeExecutionAuditInput): CodeExecutionAuditRecord {
-  // Redact over a window wider than the storage cap, then truncate the redacted
-  // result. This collapses any secret that straddles the cap before it can be
-  // cut mid-token, while keeping the regex input bounded.
-  const scanned =
-    code.length > REDACTION_SCAN_LIMIT ? code.slice(0, REDACTION_SCAN_LIMIT) : code;
-  const redacted = redactSecrets(scanned);
-  // Truncated whenever content is actually dropped: the redacted form exceeds
-  // the cap, or the raw code ran past the scan window (its tail was never seen).
-  const codeTruncated =
-    redacted.length > MAX_AUDITED_CODE_LENGTH || code.length > REDACTION_SCAN_LIMIT;
-  const auditedCode =
-    redacted.length > MAX_AUDITED_CODE_LENGTH
-      ? redacted.slice(0, MAX_AUDITED_CODE_LENGTH)
-      : redacted;
+  // Redact first, then truncate. Order matters: a secret that straddles the
+  // storage cap is fully seen and collapsed before the cut, so no plaintext
+  // prefix survives into the immutable log. Redaction runs over the whole input
+  // (the regexes are linear) rather than a separate fixed window — the window
+  // never added safety, since anything past the cap is dropped by the truncate
+  // either way, and it carried its own straddle edge.
+  const redacted = redactSecrets(code);
+  const codeTruncated = redacted.length > MAX_AUDITED_CODE_LENGTH;
+  const auditedCode = codeTruncated
+    ? redacted.slice(0, MAX_AUDITED_CODE_LENGTH)
+    : redacted;
 
   return {
     userId,
@@ -148,13 +137,20 @@ export function buildAuditRecord({
   };
 }
 
+// Most-specific available scope for the run. Shared by both audit sinks so the
+// activity log and the security log always key the same run to the same id —
+// forensic correlation across the two tables breaks if they ever diverge.
+function resolveAuditResourceId(record: CodeExecutionAuditRecord): string {
+  return record.conversationId ?? record.driveId ?? record.userId;
+}
+
 export function buildActivityLogInput(record: CodeExecutionAuditRecord): ActivityLogInput {
   const scopedToConversation = Boolean(record.conversationId);
   return {
     userId: record.userId,
     operation: 'code_execution',
     resourceType: scopedToConversation ? 'conversation' : 'drive',
-    resourceId: record.conversationId ?? record.driveId ?? record.userId,
+    resourceId: resolveAuditResourceId(record),
     driveId: record.driveId,
     actorEmail: record.actorEmail,
     actorDisplayName: record.actorDisplayName,
@@ -193,7 +189,7 @@ export function buildSecurityAuditEvent(
     eventType: 'security.suspicious.activity',
     userId: record.userId,
     resourceType: 'code_execution',
-    resourceId: record.conversationId ?? record.driveId ?? record.userId,
+    resourceId: resolveAuditResourceId(record),
     riskScore: ANOMALY_RISK[record.anomaly],
     anomalyFlags: [record.anomaly],
     details: {
