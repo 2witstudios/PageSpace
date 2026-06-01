@@ -25,7 +25,7 @@ on:
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
   pull_request:
-    branches: [master]
+    branches: [master, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
