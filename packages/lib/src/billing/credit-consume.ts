@@ -10,8 +10,8 @@
  *   - Atomic: the balance read+write is a single transaction with a row lock, so
  *     concurrent calls by the same user can't lose an update.
  *   - Safe: never throws into the AI request. A failed decrement leaves the
- *     ledger row 'pending' for the backfill cron; a failed claim leaves no row,
- *     and the cron's orphan sweep reconciles it.
+ *     ledger row 'pending' for the backfill cron (settlePendingLedgerRow); a
+ *     failed claim leaves no row, and the cron's orphan sweep reconciles it.
  */
 
 import { db } from '@pagespace/db/db';
@@ -26,6 +26,47 @@ export interface ConsumeCreditsInput {
   aiUsageLogId: string;
   userId: string;
   costDollars: number;
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Within a transaction: lock the balance, draw down monthly-first via the pure
+ * core, persist the new balance (if a row exists), and mark the ledger row
+ * applied. Shared by consumeCredits and settlePendingLedgerRow.
+ */
+async function decrementAndSettle(
+  tx: Tx,
+  ledgerId: string,
+  userId: string,
+  amountCents: number,
+): Promise<void> {
+  const rows = await tx
+    .select()
+    .from(creditBalances)
+    .where(eq(creditBalances.userId, userId))
+    .for('update');
+  const bal = rows[0] as { monthlyRemainingCents: number; topupRemainingCents: number } | undefined;
+
+  const spend = allocateSpend(
+    { monthlyCents: bal?.monthlyRemainingCents ?? 0, topupCents: bal?.topupRemainingCents ?? 0 },
+    amountCents,
+  );
+
+  if (bal) {
+    await tx
+      .update(creditBalances)
+      .set({ monthlyRemainingCents: spend.monthlyCents, topupRemainingCents: spend.topupCents })
+      .where(eq(creditBalances.userId, userId));
+  }
+
+  await tx
+    .update(creditLedger)
+    .set({
+      consumeStatus: 'applied',
+      bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
+    })
+    .where(eq(creditLedger.id, ledgerId));
 }
 
 export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> {
@@ -64,34 +105,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
 
   // 2. Decrement the balance and settle the ledger row, atomically.
   try {
-    await db.transaction(async (tx) => {
-      const rows = await tx
-        .select()
-        .from(creditBalances)
-        .where(eq(creditBalances.userId, input.userId))
-        .for('update');
-      const bal = rows[0] as { monthlyRemainingCents: number; topupRemainingCents: number } | undefined;
-
-      const spend = allocateSpend(
-        { monthlyCents: bal?.monthlyRemainingCents ?? 0, topupCents: bal?.topupRemainingCents ?? 0 },
-        amountCents,
-      );
-
-      if (bal) {
-        await tx
-          .update(creditBalances)
-          .set({ monthlyRemainingCents: spend.monthlyCents, topupRemainingCents: spend.topupCents })
-          .where(eq(creditBalances.userId, input.userId));
-      }
-
-      await tx
-        .update(creditLedger)
-        .set({
-          consumeStatus: 'applied',
-          bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
-        })
-        .where(eq(creditLedger.id, ledgerId));
-    });
+    await db.transaction((tx) => decrementAndSettle(tx, ledgerId, input.userId, amountCents));
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
     loggers.ai.debug('credit consume failed', {
@@ -99,4 +113,22 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
       aiUsageLogId: input.aiUsageLogId,
     });
   }
+}
+
+/**
+ * Re-apply a ledger row that was claimed but never settled (consumeCredits
+ * crashed/failed after the claim). Reads the row's stored amount, then decrements
+ * atomically. A no-op if the row is missing or already applied — safe to retry.
+ */
+export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(creditLedger)
+      .where(eq(creditLedger.id, ledgerId))
+      .for('update');
+    const row = rows[0] as { userId: string; amountCents: number; consumeStatus: string } | undefined;
+    if (!row || row.consumeStatus !== 'pending') return;
+    await decrementAndSettle(tx, ledgerId, row.userId, Math.abs(row.amountCents));
+  });
 }

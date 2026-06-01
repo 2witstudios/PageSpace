@@ -19,7 +19,7 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
 
-import { consumeCredits } from '../credit-consume';
+import { consumeCredits, settlePendingLedgerRow } from '../credit-consume';
 
 // Build a claim-insert chain that resolves to `returned`.
 function claimReturning(returned: Array<{ id: string }>) {
@@ -81,5 +81,48 @@ describe('consumeCredits', () => {
       consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 }),
     ).resolves.toBeUndefined();
     expect(mockAiLogger.debug).toHaveBeenCalled();
+  });
+});
+
+describe('settlePendingLedgerRow', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('re-applies a pending row using its stored amount (monthly-first)', async () => {
+    const captured: { balanceSet?: Record<string, number>; ledgerSet?: Record<string, unknown> } = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      let selectCall = 0;
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => {
+          selectCall++;
+          return Promise.resolve(
+            selectCall === 1
+              ? [{ userId: 'u1', amountCents: -150, consumeStatus: 'pending' }] // ledger row
+              : [{ monthlyRemainingCents: 200, topupRemainingCents: 0 }],        // balance row
+          );
+        } }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+      };
+      await cb(tx);
+    });
+
+    await settlePendingLedgerRow('led_1');
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 50, topupRemainingCents: 0 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied' });
+  });
+
+  it('is a no-op when the row is already applied', async () => {
+    const update = vi.fn();
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () =>
+          Promise.resolve([{ userId: 'u1', amountCents: -150, consumeStatus: 'applied' }]) }) }) }),
+        update,
+      };
+      await cb(tx);
+    });
+    await settlePendingLedgerRow('led_1');
+    expect(update).not.toHaveBeenCalled();
   });
 });
