@@ -48,17 +48,21 @@ async function decrementAndSettle(
     .for('update');
   const bal = rows[0] as { monthlyRemainingCents: number; topupRemainingCents: number } | undefined;
 
+  // No balance row yet (e.g. an existing user before the gate lazy-inits one).
+  // Leave the ledger row 'pending' so the reconcile cron retries once a balance
+  // exists — never mark a call 'applied' without decrementing it, which would
+  // silently drop the charge and hide it from both backfill sweeps.
+  if (!bal) return;
+
   const spend = allocateSpend(
-    { monthlyCents: bal?.monthlyRemainingCents ?? 0, topupCents: bal?.topupRemainingCents ?? 0 },
+    { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
     amountCents,
   );
 
-  if (bal) {
-    await tx
-      .update(creditBalances)
-      .set({ monthlyRemainingCents: spend.monthlyCents, topupRemainingCents: spend.topupCents })
-      .where(eq(creditBalances.userId, userId));
-  }
+  await tx
+    .update(creditBalances)
+    .set({ monthlyRemainingCents: spend.monthlyCents, topupRemainingCents: spend.topupCents })
+    .where(eq(creditBalances.userId, userId));
 
   await tx
     .update(creditLedger)

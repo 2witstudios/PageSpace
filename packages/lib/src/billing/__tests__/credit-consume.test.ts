@@ -84,6 +84,26 @@ describe('consumeCredits', () => {
     expect(arg.where).toBeDefined();
   });
 
+  it('leaves the ledger row pending (never marks applied) when no balance row exists yet', async () => {
+    // Existing users have no credit_balances row until the gate lazy-inits one.
+    // Marking the ledger 'applied' without a balance to decrement would silently
+    // drop the charge AND hide it from the reconcile cron. It must stay pending.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
+    const update = vi.fn();
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([]) }) }) }), // no balance row
+        update,
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+
+    // Neither the balance nor the ledger is updated -> the row stays 'pending'.
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('is idempotent: a duplicate aiUsageLogId (conflict) skips the decrement', async () => {
     mockDb.insert.mockReturnValue(claimReturning([])); // conflict -> no row returned
     await consumeCredits({ aiUsageLogId: 'aul_dup', userId: 'u1', costDollars: 1 });

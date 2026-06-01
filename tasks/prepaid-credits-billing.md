@@ -48,6 +48,7 @@ Local decrement shell (`credit-consume.ts`) wired into `trackAIUsage`, plus the 
 - Given a consume failure, it should mark the ledger row `pending` and never throw into the AI request.
 - Given an AI call that failed (`success:false`), `trackAIUsage` should not consume credits.
 - Given the partial unique index on `aiUsageLogId` (`WHERE aiUsageLogId IS NOT NULL`), the idempotent claim insert should declare the index predicate so Postgres can infer the conflict arbiter — otherwise every insert raises `42P10` and no credits are ever consumed.
+- Given no `credit_balances` row exists for the user (e.g. an existing user before the gate lazy-inits one), `consumeCredits` should leave the ledger row `pending` rather than mark it `applied`, so the charge is retried by the reconcile cron once a balance exists and is never silently dropped.
 
 ---
 
