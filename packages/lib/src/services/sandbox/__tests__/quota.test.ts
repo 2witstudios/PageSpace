@@ -6,6 +6,7 @@ import {
   getCodeExecutionConcurrencyLimit,
   resetCodeExecutionConcurrency,
   checkCodeExecutionQuota,
+  chargeCodeExecutionBudget,
   type CodeExecutionQuotaDeps,
 } from '../quota';
 
@@ -138,5 +139,30 @@ describe('checkCodeExecutionQuota', () => {
       }),
     });
     expect(statusCalls).toBe(0);
+  });
+});
+
+describe('chargeCodeExecutionBudget', () => {
+  it('given user, drive, and tenant, should charge all three scopes exactly once', async () => {
+    const charged: string[] = [];
+    await chargeCodeExecutionBudget({
+      userId: 'u1',
+      driveId: 'd1',
+      tenantId: 't1',
+      deps: { charge: async (id) => { charged.push(id); } },
+    });
+    expect(charged.sort()).toEqual(
+      ['code-exec:drive:d1', 'code-exec:tenant:t1', 'code-exec:user:u1'].sort(),
+    );
+  });
+
+  it('given no tenant, should charge only the user and drive scopes', async () => {
+    const charged: string[] = [];
+    await chargeCodeExecutionBudget({
+      userId: 'u1',
+      driveId: 'd1',
+      deps: { charge: async (id) => { charged.push(id); } },
+    });
+    expect(charged.sort()).toEqual(['code-exec:drive:d1', 'code-exec:user:u1']);
   });
 });
