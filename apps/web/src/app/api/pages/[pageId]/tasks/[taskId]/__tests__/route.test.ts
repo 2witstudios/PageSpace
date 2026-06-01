@@ -138,14 +138,8 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 vi.mock('@/lib/tasks/completion-guard', () => ({
-  assertSubTasksComplete: vi.fn().mockResolvedValue(undefined),
-  SubtasksIncompleteError: class SubtasksIncompleteError extends Error {
-    readonly code = 'SUBTASKS_INCOMPLETE' as const;
-    constructor(public readonly pending: number, public readonly total: number) {
-      super(`Complete all sub-tasks first (${pending} of ${total} remaining)`);
-      this.name = 'SubtasksIncompleteError';
-    }
-  },
+  checkSubTasksComplete: vi.fn().mockResolvedValue(null),
+  SUBTASKS_INCOMPLETE_STATUS: 422,
 }));
 
 // ---------- Imports (after mocks) ----------
@@ -157,7 +151,7 @@ import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
-import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
+import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
 
 // ---------- Helpers ----------
 
@@ -1010,7 +1004,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   });
 
 
-  it('returns 422 when assertSubTasksComplete throws SubtasksIncompleteError', async () => {
+  it('returns 422 when checkSubTasksComplete reports incomplete sub-tasks', async () => {
     setupAuth();
     setupCanEdit(true);
     setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
@@ -1018,9 +1012,12 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
       { slug: 'open', group: 'todo' },
       { slug: 'finished', group: 'done' },
     ] as never);
-    vi.mocked(assertSubTasksComplete).mockRejectedValueOnce(
-      new SubtasksIncompleteError(2, 3)
-    );
+    vi.mocked(checkSubTasksComplete).mockResolvedValueOnce({
+      code: 'SUBTASKS_INCOMPLETE',
+      error: 'Complete all sub-tasks first (2 of 3 remaining)',
+      pending: 2,
+      total: 3,
+    });
 
     const response = await PATCH(createPatchRequest({ status: 'finished' }), context);
     expect(response.status).toBe(422);
@@ -1035,9 +1032,12 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     setupCanEdit(true);
     setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
-    vi.mocked(assertSubTasksComplete).mockRejectedValueOnce(
-      new SubtasksIncompleteError(1, 2)
-    );
+    vi.mocked(checkSubTasksComplete).mockResolvedValueOnce({
+      code: 'SUBTASKS_INCOMPLETE',
+      error: 'Complete all sub-tasks first (1 of 2 remaining)',
+      pending: 1,
+      total: 2,
+    });
 
     const response = await PATCH(createPatchRequest({ status: 'completed' }), context);
     expect(response.status).toBe(422);
@@ -1047,7 +1047,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.total).toBe(2);
   });
 
-  it('does not call assertSubTasksComplete when status is not done-group', async () => {
+  it('does not call checkSubTasksComplete when status is not done-group', async () => {
     setupAuth();
     setupCanEdit(true);
     setupTaskLookup({ id: mockTaskListId }, { ...baseTask });
@@ -1059,7 +1059,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     setupRelationsLookup({ ...baseTask, status: 'open', assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     await PATCH(createPatchRequest({ status: 'open' }), context);
-    expect(assertSubTasksComplete).not.toHaveBeenCalled();
+    expect(checkSubTasksComplete).not.toHaveBeenCalled();
   });
 
   it('does not fire createMentionNotification when description is not part of the update', async () => {
