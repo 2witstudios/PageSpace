@@ -45,12 +45,13 @@ export function AskOrDo({ driveId, onPromptSelect, onPromptDraft, onQuickCreate 
     async (type: PageType) => {
       if (creating) return;
       setCreating(type);
+      let page: Page;
       try {
         // Mirror QuickCreatePalette: respect the user's default-Markdown
         // preference for documents so the doc opens in the expected editor.
         const contentMode =
           type === PageType.DOCUMENT && preferences.defaultMarkdownMode ? 'markdown' : undefined;
-        const page = await post<Page>('/api/pages', {
+        page = await post<Page>('/api/pages', {
           title: `Untitled ${getPageTypeConfig(type).displayName}`,
           type,
           driveId,
@@ -59,12 +60,15 @@ export function AskOrDo({ driveId, onPromptSelect, onPromptDraft, onQuickCreate 
           ...(contentMode && { contentMode }),
         });
         await mutate(`/api/drives/${driveId}/pages`);
-        await navigateToPage(page.id, driveId);
       } catch (error) {
         toast.error((error as Error).message ?? 'Failed to create page');
+        return;
       } finally {
         setCreating(null);
       }
+      // Navigate outside the guarded block so a navigation hiccup isn't
+      // surfaced as a "failed to create" error — the page already exists.
+      await navigateToPage(page.id, driveId);
     },
     [creating, driveId, preferences.defaultMarkdownMode, mutate, navigateToPage]
   );

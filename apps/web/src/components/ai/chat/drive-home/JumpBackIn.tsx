@@ -50,7 +50,7 @@ export function JumpBackIn({ driveId, limit = 6 }: JumpBackInProps) {
   }, [favoritesSynced, fetchFavorites]);
 
   const { data, isLoading } = useSWR<{ recents: RecentPage[] }>(
-    '/api/user/recents?limit=8',
+    `/api/user/recents?limit=${limit}&driveId=${driveId}`,
     fetcher,
     { revalidateOnFocus: false }
   );
