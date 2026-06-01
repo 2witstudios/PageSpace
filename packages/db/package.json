@@ -151,6 +151,10 @@
       "types": "./dist/schema/subscriptions.d.ts",
       "default": "./dist/schema/subscriptions.js"
     },
+    "./schema/credits": {
+      "types": "./dist/schema/credits.d.ts",
+      "default": "./dist/schema/credits.js"
+    },
     "./schema/tasks": {
       "types": "./dist/schema/tasks.d.ts",
       "default": "./dist/schema/tasks.js"

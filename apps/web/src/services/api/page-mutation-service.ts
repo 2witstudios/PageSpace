@@ -127,6 +127,7 @@ export async function applyPageMutation({
     visibleToGlobalAssistant: currentPage.visibleToGlobalAssistant,
     includePageTree: currentPage.includePageTree,
     pageTreeScope: currentPage.pageTreeScope,
+    toolExposureMode: currentPage.toolExposureMode,
   });
 
   const nextPageState = {
@@ -157,6 +158,9 @@ export async function applyPageMutation({
     pageTreeScope: updates.pageTreeScope !== undefined
       ? (updates.pageTreeScope === null ? null : String(updates.pageTreeScope))
       : currentPage.pageTreeScope,
+    toolExposureMode: updates.toolExposureMode !== undefined
+      ? (updates.toolExposureMode === null ? null : String(updates.toolExposureMode))
+      : currentPage.toolExposureMode,
   };
 
   const stateHashAfter = computePageStateHash(nextPageState);

@@ -80,7 +80,7 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
-import { getInitialOpenState, TaskListDescriptionContent } from './TaskListDescription';
+import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
 import Toolbar from '@/components/editors/Toolbar';
 import { TaskRowDescription } from './TaskRowDescription';
@@ -445,7 +445,8 @@ function TaskListView({ page }: TaskListViewProps) {
   const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
-  const [descriptionOpen, setDescriptionOpen] = useState(() => getInitialOpenState(page.content));
+  // Description is always collapsed on load; the user expands it via the header toggle.
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const hasLoadedRef = useRef(false);
 

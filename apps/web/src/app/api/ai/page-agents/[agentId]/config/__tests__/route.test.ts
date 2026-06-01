@@ -122,6 +122,7 @@ const mockAgent = (overrides: Partial<{
   enabledTools: string[] | null;
   aiProvider: string | null;
   aiModel: string | null;
+  toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
@@ -133,6 +134,7 @@ const mockAgent = (overrides: Partial<{
   enabledTools: overrides.enabledTools ?? ['read_page'],
   aiProvider: overrides.aiProvider ?? 'openrouter',
   aiModel: overrides.aiModel ?? 'claude-3-opus',
+  toolExposureMode: overrides.toolExposureMode ?? 'upfront',
   isTrashed: overrides.isTrashed ?? false,
 });
 
@@ -390,6 +392,36 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
       expect(response.status).toBe(200);
       expect(body.updatedFields).toContain('visibleToGlobalAssistant');
+    });
+
+    it('should update toolExposureMode to "search"', async () => {
+      const request = createRequest(mockAgentId, {
+        toolExposureMode: 'search',
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.updatedFields).toContain('toolExposureMode');
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({ toolExposureMode: 'search' }),
+        })
+      );
+    });
+
+    it('should return 400 for an invalid toolExposureMode value', async () => {
+      const request = createRequest(mockAgentId, {
+        toolExposureMode: 'invalid',
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(400);
+      expect(applyPageMutation).not.toHaveBeenCalled();
     });
 
     it('should update multiple fields at once', async () => {

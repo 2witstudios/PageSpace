@@ -173,13 +173,29 @@ describe('useFavorites', () => {
       await addPromise;
     });
 
-    it('given API fails, should rollback optimistic update', async () => {
+    it('given API fails and the server cannot be reached, should rollback optimistic update', async () => {
       vi.mocked(post).mockRejectedValue(new Error('API error'));
+      vi.mocked(fetchWithAuth).mockRejectedValue(new Error('Network error'));
 
       await expect(useFavorites.getState().addFavorite('page-123', 'page')).rejects.toThrow();
 
       // Should have rolled back
       expect(useFavorites.getState().pageIds.has('page-123')).toBe(false);
+    });
+
+    it('given a stale cache where the item is already favorited on the server, should reconcile and resolve', async () => {
+      // POST fails as if the server returned 409 "already favorited"
+      vi.mocked(post).mockRejectedValue(new Error('Already favorited'));
+      // Reconcile fetch shows the item IS favorited on the server
+      vi.mocked(fetchWithAuth).mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          favorites: [createMockFavorite({ id: 'fav-1', page: { id: 'page-123', title: 'T', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
+        }),
+      } as never);
+
+      await expect(useFavorites.getState().addFavorite('page-123', 'page')).resolves.toBeUndefined();
+      expect(useFavorites.getState().isFavorite('page-123', 'page')).toBe(true);
     });
   });
 
@@ -204,17 +220,43 @@ describe('useFavorites', () => {
       expect(del).toHaveBeenCalledWith('/api/user/favorites/fav-1');
     });
 
-    it('given page not in favorites, should just update local state', async () => {
+    it('given page not in favorites locally or on the server, should just clean up local state', async () => {
       useFavorites.setState({
         favorites: [],
-        pageIds: new Set(['page-123']), // In local set but not synced
+        pageIds: new Set(['page-123']), // stale: lookup Set says favorited but it is not
         driveIds: new Set(),
       });
+      // Reconcile fetch confirms it is not favorited
+      vi.mocked(fetchWithAuth).mockResolvedValue({
+        ok: true,
+        json: async () => ({ favorites: [] }),
+      } as never);
 
       await useFavorites.getState().removeFavorite('page-123', 'page');
 
       expect(del).not.toHaveBeenCalled();
       expect(useFavorites.getState().pageIds.has('page-123')).toBe(false);
+    });
+
+    it('given the favorite is missing from the local array but exists on the server, should reconcile and call the delete API', async () => {
+      useFavorites.setState({
+        favorites: [], // stale: array empty even though it is favorited on the server
+        pageIds: new Set(['page-123']),
+        driveIds: new Set(),
+      });
+      // Reconcile fetch returns the real favorite with its DB id
+      vi.mocked(fetchWithAuth).mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          favorites: [createMockFavorite({ id: 'fav-1', page: { id: 'page-123', title: 'T', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
+        }),
+      } as never);
+      vi.mocked(del).mockResolvedValue({} as never);
+
+      await useFavorites.getState().removeFavorite('page-123', 'page');
+
+      expect(del).toHaveBeenCalledWith('/api/user/favorites/fav-1');
+      expect(useFavorites.getState().isFavorite('page-123', 'page')).toBe(false);
     });
   });
 

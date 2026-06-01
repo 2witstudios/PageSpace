@@ -389,6 +389,13 @@ describe('writeAiUsage', () => {
     expect(inserted.model).toBe('gpt-4');
   });
 
+  it('returns the inserted row id on success (the credit-consume idempotency key)', async () => {
+    const id = await writeAiUsage({ userId: 'u-1', provider: 'openai', model: 'gpt-4' });
+    const inserted = mockValues.mock.calls[0][0] as { id: string };
+    expect(typeof id).toBe('string');
+    expect(id).toBe(inserted.id);
+  });
+
   it('includes optional token and cost fields', async () => {
     await writeAiUsage({
       userId: 'u-2',
@@ -473,12 +480,12 @@ describe('writeAiUsage', () => {
     expect(inserted.expiresAt.getTime()).toBeLessThanOrEqual(after + expectedMs);
   });
 
-  it('handles database error without throwing', async () => {
+  it('handles database error without throwing and returns null', async () => {
     mockValues.mockRejectedValueOnce(new Error('ai usage insert fail'));
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(
       writeAiUsage({ userId: 'u-1', provider: 'openai', model: 'gpt-4' })
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
     expect(consoleSpy).toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
