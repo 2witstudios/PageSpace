@@ -74,6 +74,15 @@ export const serverEnvSchema = z
     // acquisition (the lifecycle layer fails closed) rather than failing
     // app-wide env validation at startup.
     SANDBOX_SESSION_SECRET: z.string().min(32).optional().or(z.literal('')),
+
+    // Vercel Sandbox credentials for the code-execution adapter. All three are
+    // optional: when present they authenticate the @vercel/sandbox client
+    // explicitly (local dev / non-Vercel hosts); when absent the SDK falls back
+    // to the OIDC token Vercel injects automatically. A partial triad never
+    // half-authenticates (resolveVercelCredentials requires all three).
+    VERCEL_TOKEN: z.string().min(1).optional(),
+    VERCEL_TEAM_ID: z.string().min(1).optional(),
+    VERCEL_PROJECT_ID: z.string().min(1).optional(),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY
