@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken, markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { verifyToken, markEmailVerified, markEmailVerifiedForAddress } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
@@ -13,17 +13,45 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Verification token is required' }, { status: 400 });
     }
 
-    const userId = await verifyToken(token, 'email_verification');
+    const verified = await verifyToken(token, 'email_verification');
 
-    if (!userId) {
+    if (!verified) {
       return NextResponse.json(
         { error: 'Invalid or expired verification token' },
         { status: 400 }
       );
     }
 
-    // Mark email as verified
-    await markEmailVerified(userId);
+    const { userId } = verified;
+
+    // Parse the address this token was bound to (if any). Tokens minted after
+    // address-binding shipped carry the target email so we never verify an
+    // address other than the one the link was sent to.
+    let boundEmail: string | null = null;
+    if (verified.metadata) {
+      try {
+        boundEmail = (JSON.parse(verified.metadata) as { email?: string }).email ?? null;
+      } catch {
+        boundEmail = null;
+      }
+    }
+
+    if (boundEmail) {
+      // Mark verified ONLY if the user's current email still matches the bound
+      // address. If it changed since the token was issued, refuse — otherwise a
+      // token sent to a controlled inbox could verify a different, unowned one.
+      const marked = await markEmailVerifiedForAddress(userId, boundEmail);
+      if (!marked) {
+        loggers.auth.warn('Email verification token did not match current address', { userId });
+        return NextResponse.json(
+          { error: 'Invalid or expired verification token' },
+          { status: 400 }
+        );
+      }
+    } else {
+      // Legacy token issued before address binding — preserve prior behavior.
+      await markEmailVerified(userId);
+    }
 
     // Log verification
     loggers.auth.info('Email verified', { userId });

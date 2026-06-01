@@ -53,10 +53,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create new verification token
+    // Create new verification token bound to the user's current address.
     const verificationToken = await createVerificationToken({
       userId: user.id,
       type: 'email_verification',
+      email: user.email,
     });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';

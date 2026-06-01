@@ -238,6 +238,7 @@ describe('POST /api/auth/resend-verification', () => {
       expect(createVerificationToken).toHaveBeenCalledWith({
         userId: 'test-user-id',
         type: 'email_verification',
+        email: 'test@example.com',
       });
       const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
       expect(sendArgs.to).toBe('test@example.com');

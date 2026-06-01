@@ -132,6 +132,7 @@ export async function PATCH(req: Request) {
         const verificationToken = await createVerificationToken({
           userId,
           type: 'email_verification',
+          email: updatedUser.email,
         });
         const baseUrl =
           process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';

@@ -484,6 +484,7 @@ describe('PATCH /api/account', () => {
     expect(createVerificationToken).toHaveBeenCalledWith({
       userId: mockUserId,
       type: 'email_verification',
+      email: 'new@example.com',
     });
     expect(sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'new@example.com', subject: 'Verify your PageSpace email' }),

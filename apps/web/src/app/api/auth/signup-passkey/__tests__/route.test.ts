@@ -653,6 +653,7 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(createVerificationToken).toHaveBeenCalledWith({
         userId: 'new-user-1',
         type: 'email_verification',
+        email: 'user@example.com',
       });
       expect(sendEmail).toHaveBeenCalledWith(
         expect.objectContaining({
