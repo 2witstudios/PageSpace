@@ -16,6 +16,8 @@ import { loggers } from '../logging/logger-config';
  */
 export const AI_PRICING = {
   // OpenRouter - Anthropic (source: openrouter.ai/api/v1/models)
+  'anthropic/claude-opus-4.8': { input: 5.00, output: 25.00 },
+  'anthropic/claude-opus-4.8-fast': { input: 10.00, output: 50.00 },
   'anthropic/claude-opus-4.7': { input: 5.00, output: 25.00 },
   'anthropic/claude-opus-4.7-fast': { input: 30.00, output: 150.00 },
   'anthropic/claude-opus-4.6': { input: 5.00, output: 25.00 },
@@ -33,6 +35,17 @@ export const AI_PRICING = {
 
   // OpenRouter - OpenAI (source: openrouter.ai/api/v1/models)
   'openai/gpt-5.5-pro': { input: 30.00, output: 180.00 },
+  'openai/gpt-5.2-pro': { input: 21.00, output: 168.00 },
+  'openai/gpt-5.2-chat': { input: 1.75, output: 14.00 },
+  'openai/gpt-5.1-chat': { input: 1.25, output: 10.00 },
+  'openai/gpt-5.1-codex-max': { input: 1.25, output: 10.00 },
+  'openai/gpt-5-pro': { input: 15.00, output: 120.00 },
+  'openai/gpt-5-codex': { input: 1.25, output: 10.00 },
+  'openai/o3': { input: 2.00, output: 8.00 },
+  'openai/o3-pro': { input: 20.00, output: 80.00 },
+  'openai/o4-mini': { input: 1.10, output: 4.40 },
+  'openai/gpt-4.1': { input: 2.00, output: 8.00 },
+  'openai/gpt-4.1-mini': { input: 0.40, output: 1.60 },
   'openai/gpt-5.5': { input: 5.00, output: 30.00 },
   'openai/gpt-5.4-pro': { input: 30.00, output: 180.00 },
   'openai/gpt-5.4': { input: 2.50, output: 15.00 },
@@ -81,7 +94,10 @@ export const AI_PRICING = {
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
 
   // OpenRouter - Mistral (source: openrouter.ai/api/v1/models)
+  'mistralai/mistral-large-2512': { input: 0.50, output: 1.50 },
   'mistralai/mistral-medium-3-5': { input: 1.50, output: 7.50 },
+  'mistralai/mistral-medium-3': { input: 0.40, output: 2.00 },
+  'mistralai/devstral-2512': { input: 0.40, output: 2.00 },
   'mistralai/mistral-small-2603': { input: 0.15, output: 0.60 },
   'mistralai/mistral-medium-3.1': { input: 2.70, output: 8.10 },
   'mistralai/mistral-small-3.2-24b-instruct': { input: 0.20, output: 0.60 },
@@ -90,13 +106,17 @@ export const AI_PRICING = {
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
+  'z-ai/glm-5.1': { input: 0.98, output: 3.08 },
   'z-ai/glm-5-turbo': { input: 1.20, output: 4.00 },
   'z-ai/glm-5': { input: 0.80, output: 2.56 },
+  'z-ai/glm-4.7-flash': { input: 0.06, output: 0.40 },
   'z-ai/glm-4.7': { input: 0.39, output: 1.90 },
+  'z-ai/glm-4.6': { input: 0.43, output: 1.74 },
   'z-ai/glm-4.5v': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5-air': { input: 0.35, output: 1.55 },
   'z-ai/glm-4-32b': { input: 0.35, output: 1.55 },
+  'qwen/qwen3.7-max': { input: 1.25, output: 3.75 },
   'qwen/qwen3.6-max-preview': { input: 1.04, output: 6.24 },
   'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
   'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
@@ -113,9 +133,13 @@ export const AI_PRICING = {
   'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.50, output: 2.00 },
   'qwen/qwen3-235b-a22b-2507': { input: 0.50, output: 2.00 },
   'qwen/qwen3-coder': { input: 0.50, output: 2.00 },
+  'moonshotai/kimi-k2.6': { input: 0.684, output: 3.42 },
+  'moonshotai/kimi-k2-thinking': { input: 0.60, output: 2.50 },
   'moonshotai/kimi-k2': { input: 0.48, output: 2.00 },
+  'minimax/minimax-m3': { input: 0.30, output: 1.20 },
   'minimax/minimax-m2.7': { input: 0.279, output: 1.20 },
   'minimax/minimax-m2.5': { input: 0.30, output: 1.20 },
+  'minimax/minimax-m2.1': { input: 0.29, output: 0.95 },
   'minimax/minimax-m1': { input: 0.44, output: 1.76 },
   'bytedance-seed/seed-2.0-lite': { input: 0.25, output: 2.00 },
   'bytedance-seed/seed-2.0-mini': { input: 0.10, output: 0.40 },
@@ -135,12 +159,12 @@ export const AI_PRICING = {
   'x-ai/grok-4.3': { input: 1.25, output: 2.50 },
   'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
   'x-ai/grok-4.20-multi-agent': { input: 2.00, output: 6.00 },
-  'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
-  'x-ai/grok-4': { input: 3.00, output: 15.00 },
+  'x-ai/grok-build-0.1': { input: 1.00, output: 2.00 },
 
   // OpenRouter - Other (source: openrouter.ai/api/v1/models)
   'inception/mercury-2': { input: 0.25, output: 0.75 },
   'inception/mercury': { input: 0.50, output: 1.50 },
+  'writer/palmyra-x5': { input: 0.60, output: 6.00 },
 
   // Google AI Direct (source: ai.google.dev/gemini-api/docs/pricing, 2026-05)
   'gemini-3.5-flash': { input: 1.50, output: 9.00 },

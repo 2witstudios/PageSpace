@@ -94,7 +94,9 @@ export function createRateLimitResponse(
  * Check if provider requires Pro subscription.
  * Billing-disabled deployments (on-prem and tenant) bypass subscription gating via isBillingEnabled().
  */
-export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
+export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined, isAdmin = false): boolean {
+  // Global admins bypass the subscription gate entirely (e.g. paid OpenRouter access).
+  if (isAdmin) return false;
   if (!isBillingEnabled()) return false;
   if (getProviderTier(provider, model) !== 'pro') return false;
 
