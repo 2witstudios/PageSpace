@@ -7,6 +7,7 @@ import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { writeAiUsage } from '../logging/logger-database';
+import { consumeCredits } from '../billing/credit-consume';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -600,8 +601,10 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     
     // Calculate cost
     const cost = calculateCost(data.model, inputTokens, outputTokens);
-    
-    // Fire and forget - don't await
+    const success = data.success !== false;
+
+    // Fire and forget - don't await. On a successful, persisted call, debit the
+    // user's prepaid credit balance (cost × markup); failed calls are not billed.
     writeAiUsage({
       userId: data.userId,
       provider: data.provider,
@@ -615,7 +618,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       messageId: data.messageId,
       pageId: data.pageId,
       driveId: data.driveId,
-      success: data.success !== false,
+      success,
       error: data.error,
 
       // Context tracking
@@ -632,6 +635,13 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         ...data.metadata,
         streamingDuration: data.streamingDuration,
       },
+    }).then((aiUsageLogId) => {
+      if (aiUsageLogId && success) {
+        void consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost })
+          .catch((error) => {
+            loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          });
+      }
     }).catch((error) => {
       loggers.ai.debug('AI usage tracking failed', {
         error: (error as Error).message,
