@@ -31,9 +31,11 @@ export interface ConsumeCreditsInput {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * Within a transaction: lock the balance, draw down monthly-first via the pure
- * core, persist the new balance (if a row exists), and mark the ledger row
- * applied. Shared by consumeCredits and settlePendingLedgerRow.
+ * Within a transaction: lock the balance row, draw down monthly-first via the
+ * pure core, persist the new balance, and mark the ledger row applied. If no
+ * balance row exists yet, the ledger row is left untouched ('pending') so the
+ * reconcile cron settles it once a balance is created. Shared by consumeCredits
+ * and settlePendingLedgerRow.
  */
 async function decrementAndSettle(
   tx: Tx,

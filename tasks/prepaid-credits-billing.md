@@ -60,6 +60,8 @@ Signed-cron route (`api/cron/reconcile-credits`) over the pure `computeBackfillA
 - Given ledger rows stuck `pending`, or `aiUsageLogs` rows past the grace window with no ledger entry, the cron should apply each decrement exactly once.
 - Given the reconcile run, it should call no Stripe APIs.
 
+> **Operational follow-up (deploy repo, out of this PR's scope):** like every other cron route, `api/cron/reconcile-credits` is only a signed endpoint — the schedule lives in `PageSpace-Deploy` (`fly/fly.cron.toml` / the `pagespace-cron` image). It must be registered there for the backfill (and thus the "pending settles once a balance exists" guarantee) to actually run.
+
 ---
 
 ## Funding (Stripe = payment collector)
