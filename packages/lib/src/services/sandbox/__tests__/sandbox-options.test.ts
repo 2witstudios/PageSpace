@@ -16,7 +16,14 @@ describe('mapPolicyToSandboxOptions', () => {
       memoryMb: policy.memoryMb,
       persistent: policy.persistent,
       region: policy.region,
+      egressAllowlist: policy.egressAllowlist,
     });
+  });
+
+  it('given any v1 policy, should carry through an empty (default-deny) egress allowlist', () => {
+    expect(mapPolicyToSandboxOptions({ policy: resolveExecutionPolicy() }).egressAllowlist).toEqual(
+      [],
+    );
   });
 
   it('given the safe-minimum policy, should map its more restrictive bounds', () => {

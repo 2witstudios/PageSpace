@@ -110,6 +110,24 @@ export interface CheckCodeExecutionQuotaInput {
   deps?: CodeExecutionQuotaDeps;
 }
 
+// The scope identifiers a single run is metered against. Shared by the
+// non-incrementing preflight and the real charge so the two never diverge.
+function budgetScopeIds({
+  userId,
+  driveId,
+  tenantId,
+}: {
+  userId: string;
+  driveId: string;
+  tenantId?: string;
+}): string[] {
+  return [
+    `code-exec:user:${userId}`,
+    `code-exec:drive:${driveId}`,
+    ...(tenantId ? [`code-exec:tenant:${tenantId}`] : []),
+  ];
+}
+
 export async function checkCodeExecutionQuota({
   userId,
   driveId,
@@ -121,13 +139,7 @@ export async function checkCodeExecutionQuota({
     return { allowed: false, reason: 'concurrency_limit' };
   }
 
-  const scopeIds = [
-    `code-exec:user:${userId}`,
-    `code-exec:drive:${driveId}`,
-    ...(tenantId ? [`code-exec:tenant:${tenantId}`] : []),
-  ];
-
-  for (const id of scopeIds) {
+  for (const id of budgetScopeIds({ userId, driveId, tenantId })) {
     const status = await deps.checkRateLimitStatus(id);
     if (status.blocked) {
       return { allowed: false, reason: 'rate_limited', retryAfter: status.retryAfter };
@@ -135,4 +147,39 @@ export async function checkCodeExecutionQuota({
   }
 
   return { allowed: true };
+}
+
+export interface ChargeBudgetDeps {
+  /** Increment the daily budget for one scoped identifier (consumes the window). */
+  charge: (id: string) => Promise<void>;
+}
+
+// The real charge increments the CODE_EXECUTION sliding window. Lazily imported
+// so unit tests that inject a fake never load the DB module graph.
+const defaultChargeDeps: ChargeBudgetDeps = {
+  charge: (id) =>
+    import('../../security/distributed-rate-limit').then((m) =>
+      m.checkDistributedRateLimit(id, m.DISTRIBUTED_RATE_LIMITS.CODE_EXECUTION).then(() => undefined),
+    ),
+};
+
+/**
+ * The single real per-run budget charge: increment every scope (user, drive,
+ * and — when known — tenant) exactly once. Call this only after a passing
+ * preflight and a successful concurrency reservation, so a denied run never
+ * charges. Charges run together; a sink failure rejects (the caller treats a
+ * failed charge as an `error` denial rather than running uncharged).
+ */
+export async function chargeCodeExecutionBudget({
+  userId,
+  driveId,
+  tenantId,
+  deps = defaultChargeDeps,
+}: {
+  userId: string;
+  driveId: string;
+  tenantId?: string;
+  deps?: ChargeBudgetDeps;
+}): Promise<void> {
+  await Promise.all(budgetScopeIds({ userId, driveId, tenantId }).map((id) => deps.charge(id)));
 }

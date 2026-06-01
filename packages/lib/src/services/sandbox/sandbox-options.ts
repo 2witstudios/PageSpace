@@ -30,6 +30,12 @@ export interface SandboxCreateOptions {
   persistent: boolean;
   /** Explicit deployment region. */
   region: string;
+  /**
+   * Egress firewall allowlist, carried through so the real client (PR3) can
+   * translate it into a `@vercel/sandbox` network policy. Empty means
+   * default-deny (no outbound). Frozen by the source policy.
+   */
+  egressAllowlist: readonly string[];
 }
 
 export function mapPolicyToSandboxOptions({
@@ -41,5 +47,6 @@ export function mapPolicyToSandboxOptions({
     memoryMb: policy.memoryMb,
     persistent: policy.persistent,
     region: policy.region,
+    egressAllowlist: policy.egressAllowlist,
   };
 }
