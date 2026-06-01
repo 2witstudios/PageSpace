@@ -400,6 +400,30 @@ describe('trackAIToolUsage', () => {
       })
     );
   });
+
+  it('propagates the awaited persistence promise so the tool-call path is durable too', async () => {
+    // trackAIToolUsage must RETURN trackAIUsage's promise — otherwise a caller that
+    // `await`s trackToolUsage resolves before writeAiUsage settles, and the analytics
+    // log can be dropped on a serverless freeze. We hold writeAiUsage open and assert
+    // the awaited trackAIToolUsage does NOT resolve until the write settles. A wrapper
+    // that didn't return the inner promise would resolve immediately and fail this.
+    let resolveWrite!: (id: string) => void;
+    mockWriteAiUsage.mockReturnValueOnce(new Promise<string>((res) => { resolveWrite = res; }));
+    let resolved = false;
+    const tracked = trackAIToolUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      toolName: 'searchPages',
+      success: true,
+    }).then(() => { resolved = true; });
+    await Promise.resolve(); // flush microtasks — write is still pending
+    expect(resolved).toBe(false);
+    resolveWrite('aul_tool');
+    await tracked;
+    expect(resolved).toBe(true);
+    expect(mockWriteAiUsage).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

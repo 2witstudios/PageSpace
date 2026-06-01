@@ -682,8 +682,12 @@ export interface AIToolUsage {
   pageId?: string;
 }
 
-export async function trackAIToolUsage(data: AIToolUsage): Promise<void> {
-  trackAIUsage({
+export function trackAIToolUsage(data: AIToolUsage): Promise<void> {
+  // Return (not just call) trackAIUsage so the same durability guarantee applies
+  // here: a caller that `await`s trackAIToolUsage waits for the tool-analytics log
+  // (and its zero-charge ledger settlement) to persist before returning, instead
+  // of resolving immediately and risking a dropped write on a serverless freeze.
+  return trackAIUsage({
     userId: data.userId,
     provider: data.provider,
     model: data.model,
