@@ -93,6 +93,13 @@ vi.mock('../../core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: {
+    trackUsage: vi.fn(),
+    trackToolUsage: vi.fn(),
+  },
+}));
+
 // Mock core AI modules
 vi.mock('../../core', () => ({
   sanitizeMessagesForModel: vi.fn((msgs) => msgs),
@@ -112,6 +119,7 @@ import { createAIProvider, saveMessageToDatabase } from '../../core';
 import type { ToolExecutionContext } from '../../core';
 import { generateText } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -199,12 +207,16 @@ describe('agent-communication-tools', () => {
       } as never);
       vi.mocked(createAIProvider).mockResolvedValue({
         model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+        provider: 'pagespace',
+        modelName: 'glm-5',
       } as Awaited<ReturnType<typeof createAIProvider>>);
       vi.mocked(generateText).mockResolvedValue({
         text: 'Agent response',
         steps: [],
+        totalUsage: { inputTokens: 100, outputTokens: 200, totalTokens: 300 },
       } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
       vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+      vi.mocked(AIMonitoring.trackUsage).mockClear();
     });
 
     it('has correct tool definition', () => {
@@ -325,6 +337,40 @@ describe('agent-communication-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
+      });
+
+      it('meters the sub-agent run against the resolved model with aggregated usage (PR #1475 leak fix)', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        // ask_agent runs a tool loop (stepCountIs(20)); it must bill the requesting
+        // user against the resolved backend model (glm-5), not the unmetered alias,
+        // using totalUsage so every round-trip is counted.
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            userId: 'user-123',
+            provider: 'pagespace',
+            model: 'glm-5',
+            inputTokens: 100,
+            outputTokens: 200,
+            totalTokens: 300,
+            success: true,
+          })
+        );
       });
 
       it('should set parentAgentId from calling agent location context', async () => {
