@@ -88,10 +88,22 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logUserActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
+}));
+vi.mock('@pagespace/lib/services/email-service', () => ({
+  sendEmail: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
+  VerificationEmail: () => null,
+}));
+
 import { GET, PATCH } from '../route';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
+import { sendEmail } from '@pagespace/lib/services/email-service';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -291,7 +303,9 @@ describe('PATCH /api/account', () => {
     // Assert
     expect(response.status).toBe(200);
     expect(body.email).toBe('new@example.com');
-    expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com' });
+    // A genuine email change also clears verification so the new address must
+    // be re-verified.
+    expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com', emailVerified: null });
   });
 
   it('should return 400 when email format is invalid', async () => {
@@ -439,5 +453,131 @@ describe('PATCH /api/account', () => {
     expect(errorCallArgs[0]).toContain('Profile update error');
     expect(errorCallArgs[1]).toBeInstanceOf(Error);
     expect((errorCallArgs[1] as Error).message).toBe('DB error');
+  });
+
+  it('resets verification and emails the new address when email changes', async () => {
+    // Arrange — new address, not used by anyone
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+
+    const updatedUser = {
+      id: mockUserId,
+      name: 'Existing Name',
+      email: 'new@example.com',
+      image: null,
+    };
+    const returningMock = vi.fn().mockResolvedValue([updatedUser]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ email: 'new@example.com' }),
+    });
+
+    // Act
+    const response = await PATCH(request);
+
+    // Assert
+    expect(response.status).toBe(200);
+    expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com', emailVerified: null });
+    expect(createVerificationToken).toHaveBeenCalledWith({
+      userId: mockUserId,
+      type: 'email_verification',
+    });
+    expect(sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'new@example.com', subject: 'Verify your PageSpace email' }),
+    );
+  });
+
+  it('does not reset verification or send email when only the name changes', async () => {
+    // Arrange
+    const returningMock = vi.fn().mockResolvedValue([{
+      id: mockUserId,
+      name: 'Updated Name',
+      email: 'existing@example.com',
+      image: null,
+    }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Updated Name' }),
+    });
+
+    // Act
+    const response = await PATCH(request);
+
+    // Assert
+    expect(response.status).toBe(200);
+    expect(setMock).toHaveBeenCalledWith({ name: 'Updated Name' });
+    expect(createVerificationToken).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('does not reset verification when the email matches the current address', async () => {
+    // Arrange — findFirst returns the caller themselves (same email)
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: mockUserId,
+      email: 'test@example.com',
+    } as never);
+
+    const returningMock = vi.fn().mockResolvedValue([{
+      id: mockUserId,
+      name: 'Test User',
+      email: 'test@example.com',
+      image: null,
+    }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ email: 'test@example.com' }),
+    });
+
+    // Act
+    const response = await PATCH(request);
+
+    // Assert
+    expect(response.status).toBe(200);
+    expect(setMock).toHaveBeenCalledWith({ email: 'test@example.com' });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('still updates the profile when the verification email fails to send', async () => {
+    // Arrange
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP down'));
+
+    const returningMock = vi.fn().mockResolvedValue([{
+      id: mockUserId,
+      name: 'Existing Name',
+      email: 'new@example.com',
+      image: null,
+    }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ email: 'new@example.com' }),
+    });
+
+    // Act
+    const response = await PATCH(request);
+    const body = await response.json();
+
+    // Assert
+    expect(response.status).toBe(200);
+    expect(body.email).toBe('new@example.com');
+    expect(loggers.auth.warn).toHaveBeenCalledWith(
+      'Failed to send verification email after email change',
+      expect.objectContaining({ userId: mockUserId }),
+    );
   });
 });

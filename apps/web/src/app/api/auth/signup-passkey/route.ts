@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
+import React from 'react';
 import { z } from 'zod/v4';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { markEmailVerified, createVerificationToken } from '@pagespace/lib/auth/verification-utils';
+import { sendEmail } from '@pagespace/lib/services/email-service';
+import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
@@ -245,6 +249,47 @@ export async function POST(req: Request) {
       user: { id: userId, suspendedAt: null },
       now: new Date(),
     });
+
+    // Email verification. A passkey only proves authenticator control, not email
+    // ownership, so a fresh signup starts unverified. A successfully consumed
+    // BOUND invite token (delivered to this inbox and presented here) is the one
+    // exception — it proves the user accessed the address, so we mark verified.
+    // The broad consumeAllInvitesForEmail drain above is NOT proof: it matches
+    // pending invites by email without proving the user clicked an emailed link.
+    const inviteProvesEmailOwnership =
+      inviteAcceptedKind !== null && inviteAcceptError === null;
+    if (inviteProvesEmailOwnership) {
+      try {
+        await markEmailVerified(userId);
+      } catch (error) {
+        loggers.auth.warn('Failed to mark passkey-signup email verified via invite', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      // Best-effort verification email — must NOT fail the signup. The user can
+      // resend from the account banner if delivery fails.
+      try {
+        const verificationToken = await createVerificationToken({
+          userId,
+          type: 'email_verification',
+        });
+        const baseUrl =
+          process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
+        await sendEmail({
+          to: email,
+          subject: 'Verify your PageSpace email',
+          react: React.createElement(VerificationEmail, { userName: name, verificationUrl }),
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to send passkey-signup verification email', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     let deviceTokenValue: string | undefined;
     if (deviceId) {

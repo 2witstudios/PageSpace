@@ -995,9 +995,9 @@ describe('Passkey Service', () => {
 
         assert({
           given: 'successful signup verification',
-          should: 'mark email as verified',
-          actual: createdUser?.emailVerified !== null,
-          expected: true,
+          should: 'leave email unverified (proven out-of-band, not by passkey)',
+          actual: createdUser?.emailVerified,
+          expected: null,
         });
 
         // Verify passkey was created

@@ -16,6 +16,10 @@ import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logActivity, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
+import { sendEmail } from '@pagespace/lib/services/email-service';
+import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
+import React from 'react';
 import { stripe } from '@/lib/stripe/client';
 
 const patchBodySchema = z
@@ -82,19 +86,28 @@ export async function PATCH(req: Request) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
-    if (email !== undefined) {
+    // Did the address actually change? The uniqueness lookup below returns the
+    // caller themselves when the normalized email matches their current one, so
+    // an unfound (undefined) result means a genuine change to a new address.
+    const normalizedEmail = email !== undefined ? email.toLowerCase() : undefined;
+    let emailChanged = false;
+    if (normalizedEmail !== undefined) {
       const existingUser = await db.query.users.findFirst({
-        where: eq(users.email, email),
+        where: eq(users.email, normalizedEmail),
       });
 
       if (existingUser && existingUser.id !== userId) {
         return Response.json({ error: 'Email is already in use' }, { status: 400 });
       }
+      emailChanged = !existingUser;
     }
 
-    const updates: { name?: string; email?: string } = {};
+    const updates: { name?: string; email?: string; emailVerified?: Date | null } = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email.toLowerCase();
+    if (normalizedEmail !== undefined) updates.email = normalizedEmail;
+    // A new address must be re-verified — the old verification proved ownership
+    // of a different inbox. Verification is re-issued via the email below.
+    if (emailChanged) updates.emailVerified = null;
 
     const [updatedUser] = await db
       .update(users)
@@ -109,6 +122,34 @@ export async function PATCH(req: Request) {
 
     if (!updatedUser) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 });
+    }
+
+    // Send a verification email to the NEW address. Best-effort: a delivery
+    // failure must not fail the profile update — the user can resend from the
+    // account banner.
+    if (emailChanged) {
+      try {
+        const verificationToken = await createVerificationToken({
+          userId,
+          type: 'email_verification',
+        });
+        const baseUrl =
+          process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
+        await sendEmail({
+          to: updatedUser.email,
+          subject: 'Verify your PageSpace email',
+          react: React.createElement(VerificationEmail, {
+            userName: updatedUser.name,
+            verificationUrl,
+          }),
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to send verification email after email change', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Log activity for audit trail (profile updates may be security-relevant)
