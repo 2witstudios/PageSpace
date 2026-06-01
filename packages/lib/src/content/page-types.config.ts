@@ -165,7 +165,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsVersioning: false,
       supportsAI: true,
     },
-    defaultContent: () => JSON.stringify({}),
+    defaultContent: () => '',
     uiComponent: 'TaskListView',
     layoutViewType: 'document',
   },

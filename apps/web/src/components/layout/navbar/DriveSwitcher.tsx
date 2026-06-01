@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
-import { useFavorites } from "@/hooks/useFavorites";
+import { useFavorites, useFavoritesSync } from "@/hooks/useFavorites";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { cn } from "@/lib/utils";
@@ -36,7 +36,8 @@ export default function DriveSwitcher() {
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
 
-  const { isFavorite, addFavorite, removeFavorite, fetchFavorites, isSynced, driveIds } = useFavorites();
+  const { isFavorite, addFavorite, removeFavorite, driveIds } = useFavorites();
+  useFavoritesSync();
 
   const { driveId } = params;
   const urlDriveId = Array.isArray(driveId) ? driveId[0] : driveId;
@@ -44,12 +45,6 @@ export default function DriveSwitcher() {
   useEffect(() => {
     fetchDrives();
   }, [fetchDrives]);
-
-  useEffect(() => {
-    if (!isSynced) {
-      fetchFavorites();
-    }
-  }, [isSynced, fetchFavorites]);
 
   useEffect(() => {
     if (urlDriveId && drives.length > 0) {

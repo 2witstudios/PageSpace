@@ -6,14 +6,8 @@ import { type Editor } from '@tiptap/react';
 import { useDocument } from '@/hooks/useDocument';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { isRichContentEmpty } from '@/hooks/usePageContent';
 
 const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
-
-export { isRichContentEmpty };
-
-export const getInitialOpenState = (content: string | null): boolean =>
-  !isRichContentEmpty(content);
 
 interface TaskListDescriptionContentProps {
   pageId: string;
