@@ -147,9 +147,12 @@ export function classifyStripeEvent(event: ClassifiableEvent): StripeAction {
   if (event.type === 'checkout.session.completed') {
     const obj = event.data.object;
     if (obj.mode === 'payment' && obj.metadata?.kind === 'credit_pack') {
-      const packCents = Number.parseInt(obj.metadata.packCents ?? '', 10);
-      if (Number.isFinite(packCents) && packCents > 0) {
-        return { kind: 'topup', packCents };
+      // Strict: only a canonical unsigned-integer string credits. parseInt would
+      // accept "2500usd"; for a money amount from event metadata we require digits.
+      const raw = obj.metadata.packCents ?? '';
+      if (/^\d+$/.test(raw)) {
+        const packCents = Number.parseInt(raw, 10);
+        if (packCents > 0) return { kind: 'topup', packCents };
       }
     }
     return { kind: 'ignore' };

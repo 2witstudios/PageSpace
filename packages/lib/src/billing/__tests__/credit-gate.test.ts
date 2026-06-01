@@ -47,11 +47,27 @@ describe('canConsumeAI', () => {
   });
 
   it('lazy-inits a balance row from tier defaults on first request, then allows', async () => {
-    mockDb.select.mockReturnValue(selectReturning([])); // no row yet
+    // 1st select: no row -> needs_init. 2nd select (post-insert): the persisted row.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0 }]));
     mockDb.insert.mockReturnValue(insertChain());
     const r = await canConsumeAI('u1', 'pro');
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
+  });
+
+  it('re-evaluates against the persisted row after a concurrent init (no false allow)', async () => {
+    // 1st select: no row -> needs_init. Our insert hits onConflictDoNothing because a
+    // concurrent request already created AND drew down the row to empty. We must judge
+    // the persisted balance, not the assumed full allowance -> deny.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0 }]));
+    mockDb.insert.mockReturnValue(insertChain());
+    const r = await canConsumeAI('u1', 'pro');
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('out_of_credits');
   });
 });

@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, timestamp, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -15,10 +15,21 @@ export const creditBalances = pgTable('credit_balances', {
   monthlyRemainingCents: integer('monthlyRemainingCents').default(0).notNull(),
   monthlyAllowanceCents: integer('monthlyAllowanceCents').default(0).notNull(),
   topupRemainingCents: integer('topupRemainingCents').default(0).notNull(),
-  monthlyPeriodStart: timestamp('monthlyPeriodStart', { mode: 'date' }),
-  monthlyPeriodEnd: timestamp('monthlyPeriodEnd', { mode: 'date' }),
-  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
-});
+  monthlyPeriodStart: timestamp('monthlyPeriodStart', { mode: 'date', withTimezone: true }),
+  monthlyPeriodEnd: timestamp('monthlyPeriodEnd', { mode: 'date', withTimezone: true }),
+  updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => ({
+  // The prepaid source of truth: enforce the invariants in the DB so a single bad
+  // write can't manufacture negative balances or an inverted billing window that
+  // the gate would treat as real spendable state.
+  monthlyNonNeg: check('credit_balances_monthly_remaining_nonneg', sql`${table.monthlyRemainingCents} >= 0`),
+  allowanceNonNeg: check('credit_balances_monthly_allowance_nonneg', sql`${table.monthlyAllowanceCents} >= 0`),
+  topupNonNeg: check('credit_balances_topup_remaining_nonneg', sql`${table.topupRemainingCents} >= 0`),
+  periodOrder: check(
+    'credit_balances_period_order',
+    sql`${table.monthlyPeriodStart} IS NULL OR ${table.monthlyPeriodEnd} IS NULL OR ${table.monthlyPeriodStart} <= ${table.monthlyPeriodEnd}`,
+  ),
+}));
 
 /**
  * creditLedger — append-only audit/provenance. One row per grant, purchase, or
@@ -39,7 +50,7 @@ export const creditLedger = pgTable('credit_ledger', {
   stripeRef: text('stripeRef'), // invoice id / checkout session id for grants & purchases
   consumeStatus: text('consumeStatus').default('pending').notNull(), // 'pending' | 'applied' | 'skipped'
   consumeError: text('consumeError'),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
   usageLogUnique: uniqueIndex('credit_ledger_usage_log_unique')

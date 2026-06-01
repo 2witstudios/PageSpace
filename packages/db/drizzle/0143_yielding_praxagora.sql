@@ -3,9 +3,9 @@ CREATE TABLE IF NOT EXISTS "credit_balances" (
 	"monthlyRemainingCents" integer DEFAULT 0 NOT NULL,
 	"monthlyAllowanceCents" integer DEFAULT 0 NOT NULL,
 	"topupRemainingCents" integer DEFAULT 0 NOT NULL,
-	"monthlyPeriodStart" timestamp,
-	"monthlyPeriodEnd" timestamp,
-	"updatedAt" timestamp DEFAULT now() NOT NULL
+	"monthlyPeriodStart" timestamp with time zone,
+	"monthlyPeriodEnd" timestamp with time zone,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "credit_ledger" (
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS "credit_ledger" (
 	"stripeRef" text,
 	"consumeStatus" text DEFAULT 'pending' NOT NULL,
 	"consumeError" text,
-	"createdAt" timestamp DEFAULT now() NOT NULL
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 DO $$ BEGIN

@@ -766,6 +766,18 @@
       "logging/ai-usage-purge": [
         "./dist/logging/ai-usage-purge.d.ts"
       ],
+      "billing/credit-core": [
+        "./dist/billing/credit-core.d.ts"
+      ],
+      "billing/credit-pricing": [
+        "./dist/billing/credit-pricing.d.ts"
+      ],
+      "billing/credit-gate": [
+        "./dist/billing/credit-gate.d.ts"
+      ],
+      "billing/credit-backfill": [
+        "./dist/billing/credit-backfill.d.ts"
+      ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
       ],

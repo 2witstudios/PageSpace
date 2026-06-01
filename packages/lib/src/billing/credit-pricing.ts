@@ -10,10 +10,13 @@
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = process.env[name]?.trim();
   if (raw === undefined || raw === '') return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  // Strict: only an unsigned integer literal overrides the default. Rejects
+  // trailing junk ("100abc"), decimals ("1.5"), and signs so a typo'd billing
+  // env var falls back to the safe default instead of silently parsing.
+  if (!/^\d+$/.test(raw)) return fallback;
+  return Number.parseInt(raw, 10);
 }
 
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */

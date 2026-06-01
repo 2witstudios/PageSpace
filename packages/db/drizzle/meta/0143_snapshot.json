@@ -1,5 +1,5 @@
 {
-  "id": "03b73c51-b300-452b-a19e-5d972c009b79",
+  "id": "67d3295d-f6ad-4fe2-8388-ae1ef5a2b5ce",
   "prevId": "59475dac-753c-4b26-882d-1dead014cfef",
   "version": "7",
   "dialect": "postgresql",
@@ -15322,19 +15322,19 @@
         },
         "monthlyPeriodStart": {
           "name": "monthlyPeriodStart",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
         "monthlyPeriodEnd": {
           "name": "monthlyPeriodEnd",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
         "updatedAt": {
           "name": "updatedAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
@@ -15433,7 +15433,7 @@
         },
         "createdAt": {
           "name": "createdAt",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"

@@ -78,6 +78,18 @@ async function decrementAndSettle(
 export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> {
   if (!isBillingEnabled()) return; // tenant/onprem are unlimited
 
+  // Guard a malformed cost before it can produce a bogus ledger claim. A
+  // non-finite or negative cost is a programming/upstream error, not a billable
+  // event — skip it rather than persist a garbage row. (cost 0 is valid: free
+  // models bill nothing.)
+  if (!Number.isFinite(input.costDollars) || input.costDollars < 0) {
+    loggers.ai.debug('credit consume skipped: invalid cost', {
+      costDollars: input.costDollars,
+      aiUsageLogId: input.aiUsageLogId,
+    });
+    return;
+  }
+
   const amountCents = markupCents(input.costDollars, MARKUP_BPS);
   const realCostCents = Math.max(0, Math.round(input.costDollars * 100));
 

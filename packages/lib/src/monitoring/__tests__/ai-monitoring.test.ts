@@ -230,7 +230,7 @@ describe('trackAIUsage', () => {
   });
 
   it('does not debit credits when no usage-log id is returned (write failed/skipped)', async () => {
-    mockWriteAiUsage.mockResolvedValueOnce(undefined);
+    mockWriteAiUsage.mockResolvedValueOnce(null); // writeAiUsage resolves string | null
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 10 });
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(mockConsumeCredits).not.toHaveBeenCalled();

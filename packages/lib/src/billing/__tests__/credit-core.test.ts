@@ -147,6 +147,24 @@ describe('classifyStripeEvent', () => {
     expect(action).toEqual({ kind: 'topup', packCents: 2500 });
   });
 
+  it('ignores a credit-pack checkout whose packCents is non-canonical (e.g. "2500usd")', () => {
+    expect(classifyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { mode: 'payment', metadata: { kind: 'credit_pack', packCents: '2500usd' } } },
+    })).toEqual({ kind: 'ignore' });
+  });
+
+  it('ignores a credit-pack checkout with zero or missing packCents', () => {
+    expect(classifyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { mode: 'payment', metadata: { kind: 'credit_pack', packCents: '0' } } },
+    })).toEqual({ kind: 'ignore' });
+    expect(classifyStripeEvent({
+      type: 'checkout.session.completed',
+      data: { object: { mode: 'payment', metadata: { kind: 'credit_pack' } } },
+    })).toEqual({ kind: 'ignore' });
+  });
+
   it('ignores a non-credit-pack checkout (e.g. subscription mode)', () => {
     expect(classifyStripeEvent({
       type: 'checkout.session.completed',

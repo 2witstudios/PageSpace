@@ -104,6 +104,13 @@ describe('consumeCredits', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('skips an invalid cost (negative or non-finite) without claiming a ledger row', async () => {
+    await consumeCredits({ aiUsageLogId: 'aul_neg', userId: 'u1', costDollars: -5 });
+    await consumeCredits({ aiUsageLogId: 'aul_nan', userId: 'u1', costDollars: Number.NaN });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
   it('is idempotent: a duplicate aiUsageLogId (conflict) skips the decrement', async () => {
     mockDb.insert.mockReturnValue(claimReturning([])); // conflict -> no row returned
     await consumeCredits({ aiUsageLogId: 'aul_dup', userId: 'u1', costDollars: 1 });
