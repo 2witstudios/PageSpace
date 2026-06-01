@@ -105,6 +105,28 @@ describe('canRunCode', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('given an agent actor whose triggering user is only a plain member, should deny on the user gate', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps({ getUserDrivePermissions: async () => memberPerms }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+  });
+
+  it('given an agent actor whose triggering user has no drive membership, should deny on the user gate', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps({ getUserDrivePermissions: async () => null }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
+  });
+
   it('given an agent actor without a page id, should deny', async () => {
     const result = await canRunCode({
       userId: 'u1',

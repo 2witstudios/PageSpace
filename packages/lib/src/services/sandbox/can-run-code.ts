@@ -15,6 +15,12 @@
  * do not serve on-prem (a local execution path is future work, not wired here),
  * so gating on DEPLOYMENT_MODE / isOnPrem would only add a dead branch.
  *
+ * The actor user always clears the owner/admin drive-role gate, regardless of
+ * origin. Agent-origin runs additionally require the agent page to hold drive
+ * edit access (defence in depth): both the human who triggered the run and the
+ * agent acting on their behalf must be entitled, so a plain member can't
+ * escalate through an agent that happens to have edit access.
+ *
  * `enabledTools` (agent config) is NOT a security boundary — this is.
  */
 
@@ -122,9 +128,17 @@ export async function canRunCode({
   try {
     if (!deps.isCodeExecutionEnabled()) return deny('kill_switch_off');
 
+    // The actor user must always clear the owner/admin drive-role gate. For
+    // agent-origin runs this is the rung that stops a plain member escalating
+    // through an agent that holds drive edit access.
+    const userResult = await authorizeUser(userId, driveId, deps);
+    if (!userResult.ok) return userResult;
+
+    // Agent-origin runs additionally require the agent page itself to hold
+    // drive edit access — both the actor and the agent must be entitled.
     return requestOrigin === 'agent'
       ? await authorizeAgent(agentPageId, driveId, deps)
-      : await authorizeUser(userId, driveId, deps);
+      : userResult;
   } catch {
     return deny('error');
   }
