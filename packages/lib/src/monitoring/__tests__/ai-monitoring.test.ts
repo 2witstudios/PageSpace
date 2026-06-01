@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Hoisted mocks ─────────────────────────────────────────────────────────────
 const mockWriteAiUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAiLogger = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -19,6 +20,10 @@ const mockDbSelectFn = vi.hoisted(() => vi.fn());
 // From this test file (src/monitoring/__tests__/) → ../../logging/logger-database
 vi.mock('../../logging/logger-database', () => ({
   writeAiUsage: mockWriteAiUsage,
+}));
+
+vi.mock('../../billing/credit-consume', () => ({
+  consumeCredits: mockConsumeCredits,
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -197,6 +202,38 @@ describe('trackAIUsage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockWriteAiUsage.mockResolvedValue(undefined);
+    mockConsumeCredits.mockResolvedValue(undefined);
+  });
+
+  it('debits credits with the returned usage-log id on a successful call', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_42');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_42', userId: 'user-1' }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBeGreaterThan(0);
+  });
+
+  it('does not debit credits when the call failed (success=false)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_43');
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('does not debit credits when no usage-log id is returned (write failed/skipped)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce(null); // writeAiUsage resolves string | null
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 10 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
   });
 
   it('should call writeAiUsage with computed cost and totals', async () => {
