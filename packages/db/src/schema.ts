@@ -39,6 +39,7 @@ export * from './schema/share-links';
 export * from './schema/zoom';
 export * from './schema/webhook-triggers';
 export * from './schema/drafts';
+export * from './schema/sandbox-sessions';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -81,6 +82,7 @@ import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
 import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
+import * as sandboxSessions from './schema/sandbox-sessions';
 
 export const schema = {
   ...auth,
@@ -124,4 +126,5 @@ export const schema = {
   ...zoom,
   ...webhookTriggers,
   ...drafts,
+  ...sandboxSessions,
 };
