@@ -247,6 +247,11 @@
       "import": "./dist/services/sandbox/tool-runners.js",
       "require": "./dist/services/sandbox/tool-runners.js"
     },
+    "./services/sandbox/tool-gate": {
+      "types": "./dist/services/sandbox/tool-gate.d.ts",
+      "import": "./dist/services/sandbox/tool-gate.js",
+      "require": "./dist/services/sandbox/tool-gate.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
