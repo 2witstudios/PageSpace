@@ -7,6 +7,7 @@ import { FileText, ListTodo, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Suggestions, Suggestion } from '@/components/ai/ui/suggestion';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { post } from '@/lib/auth/auth-fetch';
 import { PageType, getDefaultContent, getPageTypeConfig } from '@pagespace/lib/client-safe';
 import type { Page } from '@pagespace/lib/client-safe';
@@ -36,6 +37,7 @@ interface AskOrDoProps {
  */
 export function AskOrDo({ driveId, onPromptSelect, onPromptDraft, onQuickCreate }: AskOrDoProps) {
   const { navigateToPage } = usePageNavigation();
+  const { preferences } = useDisplayPreferences();
   const { mutate } = useSWRConfig();
   const [creating, setCreating] = useState<PageType | null>(null);
 
@@ -44,12 +46,17 @@ export function AskOrDo({ driveId, onPromptSelect, onPromptDraft, onQuickCreate 
       if (creating) return;
       setCreating(type);
       try {
+        // Mirror QuickCreatePalette: respect the user's default-Markdown
+        // preference for documents so the doc opens in the expected editor.
+        const contentMode =
+          type === PageType.DOCUMENT && preferences.defaultMarkdownMode ? 'markdown' : undefined;
         const page = await post<Page>('/api/pages', {
           title: `Untitled ${getPageTypeConfig(type).displayName}`,
           type,
           driveId,
           parentId: null,
           content: getDefaultContent(type),
+          ...(contentMode && { contentMode }),
         });
         await mutate(`/api/drives/${driveId}/pages`);
         await navigateToPage(page.id, driveId);
@@ -59,7 +66,7 @@ export function AskOrDo({ driveId, onPromptSelect, onPromptDraft, onQuickCreate 
         setCreating(null);
       }
     },
-    [creating, driveId, mutate, navigateToPage]
+    [creating, driveId, preferences.defaultMarkdownMode, mutate, navigateToPage]
   );
 
   return (
