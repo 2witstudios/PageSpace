@@ -25,6 +25,18 @@ describe('resolveExecutionPolicy', () => {
     expect(policy).toEqual(SAFE_MINIMUM_PROFILE);
   });
 
+  it('given a prototype key as the profile, should fall back to the safe minimum (no inherited lookup)', () => {
+    // A bracket lookup would resolve these to truthy Object.prototype members and
+    // skip the fallback, yielding a policy with no bounds. The own-key guard must
+    // treat them as unknown profiles.
+    for (const profile of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      const policy = resolveExecutionPolicy({ profile });
+      expect(policy).toEqual(SAFE_MINIMUM_PROFILE);
+      expect(policy.timeoutMs).toBeGreaterThan(0);
+      expect(policy.egressAllowlist).toEqual([]);
+    }
+  });
+
   it('given the minimal profile, should be no more permissive than the default profile', () => {
     const minimal = resolveExecutionPolicy({ profile: 'minimal' });
     const def = resolveExecutionPolicy({ profile: 'default' });

@@ -70,5 +70,11 @@ const PROFILES: Record<ExecutionProfile, ExecutionPolicy> = {
 export function resolveExecutionPolicy({
   profile = 'default',
 }: { profile?: string } = {}): ExecutionPolicy {
-  return PROFILES[profile as ExecutionProfile] ?? SAFE_MINIMUM_PROFILE;
+  // Own-key check, not `PROFILES[profile] ?? ...`: a bracket lookup resolves
+  // inherited keys, so a profile of '__proto__' / 'constructor' / 'toString'
+  // would return a truthy prototype member and skip the safe-minimum fallback —
+  // yielding an object with no policy bounds. Only own keys are real profiles.
+  return Object.prototype.hasOwnProperty.call(PROFILES, profile)
+    ? PROFILES[profile as ExecutionProfile]
+    : SAFE_MINIMUM_PROFILE;
 }
