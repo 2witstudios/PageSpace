@@ -172,6 +172,11 @@
       "import": "./dist/services/sandbox/can-run-code.js",
       "require": "./dist/services/sandbox/can-run-code.js"
     },
+    "./services/sandbox/execution-policy": {
+      "types": "./dist/services/sandbox/execution-policy.d.ts",
+      "import": "./dist/services/sandbox/execution-policy.js",
+      "require": "./dist/services/sandbox/execution-policy.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
@@ -807,6 +812,9 @@
       ],
       "services/sandbox/can-run-code": [
         "./dist/services/sandbox/can-run-code.d.ts"
+      ],
+      "services/sandbox/execution-policy": [
+        "./dist/services/sandbox/execution-policy.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
