@@ -8,10 +8,9 @@
  * client (`Sandbox.getOrCreate` / `create`). Keeping it pure and separate keeps
  * the create/resume effect free of policy knowledge.
  *
- * The option shape is declared locally rather than imported from
- * `@vercel/sandbox`: PR2 owns no execution path, so the concrete client (and its
- * exact create signature) is injected by later PRs. This type is the contract
- * the injected client must satisfy.
+ * The option shape is declared locally rather than imported from a provider SDK:
+ * the concrete sandbox client (Fly Sprites) and its create signature are injected
+ * by the PR3 driver. This type is the contract the injected client must satisfy.
  */
 
 import {
@@ -32,8 +31,8 @@ export interface SandboxCreateOptions {
   region: string;
   /**
    * Egress firewall allowlist, carried through so the real client (PR3) can
-   * translate it into a `@vercel/sandbox` network policy. Empty means
-   * default-deny (no outbound). Frozen by the source policy.
+   * translate it into the provider's network policy. Empty means default-deny
+   * (no outbound). Frozen by the source policy.
    */
   egressAllowlist: readonly string[];
 }

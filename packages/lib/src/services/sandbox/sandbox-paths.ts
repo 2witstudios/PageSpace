@@ -13,10 +13,11 @@
 import { resolvePathWithinSync } from '../../security/path-validator';
 
 /**
- * The sandbox working directory. `@vercel/sandbox` writes relative paths under
- * `/vercel/sandbox` by default; we confine all tool file IO to this root.
+ * The sandbox working directory inside the Sprite. All tool file IO and the
+ * default `bash` working directory are confined to this root; the driver ensures
+ * it exists on provisioning.
  */
-export const SANDBOX_ROOT = '/vercel/sandbox';
+export const SANDBOX_ROOT = '/workspace';
 
 /**
  * Resolve an agent-supplied, sandbox-root-relative path to an absolute path

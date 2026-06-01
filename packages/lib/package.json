@@ -237,10 +237,15 @@
       "import": "./dist/services/sandbox/sandbox-paths.js",
       "require": "./dist/services/sandbox/sandbox-paths.js"
     },
-    "./services/sandbox/vercel-sandbox-client": {
-      "types": "./dist/services/sandbox/vercel-sandbox-client.d.ts",
-      "import": "./dist/services/sandbox/vercel-sandbox-client.js",
-      "require": "./dist/services/sandbox/vercel-sandbox-client.js"
+    "./services/sandbox/sandbox-client/types": {
+      "types": "./dist/services/sandbox/sandbox-client/types.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/types.js",
+      "require": "./dist/services/sandbox/sandbox-client/types.js"
+    },
+    "./services/sandbox/sandbox-client/sprites": {
+      "types": "./dist/services/sandbox/sandbox-client/sprites.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprites.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprites.js"
     },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
@@ -1238,12 +1243,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
+    "@fly/sprites": "^0.0.1-rc37",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "@simplewebauthn/server": "^13.2.2",
-    "@vercel/sandbox": "^2.1.0",
     "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.32.2",
