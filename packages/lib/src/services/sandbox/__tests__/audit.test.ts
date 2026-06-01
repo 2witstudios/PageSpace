@@ -86,6 +86,21 @@ describe('buildAuditRecord', () => {
   it('should not flag short code as truncated', () => {
     expect(buildAuditRecord(baseInput).codeTruncated).toBe(false);
   });
+
+  it('should redact in linear time on an adversarial key-repetition payload', () => {
+    // CodeQL js/polynomial-redos: the original `X* keyword X*` assignment regex
+    // backtracks polynomially on many repetitions of "key". Redaction runs over
+    // the whole (agent-supplied) code, so this is an attacker-triggerable CPU
+    // exhaustion path. A linear matcher must stay fast even on a pathological
+    // payload while still redacting a real secret elsewhere in the input.
+    const secret = 'supersecretvalue0123456789abcdef';
+    const payload = `const API_KEY = "${secret}"\n${'key'.repeat(20000)}`;
+    const start = performance.now();
+    const record = buildAuditRecord({ ...baseInput, code: payload });
+    const elapsedMs = performance.now() - start;
+    expect(record.code).not.toContain(secret);
+    expect(elapsedMs).toBeLessThan(1000);
+  });
 });
 
 describe('buildActivityLogInput', () => {
