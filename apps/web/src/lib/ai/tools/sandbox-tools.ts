@@ -48,6 +48,10 @@ import {
   chargeCodeExecutionBudget,
 } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
+import {
+  gateSandboxToolCall,
+  type SandboxToolGateResult,
+} from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { type ToolExecutionContext } from '../core';
@@ -76,29 +80,59 @@ export type ResolveSandboxContext = (
   context: ToolExecutionContext | undefined,
 ) => Promise<SandboxActorContext | { error: string }>;
 
+/** The call-time authz/quota gate, bound to the resolved actor context. */
+export type SandboxGate = (ctx: SandboxActorContext) => Promise<SandboxToolGateResult>;
+
 export interface SandboxToolsDeps {
   runDeps: SandboxRunDeps;
   resolveContext: ResolveSandboxContext;
+  gate: SandboxGate;
 }
 
 function readContext(options: unknown): ToolExecutionContext | undefined {
   return (options as { experimental_context?: ToolExecutionContext })?.experimental_context;
 }
 
-export function createSandboxTools({ runDeps, resolveContext }: SandboxToolsDeps): {
+// Translate a gate denial into the tool-facing error object (mirrors the
+// runners' `{ success: false, error }` shape and carries any retry hint).
+function gateDenial(
+  denied: Extract<SandboxToolGateResult, { ok: false }>,
+): { success: false; error: string; retryAfter?: number } {
+  return {
+    success: false,
+    error: denied.error,
+    ...(denied.retryAfter ? { retryAfter: denied.retryAfter } : {}),
+  };
+}
+
+export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToolsDeps): {
   bash: Tool;
   writeFile: Tool;
   readFile: Tool;
 } {
+  // Resolve the actor, then run the call-time gate (kill-switch + canRunCode +
+  // quota) BEFORE delegating to the runner — a denial returns a safe error and
+  // never reaches provisioning. The runner re-enforces every check; this is the
+  // defence-in-depth chokepoint at the tool boundary.
+  const open = async (
+    options: unknown,
+  ): Promise<{ ok: true; ctx: SandboxActorContext } | { ok: false; error: { success: false; error: string; retryAfter?: number } }> => {
+    const ctx = await resolveContext(readContext(options));
+    if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
+    const decision = await gate(ctx);
+    if (!decision.ok) return { ok: false, error: gateDenial(decision) };
+    return { ok: true, ctx };
+  };
+
   return {
     bash: tool({
       description:
         'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. No network access; the filesystem is ephemeral and scoped to the sandbox.',
       inputSchema: bashInputSchema,
       execute: async ({ command, cwd }, options) => {
-        const ctx = await resolveContext(readContext(options));
-        if ('error' in ctx) return { success: false, error: ctx.error };
-        return runBashInSandbox({ command, cwd, ctx, deps: runDeps });
+        const opened = await open(options);
+        if (!opened.ok) return opened.error;
+        return runBashInSandbox({ command, cwd, ctx: opened.ctx, deps: runDeps });
       },
     }),
 
@@ -107,9 +141,9 @@ export function createSandboxTools({ runDeps, resolveContext }: SandboxToolsDeps
         'Write a file inside this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it.',
       inputSchema: writeFileInputSchema,
       execute: async ({ path, content }, options) => {
-        const ctx = await resolveContext(readContext(options));
-        if ('error' in ctx) return { success: false, error: ctx.error };
-        return writeSandboxFile({ path, content, ctx, deps: runDeps });
+        const opened = await open(options);
+        if (!opened.ok) return opened.error;
+        return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps });
       },
     }),
 
@@ -118,9 +152,9 @@ export function createSandboxTools({ runDeps, resolveContext }: SandboxToolsDeps
         'Read a file from this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it.',
       inputSchema: readFileInputSchema,
       execute: async ({ path }, options) => {
-        const ctx = await resolveContext(readContext(options));
-        if ('error' in ctx) return { success: false, error: ctx.error };
-        return readSandboxFile({ path, ctx, deps: runDeps });
+        const opened = await open(options);
+        if (!opened.ok) return opened.error;
+        return readSandboxFile({ path, ctx: opened.ctx, deps: runDeps });
       },
     }),
   };
@@ -221,5 +255,14 @@ export function buildSandboxTools(): { bash: Tool; writeFile: Tool; readFile: To
   return createSandboxTools({
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,
+    gate: (ctx) =>
+      gateSandboxToolCall({
+        userId: ctx.userId,
+        driveId: ctx.driveId,
+        tenantId: ctx.tenantId,
+        requestOrigin: ctx.requestOrigin,
+        agentPageId: ctx.agentPageId,
+        tier: ctx.tier,
+      }),
   });
 }

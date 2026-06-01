@@ -1,3 +1,5 @@
+import type { Tool } from 'ai';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { memberTools } from '../tools/member-tools';
 import { driveTools } from '../tools/drive-tools';
 import { pageReadTools } from '../tools/page-read-tools';
@@ -12,9 +14,10 @@ import { calendarReadTools } from '../tools/calendar-read-tools';
 import { calendarWriteTools } from '../tools/calendar-write-tools';
 import { channelTools } from '../tools/channel-tools';
 import { workflowTools } from '../tools/workflow-tools';
+import { buildSandboxTools } from '../tools/sandbox-tools';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
-export const pageSpaceTools = {
+const baseTools = {
   ...memberTools,
   ...driveTools,
   ...pageReadTools,
@@ -30,6 +33,32 @@ export const pageSpaceTools = {
   ...channelTools,
   ...workflowTools,
 };
+
+/**
+ * Assemble the agent tool registry, registering the code-execution tools
+ * (`bash` / `writeFile` / `readFile`) ONLY when the global kill-switch is on.
+ *
+ * Code execution is the highest-risk surface in the product, so it ships
+ * default-OFF: with `CODE_EXECUTION_ENABLED` unset (the default), the tools are
+ * never added to the registry, never discoverable via `tool_search`, and never
+ * reachable by a model. Staged rollout rides this env kill-switch plus the
+ * per-call `canRunCode` authz (drive owner/admin), not a separate flag table —
+ * there is none. The sandbox factory is injected so the off-path never loads the
+ * DB module graph or constructs the Vercel client, and both branches are unit
+ * tested without real IO.
+ */
+export function buildPageSpaceTools({
+  codeExecutionEnabled = isCodeExecutionEnabled(),
+  sandboxToolsFactory = buildSandboxTools,
+}: {
+  codeExecutionEnabled?: boolean;
+  sandboxToolsFactory?: () => Record<string, Tool>;
+} = {}) {
+  if (!codeExecutionEnabled) return { ...baseTools };
+  return { ...baseTools, ...sandboxToolsFactory() };
+}
+
+export const pageSpaceTools = buildPageSpaceTools();
 
 export type PageSpaceTools = typeof pageSpaceTools;
 
