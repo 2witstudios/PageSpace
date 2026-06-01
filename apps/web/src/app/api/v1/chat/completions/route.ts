@@ -144,8 +144,8 @@ export async function POST(request: Request): Promise<Response> {
 
       await AIMonitoring.trackUsage({
         userId: authResult.userId,
-        provider: page.aiProvider ?? 'pagespace',
-        model: page.aiModel ?? 'unknown',
+        provider: providerResult.provider,
+        model: providerResult.modelName,
         inputTokens: totalUsage.inputTokens,
         outputTokens: totalUsage.outputTokens,
         duration: Date.now() - startTime,

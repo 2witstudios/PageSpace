@@ -248,6 +248,7 @@ export const AI_PRICING = {
   'glm-5': { input: 1.00, output: 3.20 },
   'glm-4.7': { input: 0.39, output: 1.90 },
   'glm-4.6': { input: 0.39, output: 1.90 },
+  'glm-4.5-air': { input: 0.35, output: 1.55 },
 
   // MiniMax Direct Models (Native)
   'MiniMax-M2.5': { input: 0.30, output: 1.20 },

@@ -132,6 +132,24 @@ describe('calculateCost', () => {
     expect(calculateCost('completely-unknown-model', 1_000_000, 1_000_000)).toBe(0);
   });
 
+  // Regression guard: every PageSpace-tier backend model must be priced. These are
+  // the resolved model ids that createAIProvider returns for the pagespace provider
+  // (standard -> glm-4.7, pro -> glm-5) plus the agent/chat default glm-4.5-air. If
+  // any of these is missing from AI_PRICING it meters at $0 and the platform eats the
+  // spend (see PR #1475 — glm-4.5-air was previously unpriced).
+  it.each(['glm-4.5-air', 'glm-4.7', 'glm-5'])(
+    'prices PageSpace-tier model "%s" above $0',
+    (model) => {
+      expect(calculateCost(model, 1_000_000, 1_000_000)).toBeGreaterThan(0);
+    }
+  );
+
+  it('prices glm-4.5-air at its published rate (0.35 in / 1.55 out per 1M)', () => {
+    expect(calculateCost('glm-4.5-air', 1_000_000, 1_000_000)).toBe(
+      Number((1.90).toFixed(6))
+    );
+  });
+
   it('should handle zero tokens', () => {
     expect(calculateCost('gpt-4o', 0, 0)).toBe(0);
   });

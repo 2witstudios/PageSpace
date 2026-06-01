@@ -9,6 +9,7 @@
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import {
   updatePersonalization,
   getCurrentPersonalization,
@@ -112,6 +113,19 @@ Reorganize this into a more concise version (target: under ${targetLength} chara
       ],
       temperature: 0.3,
       maxRetries: 2,
+    });
+
+    AIMonitoring.trackUsage({
+      userId,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      totalTokens: result.usage
+        ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
+        : undefined,
+      success: true,
+      metadata: { feature: 'memory_compaction', field: fieldName },
     });
 
     const compactedContent = result.text.trim();
