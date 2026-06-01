@@ -16,6 +16,7 @@ import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logActivity, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { stripe } from '@/lib/stripe/client';
 
 const patchBodySchema = z
@@ -82,19 +83,36 @@ export async function PATCH(req: Request) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
-    if (email !== undefined) {
-      const existingUser = await db.query.users.findFirst({
-        where: eq(users.email, email),
+    const normalizedEmail = email !== undefined ? email.toLowerCase().trim() : undefined;
+    let emailChanged = false;
+    if (normalizedEmail !== undefined) {
+      // Decide "changed" by comparing against the caller's CURRENT stored
+      // address (case-insensitively). Inferring it from a uniqueness miss is
+      // unsound: emails are not guaranteed lowercase at rest (OAuth stores the
+      // provider value verbatim), so a case-sensitive lookup would miss the
+      // user's own row and spuriously de-verify them on a no-op resubmit.
+      const current = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { email: true },
       });
+      emailChanged = (current?.email ?? '').toLowerCase() !== normalizedEmail;
 
-      if (existingUser && existingUser.id !== userId) {
-        return Response.json({ error: 'Email is already in use' }, { status: 400 });
+      if (emailChanged) {
+        const existingUser = await db.query.users.findFirst({
+          where: eq(users.email, normalizedEmail),
+        });
+        if (existingUser && existingUser.id !== userId) {
+          return Response.json({ error: 'Email is already in use' }, { status: 400 });
+        }
       }
     }
 
-    const updates: { name?: string; email?: string } = {};
+    const updates: { name?: string; email?: string; emailVerified?: Date | null } = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email.toLowerCase();
+    if (normalizedEmail !== undefined) updates.email = normalizedEmail;
+    // A new address must be re-verified — the old verification proved ownership
+    // of a different inbox. Verification is re-issued via the email below.
+    if (emailChanged) updates.emailVerified = null;
 
     const [updatedUser] = await db
       .update(users)
@@ -109,6 +127,24 @@ export async function PATCH(req: Request) {
 
     if (!updatedUser) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 });
+    }
+
+    // Send a verification email to the NEW address. Best-effort: a delivery
+    // failure must not fail the profile update — the user can resend from the
+    // account banner.
+    if (emailChanged) {
+      try {
+        await sendVerificationEmail({
+          userId,
+          email: updatedUser.email,
+          userName: updatedUser.name,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to send verification email after email change', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Log activity for audit trail (profile updates may be security-relevant)
