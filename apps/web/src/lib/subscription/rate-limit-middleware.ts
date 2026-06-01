@@ -98,8 +98,9 @@ export function requiresProSubscription(provider: string, model: string | undefi
   if (!isBillingEnabled()) return false;
   if (getProviderTier(provider, model) !== 'pro') return false;
 
-  // Allow access for 'pro' and 'business' tiers
-  return subscriptionTier !== 'pro' && subscriptionTier !== 'business';
+  // Prepaid credits model: premium models are gated only for the free tier; any
+  // paid tier (pro/founder/business) with credits can use them.
+  return !subscriptionTier || subscriptionTier === 'free';
 }
 
 /**
