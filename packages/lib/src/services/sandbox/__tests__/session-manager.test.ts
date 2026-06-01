@@ -197,6 +197,34 @@ describe('acquireConversationSandbox', () => {
     expect(calls.stop).toEqual(['sbx-new']);
   });
 
+  it('given the store lookup throwing (DB down), should fail closed and never provision', async () => {
+    const { store } = makeStore();
+    store.findBySessionKey = async () => {
+      throw new Error('db down');
+    };
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(calls.getOrCreate).toEqual([]);
+    expect(calls.get).toEqual([]);
+  });
+
+  it('given a fresh session whose lastActive touch fails, should still resume (touch is best-effort)', async () => {
+    const { store } = makeStore(seedRecord());
+    store.touch = async () => {
+      throw new Error('write failed');
+    };
+    const { client } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
+  });
+
   it('given an empty session secret, should deny without provisioning (fail closed)', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();

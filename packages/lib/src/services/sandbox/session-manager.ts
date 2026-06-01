@@ -90,6 +90,17 @@ async function safeStop(client: SandboxClient, sandboxId: string): Promise<void>
   }
 }
 
+// Update lastActiveAt best-effort: a failed metadata write must not deny an
+// already-authorized, confirmed-live resume — the worst case is an earlier idle
+// reclaim, never a lost session for the legitimate actor.
+async function safeTouch(store: SandboxSessionStore, sessionKey: string, now: Date): Promise<void> {
+  try {
+    await store.touch({ sessionKey, now });
+  } catch {
+    // Intentionally swallowed.
+  }
+}
+
 async function provisionFresh({
   key,
   input,
@@ -139,48 +150,56 @@ export async function acquireConversationSandbox(
   }
 
   const key = deriveSessionKey({ tenantId, driveId, conversationId, secret: deps.secret });
-  const existing = await deps.store.findBySessionKey(key);
-  const authorization = await deps.authorize({ userId, driveId, requestOrigin, agentPageId });
 
-  const plan = planSandboxLifecycle({
-    authorization,
-    existingSession: existing
-      ? { sandboxId: existing.sandboxId, lastActiveAt: existing.lastActiveAt }
-      : null,
-    now: deps.now(),
-    idleTimeoutMs,
-    intent: 'run',
-  });
+  // Fail closed on any unexpected IO error (store lookup/remove, client.get): a
+  // failure here means we cannot establish session state safely, so we deny
+  // rather than risk provisioning or leaking a handle.
+  try {
+    const existing = await deps.store.findBySessionKey(key);
+    const authorization = await deps.authorize({ userId, driveId, requestOrigin, agentPageId });
 
-  switch (plan.action) {
-    case 'deny':
-      return { ok: false, reason: plan.reason };
+    const plan = planSandboxLifecycle({
+      authorization,
+      existingSession: existing
+        ? { sandboxId: existing.sandboxId, lastActiveAt: existing.lastActiveAt }
+        : null,
+      now: deps.now(),
+      idleTimeoutMs,
+      intent: 'run',
+    });
 
-    case 'create':
-      return provisionFresh({ key, input });
+    switch (plan.action) {
+      case 'deny':
+        return { ok: false, reason: plan.reason };
 
-    case 'resume': {
-      const handle = await deps.client.get({ sandboxId: plan.sandboxId });
-      if (!handle) {
-        // The recorded sandbox is gone (platform-expired/crashed). Drop the stale
-        // link and provision a fresh one under the same conversation key.
-        await deps.store.remove(key);
-        return provisionFresh({ key, input });
+      case 'create':
+        return await provisionFresh({ key, input });
+
+      case 'resume': {
+        const handle = await deps.client.get({ sandboxId: plan.sandboxId });
+        if (!handle) {
+          // The recorded sandbox is gone (platform-expired/crashed). Drop the stale
+          // link and provision a fresh one under the same conversation key.
+          await deps.store.remove(key);
+          return await provisionFresh({ key, input });
+        }
+        await safeTouch(deps.store, key, deps.now());
+        return { ok: true, sandboxId: handle.sandboxId, resumed: true };
       }
-      await deps.store.touch({ sessionKey: key, now: deps.now() });
-      return { ok: true, sandboxId: handle.sandboxId, resumed: true };
-    }
 
-    case 'teardown': {
-      // Idle-expired: reclaim the stale VM and its link, then start fresh.
-      await safeStop(deps.client, plan.sandboxId);
-      await deps.store.remove(key);
-      return provisionFresh({ key, input });
-    }
+      case 'teardown': {
+        // Idle-expired: reclaim the stale VM and its link, then start fresh.
+        await safeStop(deps.client, plan.sandboxId);
+        await deps.store.remove(key);
+        return await provisionFresh({ key, input });
+      }
 
-    // 'noop' only arises for an 'end' intent, which acquire never issues.
-    default:
-      return { ok: false, reason: 'error' };
+      // 'noop' only arises for an 'end' intent, which acquire never issues.
+      default:
+        return { ok: false, reason: 'error' };
+    }
+  } catch {
+    return { ok: false, reason: 'error' };
   }
 }
 
