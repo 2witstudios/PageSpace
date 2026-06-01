@@ -45,6 +45,13 @@ export interface ChatLayoutProps {
   welcomeSubtitle?: string;
   /** Custom welcome icon */
   welcomeIcon?: React.ReactNode;
+  /**
+   * Render a custom welcome panel in place of the default title/subtitle.
+   * Only used while the layout is centered (no messages). When provided and
+   * it returns a truthy node, it replaces WelcomeContent and is given an
+   * interactive, wider container. The renderer manages its own layout.
+   */
+  renderWelcome?: (props: { isCentered: boolean }) => React.ReactNode;
   /** Edit message handler */
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   /** Delete message handler */
@@ -138,6 +145,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       welcomeTitle,
       welcomeSubtitle,
       welcomeIcon,
+      renderWelcome,
       onEdit,
       onDelete,
       onRetry,
@@ -175,6 +183,10 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
     const hasRemoteStreams = remoteStreams.length > 0;
     const inputPosition: InputPosition = hasMessages || isLoading || hasRemoteStreams ? 'docked' : 'centered';
     const isCentered = inputPosition === 'centered';
+
+    // Opt-in custom welcome (e.g. Drive Home). Only takes over when the render
+    // prop returns a truthy node — otherwise we fall back to WelcomeContent.
+    const customWelcome = renderWelcome?.({ isCentered });
 
     // Default input renderer (placeholder - will be replaced with ChatInput in Phase 3)
     const defaultInputContent = (
@@ -273,23 +285,41 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
         {/* Welcome content - only visible when centered */}
         <AnimatePresence>
           {isCentered && !isLoading && (
-            <motion.div
-              key="welcome"
-              initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
-            >
-              <div className="w-full max-w-[600px] px-6 -translate-y-48">
-                <WelcomeContent
-                  title={welcomeTitle}
-                  subtitle={welcomeSubtitle}
-                  icon={welcomeIcon}
-                  showIcon={false}
-                />
-              </div>
-            </motion.div>
+            customWelcome ? (
+              <motion.div
+                key="welcome-custom"
+                initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="absolute inset-0 flex items-start justify-center overflow-y-auto pointer-events-none z-20"
+              >
+                {/* pointer-events-auto only on the content so the gutter around
+                    the centered floating input stays clickable; pb-40 keeps
+                    cards clear of the input that floats up from the bottom. */}
+                <div className="w-full max-w-[760px] px-6 pt-16 pb-40 pointer-events-auto">
+                  {customWelcome}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="welcome"
+                initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
+              >
+                <div className="w-full max-w-[600px] px-6 -translate-y-48">
+                  <WelcomeContent
+                    title={welcomeTitle}
+                    subtitle={welcomeSubtitle}
+                    icon={welcomeIcon}
+                    showIcon={false}
+                  />
+                </div>
+              </motion.div>
+            )
           )}
         </AnimatePresence>
 

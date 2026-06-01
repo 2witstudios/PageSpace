@@ -81,6 +81,8 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { DriveHome } from '@/components/ai/chat/drive-home/DriveHome';
+import { useUIStore } from '@/stores/useUIStore';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useGlobalEffectiveStream } from './useGlobalEffectiveStream';
@@ -203,6 +205,9 @@ const GlobalAssistantView: React.FC = () => {
   // Get drives from store
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
+
+  // Quick-create palette (used by Drive Home's "New page…" action)
+  const openQuickCreate = useUIStore((state) => state.openQuickCreate);
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -729,6 +734,12 @@ const GlobalAssistantView: React.FC = () => {
     wrapSend,
   ]);
 
+  // Drive Home: place a starter prompt into the input for the user to finish.
+  const handleDraftPrompt = useCallback((text: string) => {
+    setInput(text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [setInput]);
+
   // Track last AI response for voice mode TTS.
   // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
   // messages are never spoken — only genuinely new responses trigger TTS.
@@ -893,6 +904,16 @@ const GlobalAssistantView: React.FC = () => {
             : locationContext?.currentDrive
             ? 'Ask about pages in this drive, or tell me what you\'re working on.'
             : 'Tell me what you\'re thinking about or working on.'
+        }
+        renderWelcome={({ isCentered }) =>
+          !selectedAgent && locationContext?.currentDrive && isCentered ? (
+            <DriveHome
+              drive={locationContext.currentDrive}
+              onPromptSelect={handleVoiceSend}
+              onPromptDraft={handleDraftPrompt}
+              onQuickCreate={() => openQuickCreate(null)}
+            />
+          ) : null
         }
         onEdit={handleEdit}
         onDelete={handleDelete}
