@@ -14,8 +14,13 @@
  *
  * A bare hash of the tuple would be namespaced but NOT unguessable — the inputs
  * are values the client already holds. We therefore key the digest with a
- * server-held secret (HMAC-SHA256): without the secret the name cannot be
- * derived from the public tuple, and the output never embeds the raw ids.
+ * server-held secret (HMAC): without the secret the name cannot be derived from
+ * the public tuple, and the output never embeds the raw ids.
+ *
+ * Digest is **SHA3-256**, matching the repo convention for security tokens hashed
+ * at rest (auth/token-utils.ts). HMAC adds the keying that token-utils omits —
+ * an opaque token is high-entropy and unguessable on its own, but this key's
+ * inputs are low-entropy, so the secret is what makes it unguessable.
  *
  * Pure by construction: the secret is injected (sourced from validated env by
  * the effect layer), so this function reads no globals and is trivially testable.
@@ -43,6 +48,6 @@ export function deriveSessionKey({
   secret,
 }: SessionKeyInput): string {
   const payload = [NAMESPACE_VERSION, tenantId, driveId, conversationId].join('\0');
-  const digest = createHmac('sha256', secret).update(payload).digest('hex');
+  const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-sbx-${digest}`;
 }
