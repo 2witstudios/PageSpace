@@ -47,7 +47,6 @@ function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
   return {
     getUserDrivePermissions: async () => adminPerms,
     getAgentAccessLevel: async () => agentEditPerms,
-    isCloud: () => true,
     isCodeExecutionEnabled: () => true,
     ...overrides,
   };
@@ -75,15 +74,6 @@ describe('canRunCode', () => {
       deps: makeDeps({ isCodeExecutionEnabled: () => false }),
     });
     expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
-  });
-
-  it('given a non-cloud deployment, should deny', async () => {
-    const result = await canRunCode({
-      userId: 'u1',
-      driveId: 'd1',
-      deps: makeDeps({ isCloud: () => false }),
-    });
-    expect(result).toEqual({ ok: false, reason: 'not_cloud' });
   });
 
   it('given a user with no drive membership, should deny', async () => {

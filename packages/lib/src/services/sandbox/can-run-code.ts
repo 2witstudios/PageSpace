@@ -2,25 +2,27 @@
  * Authorization gate for agent code execution.
  *
  * Code execution is the highest-risk surface in the product: the Vercel
- * microVM contains *escape*, but authorization, kill-switch, and deployment-mode
- * gating are entirely ours. `canRunCode` composes the existing drive-permission
- * helpers and is the single chokepoint every invocation must pass.
+ * microVM contains the risk of *escape*, but authorization, kill-switch, and
+ * quota gating are entirely ours. `canRunCode` composes the existing
+ * drive-permission helpers and is the single chokepoint every invocation must pass.
  *
  * Fail-closed by construction: it never throws — any error (including a DB
- * outage inside an injected dependency) resolves to a denial. The checks are
- * ordered cheapest-first (kill-switch, deployment mode) so a disabled feature
- * or non-cloud deployment denies before any database round-trip.
+ * outage inside an injected dependency) resolves to a denial. The kill-switch
+ * is checked first (cheap, no DB) so a disabled feature denies before any
+ * database round-trip.
+ *
+ * No deployment-mode gate: tenant is cloud (isolated image per tenant) and we
+ * do not serve on-prem (a local execution path is future work, not wired here),
+ * so gating on DEPLOYMENT_MODE / isOnPrem would only add a dead branch.
  *
  * `enabledTools` (agent config) is NOT a security boundary — this is.
  */
 
-import { isCloud } from '../../deployment-mode';
 import { getValidatedEnv } from '../../config/env-validation';
 import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/permissions';
 
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
-  | 'not_cloud'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -43,7 +45,6 @@ export interface CanRunCodeDeps {
     agentPageId: string,
     targetPageId: string,
   ) => Promise<PermissionLevel | null>;
-  isCloud: () => boolean;
   isCodeExecutionEnabled: () => boolean;
 }
 
@@ -78,7 +79,6 @@ const defaultDeps: CanRunCodeDeps = {
     import('../../permissions/agent-permissions').then((m) =>
       m.getAgentAccessLevel(agentPageId, targetPageId),
     ),
-  isCloud,
   isCodeExecutionEnabled,
 };
 
@@ -118,7 +118,6 @@ export async function canRunCode({
 }: CanRunCodeInput): Promise<CanRunCodeResult> {
   try {
     if (!deps.isCodeExecutionEnabled()) return deny('kill_switch_off');
-    if (!deps.isCloud()) return deny('not_cloud');
 
     return requestOrigin === 'agent'
       ? await authorizeAgent(agentPageId, driveId, deps)
