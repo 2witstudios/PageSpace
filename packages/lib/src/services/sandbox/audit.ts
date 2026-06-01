@@ -98,8 +98,11 @@ export function buildAuditRecord({
   aiProvider,
   aiModel,
 }: CodeExecutionAuditInput): CodeExecutionAuditRecord {
-  const redacted = redactSecrets(code);
-  const codeTruncated = redacted.length > MAX_AUDITED_CODE_LENGTH;
+  // Truncate the raw code to the cap BEFORE redacting, so the redaction regexes
+  // only ever run over a bounded input (no ReDoS surface on large submissions).
+  // codeTruncated reflects the raw length the agent submitted.
+  const codeTruncated = code.length > MAX_AUDITED_CODE_LENGTH;
+  const bounded = codeTruncated ? code.slice(0, MAX_AUDITED_CODE_LENGTH) : code;
 
   return {
     userId,
@@ -110,7 +113,7 @@ export function buildAuditRecord({
     requestOrigin,
     agentPageId,
     profile,
-    code: codeTruncated ? redacted.slice(0, MAX_AUDITED_CODE_LENGTH) : redacted,
+    code: redactSecrets(bounded),
     codeTruncated,
     exitCode,
     durationMs,
