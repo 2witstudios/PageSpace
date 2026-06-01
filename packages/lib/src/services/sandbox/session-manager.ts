@@ -13,8 +13,8 @@
  *    denial returns no handle, and the warm sandbox is never reconnected.
  *  - **Guaranteed teardown / no orphans**: if the link cannot be persisted after
  *    a create, the just-created sandbox is stopped; `teardownConversationSandbox`
- *    always attempts the stop and always removes the link, swallowing stop
- *    errors so cleanup never throws.
+ *    guards its lookup and runs the VM stop and link removal best-effort, so
+ *    cleanup never throws and leaves no orphaned sandbox behind.
  */
 
 import { getValidatedEnv } from '../../config/env-validation';
@@ -23,7 +23,7 @@ import type { ExecutionPolicy } from './execution-policy';
 import { mapPolicyToSandboxOptions, type SandboxCreateOptions } from './sandbox-options';
 import { deriveSessionKey } from './session-key';
 import { planSandboxLifecycle, type TeardownReason } from './lifecycle';
-import type { SandboxSessionStore } from './session-store';
+import type { SandboxSessionStore, SandboxSessionRecord } from './session-store';
 
 /** Minimal sandbox handle the lifecycle needs; PR3's client returns the full one. */
 export interface SandboxHandle {
@@ -230,8 +230,10 @@ export interface TeardownSandboxInput {
 
 /**
  * Tear down a conversation's sandbox on session end / idle / crash / failure.
- * Idempotent and never throws: the VM stop is best-effort and the link is always
- * removed, so no orphaned sandbox or dangling link survives.
+ * Idempotent and never throws: the lookup is guarded and the VM stop + link
+ * removal are best-effort, so a store or stop failure during cleanup never
+ * propagates. A lingering link after a failed removal is self-correcting (the
+ * next acquire reconnects to a stopped VM and re-provisions under the same key).
  */
 export async function teardownConversationSandbox({
   tenantId,
@@ -248,7 +250,7 @@ export async function teardownConversationSandbox({
   // The lookup is the only throwing IO before we know there is anything to tear
   // down. If the store is unavailable we cannot proceed, but cleanup must never
   // propagate — report not-torn rather than throwing out of an end/crash path.
-  let existing;
+  let existing: SandboxSessionRecord | null;
   try {
     existing = await deps.store.findBySessionKey(key);
   } catch {
