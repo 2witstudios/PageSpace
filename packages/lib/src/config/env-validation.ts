@@ -61,6 +61,11 @@ export const serverEnvSchema = z
     REALTIME_BROADCAST_SECRET: z.string().min(1).optional(),
     CRON_SECRET: z.string().min(1).optional(),
     COOKIE_DOMAIN: z.string().min(1).optional(),
+
+    // Agent code execution global kill-switch (default OFF). Accept any string so
+    // a stray value (e.g. CODE_EXECUTION_ENABLED=0) never fails app-wide env
+    // validation; isCodeExecutionEnabled() enables only on the exact value 'true'.
+    CODE_EXECUTION_ENABLED: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY

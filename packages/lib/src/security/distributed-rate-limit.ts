@@ -582,6 +582,16 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
+  // Agent code execution daily run budget. Applied per scoped identifier
+  // (user / drive / tenant) so one actor cannot exhaust another's allowance.
+  // The hard cost ceiling is Vercel account-level Spend Management; this is our
+  // app-level run-count control that complements per-tier concurrency limits.
+  CODE_EXECUTION: {
+    maxAttempts: 100,
+    windowMs: 24 * 60 * 60 * 1000,
+    blockDurationMs: 24 * 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================
