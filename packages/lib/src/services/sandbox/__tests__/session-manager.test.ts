@@ -263,6 +263,36 @@ describe('teardownConversationSandbox', () => {
     expect(calls.stop).toEqual([]);
   });
 
+  it('given the store lookup throwing (DB down), should not throw and report not torn', async () => {
+    const { store } = makeStore(seedRecord());
+    store.findBySessionKey = async () => {
+      throw new Error('db down');
+    };
+    const { client, calls } = makeClient();
+    const result = await teardownConversationSandbox({
+      ...namespacing,
+      reason: 'crash',
+      deps: { store, client, secret: SECRET },
+    });
+    expect(result).toEqual({ torn: false });
+    expect(calls.stop).toEqual([]);
+  });
+
+  it('given the link removal throwing after a successful stop, should not throw and still report torn', async () => {
+    const { store } = makeStore(seedRecord());
+    store.remove = async () => {
+      throw new Error('db down');
+    };
+    const { client, calls } = makeClient();
+    const result = await teardownConversationSandbox({
+      ...namespacing,
+      reason: 'failure',
+      deps: { store, client, secret: SECRET },
+    });
+    expect(result).toEqual({ torn: true });
+    expect(calls.stop).toEqual(['sbx-existing']);
+  });
+
   it('given the VM stop throwing, should still remove the link and not throw (guaranteed teardown)', async () => {
     const { store, calls: storeCalls } = makeStore(seedRecord());
     const { client } = makeClient({

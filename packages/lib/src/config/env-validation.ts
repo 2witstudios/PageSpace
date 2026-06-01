@@ -68,11 +68,12 @@ export const serverEnvSchema = z
     CODE_EXECUTION_ENABLED: z.string().optional(),
 
     // Server-held secret keying the sandbox session-key HMAC (see
-    // services/sandbox/session-key.ts). Optional like OAUTH_STATE_SECRET, but a
-    // configured value must be >= 32 chars; the lifecycle layer fails closed
-    // (denies execution) when it is absent or empty, so a short/missing value
-    // disables sandbox acquisition rather than failing app-wide validation.
-    SANDBOX_SESSION_SECRET: z.string().min(32).optional(),
+    // services/sandbox/session-key.ts). A configured value must be >= 32 chars,
+    // but a blank placeholder (SANDBOX_SESSION_SECRET=) is accepted — mirroring
+    // the URL vars' `.or(z.literal(''))` — so an empty value disables sandbox
+    // acquisition (the lifecycle layer fails closed) rather than failing
+    // app-wide env validation at startup.
+    SANDBOX_SESSION_SECRET: z.string().min(32).optional().or(z.literal('')),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY

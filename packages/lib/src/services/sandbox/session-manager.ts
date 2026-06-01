@@ -90,6 +90,17 @@ async function safeStop(client: SandboxClient, sandboxId: string): Promise<void>
   }
 }
 
+// Remove the link best-effort during teardown: a failed delete must not surface
+// from cleanup. A lingering row is self-correcting — the next acquire reconnects
+// to a stopped VM (get → null) and upserts a fresh sandbox under the same key.
+async function safeRemove(store: SandboxSessionStore, sessionKey: string): Promise<void> {
+  try {
+    await store.remove(sessionKey);
+  } catch {
+    // Intentionally swallowed: cleanup is best-effort and must not surface.
+  }
+}
+
 // Update lastActiveAt best-effort: a failed metadata write must not deny an
 // already-authorized, confirmed-live resume — the worst case is an earlier idle
 // reclaim, never a lost session for the legitimate actor.
@@ -233,12 +244,21 @@ export async function teardownConversationSandbox({
   }
 
   const key = deriveSessionKey({ tenantId, driveId, conversationId, secret: deps.secret });
-  const existing = await deps.store.findBySessionKey(key);
+
+  // The lookup is the only throwing IO before we know there is anything to tear
+  // down. If the store is unavailable we cannot proceed, but cleanup must never
+  // propagate — report not-torn rather than throwing out of an end/crash path.
+  let existing;
+  try {
+    existing = await deps.store.findBySessionKey(key);
+  } catch {
+    return { torn: false };
+  }
   if (!existing) {
     return { torn: false };
   }
 
   await safeStop(deps.client, existing.sandboxId);
-  await deps.store.remove(key);
+  await safeRemove(deps.store, key);
   return { torn: true };
 }
