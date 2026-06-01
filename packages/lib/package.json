@@ -192,6 +192,31 @@
       "import": "./dist/services/sandbox/audit.js",
       "require": "./dist/services/sandbox/audit.js"
     },
+    "./services/sandbox/session-key": {
+      "types": "./dist/services/sandbox/session-key.d.ts",
+      "import": "./dist/services/sandbox/session-key.js",
+      "require": "./dist/services/sandbox/session-key.js"
+    },
+    "./services/sandbox/lifecycle": {
+      "types": "./dist/services/sandbox/lifecycle.d.ts",
+      "import": "./dist/services/sandbox/lifecycle.js",
+      "require": "./dist/services/sandbox/lifecycle.js"
+    },
+    "./services/sandbox/sandbox-options": {
+      "types": "./dist/services/sandbox/sandbox-options.d.ts",
+      "import": "./dist/services/sandbox/sandbox-options.js",
+      "require": "./dist/services/sandbox/sandbox-options.js"
+    },
+    "./services/sandbox/session-store": {
+      "types": "./dist/services/sandbox/session-store.d.ts",
+      "import": "./dist/services/sandbox/session-store.js",
+      "require": "./dist/services/sandbox/session-store.js"
+    },
+    "./services/sandbox/session-manager": {
+      "types": "./dist/services/sandbox/session-manager.d.ts",
+      "import": "./dist/services/sandbox/session-manager.js",
+      "require": "./dist/services/sandbox/session-manager.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
@@ -839,6 +864,21 @@
       ],
       "services/sandbox/audit": [
         "./dist/services/sandbox/audit.d.ts"
+      ],
+      "services/sandbox/session-key": [
+        "./dist/services/sandbox/session-key.d.ts"
+      ],
+      "services/sandbox/lifecycle": [
+        "./dist/services/sandbox/lifecycle.d.ts"
+      ],
+      "services/sandbox/sandbox-options": [
+        "./dist/services/sandbox/sandbox-options.d.ts"
+      ],
+      "services/sandbox/session-store": [
+        "./dist/services/sandbox/session-store.d.ts"
+      ],
+      "services/sandbox/session-manager": [
+        "./dist/services/sandbox/session-manager.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"

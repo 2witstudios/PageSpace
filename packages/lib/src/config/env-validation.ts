@@ -66,6 +66,13 @@ export const serverEnvSchema = z
     // a stray value (e.g. CODE_EXECUTION_ENABLED=0) never fails app-wide env
     // validation; isCodeExecutionEnabled() enables only on the exact value 'true'.
     CODE_EXECUTION_ENABLED: z.string().optional(),
+
+    // Server-held secret keying the sandbox session-key HMAC (see
+    // services/sandbox/session-key.ts). Optional like OAUTH_STATE_SECRET, but a
+    // configured value must be >= 32 chars; the lifecycle layer fails closed
+    // (denies execution) when it is absent or empty, so a short/missing value
+    // disables sandbox acquisition rather than failing app-wide validation.
+    SANDBOX_SESSION_SECRET: z.string().min(32).optional(),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY
