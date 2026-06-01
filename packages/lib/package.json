@@ -217,6 +217,36 @@
       "import": "./dist/services/sandbox/session-manager.js",
       "require": "./dist/services/sandbox/session-manager.js"
     },
+    "./services/sandbox/command-policy": {
+      "types": "./dist/services/sandbox/command-policy.d.ts",
+      "import": "./dist/services/sandbox/command-policy.js",
+      "require": "./dist/services/sandbox/command-policy.js"
+    },
+    "./services/sandbox/output-limit": {
+      "types": "./dist/services/sandbox/output-limit.d.ts",
+      "import": "./dist/services/sandbox/output-limit.js",
+      "require": "./dist/services/sandbox/output-limit.js"
+    },
+    "./services/sandbox/egress": {
+      "types": "./dist/services/sandbox/egress.d.ts",
+      "import": "./dist/services/sandbox/egress.js",
+      "require": "./dist/services/sandbox/egress.js"
+    },
+    "./services/sandbox/sandbox-paths": {
+      "types": "./dist/services/sandbox/sandbox-paths.d.ts",
+      "import": "./dist/services/sandbox/sandbox-paths.js",
+      "require": "./dist/services/sandbox/sandbox-paths.js"
+    },
+    "./services/sandbox/vercel-sandbox-client": {
+      "types": "./dist/services/sandbox/vercel-sandbox-client.d.ts",
+      "import": "./dist/services/sandbox/vercel-sandbox-client.js",
+      "require": "./dist/services/sandbox/vercel-sandbox-client.js"
+    },
+    "./services/sandbox/tool-runners": {
+      "types": "./dist/services/sandbox/tool-runners.d.ts",
+      "import": "./dist/services/sandbox/tool-runners.js",
+      "require": "./dist/services/sandbox/tool-runners.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
@@ -1213,6 +1243,7 @@
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "@simplewebauthn/server": "^13.2.2",
+    "@vercel/sandbox": "^2.1.0",
     "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.32.2",
