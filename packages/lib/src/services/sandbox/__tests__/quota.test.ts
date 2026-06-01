@@ -9,16 +9,15 @@ import {
   type CodeExecutionQuotaDeps,
 } from '../quota';
 
-const allowAll: CodeExecutionQuotaDeps['checkRateLimit'] = async () => ({
-  allowed: true,
-  attemptsRemaining: 99,
+const allowAll: CodeExecutionQuotaDeps['checkRateLimitStatus'] = async () => ({
+  blocked: false,
 });
 
 function makeDeps(
   overrides: Partial<CodeExecutionQuotaDeps> = {},
 ): CodeExecutionQuotaDeps {
   return {
-    checkRateLimit: allowAll,
+    checkRateLimitStatus: allowAll,
     canAcquireSlot: () => true,
     ...overrides,
   };
@@ -84,10 +83,10 @@ describe('checkCodeExecutionQuota', () => {
       driveId: 'd1',
       tier: 'pro',
       deps: makeDeps({
-        checkRateLimit: async (id: string) =>
+        checkRateLimitStatus: async (id: string) =>
           id.includes('user:u1')
-            ? { allowed: false, retryAfter: 3600, attemptsRemaining: 0 }
-            : { allowed: true, attemptsRemaining: 99 },
+            ? { blocked: true, retryAfter: 3600 }
+            : { blocked: false },
       }),
     });
     expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 3600 });
@@ -99,10 +98,10 @@ describe('checkCodeExecutionQuota', () => {
       driveId: 'd1',
       tier: 'pro',
       deps: makeDeps({
-        checkRateLimit: async (id: string) =>
+        checkRateLimitStatus: async (id: string) =>
           id.includes('drive:d1')
-            ? { allowed: false, retryAfter: 60, attemptsRemaining: 0 }
-            : { allowed: true, attemptsRemaining: 99 },
+            ? { blocked: true, retryAfter: 60 }
+            : { blocked: false },
       }),
     });
     expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 60 });
@@ -115,29 +114,29 @@ describe('checkCodeExecutionQuota', () => {
       tenantId: 't1',
       tier: 'pro',
       deps: makeDeps({
-        checkRateLimit: async (id: string) =>
+        checkRateLimitStatus: async (id: string) =>
           id.includes('tenant:t1')
-            ? { allowed: false, retryAfter: 120, attemptsRemaining: 0 }
-            : { allowed: true, attemptsRemaining: 99 },
+            ? { blocked: true, retryAfter: 120 }
+            : { blocked: false },
       }),
     });
     expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 120 });
   });
 
-  it('should check concurrency before spending budget so a full system never burns quota', async () => {
-    let rateLimitCalls = 0;
+  it('should check concurrency before reading budget so a full system never queries quota', async () => {
+    let statusCalls = 0;
     await checkCodeExecutionQuota({
       userId: 'u1',
       driveId: 'd1',
       tier: 'pro',
       deps: makeDeps({
         canAcquireSlot: () => false,
-        checkRateLimit: async () => {
-          rateLimitCalls += 1;
-          return { allowed: true, attemptsRemaining: 99 };
+        checkRateLimitStatus: async () => {
+          statusCalls += 1;
+          return { blocked: false };
         },
       }),
     });
-    expect(rateLimitCalls).toBe(0);
+    expect(statusCalls).toBe(0);
   });
 });

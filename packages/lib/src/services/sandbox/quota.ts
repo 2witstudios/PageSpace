@@ -7,15 +7,23 @@
  *
  *  - Concurrency: an in-process per-user semaphore whose ceiling scales by
  *    subscription tier (mirrors `upload-semaphore.ts`, expressed functionally).
- *  - Daily budget: `checkDistributedRateLimit` against the `CODE_EXECUTION`
- *    config, applied independently to the user, drive, and tenant identifiers
- *    so exhausting one scope never drains another's allowance.
+ *  - Daily budget: a NON-incrementing read of the `CODE_EXECUTION` sliding
+ *    window (`getDistributedRateLimitStatus`) for the user, drive, and tenant
+ *    identifiers independently, so checking one scope never charges another.
  *
- * `checkCodeExecutionQuota` checks concurrency first (free, in-process) so a
- * saturated system rejects without spending any of the daily budget.
+ * `checkCodeExecutionQuota` is an ADVISORY preflight: it reports whether a run
+ * would be allowed without consuming anything. It must not increment the
+ * budget, because checking multiple scopes in sequence would otherwise charge
+ * the earlier scopes even when a later one denies — letting an exhausted drive
+ * drain a user's allowance in unrelated drives. The single real charge per run
+ * (one increment per scope via `checkDistributedRateLimit`) and the matching
+ * `acquireCodeExecutionSlot()` are wired at execution time in PR3; that caller
+ * must treat a passing preflight as advisory and handle `acquire === false`.
+ *
+ * Concurrency is checked first (free, in-process) so a saturated system rejects
+ * without even reading the budget.
  */
 
-import type { RateLimitResult } from '../../security/distributed-rate-limit';
 import type { SubscriptionTier } from '../subscription-utils';
 
 // Concurrent runs permitted per user, by subscription tier. Per-process: each
@@ -76,19 +84,20 @@ export type CodeExecutionQuotaDecision =
   | { allowed: false; reason: QuotaDenialReason; retryAfter?: number };
 
 export interface CodeExecutionQuotaDeps {
-  /** Check the daily budget for one scoped identifier. Config binding (the
-   *  CODE_EXECUTION window) is the dependency's concern, not the caller's. */
-  checkRateLimit: (id: string) => Promise<RateLimitResult>;
+  /** Read (do NOT increment) the daily budget for one scoped identifier. Config
+   *  binding (the CODE_EXECUTION window) is the dependency's concern. */
+  checkRateLimitStatus: (id: string) => Promise<{ blocked: boolean; retryAfter?: number }>;
   canAcquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
 }
 
-// checkDistributedRateLimit pulls in the database; import it (and the
+// getDistributedRateLimitStatus pulls in the database; import it (and the
 // CODE_EXECUTION config) lazily so the unit tests, which inject a fake, never
-// load the DB module graph.
+// load the DB module graph. Status is the read-only sibling of
+// checkDistributedRateLimit — it does not consume the window.
 const defaultDeps: CodeExecutionQuotaDeps = {
-  checkRateLimit: (id) =>
+  checkRateLimitStatus: (id) =>
     import('../../security/distributed-rate-limit').then((m) =>
-      m.checkDistributedRateLimit(id, m.DISTRIBUTED_RATE_LIMITS.CODE_EXECUTION),
+      m.getDistributedRateLimitStatus(id, m.DISTRIBUTED_RATE_LIMITS.CODE_EXECUTION),
     ),
   canAcquireSlot: canAcquireCodeExecutionSlot,
 };
@@ -119,9 +128,9 @@ export async function checkCodeExecutionQuota({
   ];
 
   for (const id of scopeIds) {
-    const result = await deps.checkRateLimit(id);
-    if (!result.allowed) {
-      return { allowed: false, reason: 'rate_limited', retryAfter: result.retryAfter };
+    const status = await deps.checkRateLimitStatus(id);
+    if (status.blocked) {
+      return { allowed: false, reason: 'rate_limited', retryAfter: status.retryAfter };
     }
   }
 
