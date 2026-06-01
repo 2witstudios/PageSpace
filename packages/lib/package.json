@@ -177,6 +177,11 @@
       "import": "./dist/services/sandbox/execution-policy.js",
       "require": "./dist/services/sandbox/execution-policy.js"
     },
+    "./services/sandbox/sandbox-env": {
+      "types": "./dist/services/sandbox/sandbox-env.d.ts",
+      "import": "./dist/services/sandbox/sandbox-env.js",
+      "require": "./dist/services/sandbox/sandbox-env.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
@@ -815,6 +820,9 @@
       ],
       "services/sandbox/execution-policy": [
         "./dist/services/sandbox/execution-policy.d.ts"
+      ],
+      "services/sandbox/sandbox-env": [
+        "./dist/services/sandbox/sandbox-env.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
