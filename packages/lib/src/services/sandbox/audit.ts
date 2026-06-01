@@ -62,16 +62,30 @@ export interface CodeExecutionAuditRecord {
   aiModel?: string;
 }
 
+/** Cap on the code stored in the audit record. */
 const MAX_AUDITED_CODE_LENGTH = 4000;
+/**
+ * Redact over a window larger than the storage cap, then truncate. A secret
+ * that begins before the cap but extends past it is fully seen (and collapsed)
+ * here before truncation — otherwise a cut-off closing quote would defeat
+ * SECRET_ASSIGNMENT and leak a prefix into the immutable log. The window also
+ * bounds the regex input so scanning stays cheap.
+ */
+const REDACTION_SCAN_LIMIT = 16_000;
 const REDACTED = '***REDACTED***';
 
+// Best-effort redaction — audit hygiene / defense-in-depth, NOT the security
+// boundary (buildSandboxEnv is). It will miss exotic secret shapes; that is
+// acceptable because the captured code is already untrusted log data.
+//
 // Secret-bearing assignments: `API_KEY = "..."`, `token: '...'`, `password=...`.
 const SECRET_ASSIGNMENT =
   /\b([A-Za-z0-9_-]*(?:key|secret|token|password|passwd|pwd|auth)[A-Za-z0-9_-]*)\b(\s*[:=]\s*)(['"]?)[^\s'"]+\3/gi;
 // `Authorization: Bearer <token>`.
 const BEARER_TOKEN = /\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{8,}/g;
-// Standalone high-entropy tokens (provider key prefixes, long hex/base64).
-const STANDALONE_TOKEN = /\b[A-Za-z0-9_-]*[A-Za-z0-9][A-Za-z0-9_-]{23,}\b/g;
+// Standalone high-entropy tokens (provider key prefixes, long hex/base64). Kept
+// as a single non-ambiguous run so matching stays linear over the scan window.
+const STANDALONE_TOKEN = /\b[A-Za-z0-9_]{24,}\b/g;
 
 function redactSecrets(code: string): string {
   return code
@@ -98,11 +112,20 @@ export function buildAuditRecord({
   aiProvider,
   aiModel,
 }: CodeExecutionAuditInput): CodeExecutionAuditRecord {
-  // Truncate the raw code to the cap BEFORE redacting, so the redaction regexes
-  // only ever run over a bounded input (no ReDoS surface on large submissions).
-  // codeTruncated reflects the raw length the agent submitted.
-  const codeTruncated = code.length > MAX_AUDITED_CODE_LENGTH;
-  const bounded = codeTruncated ? code.slice(0, MAX_AUDITED_CODE_LENGTH) : code;
+  // Redact over a window wider than the storage cap, then truncate the redacted
+  // result. This collapses any secret that straddles the cap before it can be
+  // cut mid-token, while keeping the regex input bounded.
+  const scanned =
+    code.length > REDACTION_SCAN_LIMIT ? code.slice(0, REDACTION_SCAN_LIMIT) : code;
+  const redacted = redactSecrets(scanned);
+  // Truncated whenever content is actually dropped: the redacted form exceeds
+  // the cap, or the raw code ran past the scan window (its tail was never seen).
+  const codeTruncated =
+    redacted.length > MAX_AUDITED_CODE_LENGTH || code.length > REDACTION_SCAN_LIMIT;
+  const auditedCode =
+    redacted.length > MAX_AUDITED_CODE_LENGTH
+      ? redacted.slice(0, MAX_AUDITED_CODE_LENGTH)
+      : redacted;
 
   return {
     userId,
@@ -113,7 +136,7 @@ export function buildAuditRecord({
     requestOrigin,
     agentPageId,
     profile,
-    code: redactSecrets(bounded),
+    code: auditedCode,
     codeTruncated,
     exitCode,
     durationMs,
@@ -135,6 +158,8 @@ export function buildActivityLogInput(record: CodeExecutionAuditRecord): Activit
     driveId: record.driveId,
     actorEmail: record.actorEmail,
     actorDisplayName: record.actorDisplayName,
+    // Invariant: sandbox code is always model-generated, regardless of whether a
+    // user or another agent triggered the run — so this is unconditionally true.
     isAiGenerated: true,
     aiProvider: record.aiProvider,
     aiModel: record.aiModel,

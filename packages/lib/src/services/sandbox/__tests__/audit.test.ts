@@ -64,7 +64,23 @@ describe('buildAuditRecord', () => {
   it('should truncate over-long code and flag that it was truncated', () => {
     const record = buildAuditRecord({ ...baseInput, code: 'a();\n'.repeat(2000) });
     expect(record.codeTruncated).toBe(true);
+    // Loose bound (cap is 4000): redaction can expand a short match to the
+    // 14-char ***REDACTED*** marker, so we only assert it shrank well below input.
     expect(record.code.length).toBeLessThan(10_000);
+  });
+
+  it('should still redact a secret assignment that straddles the truncation cap', () => {
+    // Push a quoted secret assignment so it begins just before the 4 KB cap and
+    // its closing quote falls past it — the case that leaked when truncation
+    // happened before redaction.
+    const secret = 'straddlingsecretvalue0123456789abcdef';
+    // 4000 chars of non-collapsing code pushes the assignment to the cap boundary.
+    const record = buildAuditRecord({
+      ...baseInput,
+      code: `${'a();\n'.repeat(800)}const SECRET_TOKEN = "${secret}"\n`,
+    });
+    expect(record.code).not.toContain(secret);
+    expect(record.codeTruncated).toBe(true);
   });
 
   it('should not flag short code as truncated', () => {
