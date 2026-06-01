@@ -603,52 +603,60 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     const cost = calculateCost(data.model, inputTokens, outputTokens);
     const success = data.success !== false;
 
-    // Fire and forget - don't await. On a successful, persisted call, debit the
+    // Persist the usage log, then (on a successful, persisted call) debit the
     // user's prepaid credit balance (cost × markup); failed calls are not billed.
-    writeAiUsage({
-      userId: data.userId,
-      provider: data.provider,
-      model: data.model,
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      cost,
-      duration: data.duration,
-      conversationId: data.conversationId,
-      messageId: data.messageId,
-      pageId: data.pageId,
-      driveId: data.driveId,
-      success,
-      error: data.error,
+    //
+    // AWAITED, not fire-and-forget: callers reach this from a stream onFinish or
+    // a post-response handler and `await` trackAIUsage. A detached promise can be
+    // dropped when a serverless function freezes/returns, losing BOTH the usage
+    // log AND the charge — and with no aiUsageLogs row the reconcile cron's orphan
+    // sweep has nothing to recover from. Awaiting makes the write durable before
+    // the request returns. Still never throws into the AI request (see catch).
+    try {
+      const aiUsageLogId = await writeAiUsage({
+        userId: data.userId,
+        provider: data.provider,
+        model: data.model,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        cost,
+        duration: data.duration,
+        conversationId: data.conversationId,
+        messageId: data.messageId,
+        pageId: data.pageId,
+        driveId: data.driveId,
+        success,
+        error: data.error,
 
-      // Context tracking
-      contextMessages: data.contextMessages,
-      contextSize: data.contextSize,
-      systemPromptTokens: data.systemPromptTokens,
-      toolDefinitionTokens: data.toolDefinitionTokens,
-      conversationTokens: data.conversationTokens,
-      messageCount: data.messageCount,
-      wasTruncated: data.wasTruncated,
-      truncationStrategy: data.truncationStrategy,
+        // Context tracking
+        contextMessages: data.contextMessages,
+        contextSize: data.contextSize,
+        systemPromptTokens: data.systemPromptTokens,
+        toolDefinitionTokens: data.toolDefinitionTokens,
+        conversationTokens: data.conversationTokens,
+        messageCount: data.messageCount,
+        wasTruncated: data.wasTruncated,
+        truncationStrategy: data.truncationStrategy,
 
-      metadata: {
-        ...data.metadata,
-        streamingDuration: data.streamingDuration,
-      },
-    }).then((aiUsageLogId) => {
+        metadata: {
+          ...data.metadata,
+          streamingDuration: data.streamingDuration,
+        },
+      });
       if (aiUsageLogId && success) {
-        void consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost })
+        await consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost })
           .catch((error) => {
             loggers.ai.debug('credit consume failed', { error: (error as Error).message });
           });
       }
-    }).catch((error) => {
+    } catch (error) {
       loggers.ai.debug('AI usage tracking failed', {
         error: (error as Error).message,
         model: data.model,
         provider: data.provider
       });
-    });
+    }
   } catch (error) {
     loggers.ai.debug('AI usage calculation failed', { 
       error: (error as Error).message 

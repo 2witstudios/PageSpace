@@ -5,6 +5,7 @@ const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockDb = vi.hoisted(() => ({
   insert: vi.fn(),
   transaction: vi.fn(),
+  update: vi.fn(),
 }));
 const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 
@@ -102,6 +103,22 @@ describe('consumeCredits', () => {
 
     // Neither the balance nor the ledger is updated -> the row stays 'pending'.
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('settles a zero-charge call (free model / tool-only log) as skipped, without opening the balance transaction', async () => {
+    // cost 0 -> markupCents 0 -> nothing to draw down. The claim row is still
+    // written (idempotency/orphan-sweep marker) but we must NOT take the balance
+    // row lock or run a $0 decrement for it.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero' }]));
+    let ledgerSet: Record<string, unknown> | undefined;
+    const where = vi.fn().mockResolvedValue(undefined);
+    mockDb.update.mockReturnValue({ set: (v: Record<string, unknown>) => { ledgerSet = v; return { where }; } });
+
+    await consumeCredits({ aiUsageLogId: 'aul_free', userId: 'u1', costDollars: 0 });
+
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(ledgerSet).toEqual({ consumeStatus: 'skipped' });
   });
 
   it('skips an invalid cost (negative or non-finite) without claiming a ledger row', async () => {

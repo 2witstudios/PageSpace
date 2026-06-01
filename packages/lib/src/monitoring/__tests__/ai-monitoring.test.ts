@@ -222,6 +222,29 @@ describe('trackAIUsage', () => {
     expect(arg.costDollars).toBeGreaterThan(0);
   });
 
+  it('awaits persistence before returning so the write/charge cannot be dropped on a serverless freeze', async () => {
+    // Durability: trackAIUsage must not return until writeAiUsage AND the consume
+    // have settled. We resolve writeAiUsage on a later microtask and assert that,
+    // by the time the awaited trackAIUsage resolves, consumeCredits already ran —
+    // WITHOUT any post-call setTimeout flush. A fire-and-forget chain would fail this.
+    let resolveWrite!: (id: string) => void;
+    mockWriteAiUsage.mockReturnValueOnce(new Promise<string>((res) => { resolveWrite = res; }));
+    const tracked = trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(mockConsumeCredits).not.toHaveBeenCalled(); // write hasn't resolved yet
+    resolveWrite('aul_durable');
+    await tracked;
+    // No setTimeout(0) flush here — if trackAIUsage were fire-and-forget this would be empty.
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_durable', userId: 'user-1' }),
+    );
+  });
+
   it('does not debit credits when the call failed (success=false)', async () => {
     mockWriteAiUsage.mockResolvedValueOnce('aul_43');
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
