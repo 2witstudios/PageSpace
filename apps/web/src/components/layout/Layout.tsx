@@ -160,6 +160,15 @@ function Layout({ children }: LayoutProps) {
     }
   }, [isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
+  // Reset the transient desktop overlay when the layout is no longer in left-overlay
+  // mode (persistent >=1280px, or sheet mode), so re-entering overlay width always
+  // starts closed — matching first-load behavior and the sheet reset above.
+  useEffect(() => {
+    if ((!shouldOverlayLeftSidebar || isSheetBreakpoint) && leftOverlayOpen) {
+      setLeftOverlayOpen(false);
+    }
+  }, [shouldOverlayLeftSidebar, isSheetBreakpoint, leftOverlayOpen, setLeftOverlayOpen]);
+
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
