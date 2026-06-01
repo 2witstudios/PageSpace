@@ -225,6 +225,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
   getProviderTier: vi.fn().mockReturnValue('standard'),
+  isAdminOnlyProvider: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({
