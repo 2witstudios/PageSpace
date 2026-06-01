@@ -182,6 +182,11 @@
       "import": "./dist/services/sandbox/sandbox-env.js",
       "require": "./dist/services/sandbox/sandbox-env.js"
     },
+    "./services/sandbox/quota": {
+      "types": "./dist/services/sandbox/quota.d.ts",
+      "import": "./dist/services/sandbox/quota.js",
+      "require": "./dist/services/sandbox/quota.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
@@ -823,6 +828,9 @@
       ],
       "services/sandbox/sandbox-env": [
         "./dist/services/sandbox/sandbox-env.d.ts"
+      ],
+      "services/sandbox/quota": [
+        "./dist/services/sandbox/quota.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
