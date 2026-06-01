@@ -70,7 +70,7 @@ const SECRET_ASSIGNMENT =
   /\b([A-Za-z0-9_-]*(?:key|secret|token|password|passwd|pwd|auth)[A-Za-z0-9_-]*)\b(\s*[:=]\s*)(['"]?)[^\s'"]+\3/gi;
 // `Authorization: Bearer <token>`.
 const BEARER_TOKEN = /\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{8,}/g;
-// Standalone high-entropy tokens (e.g. sk_live_..., ghp_..., long hex/base64).
+// Standalone high-entropy tokens (provider key prefixes, long hex/base64).
 const STANDALONE_TOKEN = /\b[A-Za-z0-9_-]*[A-Za-z0-9][A-Za-z0-9_-]{23,}\b/g;
 
 function redactSecrets(code: string): string {
