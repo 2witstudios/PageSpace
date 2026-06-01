@@ -24,7 +24,10 @@ export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
  * Resets every period (use-it-or-lose-it).
  */
 export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
-  free: envInt('CREDIT_ALLOWANCE_FREE_CENTS', 50),
+  // Free: generous $5/mo of credit value, but the free-tier-only premium gate
+  // (requiresProSubscription) confines it to cheaper "standard" models, so the
+  // real provider cost behind that $5 stays low.
+  free: envInt('CREDIT_ALLOWANCE_FREE_CENTS', 500),
   pro: envInt('CREDIT_ALLOWANCE_PRO_CENTS', 1500),
   founder: envInt('CREDIT_ALLOWANCE_FOUNDER_CENTS', 5000),
   business: envInt('CREDIT_ALLOWANCE_BUSINESS_CENTS', 10000),
