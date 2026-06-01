@@ -16,7 +16,7 @@
 
 import { db } from '@pagespace/db/db';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { markupCents, allocateSpend } from './credit-core';
 import { MARKUP_BPS } from './credit-pricing';
@@ -90,7 +90,12 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
         markupBps: MARKUP_BPS,
         consumeStatus: 'pending',
       })
-      .onConflictDoNothing({ target: creditLedger.aiUsageLogId })
+      // The unique index on aiUsageLogId is partial (WHERE aiUsageLogId IS NOT NULL);
+      // Postgres can only infer it as the conflict arbiter if we restate that predicate.
+      .onConflictDoNothing({
+        target: creditLedger.aiUsageLogId,
+        where: sql`${creditLedger.aiUsageLogId} IS NOT NULL`,
+      })
       .returning({ id: creditLedger.id });
     if (claimed.length === 0) return; // already consumed — idempotent no-op
     ledgerId = claimed[0].id;

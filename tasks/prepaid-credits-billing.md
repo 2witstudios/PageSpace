@@ -47,6 +47,7 @@ Local decrement shell (`credit-consume.ts`) wired into `trackAIUsage`, plus the 
 - Given a completed AI call with known cost, `consumeCredits` should decrement the balance via `allocateSpend` exactly once, even when invoked twice for the same `aiUsageLogId`.
 - Given a consume failure, it should mark the ledger row `pending` and never throw into the AI request.
 - Given an AI call that failed (`success:false`), `trackAIUsage` should not consume credits.
+- Given the partial unique index on `aiUsageLogId` (`WHERE aiUsageLogId IS NOT NULL`), the idempotent claim insert should declare the index predicate so Postgres can infer the conflict arbiter — otherwise every insert raises `42P10` and no credits are ever consumed.
 
 ---
 
@@ -82,6 +83,7 @@ Funding shell (`credit-funding.ts`) + webhook dispatch via `classifyStripeEvent`
 - Given tenant/onprem deployment, the AI route should never gate on credits.
 - Given a user with no balance row, the first AI request should lazy-init the row from tier defaults before deciding.
 - Given the credits model, per-day call counting (`incrementUsage`, `rate-limit-cache` wiring) should be removed from the AI path and `plans.ts` copy should advertise monthly credits.
+- Given an unrecognized subscription tier, premium-model gating should deny (require upgrade) rather than grant access — gate on a positive allowlist of paid tiers, not by excluding `free`.
 
 ---
 
@@ -102,3 +104,10 @@ Idempotent `apps/web/scripts/setup-stripe-credits.ts`, run against test then liv
 **Requirements**:
 - Given a fresh Stripe account, the script should idempotently create per-tier recurring subscription prices and one-time credit-pack prices.
 - Given the prepaid model, the script should create no meter and no metered price.
+
+---
+
+## Packaging Hygiene
+
+**Requirements**:
+- Given the published `@pagespace/lib` export map, it should not advertise a `./billing/credit-funding` entrypoint until that module exists (a broken export resolves to a missing `dist` file).

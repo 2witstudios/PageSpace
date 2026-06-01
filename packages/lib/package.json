@@ -57,11 +57,6 @@
       "import": "./dist/billing/credit-gate.js",
       "require": "./dist/billing/credit-gate.js"
     },
-    "./billing/credit-funding": {
-      "types": "./dist/billing/credit-funding.d.ts",
-      "import": "./dist/billing/credit-funding.js",
-      "require": "./dist/billing/credit-funding.js"
-    },
     "./billing/credit-backfill": {
       "types": "./dist/billing/credit-backfill.d.ts",
       "import": "./dist/billing/credit-backfill.js",

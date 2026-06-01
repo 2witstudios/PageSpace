@@ -15,6 +15,7 @@ vi.mock('@pagespace/db/schema/credits', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: true, strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
@@ -66,6 +67,21 @@ describe('consumeCredits', () => {
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
     expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 950 });
     expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied' });
+  });
+
+  it('declares the partial-index predicate on the idempotent claim so Postgres can infer the arbiter', async () => {
+    // The unique index on aiUsageLogId is PARTIAL (WHERE aiUsageLogId IS NOT NULL);
+    // ON CONFLICT must supply that predicate or Postgres raises 42P10 on every insert.
+    const onConflict = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'led_1' }]) });
+    mockDb.insert.mockReturnValue({ values: vi.fn().mockReturnValue({ onConflictDoNothing: onConflict }) });
+    mockDb.transaction.mockResolvedValue(undefined);
+
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+
+    expect(onConflict).toHaveBeenCalledTimes(1);
+    const arg = onConflict.mock.calls[0][0] as { target?: unknown; where?: unknown };
+    expect(arg).toHaveProperty('target');
+    expect(arg.where).toBeDefined();
   });
 
   it('is idempotent: a duplicate aiUsageLogId (conflict) skips the decrement', async () => {
