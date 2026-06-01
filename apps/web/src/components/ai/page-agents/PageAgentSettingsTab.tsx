@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2 } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -28,6 +28,7 @@ interface AgentConfig {
   visibleToGlobalAssistant?: boolean;
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
+  toolExposureMode?: 'upfront' | 'search';
 }
 
 interface AgentMembership {
@@ -105,6 +106,7 @@ interface FormData {
   visibleToGlobalAssistant: boolean;
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
+  toolExposureMode: 'upfront' | 'search';
 }
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
@@ -198,6 +200,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       visibleToGlobalAssistant: config?.visibleToGlobalAssistant ?? true,
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
+      toolExposureMode: config?.toolExposureMode ?? 'upfront',
     }
   });
 
@@ -214,6 +217,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
         includePageTree: config.includePageTree ?? false,
         pageTreeScope: config.pageTreeScope ?? 'children',
+        toolExposureMode: config.toolExposureMode ?? 'upfront',
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -737,6 +741,51 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             </ScrollArea>
             <p className="text-xs text-muted-foreground mt-2">
               Selected {enabledTools.length} of {config.availableTools.length} tools
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Tool Exposure Mode */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />
+              <div>
+                <CardTitle className="text-lg">Tool Exposure</CardTitle>
+                <CardDescription>
+                  How this agent&apos;s tools are presented to the model.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Controller
+              name="toolExposureMode"
+              control={control}
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="upfront">
+                      <div className="flex flex-col">
+                        <span>Upfront</span>
+                        <span className="text-xs text-muted-foreground">Send every enabled tool schema to the model</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="search">
+                      <div className="flex flex-col">
+                        <span>Search</span>
+                        <span className="text-xs text-muted-foreground">Send core tools plus a search tool; the model discovers the rest on demand</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <p className="text-xs text-muted-foreground">
+              Search mode keeps the context small when many tools are enabled. The agent&apos;s tool selection above still applies — it can never reach a tool that isn&apos;t enabled.
             </p>
           </CardContent>
         </Card>
