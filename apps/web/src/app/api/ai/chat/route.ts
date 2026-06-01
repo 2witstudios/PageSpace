@@ -494,7 +494,10 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    const { model } = providerResult;
+    // Use the resolved model name for billing. currentModel may be a PageSpace
+    // tier alias ('standard'/'pro') or an unpriced default ('glm-4.5-air'), which
+    // would meter at $0; providerResult.modelName is the real backend model id.
+    const { model, modelName: resolvedModelName } = providerResult;
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
@@ -1082,7 +1085,7 @@ export async function POST(request: Request) {
               await AIMonitoring.trackUsage({
                 userId: userId!,
                 provider: currentProvider,
-                model: currentModel,
+                model: resolvedModelName,
                 inputTokens,
                 outputTokens,
                 totalTokens,
@@ -1108,7 +1111,7 @@ export async function POST(request: Request) {
                   await AIMonitoring.trackToolUsage({
                     userId: userId!,
                     provider: currentProvider,
-                    model: currentModel,
+                    model: resolvedModelName,
                     toolName: toolCall.toolName,
                     toolId: toolCall.toolCallId,
                     args: undefined,

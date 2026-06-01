@@ -26,6 +26,7 @@ import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -54,7 +55,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     throw new Error(providerResult.error);
   }
 
-  return providerResult.model;
+  return providerResult;
 }
 
 /**
@@ -525,10 +526,11 @@ export const agentCommunicationTools = {
         systemPrompt += `\n\nYou are being consulted by another agent or user${executionContext?.locationContext?.currentPage?.title ? ` (${executionContext.locationContext.currentPage.title})` : ''}. This is a persistent conversation - you have access to the full conversation history. Respond helpfully based on your expertise and the conversation context.`;
         
         // 8. Get configured model for agent
-        const model = await getConfiguredModel(userId, {
-          aiProvider: targetAgent.aiProvider,
-          aiModel: targetAgent.aiModel
-        });
+        const { model, provider: resolvedProvider, modelName: resolvedModelName } =
+          await getConfiguredModel(userId, {
+            aiProvider: targetAgent.aiProvider,
+            aiModel: targetAgent.aiModel
+          });
         
         // 9. Filter tools for agent
         const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
@@ -591,6 +593,23 @@ export const agentCommunicationTools = {
               experimental_context: nestedContext,
               maxRetries: 3,
             });
+
+        // Bill the requesting user for the sub-agent run. Use totalUsage so all
+        // tool-loop round-trips (up to stepCountIs(20)) are metered, not just the
+        // final step. Tracked against the resolved model name so the cost is real.
+        AIMonitoring.trackUsage({
+          userId,
+          provider: resolvedProvider,
+          model: resolvedModelName,
+          inputTokens: response.totalUsage?.inputTokens,
+          outputTokens: response.totalUsage?.outputTokens,
+          totalTokens: response.totalUsage?.totalTokens,
+          conversationId: activeConversationId,
+          pageId: agentId,
+          driveId: targetAgent.driveId,
+          success: true,
+          metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
+        });
 
         // 12. Extract response text with error checking
         // Collect text from all steps — response.text only returns the final step,

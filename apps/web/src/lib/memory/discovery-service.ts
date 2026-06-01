@@ -15,6 +15,7 @@ import { driveMembers } from '@pagespace/db/schema/members'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 export interface DiscoveryResult {
   worldview: string[];
@@ -225,6 +226,19 @@ async function runDiscoveryPass(
       ],
       temperature: 0.3,
       maxRetries: 2,
+    });
+
+    AIMonitoring.trackUsage({
+      userId,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      totalTokens: result.usage
+        ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
+        : undefined,
+      success: true,
+      metadata: { feature: 'memory_discovery', pass: passName },
     });
 
     // Parse JSON array from response
