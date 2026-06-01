@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
-import React from 'react';
 import { z } from 'zod/v4';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
-import { markEmailVerified, createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
-import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
@@ -271,19 +269,7 @@ export async function POST(req: Request) {
       // Best-effort verification email — must NOT fail the signup. The user can
       // resend from the account banner if delivery fails.
       try {
-        const verificationToken = await createVerificationToken({
-          userId,
-          type: 'email_verification',
-          email,
-        });
-        const baseUrl =
-          process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-        const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
-        await sendEmail({
-          to: email,
-          subject: 'Verify your PageSpace email',
-          react: React.createElement(VerificationEmail, { userName: name, verificationUrl }),
-        });
+        await sendVerificationEmail({ userId, email, userName: name });
       } catch (error) {
         loggers.auth.warn('Failed to send passkey-signup verification email', {
           userId,

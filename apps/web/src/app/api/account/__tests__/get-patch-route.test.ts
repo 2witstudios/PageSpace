@@ -88,22 +88,15 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logUserActivity: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth/verification-utils', () => ({
-  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
-}));
-vi.mock('@pagespace/lib/services/email-service', () => ({
-  sendEmail: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
-  VerificationEmail: () => null,
+vi.mock('@/lib/auth/send-verification-email', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { GET, PATCH } from '../route';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -325,11 +318,11 @@ describe('PATCH /api/account', () => {
   });
 
   it('should return 400 when email is already in use by another user', async () => {
-    // Arrange
-    vi.mocked(db.query.users.findFirst).mockResolvedValue({
-      id: 'different_user',
-      email: 'taken@example.com',
-    } as never);
+    // Arrange — 1st lookup (by id) is the caller's current address; 2nd lookup
+    // (by email) is the conflicting owner of the requested address.
+    vi.mocked(db.query.users.findFirst)
+      .mockResolvedValueOnce({ id: mockUserId, email: 'mine@example.com' } as never)
+      .mockResolvedValueOnce({ id: 'different_user', email: 'taken@example.com' } as never);
 
     const request = new Request('https://example.com/api/account', {
       method: 'PATCH',
@@ -481,14 +474,11 @@ describe('PATCH /api/account', () => {
     // Assert
     expect(response.status).toBe(200);
     expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com', emailVerified: null });
-    expect(createVerificationToken).toHaveBeenCalledWith({
+    expect(sendVerificationEmail).toHaveBeenCalledWith({
       userId: mockUserId,
-      type: 'email_verification',
       email: 'new@example.com',
+      userName: 'Existing Name',
     });
-    expect(sendEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: 'new@example.com', subject: 'Verify your PageSpace email' }),
-    );
   });
 
   it('does not reset verification or send email when only the name changes', async () => {
@@ -514,12 +504,11 @@ describe('PATCH /api/account', () => {
     // Assert
     expect(response.status).toBe(200);
     expect(setMock).toHaveBeenCalledWith({ name: 'Updated Name' });
-    expect(createVerificationToken).not.toHaveBeenCalled();
-    expect(sendEmail).not.toHaveBeenCalled();
+    expect(sendVerificationEmail).not.toHaveBeenCalled();
   });
 
   it('does not reset verification when the email matches the current address', async () => {
-    // Arrange — findFirst returns the caller themselves (same email)
+    // Arrange — current-address lookup returns the caller with the same email
     vi.mocked(db.query.users.findFirst).mockResolvedValue({
       id: mockUserId,
       email: 'test@example.com',
@@ -546,13 +535,46 @@ describe('PATCH /api/account', () => {
     // Assert
     expect(response.status).toBe(200);
     expect(setMock).toHaveBeenCalledWith({ email: 'test@example.com' });
-    expect(sendEmail).not.toHaveBeenCalled();
+    expect(sendVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  it('does not reset verification when a mixed-case stored email (OAuth) is resubmitted', async () => {
+    // Regression: emails are not guaranteed lowercase at rest (OAuth stores the
+    // provider value verbatim). Resubmitting the same address must be a no-op,
+    // not a spurious de-verification.
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: mockUserId,
+      email: 'John.Doe@gmail.com',
+    } as never);
+
+    const returningMock = vi.fn().mockResolvedValue([{
+      id: mockUserId,
+      name: 'John Doe',
+      email: 'john.doe@gmail.com',
+      image: null,
+    }]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as never);
+
+    const request = new Request('https://example.com/api/account', {
+      method: 'PATCH',
+      body: JSON.stringify({ email: 'john.doe@gmail.com' }),
+    });
+
+    // Act
+    const response = await PATCH(request);
+
+    // Assert — no emailVerified reset, no verification email
+    expect(response.status).toBe(200);
+    expect(setMock).toHaveBeenCalledWith({ email: 'john.doe@gmail.com' });
+    expect(sendVerificationEmail).not.toHaveBeenCalled();
   });
 
   it('still updates the profile when the verification email fails to send', async () => {
     // Arrange
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-    vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP down'));
+    vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('SMTP down'));
 
     const returningMock = vi.fn().mockResolvedValue([{
       id: mockUserId,

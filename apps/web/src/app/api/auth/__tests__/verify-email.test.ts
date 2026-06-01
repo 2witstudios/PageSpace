@@ -156,8 +156,9 @@ describe('/api/auth/verify-email', () => {
       );
     });
 
-    it('falls back to the unbound path for tokens with malformed metadata', async () => {
-      // Arrange — metadata is not valid JSON
+    it('rejects tokens with present-but-unparseable metadata (does not silently fall back)', async () => {
+      // Arrange — metadata is present but not valid JSON (corrupt). It must NOT
+      // downgrade to the unbound markEmailVerified path.
       vi.mocked(verifyToken).mockResolvedValue({
         userId: 'test-user-id',
         metadata: 'not-json',
@@ -168,11 +169,17 @@ describe('/api/auth/verify-email', () => {
 
       // Act
       const response = await GET(request);
+      const body = await response.json();
 
       // Assert
-      expect(response.status).toBe(303);
-      expect(markEmailVerified).toHaveBeenCalledWith('test-user-id');
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid or expired verification token');
+      expect(markEmailVerified).not.toHaveBeenCalled();
       expect(markEmailVerifiedForAddress).not.toHaveBeenCalled();
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Email verification token has unparseable metadata',
+        { userId: 'test-user-id' },
+      );
     });
   });
 

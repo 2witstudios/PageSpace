@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
-import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
-import React from 'react';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -53,25 +50,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create new verification token bound to the user's current address.
-    const verificationToken = await createVerificationToken({
-      userId: user.id,
-      type: 'email_verification',
-      email: user.email,
-    });
-
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
-
-    // Send verification email (rate limited in sendEmail function)
+    // Send verification email (token bound to the user's current address;
+    // sendEmail applies its own per-address rate limit).
     try {
-      await sendEmail({
-        to: user.email,
-        subject: 'Verify your PageSpace email',
-        react: React.createElement(VerificationEmail, {
-          userName: user.name,
-          verificationUrl
-        }),
+      await sendVerificationEmail({
+        userId: user.id,
+        email: user.email,
+        userName: user.name,
       });
 
       loggers.auth.info('Verification email resent', { userId: user.id, email: maskEmail(user.email) });

@@ -16,10 +16,7 @@ import { isCloud } from '@pagespace/lib/deployment-mode';
 import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logActivity, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
-import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
-import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
-import React from 'react';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { stripe } from '@/lib/stripe/client';
 
 const patchBodySchema = z
@@ -86,20 +83,28 @@ export async function PATCH(req: Request) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
-    // Did the address actually change? The uniqueness lookup below returns the
-    // caller themselves when the normalized email matches their current one, so
-    // an unfound (undefined) result means a genuine change to a new address.
-    const normalizedEmail = email !== undefined ? email.toLowerCase() : undefined;
+    const normalizedEmail = email !== undefined ? email.toLowerCase().trim() : undefined;
     let emailChanged = false;
     if (normalizedEmail !== undefined) {
-      const existingUser = await db.query.users.findFirst({
-        where: eq(users.email, normalizedEmail),
+      // Decide "changed" by comparing against the caller's CURRENT stored
+      // address (case-insensitively). Inferring it from a uniqueness miss is
+      // unsound: emails are not guaranteed lowercase at rest (OAuth stores the
+      // provider value verbatim), so a case-sensitive lookup would miss the
+      // user's own row and spuriously de-verify them on a no-op resubmit.
+      const current = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { email: true },
       });
+      emailChanged = (current?.email ?? '').toLowerCase() !== normalizedEmail;
 
-      if (existingUser && existingUser.id !== userId) {
-        return Response.json({ error: 'Email is already in use' }, { status: 400 });
+      if (emailChanged) {
+        const existingUser = await db.query.users.findFirst({
+          where: eq(users.email, normalizedEmail),
+        });
+        if (existingUser && existingUser.id !== userId) {
+          return Response.json({ error: 'Email is already in use' }, { status: 400 });
+        }
       }
-      emailChanged = !existingUser;
     }
 
     const updates: { name?: string; email?: string; emailVerified?: Date | null } = {};
@@ -129,21 +134,10 @@ export async function PATCH(req: Request) {
     // account banner.
     if (emailChanged) {
       try {
-        const verificationToken = await createVerificationToken({
+        await sendVerificationEmail({
           userId,
-          type: 'email_verification',
           email: updatedUser.email,
-        });
-        const baseUrl =
-          process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-        const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
-        await sendEmail({
-          to: updatedUser.email,
-          subject: 'Verify your PageSpace email',
-          react: React.createElement(VerificationEmail, {
-            userName: updatedUser.name,
-            verificationUrl,
-          }),
+          userName: updatedUser.name,
         });
       } catch (error) {
         loggers.auth.warn('Failed to send verification email after email change', {

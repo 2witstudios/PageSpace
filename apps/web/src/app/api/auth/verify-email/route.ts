@@ -26,13 +26,19 @@ export async function GET(request: NextRequest) {
 
     // Parse the address this token was bound to (if any). Tokens minted after
     // address-binding shipped carry the target email so we never verify an
-    // address other than the one the link was sent to.
+    // address other than the one the link was sent to. A null metadata is a
+    // legacy (pre-binding) token; present-but-unparseable metadata is corrupt
+    // and must NOT silently fall through to the unbound path.
     let boundEmail: string | null = null;
     if (verified.metadata) {
       try {
         boundEmail = (JSON.parse(verified.metadata) as { email?: string }).email ?? null;
       } catch {
-        boundEmail = null;
+        loggers.auth.warn('Email verification token has unparseable metadata', { userId });
+        return NextResponse.json(
+          { error: 'Invalid or expired verification token' },
+          { status: 400 }
+        );
       }
     }
 

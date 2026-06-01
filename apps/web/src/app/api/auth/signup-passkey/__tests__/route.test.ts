@@ -13,13 +13,9 @@ vi.mock('@pagespace/lib/auth/passkey-service', () => ({
 }));
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
-  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
 }));
-vi.mock('@pagespace/lib/services/email-service', () => ({
-  sendEmail: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
-  VerificationEmail: () => null,
+vi.mock('@/lib/auth/send-verification-email', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
@@ -103,8 +99,8 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 import { POST } from '../route';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
-import { markEmailVerified, createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -650,17 +646,11 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(200);
       expect(markEmailVerified).not.toHaveBeenCalled();
-      expect(createVerificationToken).toHaveBeenCalledWith({
+      expect(sendVerificationEmail).toHaveBeenCalledWith({
         userId: 'new-user-1',
-        type: 'email_verification',
         email: 'user@example.com',
+        userName: 'Test User',
       });
-      expect(sendEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'user@example.com',
-          subject: 'Verify your PageSpace email',
-        }),
-      );
     });
 
     it('signup via a successfully consumed invite marks verified and sends no verification email', async () => {
@@ -675,8 +665,22 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(200);
       expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
-      expect(sendEmail).not.toHaveBeenCalled();
-      expect(createVerificationToken).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('signup via a successfully consumed CONNECTION invite also marks verified (inbox ownership proven)', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_conn' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
     });
 
     it('failed invite acceptance falls back to sending a verification email', async () => {
@@ -692,11 +696,11 @@ describe('POST /api/auth/signup-passkey', () => {
 
       expect(response.status).toBe(200);
       expect(markEmailVerified).not.toHaveBeenCalled();
-      expect(sendEmail).toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalled();
     });
 
     it('a verification-email failure does not fail the signup', async () => {
-      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP down'));
+      vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('SMTP down'));
 
       const response = await POST(createRequest());
       const body = await response.json();
