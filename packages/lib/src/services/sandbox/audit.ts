@@ -70,9 +70,18 @@ const REDACTED = '***REDACTED***';
 // boundary (buildSandboxEnv is). It will miss exotic secret shapes; that is
 // acceptable because the captured code is already untrusted log data.
 //
-// Secret-bearing assignments: `API_KEY = "..."`, `token: '...'`, `password=...`.
-const SECRET_ASSIGNMENT =
-  /\b([A-Za-z0-9_-]*(?:key|secret|token|password|passwd|pwd|auth)[A-Za-z0-9_-]*)\b(\s*[:=]\s*)(['"]?)[^\s'"]+\3/gi;
+// Every regex here is linear: a single quantifier per character class with no
+// nested or adjacent overlapping repetition. The identifier of an assignment is
+// matched as one `[A-Za-z0-9_-]+` run and the "is this a secret key" decision is
+// made in the callback — NOT with an `X*keyword X*` pattern, which backtracks
+// polynomially on agent-supplied input (CodeQL js/polynomial-redos).
+
+// Any `name = value` / `name: "value"` assignment. The identifier is one run; a
+// distinct `[:=]` separates it from the value, so there is no ambiguity.
+const ASSIGNMENT =
+  /\b([A-Za-z0-9_-]+)(\s*[:=]\s*)(['"]?)[^\s'"]+\3/g;
+// Identifiers naming a secret. Plain literal alternation, tested in the callback.
+const SECRET_KEYWORD = /(?:key|secret|token|password|passwd|pwd|auth)/i;
 // `Authorization: Bearer <token>`.
 const BEARER_TOKEN = /\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{8,}/g;
 // Standalone high-entropy tokens (provider key prefixes, long hex/base64). Kept
@@ -81,7 +90,9 @@ const STANDALONE_TOKEN = /\b[A-Za-z0-9_]{24,}\b/g;
 
 function redactSecrets(code: string): string {
   return code
-    .replace(SECRET_ASSIGNMENT, (_m, key, sep) => `${key}${sep}${REDACTED}`)
+    .replace(ASSIGNMENT, (match, ident, sep) =>
+      SECRET_KEYWORD.test(ident) ? `${ident}${sep}${REDACTED}` : match,
+    )
     .replace(BEARER_TOKEN, `Bearer ${REDACTED}`)
     .replace(STANDALONE_TOKEN, REDACTED);
 }
