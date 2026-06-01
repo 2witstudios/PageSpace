@@ -301,6 +301,8 @@ export const AI_PRICING = {
  */
 export const MODEL_CONTEXT_WINDOWS = {
   // OpenRouter Models - Anthropic
+  'anthropic/claude-opus-4.8': 1000000,
+  'anthropic/claude-opus-4.8-fast': 1000000,
   'anthropic/claude-opus-4.7': 1000000,
   'anthropic/claude-opus-4.7-fast': 1000000,
   'anthropic/claude-opus-4.6': 1000000,
@@ -318,6 +320,17 @@ export const MODEL_CONTEXT_WINDOWS = {
 
   // OpenRouter Models - OpenAI
   'openai/gpt-5.5-pro': 200000,
+  'openai/gpt-5.2-pro': 400000,
+  'openai/gpt-5.2-chat': 128000,
+  'openai/gpt-5.1-chat': 128000,
+  'openai/gpt-5.1-codex-max': 400000,
+  'openai/gpt-5-pro': 400000,
+  'openai/gpt-5-codex': 400000,
+  'openai/o3': 200000,
+  'openai/o3-pro': 200000,
+  'openai/o4-mini': 200000,
+  'openai/gpt-4.1': 1047576,
+  'openai/gpt-4.1-mini': 1047576,
   'openai/gpt-5.5': 272000,
   'openai/gpt-5.4-pro': 200000,
   'openai/gpt-5.4': 272000,
@@ -367,6 +380,9 @@ export const MODEL_CONTEXT_WINDOWS = {
   'meta-llama/llama-3.1-405b-instruct': 128000,
 
   // OpenRouter Models - Mistral
+  'mistralai/mistral-large-2512': 262144,
+  'mistralai/mistral-medium-3': 131072,
+  'mistralai/devstral-2512': 262144,
   'mistralai/mistral-medium-3-5': 262144,
   'mistralai/mistral-small-2603': 262144,
   'mistralai/mistral-medium-3.1': 128000,
@@ -376,9 +392,12 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/devstral-small': 128000,
 
   // OpenRouter Models - Chinese/Asian
+  'z-ai/glm-5.1': 202752,
   'z-ai/glm-5-turbo': 202752,
   'z-ai/glm-5': 202752,
+  'z-ai/glm-4.7-flash': 202752,
   'z-ai/glm-4.7': 200000,
+  'z-ai/glm-4.6': 202752,
   'z-ai/glm-4.5v': 128000,
   'z-ai/glm-4.5': 128000,
   'z-ai/glm-4.5-air': 128000,
@@ -399,9 +418,14 @@ export const MODEL_CONTEXT_WINDOWS = {
   'qwen/qwen3-235b-a22b-thinking-2507': 128000,
   'qwen/qwen3-235b-a22b-2507': 128000,
   'qwen/qwen3-coder': 128000,
+  'qwen/qwen3.7-max': 1000000,
+  'moonshotai/kimi-k2.6': 262144,
+  'moonshotai/kimi-k2-thinking': 262144,
   'moonshotai/kimi-k2': 128000,
+  'minimax/minimax-m3': 1048576,
   'minimax/minimax-m2.7': 204800,
   'minimax/minimax-m2.5': 204800,
+  'minimax/minimax-m2.1': 204800,
   'minimax/minimax-m1': 128000,
   'bytedance-seed/seed-2.0-lite': 262144,
   'bytedance-seed/seed-2.0-mini': 262144,
@@ -421,12 +445,14 @@ export const MODEL_CONTEXT_WINDOWS = {
   'x-ai/grok-4.3': 1000000,
   'x-ai/grok-4.20': 2000000,
   'x-ai/grok-4.20-multi-agent': 2000000,
+  'x-ai/grok-build-0.1': 256000,
   'x-ai/grok-4-fast': 2000000,
   'x-ai/grok-4': 128000,
 
   // OpenRouter Models - Other
   'inception/mercury-2': 128000,
   'inception/mercury': 128000,
+  'writer/palmyra-x5': 1040000,
 
   // Google AI Direct (source: ai.google.dev/gemini-api/docs/models, 2026-05)
   'gemini-3.5-flash': 1048576,

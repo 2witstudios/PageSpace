@@ -120,6 +120,7 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn().mockReturnValue(false),
   createRateLimitResponse: vi.fn(),
   createSubscriptionRequiredResponse: vi.fn(),
+  createAdminRestrictedResponse: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/core', () => ({

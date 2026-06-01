@@ -193,6 +193,17 @@ describe('getContextWindow', () => {
   it('should return correct value for anthropic model', () => {
     expect(getContextWindow('claude-3-5-sonnet-20241022')).toBe(200_000);
   });
+
+  // Drift guard: every priced model must declare a context window, otherwise
+  // getContextWindow() silently falls back to the 200k default and can truncate
+  // or trip provider-side context limits. Keep AI_PRICING and
+  // MODEL_CONTEXT_WINDOWS in lockstep when adding/removing models.
+  it('should have a MODEL_CONTEXT_WINDOWS entry for every AI_PRICING model', () => {
+    const missing = Object.keys(AI_PRICING).filter(
+      (model) => model !== 'default' && !(model in MODEL_CONTEXT_WINDOWS)
+    );
+    expect(missing).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

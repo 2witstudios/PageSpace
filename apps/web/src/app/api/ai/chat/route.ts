@@ -424,7 +424,7 @@ export async function POST(request: Request) {
       .catch(() => [] as { displayName: string | null }[]);
 
     // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     const isAdminUser = user?.role === 'admin';
 
@@ -436,7 +436,7 @@ export async function POST(request: Request) {
         provider: currentProvider,
         model: currentModel,
       });
-      return createSubscriptionRequiredResponse();
+      return createAdminRestrictedResponse();
     }
 
     // Check if provider requires Pro subscription

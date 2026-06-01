@@ -119,3 +119,18 @@ export function createSubscriptionRequiredResponse(): NextResponse {
     { status: 403 }
   );
 }
+
+/**
+ * Create an admin-only provider rejection response.
+ * Distinct from the subscription gate: the block is on role, not tier, so the
+ * message must not imply an upgrade would help.
+ */
+export function createAdminRestrictedResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      error: 'Provider restricted',
+      message: 'This provider is restricted to administrators.',
+    },
+    { status: 403 }
+  );
+}
