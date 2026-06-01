@@ -93,6 +93,9 @@ async function authorizeAgent(
   deps: CanRunCodeDeps,
 ): Promise<CanRunCodeResult> {
   if (!agentPageId) return deny('no_agent_access');
+  // Pass driveId as the target: getAgentAccessLevel resolves an id with no page
+  // row to a drive (the drive-as-root-node fallback in agent-permissions.ts),
+  // so this evaluates the agent's drive-level access.
   const access = await deps.getAgentAccessLevel(agentPageId, driveId);
   if (!access?.canEdit) return deny('no_agent_access');
   return { ok: true };
