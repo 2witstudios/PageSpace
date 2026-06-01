@@ -5,6 +5,8 @@ on:
     branches: [master, develop]
     paths:
       - 'packages/lib/src/security/**'
+      - 'packages/lib/src/services/sandbox/**'
+      - 'packages/db/src/schema/sandbox-sessions.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
@@ -28,6 +30,8 @@ on:
     branches: [master, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
+      - 'packages/lib/src/services/sandbox/**'
+      - 'packages/db/src/schema/sandbox-sessions.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
