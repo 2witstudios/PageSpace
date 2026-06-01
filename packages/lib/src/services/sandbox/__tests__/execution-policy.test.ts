@@ -41,4 +41,12 @@ describe('resolveExecutionPolicy', () => {
     expect(resolveExecutionPolicy({ profile: 'default' }).profile).toBe('default');
     expect(resolveExecutionPolicy({ profile: 'minimal' }).profile).toBe('minimal');
   });
+
+  it('should return an immutable policy so the default-deny egress baseline cannot be mutated', () => {
+    const policy = resolveExecutionPolicy();
+    expect(() => {
+      (policy.egressAllowlist as string[]).push('evil.example.com');
+    }).toThrow();
+    expect(policy.egressAllowlist).toEqual([]);
+  });
 });

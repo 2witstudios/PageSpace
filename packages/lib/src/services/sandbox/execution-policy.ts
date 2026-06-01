@@ -32,30 +32,35 @@ export interface ExecutionPolicy {
   region: string;
 }
 
+// Policies are returned by reference from module constants. Freeze them (and
+// their egress arrays) so a downstream caller can never mutate the shared
+// default-deny baseline — e.g. `policy.egressAllowlist.push(host)` would
+// otherwise widen egress globally for every subsequent run. Frozen → it throws.
+
 /**
  * Most-restrictive policy. Also the fallback for any unknown profile.
  */
-export const SAFE_MINIMUM_PROFILE: ExecutionPolicy = {
+export const SAFE_MINIMUM_PROFILE: ExecutionPolicy = Object.freeze({
   profile: 'minimal',
   timeoutMs: 10_000,
   vcpus: 1,
   memoryMb: 512,
   maxOutputBytes: 32 * 1024,
-  egressAllowlist: [],
+  egressAllowlist: Object.freeze([]) as readonly string[],
   persistent: false,
   region: 'iad1',
-};
+});
 
-const DEFAULT_PROFILE: ExecutionPolicy = {
+const DEFAULT_PROFILE: ExecutionPolicy = Object.freeze({
   profile: 'default',
   timeoutMs: 30_000,
   vcpus: 1,
   memoryMb: 1024,
   maxOutputBytes: 64 * 1024,
-  egressAllowlist: [],
+  egressAllowlist: Object.freeze([]) as readonly string[],
   persistent: false,
   region: 'iad1',
-};
+});
 
 const PROFILES: Record<ExecutionProfile, ExecutionPolicy> = {
   default: DEFAULT_PROFILE,
