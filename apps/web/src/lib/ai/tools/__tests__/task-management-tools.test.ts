@@ -90,19 +90,11 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 vi.mock('@/lib/tasks/completion-guard', () => ({
-  assertSubTasksComplete: vi.fn().mockResolvedValue(undefined),
   checkSubTasksComplete: vi.fn().mockResolvedValue(null),
   toToolFailure: (p: { code: string; error: string; pending: number; total: number }) => ({
     success: false,
     ...p,
   }),
-  SubtasksIncompleteError: class SubtasksIncompleteError extends Error {
-    readonly code = 'SUBTASKS_INCOMPLETE' as const;
-    constructor(public readonly pending: number, public readonly total: number) {
-      super(`Complete all sub-tasks first (${pending} of ${total} remaining)`);
-      this.name = 'SubtasksIncompleteError';
-    }
-  },
 }));
 
 import { taskManagementTools } from '../task-management-tools';

@@ -138,16 +138,8 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 vi.mock('@/lib/tasks/completion-guard', () => ({
-  assertSubTasksComplete: vi.fn().mockResolvedValue(undefined),
   checkSubTasksComplete: vi.fn().mockResolvedValue(null),
   SUBTASKS_INCOMPLETE_STATUS: 422,
-  SubtasksIncompleteError: class SubtasksIncompleteError extends Error {
-    readonly code = 'SUBTASKS_INCOMPLETE' as const;
-    constructor(public readonly pending: number, public readonly total: number) {
-      super(`Complete all sub-tasks first (${pending} of ${total} remaining)`);
-      this.name = 'SubtasksIncompleteError';
-    }
-  },
 }));
 
 // ---------- Imports (after mocks) ----------
@@ -1012,7 +1004,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   });
 
 
-  it('returns 422 when assertSubTasksComplete throws SubtasksIncompleteError', async () => {
+  it('returns 422 when checkSubTasksComplete reports incomplete sub-tasks', async () => {
     setupAuth();
     setupCanEdit(true);
     setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
@@ -1055,7 +1047,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.total).toBe(2);
   });
 
-  it('does not call assertSubTasksComplete when status is not done-group', async () => {
+  it('does not call checkSubTasksComplete when status is not done-group', async () => {
     setupAuth();
     setupCanEdit(true);
     setupTaskLookup({ id: mockTaskListId }, { ...baseTask });
