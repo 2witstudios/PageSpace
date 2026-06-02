@@ -92,8 +92,9 @@ async function decrementAndSettle(
       bucket: spend.spentTopup > spend.spentMonthly ? 'topup' : 'monthly',
       // What actually came out of the balance (signed, matching the usage row's
       // negative convention). The gap between this and the intended charge is the
-      // shortfall, recorded as a debt row below.
-      appliedCents: -spend.appliedCents,
+      // shortfall, recorded as a debt row below. `|| 0` avoids storing -0 when a
+      // sub-cent call accrues into pending without decrementing a whole cent.
+      appliedCents: -spend.appliedCents || 0,
     })
     .where(eq(creditLedger.id, ledgerId));
 
