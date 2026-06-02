@@ -312,6 +312,23 @@ export const pageRepository = {
 
     return [...childIds, ...grandChildIds];
   },
+
+  /** Direct (non-recursive) live children of a page, with revisions for optimistic-concurrency moves. */
+  getDirectChildren: async (
+    driveId: string,
+    parentId: string
+  ): Promise<{ id: string; revision: number }[]> => {
+    return db
+      .select({ id: pages.id, revision: pages.revision })
+      .from(pages)
+      .where(
+        and(
+          eq(pages.driveId, driveId),
+          eq(pages.parentId, parentId),
+          eq(pages.isTrashed, false)
+        )
+      );
+  },
 };
 
 export type PageRepository = typeof pageRepository;
