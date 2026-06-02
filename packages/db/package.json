@@ -31,6 +31,10 @@
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"
     },
+    "./schema/published-pages": {
+      "types": "./dist/schema/published-pages.d.ts",
+      "default": "./dist/schema/published-pages.js"
+    },
     "./schema/auth": {
       "types": "./dist/schema/auth.d.ts",
       "default": "./dist/schema/auth.js"

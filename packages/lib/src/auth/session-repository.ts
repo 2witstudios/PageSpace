@@ -4,9 +4,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, or, isNull, gt, lt } from '@pagespace/db/operators';
+import { eq, ne, and, or, isNull, gt, lt } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
+import { ADMIN_SESSION_SERVICE } from './constants';
 
 export interface SessionUserRecord {
   id: string;
@@ -85,14 +86,49 @@ export const sessionRepository = {
     return result.rowCount ?? 0;
   },
 
+  // Revoke every active session for the user EXCEPT admin-console sessions, so a
+  // web login does not knock the user out of the admin app.
+  revokeWebForUser: async (userId: string, reason: string): Promise<number> => {
+    const result = await db.update(sessions)
+      .set({ revokedAt: new Date(), revokedReason: reason })
+      .where(and(
+        eq(sessions.userId, userId),
+        or(
+          ne(sessions.createdByService, ADMIN_SESSION_SERVICE),
+          isNull(sessions.createdByService),
+        ),
+        isNull(sessions.revokedAt),
+      ));
+    return result.rowCount ?? 0;
+  },
+
+  // Revoke ONLY admin-console sessions for the user, so an admin login does not
+  // knock the user out of the main web app.
+  revokeAdminForUser: async (userId: string, reason: string): Promise<number> => {
+    const result = await db.update(sessions)
+      .set({ revokedAt: new Date(), revokedReason: reason })
+      .where(and(
+        eq(sessions.userId, userId),
+        eq(sessions.createdByService, ADMIN_SESSION_SERVICE),
+        isNull(sessions.revokedAt),
+      ));
+    return result.rowCount ?? 0;
+  },
+
   revokeForUserDevice: async (userId: string, deviceId: string, reason: string): Promise<number> => {
     // Revoke sessions matching this device OR legacy sessions with no device_id (pre-migration).
     // This ensures the first device-aware login after deploy cleans up old NULL sessions.
+    // Exclude admin-console sessions: they always have a NULL device_id and must not be
+    // collaterally revoked by a web/desktop device login.
     const result = await db.update(sessions)
       .set({ revokedAt: new Date(), revokedReason: reason })
       .where(and(
         eq(sessions.userId, userId),
         or(eq(sessions.deviceId, deviceId), isNull(sessions.deviceId)),
+        or(
+          ne(sessions.createdByService, ADMIN_SESSION_SERVICE),
+          isNull(sessions.createdByService),
+        ),
         isNull(sessions.revokedAt),
       ));
     return result.rowCount ?? 0;

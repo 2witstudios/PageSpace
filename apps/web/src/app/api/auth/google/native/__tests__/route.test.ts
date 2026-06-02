@@ -75,6 +75,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -251,7 +253,7 @@ describe('POST /api/auth/google/native', () => {
       type: 'user',
       scopes: ['*'],
     } as never);
-    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
     // Default device token mock
@@ -582,12 +584,12 @@ describe('POST /api/auth/google/native', () => {
 
   describe('session management', () => {
     it('should revoke existing sessions before creating new one (session fixation prevention)', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
+      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(2);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith(
         mockNewUser.id,
         'new_login'
       );

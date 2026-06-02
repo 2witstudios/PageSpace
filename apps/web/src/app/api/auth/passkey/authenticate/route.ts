@@ -161,8 +161,9 @@ export async function POST(req: Request) {
 
     const { userId } = result.data;
 
-    // Passkey is the strongest auth flow — hard-reset all sessions across devices
-    const revokedCount = await sessionService.revokeAllUserSessions(userId, 'passkey_login');
+    // Passkey is the strongest auth flow — hard-reset web sessions across devices
+    // (admin-console sessions are scoped separately and left intact).
+    const revokedCount = await sessionService.revokeWebUserSessions(userId, 'passkey_login');
     if (revokedCount > 0) {
       loggers.auth.info('Revoked all sessions on passkey login', { userId, count: revokedCount });
     }

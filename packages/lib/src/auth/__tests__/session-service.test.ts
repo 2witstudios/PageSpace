@@ -5,6 +5,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { eq, and, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { sessionService } from '../session-service';
+import { ADMIN_SESSION_SERVICE } from '../constants';
 
 describe('Session Service', () => {
   let testUserId: string;
@@ -261,6 +262,49 @@ describe('Session Service', () => {
 
       const count = await sessionService.revokeAllUserSessions(testUserId, 'test');
       expect(count).toBe(1);
+    });
+  });
+
+  describe('per-app session scoping', () => {
+    async function createWebSession() {
+      return sessionService.createSession({
+        userId: testUserId,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 3600000,
+      });
+    }
+
+    async function createAdminSession() {
+      return sessionService.createSession({
+        userId: testUserId,
+        type: 'user',
+        scopes: [],
+        expiresInMs: 3600000,
+        createdByService: ADMIN_SESSION_SERVICE,
+      });
+    }
+
+    it('revokeWebUserSessions revokes web sessions but leaves admin sessions intact', async () => {
+      const webToken = await createWebSession();
+      const adminToken = await createAdminSession();
+
+      const count = await sessionService.revokeWebUserSessions(testUserId, 'magic_link_login');
+
+      expect(count).toBe(1);
+      expect(await sessionService.validateSession(webToken)).toBeNull();
+      expect(await sessionService.validateSession(adminToken)).not.toBeNull();
+    });
+
+    it('revokeAdminUserSessions revokes admin sessions but leaves web sessions intact', async () => {
+      const webToken = await createWebSession();
+      const adminToken = await createAdminSession();
+
+      const count = await sessionService.revokeAdminUserSessions(testUserId, 'admin_login');
+
+      expect(count).toBe(1);
+      expect(await sessionService.validateSession(adminToken)).toBeNull();
+      expect(await sessionService.validateSession(webToken)).not.toBeNull();
     });
   });
 });

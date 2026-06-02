@@ -88,6 +88,7 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
     trashMany: vi.fn(),
     restore: vi.fn(),
     getChildIds: vi.fn(),
+    getDirectChildren: vi.fn(),
   },
 }));
 vi.mock('@pagespace/lib/repositories/drive-repository', () => ({
@@ -120,7 +121,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
@@ -128,6 +129,7 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockCanUserDeletePage = vi.mocked(canUserDeletePage);
 const mockGetAgentAccessLevel = vi.mocked(getAgentAccessLevel);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
@@ -136,6 +138,8 @@ const mockApplyPageMutation = vi.mocked(applyPageMutation);
 describe('page-write-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: pages have no direct children unless a test says otherwise.
+    mockPageRepo.getDirectChildren.mockResolvedValue([]);
   });
 
   describe('replace_lines', () => {
@@ -594,6 +598,103 @@ describe('page-write-tools', () => {
       expect(result.type).toBe('page');
       expect(result.id).toBe('page-1');
       expect(result.message).toContain('to trash');
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'page-1', operation: 'trash' })
+      );
+    });
+
+    it('defaults withChildren to true in the input schema (cascade by default)', () => {
+      const schema = pageWriteTools.trash_page.inputSchema as unknown as {
+        parse: (value: unknown) => { withChildren: boolean };
+      };
+      expect(schema.parse({ id: 'page-1' }).withChildren).toBe(true);
+    });
+
+    it('cascades to children when withChildren is true', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Parent Page',
+        type: 'TASK_LIST',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserDeletePage.mockResolvedValue(true);
+      mockPageRepo.getChildIds.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.trash_page.execute!(
+        { id: 'page-1', withChildren: true },
+        context
+      ) as { success: boolean; childrenCount?: number };
+
+      expect(result.success).toBe(true);
+      // Cascade branch was taken: delete permission checked and descendants enumerated.
+      expect(mockCanUserDeletePage).toHaveBeenCalledWith('user-123', 'page-1');
+      expect(mockPageRepo.getChildIds).toHaveBeenCalledWith('drive-1', 'page-1');
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'page-1', operation: 'trash' })
+      );
+    });
+
+    it('re-homes live children to the grandparent when withChildren is false', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Parent Page',
+        type: 'TASK_LIST',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: 'grandparent-1',
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 7,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.getDirectChildren.mockResolvedValue([
+        { id: 'child-1', revision: 2 },
+        { id: 'child-2', revision: 3 },
+      ]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.trash_page.execute!(
+        { id: 'page-1', withChildren: false },
+        context
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      // Each live child is moved up to the grandparent (originalParentId recorded for restore)...
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'child-1',
+          operation: 'move',
+          updates: { parentId: 'grandparent-1', originalParentId: 'page-1' },
+        })
+      );
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'child-2',
+          operation: 'move',
+          updates: { parentId: 'grandparent-1', originalParentId: 'page-1' },
+        })
+      );
+      // ...and only then is the parent trashed (children are never stranded under it).
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({ pageId: 'page-1', operation: 'trash' })
       );

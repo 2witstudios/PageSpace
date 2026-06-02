@@ -224,7 +224,7 @@ describe('provider-factory', () => {
         }
       });
 
-      it('openrouter_free shares the OpenRouter env var', async () => {
+      it('openrouter_free shares the OpenRouter env var and enables response caching', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
         const result = await createAIProvider('user-123', {
@@ -233,7 +233,24 @@ describe('provider-factory', () => {
         });
 
         expect(isProviderError(result)).toBe(false);
-        expect(createOpenRouter).toHaveBeenCalledWith({ apiKey: 'or-key' });
+        expect(createOpenRouter).toHaveBeenCalledWith({
+          apiKey: 'or-key',
+          headers: { 'X-OpenRouter-Cache': 'true' },
+        });
+      });
+
+      it('enables OpenRouter response caching via the X-OpenRouter-Cache header', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+        await createAIProvider('user-123', {
+          selectedProvider: 'openrouter',
+          selectedModel: 'anthropic/claude-opus-4.7',
+        });
+
+        expect(createOpenRouter).toHaveBeenCalledWith({
+          apiKey: 'or-key',
+          headers: { 'X-OpenRouter-Cache': 'true' },
+        });
       });
 
       it('anthropic instantiates createAnthropic with the env key', async () => {

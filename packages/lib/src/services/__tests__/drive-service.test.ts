@@ -67,6 +67,7 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   isTrashed: overrides.isTrashed ?? false,
   trashedAt: null,
   drivePrompt: null,
+  publishSubdomain: null,
 });
 
 // ============================================================================

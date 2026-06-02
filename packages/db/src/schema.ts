@@ -40,6 +40,7 @@ export * from './schema/zoom';
 export * from './schema/webhook-triggers';
 export * from './schema/drafts';
 export * from './schema/sandbox-sessions';
+export * from './schema/published-pages';
 export * from './schema/credits';
 
 import * as auth from './schema/auth';
@@ -84,6 +85,7 @@ import * as zoom from './schema/zoom';
 import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
 import * as sandboxSessions from './schema/sandbox-sessions';
+import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
 
 export const schema = {
@@ -129,5 +131,6 @@ export const schema = {
   ...webhookTriggers,
   ...drafts,
   ...sandboxSessions,
+  ...publishedPages,
   ...credits,
 };

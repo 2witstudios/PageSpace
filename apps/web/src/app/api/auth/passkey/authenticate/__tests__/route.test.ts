@@ -33,6 +33,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -174,7 +176,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('revokes existing sessions before creating new one', async () => {
       await POST(createRequest());
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
+      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
         type: 'user',
@@ -183,7 +185,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
 
     it('logs when existing sessions are revoked', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(3);
+      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(3);
 
       await POST(createRequest());
 
@@ -194,7 +196,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
 
     it('does not log when no sessions are revoked', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
 
       await POST(createRequest());
 

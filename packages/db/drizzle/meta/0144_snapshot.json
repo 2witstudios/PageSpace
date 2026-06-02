@@ -1,5 +1,5 @@
 {
-  "id": "0133736c-b1d8-40e8-8f86-e176cb09f8ce",
+  "id": "7bd7f849-3157-4353-9369-d98220f35ce9",
   "prevId": "67d3295d-f6ad-4fe2-8388-ae1ef5a2b5ce",
   "version": "7",
   "dialect": "postgresql",
@@ -1597,6 +1597,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "publishSubdomain": {
+          "name": "publishSubdomain",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1653,7 +1659,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {
+        "drives_publishSubdomain_unique": {
+          "name": "drives_publishSubdomain_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "publishSubdomain"
+          ]
+        }
+      }
     },
     "public.favorites": {
       "name": "favorites",
@@ -15289,8 +15303,8 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.sandbox_sessions": {
-      "name": "sandbox_sessions",
+    "public.published_pages": {
+      "name": "published_pages",
       "schema": "",
       "columns": {
         "id": {
@@ -15299,69 +15313,56 @@
           "primaryKey": true,
           "notNull": true
         },
-        "sessionKey": {
-          "name": "sessionKey",
+        "drive_id": {
+          "name": "drive_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "conversationId": {
-          "name": "conversationId",
+        "page_id": {
+          "name": "page_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "driveId": {
-          "name": "driveId",
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_key": {
+          "name": "artifact_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "published_by": {
+          "name": "published_by",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "tenantId": {
-          "name": "tenantId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sandboxId": {
-          "name": "sandboxId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lastActiveAt": {
-          "name": "lastActiveAt",
+        "published_at": {
+          "name": "published_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
         },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true
         }
       },
       "indexes": {
-        "sandbox_sessions_conversation_id_idx": {
-          "name": "sandbox_sessions_conversation_id_idx",
+        "published_pages_drive_id_idx": {
+          "name": "published_pages_drive_id_idx",
           "columns": [
             {
-              "expression": "conversationId",
+              "expression": "drive_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -15372,11 +15373,11 @@
           "method": "btree",
           "with": {}
         },
-        "sandbox_sessions_last_active_at_idx": {
-          "name": "sandbox_sessions_last_active_at_idx",
+        "published_pages_page_id_idx": {
+          "name": "published_pages_page_id_idx",
           "columns": [
             {
-              "expression": "lastActiveAt",
+              "expression": "page_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -15389,25 +15390,12 @@
         }
       },
       "foreignKeys": {
-        "sandbox_sessions_conversationId_conversations_id_fk": {
-          "name": "sandbox_sessions_conversationId_conversations_id_fk",
-          "tableFrom": "sandbox_sessions",
-          "tableTo": "conversations",
-          "columnsFrom": [
-            "conversationId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "sandbox_sessions_driveId_drives_id_fk": {
-          "name": "sandbox_sessions_driveId_drives_id_fk",
-          "tableFrom": "sandbox_sessions",
+        "published_pages_drive_id_drives_id_fk": {
+          "name": "published_pages_drive_id_drives_id_fk",
+          "tableFrom": "published_pages",
           "tableTo": "drives",
           "columnsFrom": [
-            "driveId"
+            "drive_id"
           ],
           "columnsTo": [
             "id"
@@ -15415,27 +15403,48 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "sandbox_sessions_userId_users_id_fk": {
-          "name": "sandbox_sessions_userId_users_id_fk",
-          "tableFrom": "sandbox_sessions",
-          "tableTo": "users",
+        "published_pages_page_id_pages_id_fk": {
+          "name": "published_pages_page_id_pages_id_fk",
+          "tableFrom": "published_pages",
+          "tableTo": "pages",
           "columnsFrom": [
-            "userId"
+            "page_id"
           ],
           "columnsTo": [
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "published_pages_published_by_users_id_fk": {
+          "name": "published_pages_published_by_users_id_fk",
+          "tableFrom": "published_pages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "published_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "sandbox_sessions_sessionKey_unique": {
-          "name": "sandbox_sessions_sessionKey_unique",
+        "published_pages_page_id_key": {
+          "name": "published_pages_page_id_key",
           "nullsNotDistinct": false,
           "columns": [
-            "sessionKey"
+            "page_id"
+          ]
+        },
+        "published_pages_drive_id_path_key": {
+          "name": "published_pages_drive_id_path_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "drive_id",
+            "path"
           ]
         }
       }

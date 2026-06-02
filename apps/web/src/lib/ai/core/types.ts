@@ -40,6 +40,12 @@ export interface ToolExecutionContext {
   // Allowlist of tool names this agent is permitted to execute (null = unrestricted)
   enabledTools?: string[] | null;
 
+  // MCP token drive-scope restriction. Empty/undefined = full access (session auth
+  // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.
+  // Enforced in actor-permissions so a scoped token cannot escalate through an
+  // agent whose own ACL spans drives outside the token scope.
+  mcpAllowedDriveIds?: string[];
+
   // Chat source identification - determines sender identity for channel messages
   chatSource?: {
     type: 'global' | 'page';

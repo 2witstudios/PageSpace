@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage, canActorDeletePage } from './actor-permissions';
+import { canActorEditPage, canActorDeletePage, driveOutsideMcpScope } from './actor-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -248,6 +248,21 @@ async function trashPage(
       });
     }
   } else {
+    // Re-home live children to the grandparent before trashing the parent, mirroring
+    // pageService.trashPage's move-children-up branch. Without this, the children would
+    // be stranded under a trashed parent and surface as bogus top-level sidebar items.
+    const children = await pageRepository.getDirectChildren(page.driveId, page.id);
+    for (const child of children) {
+      await applyPageMutation({
+        pageId: child.id,
+        operation: 'move',
+        updates: { parentId: page.parentId, originalParentId: page.id },
+        updatedFields: ['parentId', 'originalParentId'],
+        expectedRevision: typeof child.revision === 'number' ? child.revision : undefined,
+        context: baseContext,
+      });
+    }
+
     await applyPageMutation({
       pageId: page.id,
       operation: 'trash',
@@ -761,13 +776,13 @@ export const pageWriteTools = {
    * Move a page to trash (soft delete)
    */
   trash_page: tool({
-    description: 'Move a page to trash (soft delete). Optionally trash all child pages recursively with withChildren.',
+    description: 'Move a page to trash (soft delete). By default all child pages are trashed recursively with the parent; pass withChildren: false to instead move children up to the grandparent and keep them.',
     inputSchema: z.object({
       id: z.string().describe('The unique ID of the page to trash'),
       title: z.string().optional().describe('Optional page title for display/error context only — the real title is fetched by ID'),
-      withChildren: z.boolean().optional().default(false).describe('Whether to trash all children recursively'),
+      withChildren: z.boolean().optional().default(true).describe('Whether to trash all children recursively (default true). Set false to move children up to the grandparent instead of trashing them.'),
     }),
-    execute: async ({ id, title, withChildren = false }, { experimental_context: context }) => {
+    execute: async ({ id, title, withChildren = true }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -815,6 +830,10 @@ export const pageWriteTools = {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      if (driveOutsideMcpScope(context as ToolExecutionContext, id)) {
+        throw new Error('This token does not have access to this drive');
       }
 
       try {
@@ -898,6 +917,10 @@ export const pageWriteTools = {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      if (driveOutsideMcpScope(context as ToolExecutionContext, id)) {
+        throw new Error('This token does not have access to this drive');
       }
 
       try {
