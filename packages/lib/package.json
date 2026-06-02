@@ -952,6 +952,30 @@
       "services/sandbox/session-manager": [
         "./dist/services/sandbox/session-manager.d.ts"
       ],
+      "services/sandbox/command-policy": [
+        "./dist/services/sandbox/command-policy.d.ts"
+      ],
+      "services/sandbox/output-limit": [
+        "./dist/services/sandbox/output-limit.d.ts"
+      ],
+      "services/sandbox/egress": [
+        "./dist/services/sandbox/egress.d.ts"
+      ],
+      "services/sandbox/sandbox-paths": [
+        "./dist/services/sandbox/sandbox-paths.d.ts"
+      ],
+      "services/sandbox/sandbox-client/types": [
+        "./dist/services/sandbox/sandbox-client/types.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sprites": [
+        "./dist/services/sandbox/sandbox-client/sprites.d.ts"
+      ],
+      "services/sandbox/tool-runners": [
+        "./dist/services/sandbox/tool-runners.d.ts"
+      ],
+      "services/sandbox/tool-gate": [
+        "./dist/services/sandbox/tool-gate.d.ts"
+      ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
       ],
