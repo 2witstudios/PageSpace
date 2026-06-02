@@ -20,12 +20,30 @@ describe('truncateToBytes', () => {
     expect(result.originalBytes).toBe(10);
   });
 
-  it('given a multi-byte boundary split, should not throw and should report original bytes', () => {
-    // '😀' is 4 UTF-8 bytes; a 2-byte cap splits it.
+  it('given a multi-byte boundary split, should cut on a char boundary and stay within the cap', () => {
+    // '😀' is 4 UTF-8 bytes; a 2-byte cap splits it. A lenient decode would emit
+    // U+FFFD (3 bytes) and BLOW the 2-byte cap; cutting on the boundary yields ''.
     const result = truncateToBytes({ text: '😀😀', maxBytes: 2 });
     expect(result.truncated).toBe(true);
     expect(result.originalBytes).toBe(8);
-    expect(typeof result.text).toBe('string');
+    expect(result.text).toBe('');
+    expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(2);
+    expect(result.text).not.toContain('�');
+  });
+
+  it('given a mixed ASCII + multi-byte split, should keep the whole-char prefix within the cap', () => {
+    // 'aé' = 'a'(1) + 'é'(2 bytes). maxBytes 2 splits 'é'; result must be 'a'.
+    const result = truncateToBytes({ text: 'aé', maxBytes: 2 });
+    expect(result.text).toBe('a');
+    expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(2);
+  });
+
+  it('given any cap, the returned text never exceeds maxBytes (replacement-char inflation guard)', () => {
+    const text = '😀aé😀b';
+    for (let maxBytes = 0; maxBytes <= Buffer.byteLength(text, 'utf8'); maxBytes++) {
+      const result = truncateToBytes({ text, maxBytes });
+      expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(maxBytes);
+    }
   });
 
   it('given empty/no text, should be safe', () => {

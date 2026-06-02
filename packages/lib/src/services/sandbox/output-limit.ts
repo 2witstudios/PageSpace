@@ -4,9 +4,12 @@
  * Untrusted code can emit unbounded output; the policy's `maxOutputBytes` caps
  * what we retain and render in the chat tool-call UI. Truncation is byte-bounded
  * (not character-bounded) so a multi-megabyte stream can never blow the cap via
- * wide characters. A partial multi-byte sequence at the cut is decoded
- * leniently (replacement char) rather than thrown — the output is untrusted log
- * data, so a clean lossy cut is correct.
+ * wide characters. The cut is moved BACK to the nearest UTF-8 character boundary
+ * so it never lands mid-codepoint: that means the result is a clean prefix with
+ * no U+FFFD replacement char — which matters because a replacement char is itself
+ * 3 UTF-8 bytes and, emitted at the boundary, could push the returned text back
+ * OVER `maxBytes` (e.g. '😀😀' capped at 2 bytes). The returned text is therefore
+ * GUARANTEED to be ≤ `maxBytes`.
  */
 
 export interface TruncatedOutput {
@@ -23,13 +26,16 @@ export function truncateToBytes({
   text?: string;
   maxBytes: number;
 }): TruncatedOutput {
-  const originalBytes = Buffer.byteLength(text, 'utf8');
+  const buffer = Buffer.from(text, 'utf8');
+  const originalBytes = buffer.length;
   if (originalBytes <= maxBytes) {
     return { text, truncated: false, originalBytes };
   }
-  // Cut on the byte buffer, then decode leniently so a split multi-byte
-  // sequence at the boundary becomes a replacement char instead of throwing.
-  const cut = Buffer.from(text, 'utf8').subarray(0, maxBytes);
-  const decoded = new TextDecoder('utf-8', { fatal: false }).decode(cut);
-  return { text: decoded, truncated: true, originalBytes };
+  // Walk the cut back off any partial trailing multi-byte sequence so it lands on
+  // a UTF-8 character boundary. A continuation byte matches 0b10xxxxxx; backing up
+  // past them lands on the lead byte of the split codepoint, which we then exclude
+  // — yielding a clean prefix with no replacement char (and so guaranteed ≤ maxBytes).
+  let end = maxBytes;
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--;
+  return { text: buffer.subarray(0, end).toString('utf8'), truncated: true, originalBytes };
 }
