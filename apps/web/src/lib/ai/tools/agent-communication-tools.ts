@@ -600,6 +600,9 @@ export const agentCommunicationTools = {
         // Awaited (not fire-and-forget): trackAIUsage persists the usage log and
         // debits the balance inside the returned promise, so awaiting here keeps the
         // sub-agent charge durable if the tool returns into a serverless freeze.
+        // No holdId: this nested call runs inside an already-gated parent request;
+        // the parent's hold covers its own settle, and these sub-agent decrements
+        // draw the balance directly (no separate reservation to release).
         await AIMonitoring.trackUsage({
           userId,
           provider: resolvedProvider,

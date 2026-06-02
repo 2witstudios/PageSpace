@@ -51,6 +51,31 @@ export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
  */
 export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
 
+/**
+ * Estimated spend reserved per in-flight call as a credit_holds row. The gate
+ * subtracts the sum of a user's active holds from spendable, so concurrent calls
+ * can't collectively overshoot the balance before any of them settles. Defaults
+ * to the reserve floor — a plausible worst-case single completion (see
+ * {@link RESERVE_FLOOR_CENTS}). Tune via env per real usage data.
+ */
+export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', RESERVE_FLOOR_CENTS);
+
+/**
+ * How long a hold lives before the reconcile cron may sweep it. Must exceed the
+ * longest possible stream plus its settle window (AI routes cap streams at 300s),
+ * so a still-running call's reservation is never reclaimed out from under it.
+ * Default 15 minutes.
+ */
+export const CREDIT_HOLD_TTL_SECONDS = envInt('CREDIT_HOLD_TTL_SECONDS', 900);
+
+/**
+ * Max concurrent in-flight AI calls for a free-tier user. With daily call counts
+ * gone, this bounds how many simultaneous streams one free user can open — each
+ * of which could overshoot its reservation. Paid tiers are uncapped (bounded by
+ * credits alone). Default 2.
+ */
+export const MAX_FREE_INFLIGHT = envInt('MAX_FREE_INFLIGHT', 2);
+
 export interface CreditPack {
   /** Stable SKU id, also stored in Stripe price metadata. */
   id: string;

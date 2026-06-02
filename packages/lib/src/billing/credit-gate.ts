@@ -15,11 +15,23 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances } from '@pagespace/db/schema/credits';
-import { and, eq, lt, or, isNull } from '@pagespace/db/operators';
+import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { and, eq, gt, lt, or, isNull, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { evaluateGate, computeMonthlyRefill, type GateResult } from './credit-core';
-import { RESERVE_FLOOR_CENTS, TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
+import {
+  evaluateGate,
+  computeMonthlyRefill,
+  reservationCents,
+  holdExpiresAt,
+  type GateResult,
+} from './credit-core';
+import {
+  RESERVE_FLOOR_CENTS,
+  TIER_MONTHLY_ALLOWANCE_CENTS,
+  CREDIT_HOLD_ESTIMATE_CENTS,
+  CREDIT_HOLD_TTL_SECONDS,
+  MAX_FREE_INFLIGHT,
+} from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 /**
@@ -99,55 +111,98 @@ export async function canConsumeAI(
     row = await readBalance();
   }
 
-  // Use-it-or-lose-it for paid tiers: a paid user's monthly bucket is only spendable
-  // within its window. The gate never resets paid tiers (invoice.paid is authoritative),
-  // so once the window has expired we must EXCLUDE the leftover monthly from the
-  // decision — otherwise a delayed renewal would let last period's allowance keep
-  // funding calls. Only the never-expiring top-up bucket survives an expired window.
-  // A NULL period is treated as not-yet-expired (we can't prove it lapsed, and a fresh
-  // invoice.paid grant may carry no period dates); free users are handled by the reset
-  // above and never reach this exclusion.
-  const paidMonthlyExpired =
-    tier !== 'free' && row !== null && row.monthlyPeriodEnd !== null && row.monthlyPeriodEnd < now;
+  // Lazy-init from tier defaults so a balance row always exists before the
+  // authoritative hold transaction below. A free user's very first request has no
+  // row yet; init it from the tier allowance and stamp a period window so the reset
+  // path above can later roll it (a free user with no Stripe invoice would otherwise
+  // never reset). onConflictDoNothing tolerates a concurrent init — the transaction
+  // judges the REAL persisted balance under a row lock, never our assumed allowance,
+  // so we can't allow when a racing request already drew the row down.
+  if (!row) {
+    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
+    await db
+      .insert(creditBalances)
+      .values({
+        userId,
+        monthlyRemainingCents: monthly,
+        monthlyAllowanceCents: monthly,
+        topupRemainingCents: 0,
+        monthlyPeriodStart: now,
+        monthlyPeriodEnd: addOneMonth(now),
+      })
+      .onConflictDoNothing({ target: creditBalances.userId });
+  }
 
-  const result = evaluateGate({
-    billingEnabled: true,
-    balance: row
-      ? {
-          monthlyCents: paidMonthlyExpired ? 0 : row.monthlyRemainingCents,
-          topupCents: row.topupRemainingCents,
-        }
-      : null,
-    reserveFloorCents: RESERVE_FLOOR_CENTS,
-  });
+  const estCost = reservationCents(CREDIT_HOLD_ESTIMATE_CENTS);
+  // Free users are capped on concurrent in-flight calls; paid tiers are bounded by
+  // credits alone (no cap).
+  const maxInFlight = tier === 'free' ? MAX_FREE_INFLIGHT : null;
+  const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
 
-  if (result.reason !== 'needs_init') return result;
+  // Authoritative decision + reservation, atomic under a balance row lock. The lock
+  // serializes this user's concurrent requests so they observe each other's holds —
+  // two simultaneous calls can't both pass a check that only one call's worth of
+  // credit can cover, and the free-tier in-flight count can't be undercounted.
+  return db.transaction(async (tx): Promise<GateResult> => {
+    const balRows = await tx
+      .select({
+        monthlyRemainingCents: creditBalances.monthlyRemainingCents,
+        topupRemainingCents: creditBalances.topupRemainingCents,
+        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+      })
+      .from(creditBalances)
+      .where(eq(creditBalances.userId, userId))
+      .for('update');
+    const bal = balRows[0] ?? null;
 
-  // Lazy-init from tier defaults, then re-evaluate against the PERSISTED row.
-  // onConflictDoNothing means a concurrent request may have already created the
-  // row (possibly already drawn down); we must judge the real stored balance,
-  // not our assumed full allowance, or we could allow when credits are exhausted.
-  // Stamp the period boundary so the reset path above has a window to roll — a
-  // free user with no Stripe invoice would otherwise never get a monthly reset.
-  const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
-  await db
-    .insert(creditBalances)
-    .values({
-      userId,
-      monthlyRemainingCents: monthly,
-      monthlyAllowanceCents: monthly,
-      topupRemainingCents: 0,
-      monthlyPeriodStart: now,
-      monthlyPeriodEnd: addOneMonth(now),
-    })
-    .onConflictDoNothing({ target: creditBalances.userId });
+    // Sum & count this user's still-active holds (calls in flight). Expired holds
+    // are excluded from both — they no longer reserve spend and are reclaimed by
+    // the reconcile cron — so a crashed stream can't permanently shrink spendable
+    // or block the in-flight cap forever.
+    const holdAgg = await tx
+      .select({
+        reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)`,
+        inFlight: sql<number>`count(*)`,
+      })
+      .from(creditHolds)
+      .where(and(eq(creditHolds.userId, userId), gt(creditHolds.expiresAt, now)));
+    const reserved = Number(holdAgg[0]?.reserved ?? 0);
+    const inFlight = Number(holdAgg[0]?.inFlight ?? 0);
 
-  const initialized = await readBalance();
-  return evaluateGate({
-    billingEnabled: true,
-    balance: initialized
-      ? { monthlyCents: initialized.monthlyRemainingCents, topupCents: initialized.topupRemainingCents }
-      : null,
-    reserveFloorCents: RESERVE_FLOOR_CENTS,
+    // Use-it-or-lose-it for paid tiers: a paid user's monthly bucket is only spendable
+    // within its window. The gate never resets paid tiers (invoice.paid is authoritative),
+    // so once the window has expired we EXCLUDE the leftover monthly — otherwise a delayed
+    // renewal would let last period's allowance keep funding calls. Only the never-expiring
+    // top-up bucket survives. A NULL period is treated as not-yet-expired; free users were
+    // handled by the reset above and never reach this exclusion.
+    const paidMonthlyExpired =
+      tier !== 'free' && bal !== null && bal.monthlyPeriodEnd !== null && bal.monthlyPeriodEnd < now;
+
+    const result = evaluateGate({
+      billingEnabled: true,
+      balance: bal
+        ? {
+            monthlyCents: paidMonthlyExpired ? 0 : bal.monthlyRemainingCents,
+            topupCents: bal.topupRemainingCents,
+          }
+        : null,
+      reserveFloorCents: RESERVE_FLOOR_CENTS,
+      reservedCents: reserved,
+      estCostCents: estCost,
+      inFlightCount: inFlight,
+      maxInFlight,
+    });
+
+    if (!result.allowed) return result;
+
+    // Reserve this call's estimated spend AND register it as one in-flight call.
+    // consumeCredits deletes the hold at settle; a crashed stream leaves it for the
+    // reconcile sweep to expire.
+    const inserted = await tx
+      .insert(creditHolds)
+      .values({ userId, estCents: estCost, expiresAt })
+      .returning({ id: creditHolds.id });
+
+    return { ...result, holdId: inserted[0]?.id };
   });
 }

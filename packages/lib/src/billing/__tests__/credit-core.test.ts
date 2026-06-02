@@ -8,6 +8,8 @@ import {
   accrueCharge,
   allocateSpend,
   evaluateGate,
+  reservationCents,
+  holdExpiresAt,
   computeMonthlyRefill,
   applyTopup,
   classifyStripeEvent,
@@ -173,6 +175,91 @@ describe('evaluateGate', () => {
     // exact-floor boundary: spendable == floor -> denied
     expect(evaluateGate({ billingEnabled: true, balance: { monthlyCents: 5, topupCents: 0 }, reserveFloorCents: 5 }).allowed)
       .toBe(false);
+  });
+
+  it('subtracts outstanding holds and this call\'s reservation from spendable', () => {
+    // 100 spendable, 25 floor. Two 25¢ holds already reserved + a 25¢ reservation
+    // for this call => effective spendable 100 - 50 - 25 = 25 == floor => denied.
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 100, topupCents: 0 },
+      reserveFloorCents: 25,
+      reservedCents: 50,
+      estCostCents: 25,
+    }).allowed).toBe(false);
+    // Drop one outstanding hold (reserved 25): 100 - 25 - 25 = 50 > 25 => allowed.
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 100, topupCents: 0 },
+      reserveFloorCents: 25,
+      reservedCents: 25,
+      estCostCents: 25,
+    })).toEqual({ allowed: true, reason: 'ok' });
+  });
+
+  it('denies with too_many_in_flight when the in-flight count has reached the cap', () => {
+    // Cap reached even though the user has ample credit — the concurrency limiter
+    // fires first and is a distinct reason from out_of_credits.
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 10_000, topupCents: 0 },
+      reserveFloorCents: 25,
+      inFlightCount: 2,
+      maxInFlight: 2,
+    })).toEqual({ allowed: false, reason: 'too_many_in_flight' });
+  });
+
+  it('allows under the in-flight cap', () => {
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 10_000, topupCents: 0 },
+      reserveFloorCents: 25,
+      inFlightCount: 1,
+      maxInFlight: 2,
+    }).reason).toBe('ok');
+  });
+
+  it('applies no in-flight cap when maxInFlight is null/undefined (paid tiers)', () => {
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 10_000, topupCents: 0 },
+      reserveFloorCents: 25,
+      inFlightCount: 99,
+      maxInFlight: null,
+    }).allowed).toBe(true);
+  });
+
+  it('checks the in-flight cap BEFORE credits (a capped user with credit still 429s, not 402)', () => {
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 0, topupCents: 0 },
+      reserveFloorCents: 25,
+      inFlightCount: 5,
+      maxInFlight: 2,
+    }).reason).toBe('too_many_in_flight');
+  });
+});
+
+describe('reservationCents', () => {
+  it('rounds a positive estimate to whole cents', () => {
+    expect(reservationCents(25)).toBe(25);
+    expect(reservationCents(24.6)).toBe(25);
+  });
+
+  it('clamps a non-positive or non-finite estimate to 0 (hold still counts in-flight)', () => {
+    expect(reservationCents(0)).toBe(0);
+    expect(reservationCents(-5)).toBe(0);
+    expect(reservationCents(Number.NaN)).toBe(0);
+  });
+});
+
+describe('holdExpiresAt', () => {
+  it('returns now + ttl in epoch ms', () => {
+    expect(holdExpiresAt(1_000_000, 900_000)).toBe(1_900_000);
+  });
+
+  it('treats a negative ttl as 0 (never expires before it is created)', () => {
+    expect(holdExpiresAt(1_000_000, -5)).toBe(1_000_000);
   });
 });
 

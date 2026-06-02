@@ -30,6 +30,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 export const maxDuration = 300;
@@ -96,15 +97,11 @@ export async function POST(request: Request): Promise<Response> {
     .where(eq(users.id, authResult.userId));
   const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
   if (!creditGate.allowed) {
-    auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'out_of_credits' }, riskScore: 0 });
-    return NextResponse.json(
-      {
-        error: 'out_of_credits',
-        message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
-      },
-      { status: 402 }
-    );
+    auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: creditGate.reason }, riskScore: 0 });
+    return creditGateErrorResponse(creditGate.reason);
   }
+  // The gate's reservation for this call, released when usage is billed in onFinish.
+  const holdId = creditGate.holdId;
 
   // 7. Build system prompt from agent page config
   const systemPrompt = page.systemPrompt
@@ -174,6 +171,7 @@ export async function POST(request: Request): Promise<Response> {
         messageId: assistantId,
         pageId,
         success: true,
+        holdId,
         metadata: { via: 'openai_api_v1' },
       }).catch((err: unknown) => {
         loggers.ai.error('OpenAI API: failed to track usage', err as Error);

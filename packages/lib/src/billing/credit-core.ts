@@ -107,31 +107,90 @@ export function allocateSpend(balance: Balance, amountCents: number): SpendResul
   };
 }
 
-export type GateReason = 'unlimited' | 'ok' | 'out_of_credits' | 'needs_init';
+export type GateReason =
+  | 'unlimited'
+  | 'ok'
+  | 'out_of_credits'
+  | 'needs_init'
+  | 'too_many_in_flight';
 
 export interface GateInput {
   billingEnabled: boolean;
   balance: Balance | null;
   reserveFloorCents: number;
+  /**
+   * Sum of this user's already-placed, non-expired holds (estimated spend on
+   * calls still in flight). Subtracted from spendable so concurrent calls can't
+   * collectively overshoot the balance. Defaults to 0 (no outstanding holds).
+   */
+  reservedCents?: number;
+  /** This call's own reservation, also subtracted from spendable. Defaults to 0. */
+  estCostCents?: number;
+  /** Count of this user's non-expired holds (calls currently in flight). Defaults to 0. */
+  inFlightCount?: number;
+  /**
+   * Max concurrent in-flight calls for this user. `undefined`/`null` means no cap
+   * (paid tiers are bounded by credits alone). The free-tier cap stops a single
+   * user from fanning out many simultaneous streams that each overshoot.
+   */
+  maxInFlight?: number | null;
 }
 
 export interface GateResult {
   allowed: boolean;
   reason: GateReason;
+  /** Set by the gate shell when a hold row was inserted for an allowed request. */
+  holdId?: string;
 }
 
 /**
  * The prepaid hard-cap decision. Billing-disabled deployments (tenant/onprem)
  * are always allowed. A missing balance row returns `needs_init` so the shell
- * can lazy-init and re-evaluate. Otherwise allow only while spendable credits
- * exceed the reserve floor (which bounds single in-flight overshoot).
+ * can lazy-init and re-evaluate.
+ *
+ * Two limiters, checked in order:
+ *   1. in-flight cap — deny (`too_many_in_flight`) when this user already has
+ *      `maxInFlight` non-expired holds. Checked first so a user fanning out many
+ *      simultaneous calls is bounded even while they still have credits.
+ *   2. credits — allow only while spendable, AFTER subtracting outstanding holds
+ *      and this call's own reservation, exceeds the reserve floor. The floor +
+ *      per-call reservation together bound how far concurrent calls can overshoot.
  */
 export function evaluateGate(input: GateInput): GateResult {
   if (!input.billingEnabled) return { allowed: true, reason: 'unlimited' };
   if (input.balance === null) return { allowed: false, reason: 'needs_init' };
-  const spendable = input.balance.monthlyCents + input.balance.topupCents;
+
+  const inFlightCount = Math.max(0, input.inFlightCount ?? 0);
+  if (input.maxInFlight != null && inFlightCount >= input.maxInFlight) {
+    return { allowed: false, reason: 'too_many_in_flight' };
+  }
+
+  const reserved = Math.max(0, input.reservedCents ?? 0);
+  const estCost = Math.max(0, input.estCostCents ?? 0);
+  const spendable = input.balance.monthlyCents + input.balance.topupCents - reserved - estCost;
   if (spendable > input.reserveFloorCents) return { allowed: true, reason: 'ok' };
   return { allowed: false, reason: 'out_of_credits' };
+}
+
+/**
+ * Normalize the configured per-call hold estimate into a whole-cent reservation.
+ * Clamps to a non-negative integer; a non-finite or non-positive estimate yields
+ * 0 (the hold still counts toward the in-flight cap, it just reserves no spend).
+ */
+export function reservationCents(estimateCents: number): number {
+  if (!Number.isFinite(estimateCents) || estimateCents <= 0) return 0;
+  return Math.round(estimateCents);
+}
+
+/**
+ * The instant a hold placed at `nowMs` should expire, in epoch ms. Pure (operates
+ * on numbers only — the shell converts to/from Date). A hold lives long enough to
+ * cover the longest stream plus its post-call settle; after that the reconcile
+ * cron treats it as abandoned and sweeps it so a crashed stream's reservation
+ * can't permanently shrink spendable.
+ */
+export function holdExpiresAt(nowMs: number, ttlMs: number): number {
+  return nowMs + Math.max(0, ttlMs);
 }
 
 export interface MonthlyRefill {

@@ -6,13 +6,14 @@ import { fileURLToPath } from 'node:url';
 const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSettlePending = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const mockDb = vi.hoisted(() => ({ select: vi.fn(), transaction: vi.fn() }));
+const mockDb = vi.hoisted(() => ({ select: vi.fn(), transaction: vi.fn(), delete: vi.fn() }));
 const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditBalances: { userId: 'cb.userId' },
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', consumeStatus: 'cl.consumeStatus', createdAt: 'cl.createdAt' },
+  creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp' },
@@ -76,6 +77,9 @@ describe('backfillCredits', () => {
     // drain any passes a prior test queued but did not consume (e.g. the cap test).
     mockDb.select.mockReset();
     mockIsBillingEnabled.mockReturnValue(true);
+    // Hold-expiry sweep runs once at the start of every backfill; default to nothing
+    // expired so the existing pending/orphan assertions are unaffected.
+    mockDb.delete.mockReturnValue({ where: () => ({ returning: () => Promise.resolve([]) }) });
   });
 
   it('settles each pending ledger row and consumes each orphan usage row exactly once', async () => {
@@ -91,14 +95,15 @@ describe('backfillCredits', () => {
     expect(mockSettlePending).toHaveBeenCalledWith('led_2');
     expect(mockConsumeCredits).toHaveBeenCalledTimes(1);
     expect(mockConsumeCredits).toHaveBeenCalledWith({ aiUsageLogId: 'aul_9', userId: 'u9', costDollars: 0.5 });
-    expect(result).toEqual({ retried: 2, orphans: 1 });
+    expect(result).toEqual({ retried: 2, orphans: 1, expiredHolds: 0 });
   });
 
   it('does nothing when billing is disabled', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
     const result = await backfillCredits();
     expect(mockDb.select).not.toHaveBeenCalled();
-    expect(result).toEqual({ retried: 0, orphans: 0 });
+    expect(mockDb.delete).not.toHaveBeenCalled();
+    expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
   });
 
   it('is a no-op when nothing is unsettled', async () => {
@@ -106,7 +111,20 @@ describe('backfillCredits', () => {
     const result = await backfillCredits();
     expect(mockSettlePending).not.toHaveBeenCalled();
     expect(mockConsumeCredits).not.toHaveBeenCalled();
-    expect(result).toEqual({ retried: 0, orphans: 0 });
+    expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
+  });
+
+  it('sweeps holds past their expiresAt and reports the count', async () => {
+    // Three stale holds (crashed/abandoned streams) reclaimed; no pending/orphan work.
+    mockDb.delete.mockReturnValue({
+      where: () => ({ returning: () => Promise.resolve([{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }]) }),
+    });
+    mockSelects([], []);
+
+    const result = await backfillCredits();
+
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(result.expiredHolds).toBe(3);
   });
 
   it('drains a >BATCH backlog across multiple passes (does not stop at one batch)', async () => {
@@ -119,7 +137,7 @@ describe('backfillCredits', () => {
 
     expect(mockDb.select).toHaveBeenCalledTimes(4); // 2 sweeps × 2 passes
     expect(mockSettlePending).toHaveBeenCalledTimes(BATCH + 50);
-    expect(result).toEqual({ retried: BATCH + 50, orphans: 0 });
+    expect(result).toEqual({ retried: BATCH + 50, orphans: 0, expiredHolds: 0 });
   });
 
   it('stops after the safety cap even if a sweep keeps returning a full batch of fresh rows', async () => {

@@ -7,7 +7,7 @@ import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { writeAiUsage } from '../logging/logger-database';
-import { consumeCredits } from '../billing/credit-consume';
+import { consumeCredits, releaseHold } from '../billing/credit-consume';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -631,6 +631,11 @@ export interface AIUsageData {
   error?: string;
   metadata?: Record<string, unknown>;
 
+  // The reservation placed by the credit gate (canConsumeAI) at the top of the
+  // request, released when this call's real cost is billed. Threaded from the
+  // route → here → consumeCredits. Absent for un-gated calls (e.g. cron paths).
+  holdId?: string;
+
   // Context tracking - track actual conversation context vs billing tokens
   contextMessages?: string[]; // Array of message IDs included in this call's context
   contextSize?: number; // Actual tokens in context (input + system prompt + tools)
@@ -707,10 +712,14 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       // zero-charge call still reaches consumeCredits, which settles it as
       // 'skipped' without churning a $0 ledger transaction.
       if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
-        await consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost })
+        await consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost, holdId: data.holdId })
           .catch((error) => {
             loggers.ai.debug('credit consume failed', { error: (error as Error).message });
           });
+      } else if (data.holdId) {
+        // Token-less failure (pre-generation error): nothing to bill, but the gate
+        // already placed a hold. Release it now instead of leaving it to the cron.
+        await releaseHold(data.holdId);
       }
     } catch (error) {
       loggers.ai.debug('AI usage tracking failed', {
