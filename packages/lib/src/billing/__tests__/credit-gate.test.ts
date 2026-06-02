@@ -1,13 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
-const mockDb = vi.hoisted(() => ({ select: vi.fn(), insert: vi.fn() }));
+const mockDb = vi.hoisted(() => ({ select: vi.fn(), insert: vi.fn(), update: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId', monthlyRemainingCents: 'cb.monthly', topupRemainingCents: 'cb.topup' },
+  creditBalances: {
+    userId: 'cb.userId',
+    monthlyRemainingCents: 'cb.monthly',
+    topupRemainingCents: 'cb.topup',
+    monthlyAllowanceCents: 'cb.allowance',
+    monthlyPeriodStart: 'cb.periodStart',
+    monthlyPeriodEnd: 'cb.periodEnd',
+  },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  and: vi.fn((...a) => ({ op: 'and', a })),
+  lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
+}));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 
 import { canConsumeAI } from '../credit-gate';
@@ -18,6 +29,12 @@ function selectReturning(rows: unknown[]) {
 function insertChain() {
   return { values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }) };
 }
+// Captures the .set() payload of an update chain whose .where() resolves.
+function updateCapturing(sink: { set?: Record<string, unknown> }) {
+  return { set: (v: Record<string, unknown>) => { sink.set = v; return { where: () => Promise.resolve(undefined) }; } };
+}
+const PAST = new Date(Date.now() - 60 * 60 * 1000); // 1h ago
+const FUTURE = new Date(Date.now() + 60 * 60 * 1000); // 1h ahead
 
 describe('canConsumeAI', () => {
   beforeEach(() => {
@@ -46,16 +63,49 @@ describe('canConsumeAI', () => {
     expect(r.reason).toBe('out_of_credits');
   });
 
-  it('lazy-inits a balance row from tier defaults on first request, then allows', async () => {
+  it('lazy-inits a balance row from tier defaults (with a period boundary) on first request, then allows', async () => {
     // 1st select: no row -> needs_init. 2nd select (post-insert): the persisted row.
     mockDb.select
       .mockReturnValueOnce(selectReturning([]))
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0 }]));
-    mockDb.insert.mockReturnValue(insertChain());
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    let initValues: Record<string, unknown> | undefined;
+    mockDb.insert.mockReturnValue({
+      values: (v: Record<string, unknown>) => { initValues = v; return { onConflictDoNothing: () => Promise.resolve(undefined) }; },
+    });
     const r = await canConsumeAI('u1', 'pro');
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    // A free/no-subscription user needs a window for the gate to later roll over.
+    expect(initValues?.monthlyPeriodStart).toBeInstanceOf(Date);
+    expect(initValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    expect((initValues?.monthlyPeriodEnd as Date).getTime()).toBeGreaterThan((initValues?.monthlyPeriodStart as Date).getTime());
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
+  });
+
+  it('resets the monthly bucket to the tier allowance when the period has expired (gate-driven, no cron)', async () => {
+    // 1st read: expired window with a drained monthly bucket. After reset, 2nd read
+    // sees the refreshed allowance. This is how free users get a monthly reset.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown> } = {};
+    mockDb.update.mockReturnValue(updateCapturing(sink));
+
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1500, monthlyAllowanceCents: 1500 });
+    expect(sink.set?.monthlyPeriodStart).toBeInstanceOf(Date);
+    expect((sink.set?.monthlyPeriodEnd as Date).getTime()).toBeGreaterThan(Date.now());
+    expect(r).toEqual({ allowed: true, reason: 'ok' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('does NOT reset when the period is still active (paid users keep their window)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const r = await canConsumeAI('u1', 'pro');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r.allowed).toBe(true);
   });
 
   it('re-evaluates against the persisted row after a concurrent init (no false allow)', async () => {

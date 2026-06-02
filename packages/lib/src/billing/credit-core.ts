@@ -30,17 +30,66 @@ export function markupCents(realCostDollars: number, markupBps: number): number 
   return Math.round(realCostDollars * (markupBps / 10000) * 100);
 }
 
+/**
+ * Convert a real provider cost (dollars) into the customer-facing charge in
+ * MILLICENTS (1/1000 of a cent), applying the markup. Millicents is the fine unit
+ * we accumulate so that sub-cent costs aren't silently rounded down to $0 and
+ * billed nothing on high-volume cheap calls. Non-positive or non-finite cost
+ * yields 0. Integer-only — no float ever reaches stored state.
+ */
+export function chargeMillicents(realCostDollars: number, markupBps: number): number {
+  if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
+  return Math.round(realCostDollars * (markupBps / 10000) * 100_000);
+}
+
+export interface AccrualResult {
+  /** Whole cents to debit from the balance now. */
+  wholeCents: number;
+  /** Sub-cent remainder to carry to the next call; always in [0, 1000). */
+  newPending: number;
+}
+
+/**
+ * Fold a call's charge (already in millicents) into the per-user fractional
+ * remainder, yielding the whole cents to debit now and the leftover to carry.
+ * This is what stops a stream of sub-cent calls from each rounding to $0: their
+ * fractions accumulate in `pending` until they cross a whole cent. Inputs are
+ * clamped to non-negative integers; `newPending` is always in [0, 1000).
+ */
+export function accruePending(pendingMillicents: number, chargeMc: number): AccrualResult {
+  const total = Math.max(0, Math.round(pendingMillicents)) + Math.max(0, Math.round(chargeMc));
+  const wholeCents = Math.floor(total / 1000);
+  return { wholeCents, newPending: total - wholeCents * 1000 };
+}
+
+/**
+ * Convenience composition of {@link chargeMillicents} + {@link accruePending}:
+ * compute a call's charge from dollars and fold it into the remainder in one step.
+ */
+export function accrueCharge(
+  pendingMillicents: number,
+  realCostDollars: number,
+  markupBps: number,
+): AccrualResult {
+  return accruePending(pendingMillicents, chargeMillicents(realCostDollars, markupBps));
+}
+
 export interface SpendResult {
   monthlyCents: number;
   topupCents: number;
   spentMonthly: number;
   spentTopup: number;
+  /** What actually left the balance (spentMonthly + spentTopup); <= amount spent. */
+  appliedCents: number;
   shortfallCents: number;
 }
 
 /**
  * Draw `amountCents` from the balance, monthly bucket first then top-up.
  * Buckets clamp at zero; any uncovered remainder is reported as `shortfallCents`.
+ * `appliedCents` is what truly came out of the balance — the figure the ledger
+ * must record so the books reconcile against the balance delta (the uncovered
+ * `shortfallCents` is owed as debt, not silently dropped).
  */
 export function allocateSpend(balance: Balance, amountCents: number): SpendResult {
   const amount = Math.max(0, Math.round(amountCents));
@@ -53,6 +102,7 @@ export function allocateSpend(balance: Balance, amountCents: number): SpendResul
     topupCents: balance.topupCents - spentTopup,
     spentMonthly,
     spentTopup,
+    appliedCents: spentMonthly + spentTopup,
     shortfallCents,
   };
 }

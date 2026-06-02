@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   markupCents,
+  chargeMillicents,
+  accruePending,
+  accrueCharge,
   allocateSpend,
   evaluateGate,
   computeMonthlyRefill,
@@ -44,6 +47,67 @@ describe('markupCents', () => {
   });
 });
 
+describe('chargeMillicents', () => {
+  it('expresses the customer charge in millicents (1/1000 cent) so sub-cent costs survive', () => {
+    // $1.00 real -> ×1.5 -> $1.50 -> 150 cents -> 150_000 millicents
+    expect(chargeMillicents(1, 15000)).toBe(150_000);
+    // $0.0033 real -> ×1.5 -> $0.00495 -> 0.495 cents -> 495 millicents (NOT rounded to 0)
+    expect(chargeMillicents(0.0033, 15000)).toBe(495);
+  });
+
+  it('returns 0 for zero, negative, or non-finite cost', () => {
+    expect(chargeMillicents(0, 15000)).toBe(0);
+    expect(chargeMillicents(-5, 15000)).toBe(0);
+    expect(chargeMillicents(Number.NaN, 15000)).toBe(0);
+  });
+});
+
+describe('accruePending', () => {
+  it('carries the sub-cent remainder instead of dropping it', () => {
+    // 495 millicents alone -> 0 whole cents, 495 carried
+    expect(accruePending(0, 495)).toEqual({ wholeCents: 0, newPending: 495 });
+  });
+
+  it('crosses a whole cent once accumulated fractions exceed 1000 millicents', () => {
+    // 600 carried + 495 charge = 1095 -> 1 whole cent, 95 carried
+    expect(accruePending(600, 495)).toEqual({ wholeCents: 1, newPending: 95 });
+  });
+
+  it('emits multiple whole cents and keeps newPending in [0, 1000)', () => {
+    // 999 carried + 4321 charge = 5320 -> 5 whole cents, 320 carried
+    const r = accruePending(999, 4321);
+    expect(r).toEqual({ wholeCents: 5, newPending: 320 });
+    expect(r.newPending).toBeGreaterThanOrEqual(0);
+    expect(r.newPending).toBeLessThan(1000);
+  });
+
+  it('clamps negative inputs to zero', () => {
+    expect(accruePending(-10, -10)).toEqual({ wholeCents: 0, newPending: 0 });
+  });
+
+  it('many sub-cent calls eventually bill a whole cent (remainder carried across calls)', () => {
+    // Each $0.0033 call charges 495 millicents -> 0 whole cents alone. After 3
+    // calls: 1485 millicents -> the 2nd whole cent crosses, fractions retained.
+    let pending = 0;
+    let billed = 0;
+    for (let i = 0; i < 3; i++) {
+      const r = accruePending(pending, chargeMillicents(0.0033, 15000));
+      billed += r.wholeCents;
+      pending = r.newPending;
+    }
+    // 3 × 495 = 1485 millicents -> 1 whole cent billed, 485 carried.
+    expect(billed).toBe(1);
+    expect(pending).toBe(485);
+  });
+});
+
+describe('accrueCharge', () => {
+  it('composes chargeMillicents into accruePending', () => {
+    // $1.00 -> 150_000 millicents + 0 pending -> 150 whole cents, 0 carried
+    expect(accrueCharge(0, 1, 15000)).toEqual({ wholeCents: 150, newPending: 0 });
+  });
+});
+
 describe('allocateSpend', () => {
   it('draws entirely from the monthly bucket when it covers the spend', () => {
     const r = allocateSpend({ monthlyCents: 500, topupCents: 1000 }, 200);
@@ -52,6 +116,7 @@ describe('allocateSpend', () => {
       topupCents: 1000,
       spentMonthly: 200,
       spentTopup: 0,
+      appliedCents: 200,
       shortfallCents: 0,
     });
   });
@@ -62,15 +127,18 @@ describe('allocateSpend', () => {
     expect(r.spentTopup).toBe(150);
     expect(r.monthlyCents).toBe(0);
     expect(r.topupCents).toBe(850);
+    expect(r.appliedCents).toBe(250);
     expect(r.shortfallCents).toBe(0);
   });
 
-  it('reports a shortfall when both buckets are insufficient', () => {
+  it('reports a shortfall and the actually-applied amount when both buckets are insufficient', () => {
     const r = allocateSpend({ monthlyCents: 30, topupCents: 20 }, 100);
     expect(r.spentMonthly).toBe(30);
     expect(r.spentTopup).toBe(20);
     expect(r.monthlyCents).toBe(0);
     expect(r.topupCents).toBe(0);
+    // 30 + 20 covered, 50 owed -> applied 50, shortfall 50 (sum back to the 100 charge)
+    expect(r.appliedCents).toBe(50);
     expect(r.shortfallCents).toBe(50);
   });
 
@@ -78,6 +146,7 @@ describe('allocateSpend', () => {
     const r = allocateSpend({ monthlyCents: 100, topupCents: 100 }, 0);
     expect(r.monthlyCents).toBe(100);
     expect(r.topupCents).toBe(100);
+    expect(r.appliedCents).toBe(0);
     expect(r.shortfallCents).toBe(0);
   });
 });

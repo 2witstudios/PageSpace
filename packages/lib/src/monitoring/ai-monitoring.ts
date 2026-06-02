@@ -604,8 +604,11 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     const cost = calculateCost(data.model, inputTokens, outputTokens);
     const success = data.success !== false;
 
-    // Persist the usage log, then (on a successful, persisted call) debit the
-    // user's prepaid credit balance (cost × markup); failed calls are not billed.
+    // Persist the usage log, then debit the user's prepaid credit balance
+    // (cost × markup) whenever real provider tokens were consumed — even if the
+    // generation later errored/aborted mid-stream. Tokens burned before the error
+    // are real spend the provider charges us for, so we must bill them. Only a
+    // pre-generation failure (0 tokens, unsuccessful) is left unbilled.
     //
     // AWAITED, not fire-and-forget: callers reach this from a stream onFinish or
     // a post-response handler and `await` trackAIUsage. A detached promise can be
@@ -645,7 +648,11 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
           streamingDuration: data.streamingDuration,
         },
       });
-      if (aiUsageLogId && success) {
+      // Bill when real tokens were consumed, regardless of success. A token-less
+      // failure (pre-generation error) carries 0 tokens and is skipped; a
+      // zero-charge call still reaches consumeCredits, which settles it as
+      // 'skipped' without churning a $0 ledger transaction.
+      if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
         await consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost })
           .catch((error) => {
             loggers.ai.debug('credit consume failed', { error: (error as Error).message });

@@ -15,6 +15,12 @@ export const creditBalances = pgTable('credit_balances', {
   monthlyRemainingCents: integer('monthlyRemainingCents').default(0).notNull(),
   monthlyAllowanceCents: integer('monthlyAllowanceCents').default(0).notNull(),
   topupRemainingCents: integer('topupRemainingCents').default(0).notNull(),
+  // Sub-cent carry: a single AI call can cost a fraction of a cent (high-volume
+  // cheap models). We charge in millicents (1/1000 cent) and bank the leftover
+  // fraction here so those calls don't silently round to $0. Always in [0, 1000):
+  // each settle debits floor((pending + charge)/1000) whole cents and keeps the
+  // remainder. Never a float — integer millicents only.
+  pendingMillicents: integer('pendingMillicents').default(0).notNull(),
   monthlyPeriodStart: timestamp('monthlyPeriodStart', { mode: 'date', withTimezone: true }),
   monthlyPeriodEnd: timestamp('monthlyPeriodEnd', { mode: 'date', withTimezone: true }),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
@@ -25,6 +31,9 @@ export const creditBalances = pgTable('credit_balances', {
   monthlyNonNeg: check('credit_balances_monthly_remaining_nonneg', sql`${table.monthlyRemainingCents} >= 0`),
   allowanceNonNeg: check('credit_balances_monthly_allowance_nonneg', sql`${table.monthlyAllowanceCents} >= 0`),
   topupNonNeg: check('credit_balances_topup_remaining_nonneg', sql`${table.topupRemainingCents} >= 0`),
+  // The carry is a sub-cent fraction by construction; bound it so a bad write
+  // can't park whole cents of unbilled value here, out of sight of the balance.
+  pendingRange: check('credit_balances_pending_millicents_range', sql`${table.pendingMillicents} >= 0 AND ${table.pendingMillicents} < 1000`),
   periodOrder: check(
     'credit_balances_period_order',
     sql`${table.monthlyPeriodStart} IS NULL OR ${table.monthlyPeriodEnd} IS NULL OR ${table.monthlyPeriodStart} <= ${table.monthlyPeriodEnd}`,
@@ -34,16 +43,21 @@ export const creditBalances = pgTable('credit_balances', {
 /**
  * creditLedger — append-only audit/provenance. One row per grant, purchase, or
  * usage decrement. The unique indexes are the correctness backbone:
- *   - one decrement per aiUsageLogId  (each AI call billed exactly once)
- *   - one credit per stripeRef        (each payment credited exactly once)
+ *   - one USAGE decrement per aiUsageLogId  (each AI call billed exactly once)
+ *   - one credit per stripeRef              (each payment credited exactly once)
  * aiUsageLogId is a soft link (no FK) because aiUsageLogs is purged on retention.
+ * The usage-log index is scoped to entryType='usage' on purpose: a uncovered-cost
+ * 'adjustment' (debt) row is written alongside the usage row and links to the SAME
+ * aiUsageLogId, so the uniqueness must apply to the usage decrement only.
  */
 export const creditLedger = pgTable('credit_ledger', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment'
   bucket: text('bucket').notNull(), // 'monthly' | 'topup'
-  amountCents: integer('amountCents').notNull(), // signed: grants/purchases +, usage -
+  amountCents: integer('amountCents').notNull(), // signed full intended charge: grants/purchases +, usage/debt -
+  appliedCents: integer('appliedCents'), // signed amount actually decremented from the balance (usage rows). |applied| <= |amount|; the gap is debt recorded as an adjustment row.
+  chargeMillicents: integer('chargeMillicents'), // precise per-call charge in millicents (usage rows) — the sub-cent-accurate source for settlement/retry
   aiUsageLogId: text('aiUsageLogId'), // soft link to aiUsageLogs.id (no FK)
   realCostCents: integer('realCostCents'), // round(cost*100) pre-markup, for audit
   markupBps: integer('markupBps').default(15000).notNull(),
@@ -55,7 +69,7 @@ export const creditLedger = pgTable('credit_ledger', {
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
   usageLogUnique: uniqueIndex('credit_ledger_usage_log_unique')
     .on(table.aiUsageLogId)
-    .where(sql`${table.aiUsageLogId} IS NOT NULL`),
+    .where(sql`${table.aiUsageLogId} IS NOT NULL AND ${table.entryType} = 'usage'`),
   stripeRefUnique: uniqueIndex('credit_ledger_stripe_ref_unique')
     .on(table.stripeRef)
     .where(sql`${table.stripeRef} IS NOT NULL`),
