@@ -140,7 +140,7 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
     throw new Error(providerResult.error);
   }
 
-  return providerResult.model;
+  return providerResult;
 }
 
 /**
@@ -247,11 +247,16 @@ export async function POST(request: Request) {
 
     // Get configured AI model for agent
     let model;
+    let resolvedProvider = agent.aiProvider || 'pagespace';
+    let resolvedModelName = agent.aiModel || 'glm-4.5-air';
     try {
-      model = await getConfiguredModel(userId, {
+      const providerResult = await getConfiguredModel(userId, {
         aiProvider: agent.aiProvider,
         aiModel: agent.aiModel
       });
+      model = providerResult.model;
+      resolvedProvider = providerResult.provider;
+      resolvedModelName = providerResult.modelName;
     } catch (providerError) {
       loggers.api.error('Agent consultation provider setup error:', providerError as Error);
       return NextResponse.json(
@@ -459,15 +464,16 @@ export async function POST(request: Request) {
           errors: toolErrors,
         });
       }
-      // Track AI usage
-      const usage = result.usage;
+      // Track AI usage. This is a tool loop (stepCountIs(100)); use totalUsage so
+      // every round-trip is billed, not just the final step.
+      const usage = result.totalUsage;
       AIMonitoring.trackUsage({
         userId,
-        provider: agent.aiProvider || 'pagespace',
-        model: agent.aiModel || 'glm-4.5-air',
+        provider: resolvedProvider,
+        model: resolvedModelName,
         inputTokens: usage?.inputTokens,
         outputTokens: usage?.outputTokens,
-        totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+        totalTokens: usage?.totalTokens ?? (usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined),
         pageId: agentId,
         driveId: agent.driveId,
         success: true,

@@ -17,7 +17,7 @@ import {
 } from '@/lib/workflows/task-trigger-helpers';
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
-import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
+import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import {
   normalizeTaskAgentTriggerInput,
@@ -52,6 +52,9 @@ Status:
 - Each status belongs to a group (todo, in_progress, done) that controls completion behavior
 - Use a status slug that exists in the task list's configuration (read_page on the TASK_LIST page returns availableStatuses)
 - To create a new custom status slug first, call create_task_status before this tool
+
+Completion:
+- A task cannot be marked done while it still has incomplete sub-tasks. When this tool returns { success: false, code: "SUBTASKS_INCOMPLETE" }, do not retry — tell the user that {pending} of {total} sub-tasks remain and must be completed first.
 
 Assignment:
 - Use assigneeIds array to assign multiple users and/or agents
@@ -167,19 +170,8 @@ Agent Triggers:
         }
         // Completion guard: cannot mark a task done while it has incomplete sub-tasks
         if (updateData.completedAt instanceof Date && existingTask.pageId) {
-          try {
-            await assertSubTasksComplete(existingTask.pageId);
-          } catch (error) {
-            if (error instanceof SubtasksIncompleteError) {
-              return {
-                success: false,
-                error: error.message,
-                pending: error.pending,
-                total: error.total,
-              };
-            }
-            throw error;
-          }
+          const blocked = await checkSubTasksComplete(existingTask.pageId);
+          if (blocked) return toToolFailure(blocked);
         }
 
         if (priority !== undefined) updateData.priority = priority;

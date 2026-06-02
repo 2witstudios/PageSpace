@@ -1,0 +1,202 @@
+/**
+ * credit-core — the PURE decision layer for prepaid AI-credits billing.
+ *
+ * INVARIANT: this module has zero I/O. No db, no Stripe SDK, no env, no clock.
+ * Every input is an explicit argument; every output is a value. All billing
+ * decisions live here so they can be tested exhaustively and deterministically;
+ * the imperative shells (credit-consume / credit-funding / credit-gate /
+ * credit-backfill / the webhook) read state, call these functions, and persist
+ * the result. The purity invariant is enforced by a test in __tests__.
+ *
+ * Money is always whole cents of customer-facing credit value. Two buckets:
+ *   - monthly: the subscription allowance; RESETS each period (use-it-or-lose-it)
+ *   - topup:   one-time purchased packs; NEVER expires
+ * Spend always draws monthly first (it's the one that expires).
+ */
+
+import type { SubscriptionTier } from '../services/subscription-utils';
+
+export interface Balance {
+  monthlyCents: number;
+  topupCents: number;
+}
+
+/**
+ * Convert a real provider cost (in dollars) into the customer-facing charge in
+ * whole cents, applying the markup. Non-positive or non-finite cost yields 0.
+ */
+export function markupCents(realCostDollars: number, markupBps: number): number {
+  if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
+  return Math.round(realCostDollars * (markupBps / 10000) * 100);
+}
+
+export interface SpendResult {
+  monthlyCents: number;
+  topupCents: number;
+  spentMonthly: number;
+  spentTopup: number;
+  shortfallCents: number;
+}
+
+/**
+ * Draw `amountCents` from the balance, monthly bucket first then top-up.
+ * Buckets clamp at zero; any uncovered remainder is reported as `shortfallCents`.
+ */
+export function allocateSpend(balance: Balance, amountCents: number): SpendResult {
+  const amount = Math.max(0, Math.round(amountCents));
+  const spentMonthly = Math.min(balance.monthlyCents, amount);
+  const afterMonthly = amount - spentMonthly;
+  const spentTopup = Math.min(balance.topupCents, afterMonthly);
+  const shortfallCents = afterMonthly - spentTopup;
+  return {
+    monthlyCents: balance.monthlyCents - spentMonthly,
+    topupCents: balance.topupCents - spentTopup,
+    spentMonthly,
+    spentTopup,
+    shortfallCents,
+  };
+}
+
+export type GateReason = 'unlimited' | 'ok' | 'out_of_credits' | 'needs_init';
+
+export interface GateInput {
+  billingEnabled: boolean;
+  balance: Balance | null;
+  reserveFloorCents: number;
+}
+
+export interface GateResult {
+  allowed: boolean;
+  reason: GateReason;
+}
+
+/**
+ * The prepaid hard-cap decision. Billing-disabled deployments (tenant/onprem)
+ * are always allowed. A missing balance row returns `needs_init` so the shell
+ * can lazy-init and re-evaluate. Otherwise allow only while spendable credits
+ * exceed the reserve floor (which bounds single in-flight overshoot).
+ */
+export function evaluateGate(input: GateInput): GateResult {
+  if (!input.billingEnabled) return { allowed: true, reason: 'unlimited' };
+  if (input.balance === null) return { allowed: false, reason: 'needs_init' };
+  const spendable = input.balance.monthlyCents + input.balance.topupCents;
+  if (spendable > input.reserveFloorCents) return { allowed: true, reason: 'ok' };
+  return { allowed: false, reason: 'out_of_credits' };
+}
+
+export interface MonthlyRefill {
+  monthlyRemainingCents: number;
+  monthlyAllowanceCents: number;
+}
+
+/**
+ * Compute the reset state for a new billing period: remaining is reset to the
+ * full tier allowance (unspent prior credits are dropped — use-it-or-lose-it).
+ * Unknown tiers fall back to the free allowance.
+ */
+export function computeMonthlyRefill(
+  tier: SubscriptionTier,
+  allowanceTable: Record<SubscriptionTier, number>,
+): MonthlyRefill {
+  const allowance = allowanceTable[tier] ?? allowanceTable.free;
+  return { monthlyRemainingCents: allowance, monthlyAllowanceCents: allowance };
+}
+
+/**
+ * Add a purchased credit pack to the top-up bucket. The monthly bucket is never
+ * touched. A negative pack amount is a programming error and throws.
+ */
+export function applyTopup(currentTopupCents: number, packCents: number): number {
+  if (!Number.isFinite(packCents) || packCents < 0) {
+    throw new Error(`applyTopup: packCents must be a non-negative number, got ${packCents}`);
+  }
+  return currentTopupCents + Math.round(packCents);
+}
+
+export type StripeAction =
+  | { kind: 'monthly_refill' }
+  | { kind: 'topup'; packCents: number }
+  | { kind: 'tier_change' }
+  | { kind: 'ignore' };
+
+/**
+ * Structural subset of a Stripe.Event we need to route funding. Kept minimal so
+ * this stays pure and trivially testable without the Stripe SDK types.
+ */
+export interface ClassifiableEvent {
+  type: string;
+  data: {
+    object: {
+      mode?: string | null;
+      metadata?: Record<string, string> | null;
+    };
+  };
+}
+
+/**
+ * Map a Stripe webhook event to the funding action it should trigger.
+ *   invoice.paid                       -> monthly_refill (subscription renewal)
+ *   checkout.session.completed (pack)  -> topup
+ *   customer.subscription.*            -> tier_change
+ *   everything else                    -> ignore
+ */
+export function classifyStripeEvent(event: ClassifiableEvent): StripeAction {
+  if (event.type === 'invoice.paid') {
+    return { kind: 'monthly_refill' };
+  }
+  if (event.type === 'checkout.session.completed') {
+    const obj = event.data.object;
+    if (obj.mode === 'payment' && obj.metadata?.kind === 'credit_pack') {
+      // Strict: only a canonical unsigned-integer string credits. parseInt would
+      // accept "2500usd"; for a money amount from event metadata we require digits.
+      const raw = obj.metadata.packCents ?? '';
+      if (/^\d+$/.test(raw)) {
+        const packCents = Number.parseInt(raw, 10);
+        if (packCents > 0) return { kind: 'topup', packCents };
+      }
+    }
+    return { kind: 'ignore' };
+  }
+  if (
+    event.type === 'customer.subscription.updated' ||
+    event.type === 'customer.subscription.created'
+  ) {
+    return { kind: 'tier_change' };
+  }
+  return { kind: 'ignore' };
+}
+
+export interface PendingLedgerRow {
+  id: string;
+}
+
+export interface OrphanUsageRow {
+  aiUsageLogId: string;
+  userId: string;
+  costDollars: number;
+}
+
+export type BackfillAction =
+  | { kind: 'retry_pending'; ledgerId: string }
+  | { kind: 'apply_orphan'; aiUsageLogId: string; userId: string; costDollars: number };
+
+/**
+ * Plan the reconcile work: retry every unsettled ('pending') ledger row, then
+ * apply a decrement for every usage row that has no ledger entry at all. The
+ * DB query is responsible for selection (status/age/orphan); this just maps the
+ * already-filtered rows into actions so the cron shell stays dumb.
+ */
+export function computeBackfillActions(
+  pending: PendingLedgerRow[],
+  orphans: OrphanUsageRow[],
+): BackfillAction[] {
+  return [
+    ...pending.map((row): BackfillAction => ({ kind: 'retry_pending', ledgerId: row.id })),
+    ...orphans.map((row): BackfillAction => ({
+      kind: 'apply_orphan',
+      aiUsageLogId: row.aiUsageLogId,
+      userId: row.userId,
+      costDollars: row.costDollars,
+    })),
+  ];
+}

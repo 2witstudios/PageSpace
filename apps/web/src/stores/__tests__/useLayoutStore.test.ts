@@ -108,4 +108,46 @@ describe('useLayoutStore', () => {
       });
     });
   });
+
+  describe('left sidebar defaults', () => {
+    it('given a fresh store, should default the persistent left sidebar to open', () => {
+      expect(useLayoutStore.getState().leftSidebarOpen).toBe(true);
+    });
+
+    it('given a fresh store, should default the desktop left overlay to closed', () => {
+      expect(useLayoutStore.getState().leftOverlayOpen).toBe(false);
+    });
+
+    it('given setLeftOverlayOpen(true), should open the overlay without touching the persistent flag', () => {
+      const { setLeftOverlayOpen } = useLayoutStore.getState();
+
+      setLeftOverlayOpen(true);
+
+      expect(useLayoutStore.getState().leftOverlayOpen).toBe(true);
+      expect(useLayoutStore.getState().leftSidebarOpen).toBe(true);
+    });
+  });
+
+  describe('persistence contract', () => {
+    const readPersisted = () => {
+      const raw = localStorage.getItem('layout-storage');
+      return raw ? JSON.parse(raw).state : undefined;
+    };
+
+    it('given the persistent left sidebar is toggled, should persist leftSidebarOpen to localStorage', () => {
+      useLayoutStore.getState().setLeftSidebarOpen(false);
+
+      expect(readPersisted()?.leftSidebarOpen).toBe(false);
+    });
+
+    it('given the desktop overlay is opened, should NOT persist leftOverlayOpen (transient per load)', () => {
+      useLayoutStore.getState().setLeftOverlayOpen(true);
+
+      const persisted = readPersisted();
+      // A write happened (state changed) but the overlay flag must be excluded from partialize,
+      // so a narrow-screen overlay can never pollute the persisted desktop preference.
+      expect(persisted).not.toBeUndefined();
+      expect('leftOverlayOpen' in persisted).toBe(false);
+    });
+  });
 });

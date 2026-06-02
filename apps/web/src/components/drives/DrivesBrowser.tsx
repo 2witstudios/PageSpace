@@ -21,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
-import { useFavorites } from "@/hooks/useFavorites";
+import { useFavorites, useFavoritesSync } from "@/hooks/useFavorites";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { DriveContextMenu } from "./DriveContextMenu";
@@ -72,20 +72,13 @@ export default function DrivesBrowser() {
 
   const {
     isFavorite,
-    fetchFavorites,
-    isSynced,
     driveIds: favoriteDriveIds,
   } = useFavorites();
+  useFavoritesSync();
 
   useEffect(() => {
     fetchDrives(false, true);
   }, [fetchDrives]);
-
-  useEffect(() => {
-    if (!isSynced) {
-      fetchFavorites();
-    }
-  }, [isSynced, fetchFavorites]);
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {

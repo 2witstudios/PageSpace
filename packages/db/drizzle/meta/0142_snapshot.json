@@ -1,5 +1,5 @@
 {
-  "id": "aa28c8c4-b19f-4f26-a56e-19c80689baab",
+  "id": "59475dac-753c-4b26-882d-1dead014cfef",
   "prevId": "66736726-002c-43bd-9038-758a176d5dd6",
   "version": "7",
   "dialect": "postgresql",
@@ -2100,6 +2100,13 @@
           "primaryKey": false,
           "notNull": false,
           "default": "'children'"
+        },
+        "toolExposureMode": {
+          "name": "toolExposureMode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'upfront'"
         },
         "fileSize": {
           "name": "fileSize",
@@ -15281,157 +15288,6 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
-    },
-    "public.sandbox_sessions": {
-      "name": "sandbox_sessions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "sessionKey": {
-          "name": "sessionKey",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "conversationId": {
-          "name": "conversationId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tenantId": {
-          "name": "tenantId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sandboxId": {
-          "name": "sandboxId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lastActiveAt": {
-          "name": "lastActiveAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "sandbox_sessions_conversation_id_idx": {
-          "name": "sandbox_sessions_conversation_id_idx",
-          "columns": [
-            {
-              "expression": "conversationId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "sandbox_sessions_last_active_at_idx": {
-          "name": "sandbox_sessions_last_active_at_idx",
-          "columns": [
-            {
-              "expression": "lastActiveAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "sandbox_sessions_conversationId_conversations_id_fk": {
-          "name": "sandbox_sessions_conversationId_conversations_id_fk",
-          "tableFrom": "sandbox_sessions",
-          "tableTo": "conversations",
-          "columnsFrom": [
-            "conversationId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "sandbox_sessions_driveId_drives_id_fk": {
-          "name": "sandbox_sessions_driveId_drives_id_fk",
-          "tableFrom": "sandbox_sessions",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "sandbox_sessions_userId_users_id_fk": {
-          "name": "sandbox_sessions_userId_users_id_fk",
-          "tableFrom": "sandbox_sessions",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "sandbox_sessions_sessionKey_unique": {
-          "name": "sandbox_sessions_sessionKey_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "sessionKey"
-          ]
-        }
-      }
     }
   },
   "enums": {

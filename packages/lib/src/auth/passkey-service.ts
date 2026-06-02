@@ -899,7 +899,12 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
         provider: 'email',
         role: 'user',
         tokenVersion: 1,
-        emailVerified: new Date(), // Passkey signup = verified (device ownership proven)
+        // Passkey registration proves control of an authenticator, NOT ownership
+        // of the typed email. Leave the address unverified; verification happens
+        // out-of-band — the signup route either marks it verified when a trusted
+        // invite token (delivered to that inbox) is consumed, or sends a
+        // verification email the user must click.
+        emailVerified: null,
         tosAcceptedAt: new Date(),
       });
 

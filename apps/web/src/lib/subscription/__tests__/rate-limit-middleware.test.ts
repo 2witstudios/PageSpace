@@ -36,5 +36,22 @@ describe('Rate Limit Middleware', () => {
       vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
       expect(requiresProSubscription('pagespace', 'some-model', 'pro')).toBe(false);
     });
+
+    it('should not require pro subscription for founder tier in cloud mode', () => {
+      vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+      expect(requiresProSubscription('pagespace', 'glm-5', 'founder')).toBe(false);
+    });
+
+    it('should require pro subscription for an unrecognized tier in cloud mode', () => {
+      vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+      // Unknown tiers must default to denied (positive allowlist), not granted.
+      expect(requiresProSubscription('pagespace', 'glm-5', 'enterprise')).toBe(true);
+    });
+
+    it('should not require pro subscription for an admin on a free tier in cloud mode', () => {
+      vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+      // Admins bypass the subscription gate entirely (paid OpenRouter access).
+      expect(requiresProSubscription('openrouter', 'anthropic/claude-opus-4.7', 'free', true)).toBe(false);
+    });
   });
 });

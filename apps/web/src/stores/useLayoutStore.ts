@@ -32,6 +32,9 @@ interface LayoutState {
   leftSheetOpen: boolean;
   rightSheetOpen: boolean;
 
+  // Desktop overlay state (1024-1279px, NOT persisted - starts closed on page load)
+  leftOverlayOpen: boolean;
+
   // Hydration state
   rehydrated: boolean;
 
@@ -45,6 +48,7 @@ interface LayoutState {
   setRightSidebarOpen: (open: boolean) => void;
   setLeftSheetOpen: (open: boolean) => void;
   setRightSheetOpen: (open: boolean) => void;
+  setLeftOverlayOpen: (open: boolean) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
   setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => void;
   setTasksDashboardFilter: (scopeKey: string, filters: StoredDashboardFilters) => void;
@@ -76,6 +80,9 @@ export const useLayoutStore = create<LayoutState>()(
       // Mobile sheet state (NOT persisted)
       leftSheetOpen: false,
       rightSheetOpen: false,
+
+      // Desktop overlay state (NOT persisted - starts closed on page load)
+      leftOverlayOpen: false,
 
       setRehydrated: () => {
         set({ rehydrated: true });
@@ -122,6 +129,10 @@ export const useLayoutStore = create<LayoutState>()(
 
       setRightSheetOpen: (open: boolean) => {
         set({ rightSheetOpen: open });
+      },
+
+      setLeftOverlayOpen: (open: boolean) => {
+        set({ leftOverlayOpen: open });
       },
 
       setDriveFooterCollapsed: (collapsed: boolean) => {
