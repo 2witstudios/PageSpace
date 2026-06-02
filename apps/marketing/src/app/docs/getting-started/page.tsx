@@ -1,5 +1,6 @@
 import { DocsMarkdown } from "@/components/DocsContent";
 import { createMetadata } from "@/lib/metadata";
+import { MONTHLY_CREDITS } from "@/lib/credits";
 
 export const metadata = createMetadata({
   title: "Getting Started",
@@ -21,7 +22,7 @@ Sign up at **pagespace.ai** — there are no passwords. Pick one:
 - **Magic link**: enter your email and click the link we send.
 - **Google** or **Apple** OAuth.
 
-No credit card required. The free tier includes 500 MB storage, 50 AI calls per day, and a 20 MB max file size.
+No credit card required. The free tier includes 500 MB storage, ${MONTHLY_CREDITS.free}/month of AI credits, and a 20 MB max file size.
 
 After signup, PageSpace sets you up with a starter **drive** (workspace) so you can jump straight in.
 
@@ -75,7 +76,7 @@ PageSpace routes every model through the Vercel AI SDK across 12 providers. Prov
 | Ollama | Models discovered from a configured Ollama server |
 | LM Studio | Models discovered from a configured LM Studio server |
 
-Open **Settings > AI** to pick a provider and model. The picker only shows providers your deployment has enabled — anything unconfigured is hidden. The provider and model you pick become your account-level default; any individual AI Chat page can override both. Calls count against your plan's standard or pro daily AI quota depending on the model.
+Open **Settings > AI** to pick a provider and model. The picker only shows providers your deployment has enabled — anything unconfigured is hidden. The provider and model you pick become your account-level default; any individual AI Chat page can override both. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts use standard models, while paid plans add Pro (advanced) models.
 
 ## 5. Create an AI Agent
 

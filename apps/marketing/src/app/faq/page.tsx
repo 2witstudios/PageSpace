@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
+import { MONTHLY_CREDITS, creditPacksPhrase } from "@/lib/credits";
 import { FAQHashOpener } from "./hash-opener";
 
 export const metadata = pageMetadata.faq;
@@ -56,8 +57,7 @@ const faqs: FAQItem[] = [
   {
     id: "is-there-a-free-plan",
     question: "Is there a free plan?",
-    answer:
-      "Yes. The Free plan includes 500 MB of storage and 50 AI calls per day. No credit card required.",
+    answer: `Yes. The Free plan includes 500 MB of storage and ${MONTHLY_CREDITS.free}/month of AI credits that meter your usage. No credit card required.`,
     category: "Pricing and plans",
   },
   {
@@ -65,19 +65,27 @@ const faqs: FAQItem[] = [
     question: "What do the paid plans include?",
     answer: (
       <>
-        More AI calls and storage. Pro is $15/month, Founder is $50/month,
-        Business is $100/month. All plans include real-time collaboration, AI
-        agents, and the ability to bring your own API key. Full comparison on
-        the {docsLink("/pricing", "Pricing page")}.
+        More AI credits, access to Pro models, and more storage. Each plan
+        includes a monthly AI-credit allowance — {MONTHLY_CREDITS.pro}/month on
+        Pro ($15/month), {MONTHLY_CREDITS.founder}/month on Founder ($50/month),
+        and {MONTHLY_CREDITS.business}/month on Business ($100/month) — and you
+        can buy more credits anytime. All plans include real-time collaboration
+        and AI agents. Full comparison on the{" "}
+        {docsLink("/pricing", "Pricing page")}.
       </>
     ),
     category: "Pricing and plans",
   },
   {
+    id: "how-ai-credits-work",
+    question: "How do AI credits work?",
+    answer: `Every plan includes a monthly allowance of AI credits — ${MONTHLY_CREDITS.free}/month on Free, more on paid plans. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Unused monthly credits don't roll over; your allowance resets at the start of each billing period.`,
+    category: "Pricing and plans",
+  },
+  {
     id: "hit-daily-ai-limit",
-    question: "What happens when I run out of AI calls for the day?",
-    answer:
-      "Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until your limit resets the next day. Upgrade your plan for higher daily quotas.",
+    question: "What happens when I run out of AI credits?",
+    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you either buy more credits (top-up packs come in ${creditPacksPhrase()}) or your monthly allowance resets at the start of the next billing period.`,
     category: "Pricing and plans",
   },
 

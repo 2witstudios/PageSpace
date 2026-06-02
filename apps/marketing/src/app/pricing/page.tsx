@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
+import { MONTHLY_CREDITS } from "@/lib/credits";
 
 export const metadata = pageMetadata.pricing;
 
@@ -17,8 +18,9 @@ interface Plan {
   highlight?: boolean;
   features: {
     storage: string;
-    aiCalls: string;
-    proAiCalls: string;
+    monthlyCredits: string;
+    models: string;
+    buyMore: boolean;
     realtime: boolean;
     hierarchicalAgents: boolean;
     prioritySupport: boolean;
@@ -34,8 +36,9 @@ const plans: Plan[] = [
     ctaVariant: "outline",
     features: {
       storage: "500 MB",
-      aiCalls: "50/day",
-      proAiCalls: "—",
+      monthlyCredits: `${MONTHLY_CREDITS.free}/mo`,
+      models: "Standard",
+      buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: false,
@@ -51,8 +54,9 @@ const plans: Plan[] = [
     highlight: true,
     features: {
       storage: "2 GB",
-      aiCalls: "200/day",
-      proAiCalls: "50/day",
+      monthlyCredits: `${MONTHLY_CREDITS.pro}/mo`,
+      models: "Standard + Pro",
+      buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: true,
@@ -67,8 +71,9 @@ const plans: Plan[] = [
     ctaVariant: "outline",
     features: {
       storage: "10 GB",
-      aiCalls: "500/day",
-      proAiCalls: "100/day",
+      monthlyCredits: `${MONTHLY_CREDITS.founder}/mo`,
+      models: "Standard + Pro",
+      buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: true,
@@ -83,8 +88,9 @@ const plans: Plan[] = [
     ctaVariant: "outline",
     features: {
       storage: "50 GB",
-      aiCalls: "1,000/day",
-      proAiCalls: "500/day",
+      monthlyCredits: `${MONTHLY_CREDITS.business}/mo`,
+      models: "Standard + Pro",
+      buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
       prioritySupport: true,
@@ -105,7 +111,8 @@ export default function PricingPage() {
               Simple, transparent pricing
             </h1>
             <p className="text-lg text-muted-foreground mb-4">
-              Start free with generous limits. Scale as you grow. No hidden fees.
+              Every plan includes a monthly allowance of AI credits that meter
+              your usage. Run low? Buy more anytime. No hidden fees.
             </p>
             <p className="text-sm text-muted-foreground">
               No credit card required for the Free plan.
@@ -150,17 +157,18 @@ export default function PricingPage() {
                       <span className="font-medium">{plan.features.storage}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Standard AI calls</span>
-                      <span className="font-medium">{plan.features.aiCalls}</span>
+                      <span className="text-muted-foreground">AI credits</span>
+                      <span className="font-medium">{plan.features.monthlyCredits}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Pro AI calls</span>
-                      <span className="font-medium">{plan.features.proAiCalls}</span>
+                      <span className="text-muted-foreground">Models</span>
+                      <span className="font-medium">{plan.features.models}</span>
                     </div>
                   </div>
 
                   <div className="border-t border-border pt-4 space-y-2">
                     {[
+                      { key: "buyMore", label: "Buy more credits anytime", value: plan.features.buyMore },
                       { key: "realtime", label: "Real-time collaboration", value: plan.features.realtime },
                       { key: "hierarchicalAgents", label: "Hierarchical AI agents", value: plan.features.hierarchicalAgents },
                       { key: "prioritySupport", label: "Priority support", value: plan.features.prioritySupport },
@@ -221,8 +229,9 @@ export default function PricingPage() {
               <tbody>
                 {[
                   { key: "storage", label: "Storage" },
-                  { key: "aiCalls", label: "Standard AI calls" },
-                  { key: "proAiCalls", label: "Pro AI calls" },
+                  { key: "monthlyCredits", label: "Monthly AI credits" },
+                  { key: "models", label: "Model access" },
+                  { key: "buyMore", label: "Buy more credits anytime" },
                   { key: "realtime", label: "Real-time Collaboration" },
                   { key: "hierarchicalAgents", label: "Hierarchical AI Agents" },
                   { key: "prioritySupport", label: "Priority Support" },

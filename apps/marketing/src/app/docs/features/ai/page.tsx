@@ -26,7 +26,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## How it works
 
-**Providers.** PageSpace routes your conversation to one of several AI providers through a single underlying pipe. Provider credentials are held by the deployment operator — on cloud, that's PageSpace; on a self-hosted install, it's whoever runs the server. The model picker only lists providers the operator has enabled, so anything unconfigured is hidden rather than failing at call time. Calls count against your plan's standard or pro daily AI quota depending on the model you pick.
+**Providers.** PageSpace routes your conversation to one of several AI providers through a single underlying pipe. Provider credentials are held by the deployment operator — on cloud, that's PageSpace; on a self-hosted install, it's whoever runs the server. The model picker only lists providers the operator has enabled, so anything unconfigured is hidden rather than failing at call time. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts use standard models, while paid plans add Pro (advanced) models.
 
 **Permissions.** When an agent acts, it acts as **you**. It can only see pages you can see and only change pages you can change. Share a page with a teammate and *their* agents can now see it too, under their account. Revoke access and the agents lose access immediately — there is no AI back-door.
 
