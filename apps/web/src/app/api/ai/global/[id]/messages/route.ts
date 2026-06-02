@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { createRateLimitResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
@@ -397,6 +397,17 @@ export async function POST(
     }
 
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
+
+    // Admin-only providers (e.g. paid OpenRouter) are restricted to global admins on the
+    // per-user global assistant too — defends against a stored selection surviving a role downgrade.
+    if (isAdminOnlyProvider(currentProvider) && auth.role !== 'admin') {
+      loggers.api.warn('Global Assistant Chat API: admin-only provider blocked for non-admin', {
+        userId: maskIdentifier(userId),
+        provider: currentProvider,
+        model: currentModel,
+      });
+      return createAdminRestrictedResponse();
+    }
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
