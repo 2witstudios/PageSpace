@@ -94,7 +94,9 @@ export function createRateLimitResponse(
  * Check if provider requires Pro subscription.
  * Billing-disabled deployments (on-prem and tenant) bypass subscription gating via isBillingEnabled().
  */
-export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
+export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined, isAdmin = false): boolean {
+  // Global admins bypass the subscription gate entirely (e.g. paid OpenRouter access).
+  if (isAdmin) return false;
   if (!isBillingEnabled()) return false;
   if (getProviderTier(provider, model) !== 'pro') return false;
 
@@ -113,6 +115,21 @@ export function createSubscriptionRequiredResponse(): NextResponse {
       error: 'Subscription required',
       message: 'Pro AI provider requires a Pro or Business subscription.',
       upgradeUrl: '/settings/billing',
+    },
+    { status: 403 }
+  );
+}
+
+/**
+ * Create an admin-only provider rejection response.
+ * Distinct from the subscription gate: the block is on role, not tier, so the
+ * message must not imply an upgrade would help.
+ */
+export function createAdminRestrictedResponse(): NextResponse {
+  return NextResponse.json(
+    {
+      error: 'Provider restricted',
+      message: 'This provider is restricted to administrators.',
     },
     { status: 403 }
   );
