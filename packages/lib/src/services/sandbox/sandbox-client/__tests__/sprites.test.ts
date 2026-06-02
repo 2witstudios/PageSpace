@@ -11,6 +11,7 @@ import {
   type SpriteCommandLike,
   type SpriteFsLike,
 } from '../sprites';
+import { SandboxReadLimitError } from '../types';
 import { mapPolicyToSandboxOptions } from '../../sandbox-options';
 import { resolveExecutionPolicy } from '../../execution-policy';
 
@@ -65,6 +66,7 @@ function fakeFs(over: Partial<SpriteFsLike> = {}): SpriteFsLike {
     readFile: async () => Buffer.from('contents'),
     writeFile: async () => {},
     mkdir: async () => {},
+    stat: async () => ({ size: 8 }),
     ...over,
   };
 }
@@ -366,5 +368,30 @@ describe('ExecutableSandbox file ops', () => {
     const { sdk: sdkMissing } = makeSdk({ getSprite: async () => fakeSprite({ fs: missing }) });
     const miss = await createSpritesSandboxClient({ sdk: sdkMissing }).get({ sandboxId: 'k' });
     expect(await miss!.readFileToBuffer({ path: '/workspace/missing.txt' })).toBeNull();
+  });
+
+  it('readFileToBuffer should REFUSE a file larger than maxBytes via stat, BEFORE reading its bytes', async () => {
+    let read = false;
+    const fs = fakeFs({
+      stat: async () => ({ size: 100 }),
+      readFile: async () => {
+        read = true;
+        return Buffer.from('x'.repeat(100));
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ fs }) });
+    const handle = await createSpritesSandboxClient({ sdk }).get({ sandboxId: 'k' });
+    await expect(
+      handle!.readFileToBuffer({ path: '/workspace/big.bin', maxBytes: 10 }),
+    ).rejects.toBeInstanceOf(SandboxReadLimitError);
+    // The oversized body is never pulled into the host process.
+    expect(read).toBe(false);
+  });
+
+  it('readFileToBuffer should read a within-cap file (stat passes)', async () => {
+    const fs = fakeFs({ stat: async () => ({ size: 4 }), readFile: async () => Buffer.from('ok!!') });
+    const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ fs }) });
+    const handle = await createSpritesSandboxClient({ sdk }).get({ sandboxId: 'k' });
+    expect((await handle!.readFileToBuffer({ path: '/workspace/a.txt', maxBytes: 10 }))?.toString()).toBe('ok!!');
   });
 });

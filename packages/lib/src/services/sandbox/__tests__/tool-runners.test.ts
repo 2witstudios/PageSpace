@@ -7,7 +7,7 @@ import {
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
-import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
+import { SandboxReadLimitError, type ExecutableSandbox, type SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 
@@ -207,9 +207,9 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
-  it('given a cwd that escapes the sandbox root, should deny path_escape before provisioning', async () => {
+  it('given a cwd that escapes the sandbox root, should deny path_escape, audit it, and never provision', async () => {
     let acquired = false;
-    const { deps } = makeDeps({
+    const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
         return { ok: true, sandboxId: 'sbx-1', resumed: false };
@@ -218,6 +218,8 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'ls', cwd: '../../etc', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'path_escape' });
     expect(acquired).toBe(false);
+    // A blocked cwd escape must be audited, like writeFile/readFile path escapes.
+    expect(audits[0]?.anomaly).toBe('blocked_command');
   });
 
   it('given a sh -c invocation, should pass the command as a structured arg array (no host shell string)', async () => {
@@ -332,6 +334,35 @@ describe('readSandboxFile', () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.truncated).toBe(true);
+  });
+
+  it('should forward the output cap to the driver so an oversized read is bounded at the boundary', async () => {
+    let seenMax: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          readFileToBuffer: async ({ maxBytes }) => {
+            seenMax = maxBytes;
+            return Buffer.from('ok');
+          },
+        }),
+    });
+    await readSandboxFile({ path: 'a.txt', ctx: makeCtx({ profile: 'minimal' }), deps });
+    expect(seenMax).toBe(32 * 1024); // minimal profile output cap
+  });
+
+  it('given the driver refuses an oversized file, should deny content_too_large and audit a blocked_command', async () => {
+    const { deps, audits } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          readFileToBuffer: async ({ maxBytes }) => {
+            throw new SandboxReadLimitError(maxBytes ?? 0);
+          },
+        }),
+    });
+    const result = await readSandboxFile({ path: 'huge.bin', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+    expect(audits[0]?.anomaly).toBe('blocked_command');
   });
 
   it('given a traversal path, should deny path_escape before provisioning', async () => {

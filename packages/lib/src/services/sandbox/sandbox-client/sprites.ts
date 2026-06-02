@@ -42,12 +42,13 @@ import { SpritesClient, type NetworkPolicy } from '@fly/sprites';
 import { getValidatedEnv } from '../../../config/env-validation';
 import { buildSpriteNetworkPolicy } from '../egress';
 import { SANDBOX_ROOT } from '../sandbox-paths';
-import type {
-  ExecSandboxClient,
-  ExecutableSandbox,
-  SandboxRunResult,
-  RunCommandArgs,
-  WriteFileEntry,
+import {
+  SandboxReadLimitError,
+  type ExecSandboxClient,
+  type ExecutableSandbox,
+  type SandboxRunResult,
+  type RunCommandArgs,
+  type WriteFileEntry,
 } from './types';
 import type { SandboxCreateOptions } from '../sandbox-options';
 
@@ -88,6 +89,7 @@ export interface SpriteFsLike {
   readFile(path: string, encoding: null): Promise<Buffer>;
   writeFile(path: string, data: string | Buffer, options?: { mode?: number }): Promise<void>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  stat(path: string): Promise<{ size: number }>;
 }
 
 /** The readable-stream subset the driver consumes (stdout/stderr `data` events). */
@@ -265,12 +267,24 @@ function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
       }
     },
 
-    async readFileToBuffer({ path }: { path: string }): Promise<Buffer | null> {
+    async readFileToBuffer({ path, maxBytes }: { path: string; maxBytes?: number }): Promise<Buffer | null> {
+      const fs = sprite.filesystem('/');
       try {
-        return await sprite.filesystem('/').readFile(path, null);
-      } catch {
-        // A missing file (or any read failure) resolves to null; the runner maps
-        // null to a handled not-found rather than an exception.
+        if (maxBytes !== undefined && maxBytes > 0) {
+          // Stat FIRST so an oversized file is refused before its bytes are pulled
+          // into the host process — the cap is a host-memory DoS guard, not just a
+          // display limit, so it must bound the read at the API boundary. A stat
+          // failure (missing file) falls through to the null not-found path below.
+          const stats = await fs.stat(path);
+          if (typeof stats.size === 'number' && stats.size > maxBytes) {
+            throw new SandboxReadLimitError(maxBytes);
+          }
+        }
+        return await fs.readFile(path, null);
+      } catch (error) {
+        // A refused oversized read propagates; anything else (missing file / read
+        // failure) resolves to null, which the runner maps to a handled not-found.
+        if (error instanceof SandboxReadLimitError) throw error;
         return null;
       }
     },

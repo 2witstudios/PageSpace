@@ -13,6 +13,21 @@
 import type { SandboxClient, SandboxHandle } from '../session-manager';
 import type { SandboxCreateOptions } from '../sandbox-options';
 
+/**
+ * Provider-neutral signal that a file read was refused because the file exceeds
+ * the caller's byte cap. Thrown by the driver from `readFileToBuffer` BEFORE the
+ * oversized body is pulled into the host process, so the cap bounds host memory
+ * rather than only trimming an already-materialized buffer. The runner maps it to
+ * a `content_too_large` denial. Kept here (not in a provider module) so the
+ * runners can catch it without importing the Fly Sprites driver.
+ */
+export class SandboxReadLimitError extends Error {
+  constructor(public readonly maxBytes: number) {
+    super(`Sandbox file exceeds the ${maxBytes}-byte read cap`);
+    this.name = 'SandboxReadLimitError';
+  }
+}
+
 /** Result of a single command run inside the sandbox. */
 export interface SandboxRunResult {
   exitCode: number;
@@ -52,7 +67,13 @@ export interface WriteFileEntry {
 export interface ExecutableSandbox extends SandboxHandle {
   runCommand(args: RunCommandArgs): Promise<SandboxRunResult>;
   writeFiles(files: WriteFileEntry[]): Promise<void>;
-  readFileToBuffer(args: { path: string }): Promise<Buffer | null>;
+  /**
+   * Read a file's bytes, or null when it is missing/unreadable. When `maxBytes`
+   * is supplied the driver MUST refuse (throw `SandboxReadLimitError`) a file that
+   * exceeds it BEFORE buffering the whole body, so the cap bounds host memory
+   * rather than only trimming an already-materialized buffer.
+   */
+  readFileToBuffer(args: { path: string; maxBytes?: number }): Promise<Buffer | null>;
 }
 
 /** Extends the PR2 lifecycle seam so one client serves both layers. */

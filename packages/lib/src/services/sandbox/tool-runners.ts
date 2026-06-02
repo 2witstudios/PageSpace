@@ -33,7 +33,7 @@ import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { buildSandboxEnv } from './sandbox-env';
 import { getValidatedEnv } from '../../config/env-validation';
 import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
-import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
+import { SandboxReadLimitError, type ExecutableSandbox, type SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionQuotaDecision } from './quota';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -281,11 +281,22 @@ export async function runBashInSandbox({
     return fail(commandPolicy.reason);
   }
 
-  // A provided working directory must also stay inside the sandbox root.
+  // A provided working directory must also stay inside the sandbox root. A blocked
+  // escape is audited as an anomaly (like writeFile/readFile path escapes) so every
+  // denied sandbox-escape attempt is logged before returning.
   let resolvedCwd: string = SANDBOX_ROOT;
   if (cwd !== undefined) {
     const candidate = resolveSandboxPath(cwd);
-    if (!candidate) return fail('path_escape');
+    if (!candidate) {
+      await safeAudit(deps, ctx, {
+        profile: policy.profile,
+        code: `cd ${cwd} && ${command}`,
+        exitCode: null,
+        durationMs: 0,
+        anomaly: 'blocked_command',
+      });
+      return fail('path_escape');
+    }
     resolvedCwd = candidate;
   }
 
@@ -428,17 +439,21 @@ export async function readSandboxFile({
     const startedAt = deps.now();
     let buffer: Buffer | null;
     try {
-      buffer = await session.sandbox.readFileToBuffer({ path: resolved });
-    } catch {
+      // Pass the output cap so the driver refuses an oversized file BEFORE pulling
+      // it into the host process — the cap bounds host memory, not just the
+      // rendered output (a malicious sandbox could otherwise OOM the app process).
+      buffer = await session.sandbox.readFileToBuffer({ path: resolved, maxBytes: policy.maxOutputBytes });
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
+      const tooLarge = error instanceof SandboxReadLimitError;
       await safeAudit(deps, ctx, {
         profile: policy.profile,
         code: `readFile ${path}`,
         exitCode: null,
         durationMs,
-        anomaly: 'nonzero_exit',
+        anomaly: tooLarge ? 'blocked_command' : 'nonzero_exit',
       });
-      return fail('execution_failed');
+      return fail(tooLarge ? 'content_too_large' : 'execution_failed');
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
     if (buffer === null) {
