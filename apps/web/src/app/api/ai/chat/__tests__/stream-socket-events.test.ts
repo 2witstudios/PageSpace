@@ -122,6 +122,10 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createSubscriptionRequiredResponse: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+}));
+
 vi.mock('@/lib/ai/core', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {} }),
   updateUserProviderSettings: vi.fn(),

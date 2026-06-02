@@ -87,6 +87,10 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+}));
+
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>();
   return {
@@ -113,6 +117,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { sanitizeMessagesForModel } from '@/lib/ai/core';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -159,6 +164,30 @@ describe('POST /api/v1/chat/completions', () => {
       }),
     } as unknown as ReturnType<typeof db.select>);
     vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+  });
+
+  test('returns 402 when the prepaid credit gate denies the request', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+    const response = await POST(makeRequest(validBody));
+    const body = await response.json();
+    assert({
+      given: 'a user who is out of AI credits',
+      should: 'return 402 with an out_of_credits error and not start the stream',
+      actual: { status: response.status, error: body.error },
+      expected: { status: 402, error: 'out_of_credits' },
+    });
+  });
+
+  test('proceeds to a 200 stream when the credit gate allows', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
+    const response = await POST(makeRequest(validBody));
+    assert({
+      given: 'a user with available credits (gate allowed)',
+      should: 'return a 200 SSE stream',
+      actual: { status: response.status, contentType: response.headers.get('content-type') },
+      expected: { status: 200, contentType: 'text/event-stream' },
+    });
   });
 
   test('returns 401 when auth fails', async () => {
