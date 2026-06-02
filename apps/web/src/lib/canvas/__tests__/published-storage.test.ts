@@ -10,10 +10,12 @@ const send = vi.fn();
 
 vi.mock('server-only', () => ({}));
 
-vi.mock('@/lib/presigned-url', () => ({
-  getS3Client: vi.fn(() => ({ send })),
-  getS3Bucket: vi.fn(() => 'test-bucket'),
-}));
+// Mock only the S3Client constructor (capture .send); keep the real command
+// classes so `instanceof` checks below still hold.
+vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>();
+  return { ...actual, S3Client: vi.fn(() => ({ send })) };
+});
 
 describe('buildPublishedKey', () => {
   it('maps the root path to a single index.html with no double slash', () => {
@@ -55,6 +57,7 @@ describe('putPublishedArtifact', () => {
   beforeEach(() => {
     send.mockReset();
     send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
   });
 
   it('sends a PutObjectCommand with the right bucket, key, body, and content type', async () => {
@@ -82,6 +85,7 @@ describe('deletePublishedArtifact', () => {
   beforeEach(() => {
     send.mockReset();
     send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
   });
 
   it('sends a DeleteObjectCommand with the right bucket and key', async () => {
