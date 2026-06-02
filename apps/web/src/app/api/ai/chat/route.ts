@@ -338,6 +338,27 @@ export async function POST(request: Request) {
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
 
+    // Load the user up front: the prepaid credit gate must run BEFORE we persist
+    // the user's message. Otherwise an out-of-credits request appends the prompt to
+    // chat history and then returns 402, leaving an orphaned message that reappears
+    // (duplicated) once the user tops up and retries.
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+
+    // Prepaid credit gate: block out-of-credits users before persisting their
+    // message or invoking any model. Safe in billing-disabled deployments (returns
+    // unlimited) and lazy-inits balances.
+    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
+    if (!creditGate.allowed) {
+      loggers.ai.warn('AI Chat API: Out of AI credits', { userId, reason: creditGate.reason });
+      return NextResponse.json(
+        {
+          error: 'out_of_credits',
+          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+        },
+        { status: 402 }
+      );
+    }
+
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
     if (userMessage && userMessage.role === 'user') {
@@ -410,8 +431,7 @@ export async function POST(request: Request) {
       }
     }
     
-    // Get user's current AI provider settings
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    // Get user's current AI provider settings (user was loaded above for the gate)
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
 
@@ -450,25 +470,6 @@ export async function POST(request: Request) {
         subscriptionTier: user?.subscriptionTier
       });
       return createSubscriptionRequiredResponse();
-    }
-
-    // Prepaid credit gate: block out-of-credits users before any model invocation.
-    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
-    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
-    if (!creditGate.allowed) {
-      loggers.ai.warn('AI Chat API: Out of AI credits', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-        reason: creditGate.reason,
-      });
-      return NextResponse.json(
-        {
-          error: 'out_of_credits',
-          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
-        },
-        { status: 402 }
-      );
     }
 
     // Usage tracking will be handled in onFinish callback for PageSpace providers only

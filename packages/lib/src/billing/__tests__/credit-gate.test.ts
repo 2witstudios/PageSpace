@@ -89,14 +89,14 @@ describe('canConsumeAI', () => {
     // sees the refreshed allowance. This is how free users get a monthly reset.
     mockDb.select
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
     mockDb.update.mockReturnValue(updateCapturing(sink));
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'free');
 
     expect(mockDb.update).toHaveBeenCalledTimes(1);
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1500, monthlyAllowanceCents: 1500 });
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, monthlyAllowanceCents: 500 });
     expect(sink.set?.monthlyPeriodStart).toBeInstanceOf(Date);
     expect((sink.set?.monthlyPeriodEnd as Date).getTime()).toBeGreaterThan(Date.now());
     expect(r).toEqual({ allowed: true, reason: 'ok' });
@@ -105,28 +105,38 @@ describe('canConsumeAI', () => {
 
   it('grants the monthly allowance and stamps a window when a top-up created the row without a period (period IS NULL)', async () => {
     // A credit-pack purchase created a bare balance row (monthly 0, topup 2500, NULL
-    // period) before the user's first AI request. The gate must grant the free monthly
-    // allowance and stamp a window — otherwise the monthly bucket would stay 0 and never
-    // reset (the reset key is the period boundary).
+    // period) before the free user's first AI request. The gate must grant the free
+    // monthly allowance and stamp a window — otherwise the monthly bucket would stay 0
+    // and never reset (the reset key is the period boundary).
     mockDb.select
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
     mockDb.update.mockReturnValue(updateCapturing(sink));
 
-    const r = await canConsumeAI('u1', 'pro');
+    const r = await canConsumeAI('u1', 'free');
 
     expect(mockDb.update).toHaveBeenCalledTimes(1);
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1500, monthlyAllowanceCents: 1500 });
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, monthlyAllowanceCents: 500 });
     expect(sink.set?.monthlyPeriodStart).toBeInstanceOf(Date);
     expect((sink.set?.monthlyPeriodEnd as Date).getTime()).toBeGreaterThan(Date.now());
     expect(r).toEqual({ allowed: true, reason: 'ok' });
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
-  it('does NOT reset when the period is still active (paid users keep their window)', async () => {
-    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+  it('does NOT gate-reset a paid (subscription) user with an expired window — invoice.paid is authoritative', async () => {
+    // A pro user whose window expired before their renewal invoice landed must NOT be
+    // refilled by the gate (that would over-grant when the late/retried invoice.paid
+    // eventually refills too). They are blocked until the webhook credits them.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     const r = await canConsumeAI('u1', 'pro');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r).toEqual({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('does NOT reset when the period is still active', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const r = await canConsumeAI('u1', 'free');
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(r.allowed).toBe(true);
   });

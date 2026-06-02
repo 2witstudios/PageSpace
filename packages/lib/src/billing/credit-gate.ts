@@ -58,18 +58,19 @@ export async function canConsumeAI(
 
   let row = await readBalance();
 
-  // Gate-driven monthly reset for free / no-subscription users. Fires when the
-  // window has expired (monthlyPeriodEnd < now) OR was never stamped
-  // (monthlyPeriodEnd IS NULL). The NULL case matters because the top-up funding
-  // path creates a bare balance row ({ userId } only, monthly 0, no period) — if a
-  // credit-pack purchase lands before the user's first AI request, that row would
-  // otherwise never receive the free monthly allowance and never reset. A paid
-  // user's invoice.paid keeps monthlyPeriodEnd in the future, so this never fires
-  // for them. The UPDATE re-checks the same predicate in its WHERE, so if a
-  // concurrent invoice.paid (or a racing gate call) rolled the window forward
-  // between our read and write, our reset matches zero rows and we re-read the
-  // fresh balance.
-  if (row && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now)) {
+  // Gate-driven monthly reset, restricted to FREE / non-subscription users. Free
+  // users have no invoice.paid to drive a refill, so the gate rolls their window
+  // when it has expired (monthlyPeriodEnd < now) or was never stamped
+  // (monthlyPeriodEnd IS NULL — e.g. a top-up funding row created bare before the
+  // user's first AI request). Paid tiers are deliberately excluded: their refill is
+  // authoritative via invoice.paid (keyed to the invoice stripeRef). Resetting a
+  // subscription-backed balance here would over-grant if a renewal invoice is late
+  // or retried after the period end — the gate would refill, the user could spend,
+  // then the webhook would refill again. A paid user with an expired window is
+  // therefore (correctly) blocked until their renewal lands. The UPDATE re-checks
+  // the same predicate in its WHERE, so a concurrent reset/refill that rolled the
+  // window forward between our read and write matches zero rows and we re-read.
+  if (tier === 'free' && row && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now)) {
     const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
     const newEnd = addOneMonth(now);
     await db

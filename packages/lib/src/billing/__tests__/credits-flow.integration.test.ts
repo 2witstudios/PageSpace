@@ -345,8 +345,11 @@ const creditPackCheckout = (id: string, customer: string, packCents: number) => 
   data: { object: { id, customer, mode: 'payment', metadata: { kind: 'credit_pack', packCents: String(packCents) } } },
 });
 
-const PERIOD_START = 1_700_000_000;
-const PERIOD_END = 1_702_592_000; // ~30 days later, far in the future
+// Relative to "now" so the funded window is ALWAYS active during the test. A
+// hardcoded past window would expire and let the gate-driven reset refill the
+// bucket mid-test, making the drawdown→out_of_credits assertions time-dependent.
+const PERIOD_START = Math.floor(Date.now() / 1000);
+const PERIOD_END = PERIOD_START + 30 * 24 * 60 * 60; // 30 days ahead
 
 beforeEach(() => {
   reset();
@@ -494,21 +497,36 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
 });
 
 describe('credits flow — monthly reset', () => {
-  it('gate resets an expired period to the tier allowance and rolls the window forward', async () => {
-    seedUser('u1', 'cus_1', 'pro');
+  it('gate resets an expired period to the tier allowance for a FREE user and rolls the window forward', async () => {
+    seedUser('u1', 'cus_1', 'free'); // gate-driven reset is free-only; paid users refill via invoice.paid
     // Drained balance whose period already ended yesterday.
     store.creditBalances.push({
-      userId: 'u1', monthlyRemainingCents: 0, monthlyAllowanceCents: 1500,
+      userId: 'u1', monthlyRemainingCents: 0, monthlyAllowanceCents: 500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
       monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
       updatedAt: new Date(),
     });
 
-    const gate = await canConsumeAI('u1', 'pro');
+    const gate = await canConsumeAI('u1', 'free');
     expect(gate).toEqual({ allowed: true, reason: 'ok' });
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro); // refilled
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free); // refilled
     expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
+  });
+
+  it('does NOT gate-reset a paid user with an expired window (invoice.paid is authoritative)', async () => {
+    seedUser('u3', 'cus_3', 'pro');
+    store.creditBalances.push({
+      userId: 'u3', monthlyRemainingCents: 0, monthlyAllowanceCents: 1500,
+      topupRemainingCents: 0, pendingMillicents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      updatedAt: new Date(),
+    });
+
+    const gate = await canConsumeAI('u3', 'pro');
+    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' }); // blocked until renewal lands
+    expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // not refilled by the gate
   });
 
   it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice refills it', async () => {

@@ -326,4 +326,32 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
     expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'glm-4.5-air', totalTokens: 20 });
   });
+
+  it('AWAITS trackUsage in onFinish (durable persistence, not fire-and-forget)', async () => {
+    captured.totalUsage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+
+    // trackUsage returns a promise that NEVER resolves on its own. If onFinish
+    // awaits it (the durability guarantee), onFinish cannot settle no matter how
+    // many microtasks flush; a fire-and-forget call would let onFinish settle
+    // within a bounded number of flushes. This is what makes the guarantee testable
+    // — a synchronous mock + "was it called" assertion would pass either way.
+    let resolveTrack!: () => void;
+    vi.mocked(AIMonitoring.trackUsage).mockReturnValueOnce(new Promise<void>((res) => { resolveTrack = res; }));
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+    let settled = false;
+    const onFinishPromise = Promise.resolve(
+      captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage }),
+    ).then(() => { settled = true; });
+
+    for (let i = 0; i < 10; i++) await Promise.resolve(); // flush microtasks
+    expect(settled).toBe(false); // onFinish is still awaiting the pending trackUsage
+
+    resolveTrack();
+    await onFinishPromise;
+    expect(settled).toBe(true);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+  });
 });

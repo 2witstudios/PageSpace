@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 
@@ -11,7 +10,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((r: any) => r != null && typeof r === 'object' && 'error' in r),
+  isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
@@ -30,7 +29,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'pagespace', aiModel: 'glm-4.5-air', systemPrompt: 'You help.', enabledTools: [] };
 
 vi.mock('@pagespace/db/db', () => {
-  const builder: any = {
+  type QueryBuilder = {
+    from: () => QueryBuilder;
+    where: () => QueryBuilder;
+    orderBy: () => QueryBuilder;
+    limit: () => QueryBuilder;
+    then: (resolve: (v: unknown[]) => unknown) => unknown;
+  };
+  const builder: QueryBuilder = {
     from: vi.fn(() => builder),
     where: vi.fn(() => builder),
     orderBy: vi.fn(() => builder),
@@ -60,7 +66,7 @@ vi.mock('@/lib/ai/core', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
 }));
 
-vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: any, b: any) => ({ ...a, ...b })) }));
+vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })) }));
 vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME: 'finish' }));
 
 vi.mock('ai', () => ({
