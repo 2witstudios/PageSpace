@@ -26,6 +26,52 @@ const publishSchema = z.object({
 const isUniqueViolation = (err: unknown): boolean =>
   err instanceof Error && 'code' in err && (err as { code: string }).code === '23505';
 
+export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
+  const { pageId } = await params;
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) {
+    return auth.error;
+  }
+
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
+  const userId = auth.userId;
+
+  const canEdit = await canUserEditPage(userId, pageId);
+  if (!canEdit) {
+    return NextResponse.json({ error: 'You do not have permission to view this page' }, { status: 403 });
+  }
+
+  try {
+    const row = await db.query.publishedPages.findFirst({
+      where: eq(publishedPages.pageId, pageId),
+      columns: { driveId: true, path: true },
+    });
+
+    if (!row) {
+      return NextResponse.json({ published: false });
+    }
+
+    const drive = await db.query.drives.findFirst({
+      where: eq(drives.id, row.driveId),
+      columns: { publishSubdomain: true },
+    });
+
+    const subdomain = drive?.publishSubdomain ?? null;
+
+    return NextResponse.json({
+      published: true,
+      url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
+      subdomain,
+      path: row.path,
+    });
+  } catch (error) {
+    loggers.api.error('Error reading publish status:', error as Error);
+    return NextResponse.json({ error: 'Failed to read publish status' }, { status: 500 });
+  }
+}
+
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
@@ -41,6 +87,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const canEdit = await canUserEditPage(userId, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You do not have permission to publish this page' }, { status: 403 });
+  }
+
+  // Operational kill-switch: lets operators disable publishing without a deploy.
+  if (process.env.CANVAS_PUBLISHING_DISABLED === 'true') {
+    return NextResponse.json({ error: 'Publishing is temporarily disabled' }, { status: 503 });
   }
 
   try {

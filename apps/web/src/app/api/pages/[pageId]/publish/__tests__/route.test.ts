@@ -10,7 +10,7 @@
  * - Unpublish removes artifact + row, 404 when nothing published
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { POST, DELETE } from '../route';
+import { GET, POST, DELETE } from '../route';
 
 vi.mock('server-only', () => ({}));
 
@@ -118,6 +118,21 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(403);
   });
 
+  it('returns 503 when publishing is disabled via the kill-switch', async () => {
+    const prev = process.env.CANVAS_PUBLISHING_DISABLED;
+    process.env.CANVAS_PUBLISHING_DISABLED = 'true';
+    try {
+      const res = await POST(makeReq({}), { params });
+      expect(res.status).toBe(503);
+      const json = await res.json();
+      expect(json.error).toMatch(/disabled/i);
+      expect(putPublishedArtifact).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.CANVAS_PUBLISHING_DISABLED;
+      else process.env.CANVAS_PUBLISHING_DISABLED = prev;
+    }
+  });
+
   it('returns 400 when the page is not a canvas page', async () => {
     findFirstPage.mockResolvedValue({ id: 'page-1', type: 'DOCUMENT', title: 'T', content: 'x', driveId: 'drive-1' });
     const res = await POST(makeReq({}), { params });
@@ -188,6 +203,38 @@ describe('POST /api/pages/[pageId]/publish', () => {
     const json = await res.json();
     expect(json.subdomain).toBe('existing');
     expect(json.url).toBe('https://existing.pagespace.site/welcome');
+  });
+});
+
+describe('GET /api/pages/[pageId]/publish', () => {
+  it('returns 403 when the user cannot edit the page', async () => {
+    canUserEditPage.mockResolvedValue(false);
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns { published: false } when no row exists', async () => {
+    findFirstPublished.mockResolvedValue(undefined);
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ published: false });
+    expect(findFirstDrive).not.toHaveBeenCalled();
+  });
+
+  it('returns { published: true, url } when a row exists', async () => {
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome' });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({
+      published: true,
+      url: 'https://acme.pagespace.site/welcome',
+      subdomain: 'acme',
+      path: 'welcome',
+    });
   });
 });
 
