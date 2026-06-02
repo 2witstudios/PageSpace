@@ -8,17 +8,26 @@
  * source of truth (`@pagespace/lib/billing/credit-pricing`) so the email can
  * never quote a number that disagrees with what the credit gate actually grants.
  *
- * Idempotent / resumable: every successful send is appended to a local JSONL
- * ledger (default `<repo>/.credits-change-sent.jsonl`, override with
+ * Idempotent / resumable: every successful send is appended (and fsync'd) to a
+ * local JSONL ledger (default `<repo>/.credits-change-sent.jsonl`, override with
  * CREDITS_EMAIL_LOG_PATH or --log). Re-running skips any recipient already in
- * the ledger, so an interrupted run can be resumed without double-sending.
- * Failures are NOT recorded, so they are retried on the next run.
+ * the ledger, so an interrupted run can be resumed without double-sending. The
+ * ledger is opened/validated BEFORE the first send; a per-recipient provider
+ * failure is recorded as retryable (not written), but a ledger-write failure
+ * AFTER a successful send is fatal — the run aborts and names the unrecorded
+ * recipient so it can never be silently re-sent.
+ *
+ * Safety: a live (non --dry-run) send refuses to run if the resolved app base
+ * URL points at localhost, so the broadcast can never email a broken CTA.
  *
  * Usage:
  *   bun scripts/send-credits-change-notifications.ts --dry-run
  *   bun scripts/send-credits-change-notifications.ts --verified-only
  *   bun scripts/send-credits-change-notifications.ts --limit=50
  *   bun scripts/send-credits-change-notifications.ts --log=/tmp/credits-sent.jsonl
+ *
+ * The CTA link uses NEXT_PUBLIC_APP_URL, falling back to WEB_APP_URL (the first
+ * non-localhost value wins).
  *
  * Flags:
  *   --dry-run         Render + report recipients; send nothing, write nothing.
@@ -33,6 +42,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db } from '@pagespace/db/db';
@@ -134,26 +144,71 @@ async function loadSentEmails(logPath: string): Promise<Set<string>> {
   return sent;
 }
 
-/** Append one successful send to the ledger (atomic per-line). */
-async function recordSent(
-  logPath: string,
-  entry: SentLedgerEntry,
-): Promise<void> {
-  await fs.appendFile(logPath, `${JSON.stringify(entry)}\n`, 'utf8');
+/**
+ * Open the ledger for appending, creating its parent directory first. Validating
+ * writability UP FRONT (before any email is sent) turns a bad --log path or a
+ * permission/disk problem into a clean pre-flight failure instead of a
+ * mid-broadcast crash that leaves successful sends unrecorded.
+ */
+async function openLedger(logPath: string): Promise<FileHandle> {
+  await fs.mkdir(path.dirname(logPath), { recursive: true });
+  return fs.open(logPath, 'a');
+}
+
+/**
+ * Append one successful send and fsync it to disk before returning, so the
+ * record is durable the instant `sendEmail` is acknowledged. A failure here is
+ * treated as fatal by the caller: an unrecorded successful send would be
+ * re-sent on the next run, so we must never silently continue past it.
+ */
+async function recordSent(handle: FileHandle, entry: SentLedgerEntry): Promise<void> {
+  await handle.write(`${JSON.stringify(entry)}\n`, null, 'utf8');
+  await handle.sync();
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function appBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL?.trim() || 'http://localhost:3000';
+/** True when the URL points at the local machine (unsafe for a broadcast CTA). */
+function isLocalhostUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '::1' ||
+      hostname === '[::1]'
+    );
+  } catch {
+    // Unparseable → treat as unsafe so we never email a malformed CTA.
+    return true;
+  }
+}
+
+/**
+ * Resolve the public app base URL for the email CTA. Prefers the first
+ * configured NON-localhost candidate so a setup with only the server-side
+ * WEB_APP_URL pointed at production (and a stale localhost NEXT_PUBLIC_APP_URL)
+ * still produces working links. Falls back to whatever is set, else localhost.
+ */
+function resolveBaseUrl(): string {
+  const candidates = [
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.WEB_APP_URL,
+  ].map((c) => c?.trim()).filter((c): c is string => Boolean(c));
+
+  const live = candidates.find((c) => !isLocalhostUrl(c));
+  const chosen = live ?? candidates[0] ?? 'http://localhost:3000';
+  return chosen.replace(/\/+$/, '');
 }
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-  const baseUrl = appBaseUrl();
+  const baseUrl = resolveBaseUrl();
   const manageUrl = `${baseUrl}/settings/plan`;
+  const localhostBase = isLocalhostUrl(baseUrl);
 
   console.log('📢 Metered AI-credits announcement broadcast');
   console.log(`  Mode:          ${opts.dryRun ? 'DRY RUN (no sends)' : 'LIVE SEND'}`);
@@ -161,15 +216,30 @@ async function main(): Promise<void> {
   console.log(`  Ledger:        ${opts.logPath}`);
   console.log(`  Manage URL:    ${manageUrl}`);
   if (opts.limit) console.log(`  Limit:         ${opts.limit}`);
-  if (baseUrl.includes('localhost')) {
-    console.warn('  ⚠️  NEXT_PUBLIC_APP_URL is unset — links point at localhost. Set it before a real send.');
-  }
   console.log('');
+
+  // Never email every user a broken localhost CTA. A dry run may use localhost
+  // (it sends nothing); a live send must resolve a real public URL.
+  if (localhostBase) {
+    if (opts.dryRun) {
+      console.warn('  ⚠️  Base URL resolves to localhost — set NEXT_PUBLIC_APP_URL or WEB_APP_URL before a real send.\n');
+    } else {
+      console.error(
+        '❌ Refusing live send: app base URL resolves to localhost, which would email broken links.\n' +
+          '   Set NEXT_PUBLIC_APP_URL (or WEB_APP_URL) to the public app URL and re-run.',
+      );
+      process.exit(1);
+    }
+  }
 
   const sentEmails = await loadSentEmails(opts.logPath);
   if (sentEmails.size > 0) {
     console.log(`↩️  Resuming: ${sentEmails.size} recipient(s) already recorded in the ledger.\n`);
   }
+
+  // Open (and validate writability of) the ledger BEFORE the first send, so a
+  // bad path or permission error fails fast rather than after emails go out.
+  const ledger: FileHandle | null = opts.dryRun ? null : await openLedger(opts.logPath);
 
   // Pull all users that can receive email. emailVerified gating is opt-in via
   // --verified-only; email validity is always enforced in code below.
@@ -178,7 +248,6 @@ async function main(): Promise<void> {
       id: users.id,
       name: users.name,
       email: users.email,
-      emailVerified: users.emailVerified,
       subscriptionTier: users.subscriptionTier,
     })
     .from(users)
@@ -217,33 +286,62 @@ async function main(): Promise<void> {
       manageUrl,
     });
 
-    try {
-      if (opts.dryRun) {
-        // Render to HTML so the dry run exercises the real template path and
-        // surfaces any rendering error, without contacting the provider.
+    if (opts.dryRun) {
+      // Render to HTML so the dry run exercises the real template path and
+      // surfaces any rendering error, without contacting the provider.
+      try {
         const html = await renderEmailToHtml(component);
         console.log(
           `  [dry-run] → ${email} (${summary.tierLabel}, ${summary.monthlyAllowanceLabel}/mo, ${html.length} bytes)`,
         );
-      } else {
-        await sendEmail({ to: email, subject: EMAIL_SUBJECT, react: component });
-        await recordSent(opts.logPath, {
-          email: emailKey,
-          userId: user.id,
-          sentAt: new Date().toISOString(),
-        });
-        console.log(`  ✓ ${email} (${summary.tierLabel})`);
-        if (opts.delayMs > 0) await sleep(opts.delayMs);
+        sentCount++;
+      } catch (error) {
+        errorCount++;
+        const msg = error instanceof Error ? error.message : String(error);
+        errors.push(`${email}: ${msg}`);
+        console.error(`  ✗ Render failed for ${email}: ${msg}`);
       }
-      sentEmails.add(emailKey);
-      sentCount++;
+      continue;
+    }
+
+    // Live send. A provider failure is per-recipient retryable, but once a send
+    // is accepted the ledger record MUST persist — otherwise a re-run would
+    // double-send. So a ledger-write failure after a successful send is fatal:
+    // we name the unrecorded recipient and abort before sending anyone else.
+    try {
+      await sendEmail({ to: email, subject: EMAIL_SUBJECT, react: component });
     } catch (error) {
       errorCount++;
       const msg = error instanceof Error ? error.message : String(error);
       errors.push(`${email}: ${msg}`);
-      console.error(`  ✗ Failed for ${email}: ${msg}`);
+      console.error(`  ✗ Send failed for ${email}: ${msg}`);
+      continue;
     }
+
+    try {
+      await recordSent(ledger!, {
+        email: emailKey,
+        userId: user.id,
+        sentAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(
+        `\n❌ FATAL: sent to ${email} but failed to record it in the ledger: ${msg}\n` +
+          `   Add this line to ${opts.logPath} before re-running, or that user will be emailed again:\n` +
+          `   ${JSON.stringify({ email: emailKey, userId: user.id })}`,
+      );
+      await ledger!.close();
+      process.exit(1);
+    }
+
+    sentEmails.add(emailKey);
+    sentCount++;
+    console.log(`  ✓ ${email} (${summary.tierLabel})`);
+    if (opts.delayMs > 0) await sleep(opts.delayMs);
   }
+
+  if (ledger) await ledger.close();
 
   console.log('\n📊 Summary:');
   console.log(`  ${opts.dryRun ? 'Would send' : 'Sent'}:        ${sentCount}`);
