@@ -87,7 +87,11 @@ export async function createDbSandboxSessionStore(): Promise<SandboxSessionStore
         })
         .onConflictDoUpdate({
           target: sandboxSessions.sessionKey,
-          set: { sandboxId, lastActiveAt: now, updatedAt: now },
+          // Refresh userId too: the sessionKey is stable across re-provisioning,
+          // but the actor who creates the replacement sandbox may differ, so the
+          // row's audit metadata must track the live sandbox's creator rather than
+          // keeping the previous owner.
+          set: { userId, sandboxId, lastActiveAt: now, updatedAt: now },
         });
     },
 
