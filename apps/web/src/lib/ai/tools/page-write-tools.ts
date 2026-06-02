@@ -761,13 +761,13 @@ export const pageWriteTools = {
    * Move a page to trash (soft delete)
    */
   trash_page: tool({
-    description: 'Move a page to trash (soft delete). Optionally trash all child pages recursively with withChildren.',
+    description: 'Move a page to trash (soft delete). By default all child pages are trashed recursively with the parent; pass withChildren: false to instead move children up to the grandparent and keep them.',
     inputSchema: z.object({
       id: z.string().describe('The unique ID of the page to trash'),
       title: z.string().optional().describe('Optional page title for display/error context only — the real title is fetched by ID'),
-      withChildren: z.boolean().optional().default(false).describe('Whether to trash all children recursively'),
+      withChildren: z.boolean().optional().default(true).describe('Whether to trash all children recursively (default true). Set false to move children up to the grandparent instead of trashing them.'),
     }),
-    execute: async ({ id, title, withChildren = false }, { experimental_context: context }) => {
+    execute: async ({ id, title, withChildren = true }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
