@@ -105,11 +105,37 @@ async function resolveUser(
 }
 
 /**
+ * Resolve the buyer of a credit-pack checkout. A one-time payment-mode checkout does
+ * NOT necessarily link the Stripe customer to a user (the subscription handler only
+ * links subscription sessions), so a customer lookup can come up empty for a first-time
+ * pack purchase. We therefore prefer metadata.userId — set by us when creating the
+ * checkout session and round-tripped verbatim through the signature-verified event, so
+ * it's trusted — and fall back to the customer link only when metadata is absent.
+ */
+async function resolveTopupUser(obj: FundingEventObject): Promise<{ id: string } | null> {
+  const metaUserId = obj.metadata?.userId;
+  if (metaUserId) {
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, metaUserId))
+      .limit(1);
+    if (rows.length) return { id: rows[0].id };
+  }
+  const customerId = customerIdOf(obj);
+  if (customerId) {
+    const byCustomer = await resolveUser(customerId);
+    if (byCustomer) return { id: byCustomer.id };
+  }
+  return null;
+}
+
+/**
  * invoice.paid — reset the monthly bucket to the tier allowance and roll the
  * billing window forward, recording a monthly_grant ledger row keyed on the
  * invoice id. The balance write only runs if the grant row was newly inserted.
  */
-async function applyMonthlyRefill(event: FundingEvent): Promise<void> {
+async function applyMonthlyRefill(event: FundingEvent, tierOverride?: SubscriptionTier): Promise<void> {
   const obj = event.data.object;
   const stripeRef = obj.id ?? null;
   if (!stripeRef) {
@@ -127,7 +153,12 @@ async function applyMonthlyRefill(event: FundingEvent): Promise<void> {
     return;
   }
 
-  const refill = computeMonthlyRefill(user.tier, TIER_MONTHLY_ALLOWANCE_CENTS);
+  // Prefer the tier the caller derived from the PAID invoice's line price. invoice.paid
+  // can land before customer.subscription.* has updated users.subscriptionTier, so the
+  // stored tier (user.tier) may be stale ('free'); the invoice reflects what was actually
+  // billed. Fall back to the stored tier only when the caller couldn't resolve one.
+  const tier = tierOverride ?? user.tier;
+  const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
   const { start, end } = invoicePeriod(obj);
 
   await db.transaction(async (tx) => {
@@ -176,7 +207,7 @@ async function applyMonthlyRefill(event: FundingEvent): Promise<void> {
 
   loggers.api.info('credit funding: monthly refill applied', {
     userId: user.id,
-    tier: user.tier,
+    tier,
     allowanceCents: refill.monthlyAllowanceCents,
     stripeRef,
   });
@@ -194,14 +225,13 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
     loggers.api.warn('credit funding skipped: checkout session has no id', { eventId: event.id });
     return;
   }
-  const customerId = customerIdOf(obj);
-  if (!customerId) {
-    loggers.api.warn('credit funding skipped: checkout session has no customer', { eventId: event.id });
-    return;
-  }
-  const user = await resolveUser(customerId);
+  // Resolve from trusted metadata.userId first (the customer may be unlinked on a
+  // first-time pack purchase). Skipping here silently drops paid credit, so a miss is
+  // logged loudly for follow-up — but it is NOT a failure to retry: redelivery won't
+  // make an unresolvable buyer resolvable.
+  const user = await resolveTopupUser(obj);
   if (!user) {
-    loggers.api.warn('credit funding skipped: user not found for customer', { eventId: event.id });
+    loggers.api.warn('credit funding skipped: no user for credit-pack checkout', { eventId: event.id });
     return;
   }
 
@@ -265,14 +295,23 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
  * (the webhook) can surface a non-2xx and let Stripe redeliver; funding is
  * idempotent on stripeRef, so a reprocess credits exactly once.
  */
-export async function applyStripeFunding(event: FundingEvent): Promise<void> {
+export interface FundingOptions {
+  /**
+   * Tier derived from the PAID invoice (invoice.paid line price). Authoritative over the
+   * stored user tier, which can lag behind a near-simultaneous subscription webhook.
+   * Only used by the monthly_refill path.
+   */
+  tier?: SubscriptionTier;
+}
+
+export async function applyStripeFunding(event: FundingEvent, opts?: FundingOptions): Promise<void> {
   if (!isBillingEnabled()) return; // tenant/onprem credit via the control plane, not Stripe
 
   const action = classifyStripeEvent(event);
   try {
     switch (action.kind) {
       case 'monthly_refill':
-        await applyMonthlyRefill(event);
+        await applyMonthlyRefill(event, opts?.tier);
         break;
       case 'topup':
         await applyTopupFunding(event, action.packCents);

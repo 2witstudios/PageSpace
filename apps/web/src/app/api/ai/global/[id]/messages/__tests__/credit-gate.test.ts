@@ -281,6 +281,18 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
   });
 
+  it('does NOT persist the user message when the gate denies (gate runs before save)', async () => {
+    // R3: the gate must precede the message save. Otherwise an out-of-credits prompt is
+    // written to the conversation and then 402s, leaving an orphaned message that
+    // duplicates on retry once the user tops up.
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(402);
+    expect(mockSaveGlobalAssistantMessageToDatabase).not.toHaveBeenCalled();
+  });
+
   it('does not block with a 402 when the gate allows', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
 

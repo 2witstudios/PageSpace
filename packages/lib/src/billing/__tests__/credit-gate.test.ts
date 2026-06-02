@@ -157,6 +157,26 @@ describe('canConsumeAI', () => {
     expect(r).toEqual({ allowed: false, reason: 'out_of_credits' });
   });
 
+  it('does NOT count a paid user\'s leftover monthly as spendable once the window has expired', async () => {
+    // Pro user, renewal invoice delayed: window expired but the monthly bucket still
+    // holds 300¢ of last period's allowance. Use-it-or-lose-it means that expired
+    // monthly must NOT fund new calls; only the never-expiring top-up can. Here topup
+    // is 0, so the user is blocked until invoice.paid refills them. The row is not reset.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    const r = await canConsumeAI('u1', 'pro');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r).toEqual({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('still counts a paid user\'s top-up bucket when the monthly window has expired', async () => {
+    // Expired monthly (excluded) but a healthy top-up balance funds the call.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }]));
+    const r = await canConsumeAI('u1', 'pro');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
   it('does NOT reset when the period is still active', async () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const r = await canConsumeAI('u1', 'free');

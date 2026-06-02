@@ -4,6 +4,7 @@ import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
+import type { SubscriptionTier } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
@@ -75,13 +76,17 @@ export async function POST(request: NextRequest) {
           await handlePaymentFailed(event.data.object as Stripe.Invoice);
           break;
 
-        case 'invoice.paid':
+        case 'invoice.paid': {
+          const invoice = event.data.object as Stripe.Invoice;
           await withFundingRetry(event.id, async () => {
-            await handleInvoicePaid(event.data.object as Stripe.Invoice);
+            await handleInvoicePaid(invoice);
             // Reset the monthly credit bucket to the tier allowance on each renewal.
-            await applyStripeFunding(event);
+            // Derive the tier from the PAID invoice line so a refill that races ahead
+            // of the subscription webhook still grants the correct (paid) allowance.
+            await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
           });
           break;
+        }
 
         default:
           loggers.api.info('Unhandled webhook event type', { eventType: event.type, eventId: event.id });
@@ -149,6 +154,28 @@ async function withFundingRetry(eventId: string, run: () => Promise<void>) {
     await db.delete(stripeEvents).where(eq(stripeEvents.id, eventId));
     throw err;
   }
+}
+
+/**
+ * Derive the subscription tier from a paid invoice's line price. This is authoritative
+ * for the monthly refill because it reflects what was actually billed, independent of
+ * whether our DB's users.subscriptionTier has caught up with the subscription webhook
+ * (the two events can arrive in either order). Returns undefined when the invoice has
+ * no recognizable subscription price — including getTierFromPrice's 'free' fallback for
+ * an unmapped price — so the funding shell falls back to the stored user tier rather
+ * than wrongly downgrading a paid user. Mirrors the extraction in stripe/invoices/route.ts.
+ */
+function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier | undefined {
+  const lines = invoice.lines?.data ?? [];
+  const line = lines.find((l) => l.pricing?.price_details?.price) ?? lines[0];
+  const priceData = line?.pricing?.price_details?.price;
+  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
+  if (!priceId) return undefined;
+  const unitAmount = line?.pricing?.unit_amount_decimal
+    ? Math.round(parseFloat(line.pricing.unit_amount_decimal) * 100)
+    : null;
+  const tier = getTierFromPrice(priceId, unitAmount);
+  return tier === 'free' ? undefined : tier;
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {

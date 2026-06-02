@@ -105,6 +105,18 @@ const topupEvent = {
   },
 };
 
+// First-time credit-pack buyer: the Stripe customer is not yet linked to any user
+// (customer lookup returns nothing), but we stamped the user's id into the checkout
+// session metadata when we created it. Funding must resolve the buyer from that
+// trusted metadata.userId, not the unlinked customer.
+const unlinkedTopupEvent = {
+  id: 'evt_chk_meta',
+  type: 'checkout.session.completed',
+  data: {
+    object: { id: 'cs_meta', mode: 'payment', metadata: { kind: 'credit_pack', packCents: '2500', userId: 'u1' } },
+  },
+};
+
 const subscriptionCheckoutEvent = {
   id: 'evt_sub',
   type: 'checkout.session.completed',
@@ -192,6 +204,51 @@ describe('applyStripeFunding', () => {
     await applyStripeFunding(topupEvent);
 
     expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500 });
+  });
+
+  it('resolves a first-time credit-pack buyer from trusted session metadata.userId when the customer is unlinked', async () => {
+    // resolveUser-by-customer is never reached; the buyer is found via metadata.userId.
+    mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(topupTx(cap, [{ id: 'led_meta' }], 0));
+    });
+
+    await applyStripeFunding(unlinkedTopupEvent);
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(cap.ledgerValues).toMatchObject({
+      userId: 'u1',
+      entryType: 'topup_purchase',
+      stripeRef: 'cs_meta',
+      consumeStatus: 'applied',
+    });
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500 });
+  });
+
+  it('invoice.paid uses the tier passed by the caller (invoice-derived) over a stale stored tier', async () => {
+    // Race: invoice.paid lands before the subscription webhook upgraded users.tier,
+    // so the stored tier is still 'free'. The webhook derives the real tier from the
+    // paid invoice line and passes it; the refill must grant the PAID allowance.
+    mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        insert: vi.fn()
+          .mockReturnValueOnce(ledgerInsert([{ id: 'led_tier' }], cap))
+          .mockReturnValueOnce(balanceUpsert(cap)),
+      };
+      await cb(tx);
+    });
+
+    await applyStripeFunding(invoiceEvent, { tier: 'business' });
+
+    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.business;
+    expect(cap.ledgerValues).toMatchObject({ amountCents: allowance });
+    expect(cap.balanceSet).toMatchObject({
+      monthlyRemainingCents: allowance,
+      monthlyAllowanceCents: allowance,
+    });
   });
 
   it('declares the partial-index predicate as the ON CONFLICT arbiter on the funding ledger insert', async () => {

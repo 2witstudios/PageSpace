@@ -99,10 +99,24 @@ export async function canConsumeAI(
     row = await readBalance();
   }
 
+  // Use-it-or-lose-it for paid tiers: a paid user's monthly bucket is only spendable
+  // within its window. The gate never resets paid tiers (invoice.paid is authoritative),
+  // so once the window has expired we must EXCLUDE the leftover monthly from the
+  // decision — otherwise a delayed renewal would let last period's allowance keep
+  // funding calls. Only the never-expiring top-up bucket survives an expired window.
+  // A NULL period is treated as not-yet-expired (we can't prove it lapsed, and a fresh
+  // invoice.paid grant may carry no period dates); free users are handled by the reset
+  // above and never reach this exclusion.
+  const paidMonthlyExpired =
+    tier !== 'free' && row !== null && row.monthlyPeriodEnd !== null && row.monthlyPeriodEnd < now;
+
   const result = evaluateGate({
     billingEnabled: true,
     balance: row
-      ? { monthlyCents: row.monthlyRemainingCents, topupCents: row.topupRemainingCents }
+      ? {
+          monthlyCents: paidMonthlyExpired ? 0 : row.monthlyRemainingCents,
+          topupCents: row.topupRemainingCents,
+        }
       : null,
     reserveFloorCents: RESERVE_FLOOR_CENTS,
   });
