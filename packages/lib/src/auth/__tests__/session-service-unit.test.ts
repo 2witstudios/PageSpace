@@ -8,6 +8,8 @@ vi.mock('../session-repository', () => ({
     touchSession: vi.fn(),
     revokeByHash: vi.fn(),
     revokeAllForUser: vi.fn(),
+    revokeWebForUser: vi.fn(),
+    revokeAdminForUser: vi.fn(),
     revokeForUserDevice: vi.fn(),
     deleteExpired: vi.fn(),
   },
@@ -258,6 +260,30 @@ describe('SessionService', () => {
       const count = await service.revokeAllUserSessions('user-1', 'test');
 
       expect(count).toBe(0);
+    });
+  });
+
+  describe('revokeWebUserSessions', () => {
+    it('delegates to revokeWebForUser (excludes admin sessions) and returns the count', async () => {
+      vi.mocked(sessionRepository.revokeWebForUser).mockResolvedValue(2);
+
+      const count = await service.revokeWebUserSessions('user-1', 'magic_link_login');
+
+      expect(count).toBe(2);
+      expect(sessionRepository.revokeWebForUser).toHaveBeenCalledWith('user-1', 'magic_link_login');
+      expect(sessionRepository.revokeAllForUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revokeAdminUserSessions', () => {
+    it('delegates to revokeAdminForUser (only admin sessions) and returns the count', async () => {
+      vi.mocked(sessionRepository.revokeAdminForUser).mockResolvedValue(1);
+
+      const count = await service.revokeAdminUserSessions('user-1', 'admin_login');
+
+      expect(count).toBe(1);
+      expect(sessionRepository.revokeAdminForUser).toHaveBeenCalledWith('user-1', 'admin_login');
+      expect(sessionRepository.revokeAllForUser).not.toHaveBeenCalled();
     });
   });
 

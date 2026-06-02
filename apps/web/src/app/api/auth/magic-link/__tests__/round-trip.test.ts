@@ -68,6 +68,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({

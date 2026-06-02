@@ -157,7 +157,7 @@ export async function POST(req: Request) {
     }
 
     // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
+    const revokedCount = await sessionService.revokeWebUserSessions(user.id, 'new_login');
     if (revokedCount > 0) {
       loggers.auth.info('Revoked existing sessions on native Apple OAuth login', {
         userId: user.id,

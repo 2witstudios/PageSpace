@@ -10,7 +10,9 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const sessionCookie = request.cookies.get('session');
+  // Admin's session cookie is named `admin_session` (see lib/auth/cookie-config.ts)
+  // so it never collides with the web app's `session` cookie on the shared domain.
+  const sessionCookie = request.cookies.get('admin_session');
   if (!sessionCookie) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

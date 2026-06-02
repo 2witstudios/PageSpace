@@ -17,9 +17,10 @@ export async function revokeSessionsForLogin(
     if (count > 0) loggers.auth.info(`Revoked device sessions on ${provider} login`, { userId, deviceId, count });
     return count;
   }
-  // Fallback: revoke all sessions for backward compatibility with older clients
-  const count = await sessionService.revokeAllUserSessions(userId, reason);
-  if (count > 0) loggers.auth.info(`Revoked all sessions on ${provider} login (no deviceId)`, { userId, count });
+  // Fallback: revoke all WEB sessions for backward compatibility with older clients.
+  // Excludes admin-console sessions so a web login never logs the user out of admin.
+  const count = await sessionService.revokeWebUserSessions(userId, reason);
+  if (count > 0) loggers.auth.info(`Revoked web sessions on ${provider} login (no deviceId)`, { userId, count });
   return count;
 }
 

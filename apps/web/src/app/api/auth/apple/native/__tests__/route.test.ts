@@ -43,6 +43,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -200,7 +202,7 @@ describe('POST /api/auth/apple/native', () => {
         emailVerified: true,
       },
     });
-    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
     // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -481,11 +483,11 @@ describe('POST /api/auth/apple/native', () => {
 
   describe('session management', () => {
     it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
+      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(2);
 
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
+      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Revoked existing sessions on native Apple OAuth login',
         { userId: 'new-user-id', count: 2, platform: 'ios' }
@@ -493,7 +495,7 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('does not log when no sessions were revoked', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
 
       await POST(createNativeRequest(validPayload));
 

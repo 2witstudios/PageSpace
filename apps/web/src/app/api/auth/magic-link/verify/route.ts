@@ -100,7 +100,7 @@ export async function GET(req: Request) {
     const boundInviteToken = parsedMeta?.inviteToken;
 
     // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(userId, 'magic_link_login');
+    const revokedCount = await sessionService.revokeWebUserSessions(userId, 'magic_link_login');
     if (revokedCount > 0) {
       loggers.auth.info('Revoked existing sessions on magic link login', {
         userId,

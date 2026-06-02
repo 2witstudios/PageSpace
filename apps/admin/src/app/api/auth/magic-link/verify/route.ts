@@ -4,7 +4,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
-import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
+import { SESSION_DURATION_MS, ADMIN_SESSION_SERVICE } from '@pagespace/lib/auth/constants';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
@@ -64,13 +64,15 @@ export async function GET(req: Request) {
       return redirectWithError('not_admin');
     }
 
-    await sessionService.revokeAllUserSessions(userId, 'magic_link_login');
+    // Revoke only prior admin-console sessions — never the user's web sessions.
+    await sessionService.revokeAdminUserSessions(userId, 'admin_login');
 
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
       scopes: [],
       expiresInMs: SESSION_DURATION_MS,
+      createdByService: ADMIN_SESSION_SERVICE,
     });
 
     auditRequest(req, {
