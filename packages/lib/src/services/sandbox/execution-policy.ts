@@ -48,7 +48,7 @@ export const SAFE_MINIMUM_PROFILE: ExecutionPolicy = Object.freeze({
   maxOutputBytes: 32 * 1024,
   egressAllowlist: Object.freeze([]) as readonly string[],
   persistent: false,
-  region: 'iad1',
+  region: 'iad',
 });
 
 const DEFAULT_PROFILE: ExecutionPolicy = Object.freeze({
@@ -59,7 +59,7 @@ const DEFAULT_PROFILE: ExecutionPolicy = Object.freeze({
   maxOutputBytes: 64 * 1024,
   egressAllowlist: Object.freeze([]) as readonly string[],
   persistent: false,
-  region: 'iad1',
+  region: 'iad',
 });
 
 const PROFILES: Record<ExecutionProfile, ExecutionPolicy> = {

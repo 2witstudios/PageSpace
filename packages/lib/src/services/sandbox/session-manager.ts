@@ -31,9 +31,10 @@ export interface SandboxHandle {
 }
 
 /**
- * The slice of `@vercel/sandbox` this layer drives, injected so PR2 owns no
- * execution path. `getOrCreate` auto-resumes by `name` (the session key);
- * `get` reconnects to a known id (null if it has vanished); `stop` tears down.
+ * The provider-agnostic slice of the sandbox client this layer drives, injected
+ * so this lifecycle owns no execution path (the PR3 Fly Sprites driver
+ * implements it). `getOrCreate` auto-resumes by `name` (the session key); `get`
+ * reconnects to a known id (null if it has vanished); `stop` tears down.
  */
 export interface SandboxClient {
   getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<SandboxHandle>;

@@ -1,51 +1,58 @@
 /**
- * Sandbox egress network policy construction (pure).
+ * Sprite egress network policy construction (pure).
  *
- * Maps a policy's `egressAllowlist` to a `@vercel/sandbox` `NetworkPolicy`.
- * Egress is default-DENY: an empty allowlist yields `'deny-all'`, so v1 (whose
- * every profile ships an empty allowlist) has no outbound network at all.
+ * Maps a policy's `egressAllowlist` to a Fly Sprites L3 `NetworkPolicy` — an
+ * ordered, domain-matched allow/deny rule list applied to the Sprite via the
+ * authenticated policy API. Egress is default-DENY: the policy ALWAYS ends in a
+ * terminating `{ domain: '*', action: 'deny' }` catch-all, so anything not
+ * explicitly allowed (including every internal Fly target) is dropped. v1 ships
+ * an empty allowlist on every profile, so the policy is pure deny-all — no
+ * outbound network at all.
  *
- * When the allowlist is deliberately widened for an external package registry
- * (npm / PyPI), the resulting policy still NEVER reaches internal targets:
+ * Fly-shaped SSRF defence (NOT the AWS `169.254.169.254` shape): when the
+ * allowlist is deliberately widened for an external registry, the policy first
+ * lists EXPLICIT denies for the internal Fly surface — the 6PN `*.internal`
+ * DNS namespace (apps, Postgres, the `_api.internal` metadata endpoint),
+ * Flycast, and the Tigris object store — placed BEFORE any allow, so even a
+ * later misconfiguration that allowed `*` could not reach them. The IP-level
+ * 6PN (`fdaa::/8`) isolation is a deployment concern (a Sprite is meant to sit
+ * on a separate `fdf::` prefix with no 6PN route and no `*.internal`
+ * resolution; verify empirically before exposure) — it cannot be expressed as a
+ * domain rule and is intentionally not encoded here.
  *
- *  - the allowlist is a domain allow-list (record form), so any host not listed
- *    is denied — PageSpace's own APIs, the DB, and the object store are never
- *    listed and therefore unreachable; and
- *  - `subnets.deny` explicitly blocks the cloud metadata endpoint and every
- *    RFC1918 / CGNAT / link-local range. Subnet denies take precedence over
- *    domain allows, so even a listed host that resolves to a private/metadata
- *    IP (a DNS-rebinding / SSRF attempt) is dropped.
- *
- * The function builds the allow map from a frozen, deduped copy of the input,
- * so a caller cannot mutate the shared policy array through the returned object.
+ * The allow map is built from a frozen, deduped copy of the input so a caller
+ * cannot mutate the shared policy array through the returned object.
  */
 
-import type { NetworkPolicy } from '@vercel/sandbox';
+import type { NetworkPolicy, PolicyRule } from '@fly/sprites';
 
-// Metadata endpoint + the private/shared address space that must never be
-// reachable from an untrusted sandbox, regardless of any domain allow.
-const INTERNAL_DENY_CIDRS: readonly string[] = Object.freeze([
-  '169.254.0.0/16', // link-local, incl. the 169.254.169.254 metadata endpoint
-  '10.0.0.0/8', // RFC1918 private
-  '172.16.0.0/12', // RFC1918 private
-  '192.168.0.0/16', // RFC1918 private
-  '100.64.0.0/10', // RFC6598 carrier-grade NAT (internal infra)
-  '127.0.0.0/8', // loopback
-  'fd00::/8', // IPv6 unique-local
-  'fe80::/10', // IPv6 link-local
+// Internal Fly domains an untrusted Sprite must never reach. Denied explicitly
+// (and first) as defence in depth on top of the default-deny catch-all.
+const INTERNAL_DENY_DOMAINS: readonly string[] = Object.freeze([
+  '*.internal', // 6PN app DNS, incl. Postgres and the _api.internal metadata endpoint
+  '_api.internal', // Fly metadata endpoint (explicit, in case *.internal matching is literal)
+  '*.flycast', // Flycast private service addresses
+  '*.tigris.dev', // Tigris object store
+  'fly.storage.tigris.dev', // Tigris S3 endpoint (explicit)
 ]);
 
-export function buildSandboxNetworkPolicy({
+const DENY_ALL: PolicyRule = Object.freeze({ domain: '*', action: 'deny' });
+
+export function buildSpriteNetworkPolicy({
   egressAllowlist = [],
 }: {
   egressAllowlist?: readonly string[];
 } = {}): NetworkPolicy {
   const hosts = [...new Set(egressAllowlist)].filter((h) => h.length > 0);
   if (hosts.length === 0) {
-    return 'deny-all';
+    // Default-deny: no outbound at all.
+    return { rules: [{ ...DENY_ALL }] };
   }
   return {
-    allow: Object.fromEntries(hosts.map((host) => [host, []])),
-    subnets: { deny: [...INTERNAL_DENY_CIDRS] },
+    rules: [
+      ...INTERNAL_DENY_DOMAINS.map((domain): PolicyRule => ({ domain, action: 'deny' })),
+      ...hosts.map((domain): PolicyRule => ({ domain, action: 'allow' })),
+      { ...DENY_ALL },
+    ],
   };
 }

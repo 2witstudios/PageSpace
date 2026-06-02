@@ -29,10 +29,10 @@ import type { SubscriptionTier } from '../subscription-utils';
 import { resolveExecutionPolicy, type ExecutionPolicy } from './execution-policy';
 import { evaluateCommandPolicy } from './command-policy';
 import { truncateToBytes } from './output-limit';
-import { resolveSandboxPath } from './sandbox-paths';
+import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { buildSandboxEnv } from './sandbox-env';
 import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
-import type { ExecutableSandbox, SandboxRunResult } from './vercel-sandbox-client';
+import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionQuotaDecision } from './quota';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -281,7 +281,7 @@ export async function runBashInSandbox({
   }
 
   // A provided working directory must also stay inside the sandbox root.
-  let resolvedCwd = '/vercel/sandbox';
+  let resolvedCwd: string = SANDBOX_ROOT;
   if (cwd !== undefined) {
     const candidate = resolveSandboxPath(cwd);
     if (!candidate) return fail('path_escape');

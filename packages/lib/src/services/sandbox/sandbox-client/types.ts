@@ -1,0 +1,56 @@
+/**
+ * Provider-neutral execution-client contract.
+ *
+ * PR2 defined the minimal `SandboxClient` lifecycle seam (getOrCreate / get /
+ * stop) in `session-manager`. The tools need to actually run commands and touch
+ * files, so this module extends that seam with an execution surface —
+ * `ExecutableSandbox` — kept deliberately provider-agnostic. The concrete driver
+ * (Fly Sprites today) implements `ExecSandboxClient`; the runners depend only on
+ * these interfaces, so swapping the backing provider never touches the safety
+ * layer.
+ */
+
+import type { SandboxClient, SandboxHandle } from '../session-manager';
+import type { SandboxCreateOptions } from '../sandbox-options';
+
+/** Result of a single command run inside the sandbox. */
+export interface SandboxRunResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface RunCommandArgs {
+  cmd: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  /**
+   * Hard wall-clock cap, in ms, enforced by the driver. On expiry the run is
+   * aborted; the driver tears the sandbox down so no process keeps running.
+   */
+  timeoutMs?: number;
+}
+
+export interface WriteFileEntry {
+  path: string;
+  content: string | Uint8Array;
+  mode?: number;
+}
+
+/**
+ * The minimal lifecycle handle (PR2) plus the execution surface the tools drive.
+ * The runners reconnect to this via `client.get` after the lifecycle gate has
+ * authorized the conversation.
+ */
+export interface ExecutableSandbox extends SandboxHandle {
+  runCommand(args: RunCommandArgs): Promise<SandboxRunResult>;
+  writeFiles(files: WriteFileEntry[]): Promise<void>;
+  readFileToBuffer(args: { path: string }): Promise<Buffer | null>;
+}
+
+/** Extends the PR2 lifecycle seam so one client serves both layers. */
+export interface ExecSandboxClient extends SandboxClient {
+  getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<ExecutableSandbox>;
+  get(args: { sandboxId: string }): Promise<ExecutableSandbox | null>;
+}
