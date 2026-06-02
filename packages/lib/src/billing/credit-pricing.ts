@@ -38,10 +38,18 @@ export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
 
 /**
  * Block AI when spendable credits are at or below this floor. Bounds the single
- * in-flight call that can overshoot zero (cost is only known post-stream), so we
- * never meaningfully front unpaid usage.
+ * in-flight call that can overshoot zero: the gate runs BEFORE a call but the real
+ * cost is only known AFTER the stream, so the gate can wave through one call that
+ * then exceeds the remaining balance. With the floor at 0 that overshoot is the
+ * full cost of the most expensive single call — uncovered and (pre-fix) discarded.
+ *
+ * The default of 25¢ covers a plausible worst-case single completion: a long,
+ * high-token answer from a premium model can run a few cents of real provider cost,
+ * and at the 1.5× markup that lands around ~25¢ of customer-facing credit value.
+ * So once spendable drops to the floor we stop, and the most we ever front on the
+ * one call already in flight is bounded by it. Tune via env per real usage data.
  */
-export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 0);
+export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
 
 export interface CreditPack {
   /** Stable SKU id, also stored in Stripe price metadata. */

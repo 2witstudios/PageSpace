@@ -6,15 +6,34 @@
  * A missing balance row is lazy-initialized from the tier's monthly allowance
  * (this is how a brand-new free user gets their trial allowance without a Stripe
  * subscription) and then re-evaluated.
+ *
+ * Free / no-subscription users also get their monthly reset HERE: there's no
+ * invoice.paid to drive a refill, so when the period has expired the gate resets
+ * the monthly bucket to the tier allowance and rolls the window forward. This is
+ * the imperative shell, so it owns the real clock; the period math stays trivial
+ * and the bucket reset itself comes from the pure computeMonthlyRefill.
  */
 
 import { db } from '@pagespace/db/db';
 import { creditBalances } from '@pagespace/db/schema/credits';
-import { eq } from '@pagespace/db/operators';
+import { and, eq, lt } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { evaluateGate, type GateResult } from './credit-core';
+import { evaluateGate, computeMonthlyRefill, type GateResult } from './credit-core';
 import { RESERVE_FLOOR_CENTS, TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
+
+/** One month after `from`, as a new Date (calendar month, UTC-safe). */
+function addOneMonth(from: Date): Date {
+  const d = new Date(from.getTime());
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  return d;
+}
+
+interface BalanceRow {
+  monthlyRemainingCents: number;
+  topupRemainingCents: number;
+  monthlyPeriodEnd: Date | null;
+}
 
 export async function canConsumeAI(
   userId: string,
@@ -22,22 +41,49 @@ export async function canConsumeAI(
 ): Promise<GateResult> {
   if (!isBillingEnabled()) return { allowed: true, reason: 'unlimited' };
 
-  const readBalance = async () => {
+  const now = new Date();
+
+  const readBalance = async (): Promise<BalanceRow | null> => {
     const rows = await db
       .select({
         monthlyRemainingCents: creditBalances.monthlyRemainingCents,
         topupRemainingCents: creditBalances.topupRemainingCents,
+        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
       })
       .from(creditBalances)
       .where(eq(creditBalances.userId, userId))
       .limit(1);
-    const r = rows[0];
-    return r ? { monthlyCents: r.monthlyRemainingCents, topupCents: r.topupRemainingCents } : null;
+    return rows[0] ?? null;
   };
+
+  let row = await readBalance();
+
+  // Gate-driven monthly reset for free / no-subscription users. Only when the
+  // window has actually expired (monthlyPeriodEnd < now): a paid user's
+  // invoice.paid keeps monthlyPeriodEnd in the future, so this never fires for
+  // them. The UPDATE re-checks expiry in its WHERE, so if a concurrent
+  // invoice.paid rolled the window forward between our read and write, our reset
+  // matches zero rows and we simply re-read the fresh, paid balance.
+  if (row?.monthlyPeriodEnd && row.monthlyPeriodEnd < now) {
+    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
+    const newEnd = addOneMonth(now);
+    await db
+      .update(creditBalances)
+      .set({
+        monthlyRemainingCents: refill.monthlyRemainingCents,
+        monthlyAllowanceCents: refill.monthlyAllowanceCents,
+        monthlyPeriodStart: now,
+        monthlyPeriodEnd: newEnd,
+      })
+      .where(and(eq(creditBalances.userId, userId), lt(creditBalances.monthlyPeriodEnd, now)));
+    row = await readBalance();
+  }
 
   const result = evaluateGate({
     billingEnabled: true,
-    balance: await readBalance(),
+    balance: row
+      ? { monthlyCents: row.monthlyRemainingCents, topupCents: row.topupRemainingCents }
+      : null,
     reserveFloorCents: RESERVE_FLOOR_CENTS,
   });
 
@@ -47,6 +93,8 @@ export async function canConsumeAI(
   // onConflictDoNothing means a concurrent request may have already created the
   // row (possibly already drawn down); we must judge the real stored balance,
   // not our assumed full allowance, or we could allow when credits are exhausted.
+  // Stamp the period boundary so the reset path above has a window to roll — a
+  // free user with no Stripe invoice would otherwise never get a monthly reset.
   const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
   await db
     .insert(creditBalances)
@@ -55,12 +103,17 @@ export async function canConsumeAI(
       monthlyRemainingCents: monthly,
       monthlyAllowanceCents: monthly,
       topupRemainingCents: 0,
+      monthlyPeriodStart: now,
+      monthlyPeriodEnd: addOneMonth(now),
     })
     .onConflictDoNothing({ target: creditBalances.userId });
 
+  const initialized = await readBalance();
   return evaluateGate({
     billingEnabled: true,
-    balance: await readBalance(),
+    balance: initialized
+      ? { monthlyCents: initialized.monthlyRemainingCents, topupCents: initialized.topupRemainingCents }
+      : null,
     reserveFloorCents: RESERVE_FLOOR_CENTS,
   });
 }

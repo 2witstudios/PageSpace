@@ -11,8 +11,8 @@ const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId', monthlyRemainingCents: 'cb.monthly', topupRemainingCents: 'cb.topup' },
-  creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId' },
+  creditBalances: { userId: 'cb.userId', monthlyRemainingCents: 'cb.monthly', topupRemainingCents: 'cb.topup', pendingMillicents: 'cb.pending' },
+  creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', entryType: 'cl.entryType' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
@@ -66,8 +66,84 @@ describe('consumeCredits', () => {
     await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
 
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
-    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 950 });
-    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied' });
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 950, pendingMillicents: 0 });
+    // appliedCents records what truly left the balance (signed -): 100 monthly + 50 topup.
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150 });
+  });
+
+  it('floors the balance at 0 and records the uncovered remainder as a debt adjustment row', async () => {
+    // cost $1.00 -> 150 cents charge. Balance only has 30 monthly + 20 topup = 50.
+    // Expect: balance floored to 0/0, appliedCents = -50 (what left), and a second
+    // ledger row inserted as a -100 'adjustment' (debt) linking the same aiUsageLogId.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_short' }]));
+    const captured: { balanceSet?: Record<string, number>; ledgerSet?: Record<string, unknown>; debtRow?: Record<string, unknown> } = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 30, topupRemainingCents: 20, pendingMillicents: 0 }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+        insert: vi.fn().mockReturnValue({ values: (v: Record<string, unknown>) => { captured.debtRow = v; return Promise.resolve(undefined); } }),
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_short', userId: 'u1', costDollars: 1 });
+
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 0, pendingMillicents: 0 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -50 });
+    // Debt row: the uncovered 100 cents, owed, terminal status (not retried), same aiUsageLogId.
+    expect(captured.debtRow).toMatchObject({
+      entryType: 'adjustment',
+      bucket: 'monthly',
+      amountCents: -100,
+      aiUsageLogId: 'aul_short',
+      consumeStatus: 'applied',
+    });
+  });
+
+  it('does not insert a debt row when the balance fully covers the charge', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_ok' }]));
+    let insertCalled = false;
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) }),
+        insert: vi.fn(() => { insertCalled = true; return { values: () => Promise.resolve(undefined) }; }),
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_ok', userId: 'u1', costDollars: 1 });
+    expect(insertCalled).toBe(false);
+  });
+
+  it('carries a sub-cent charge into pendingMillicents without decrementing whole cents', async () => {
+    // cost $0.0033 -> 495 millicents charge (chargeMillicents), < 1 whole cent.
+    // The call is NOT skipped: it opens the txn and banks the fraction in pending,
+    // leaving the balance untouched. A later call crosses the whole-cent boundary.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_sub' }]));
+    const captured: { balanceSet?: Record<string, number>; ledgerSet?: Record<string, unknown> } = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        // 600 already carried + 495 = 1095 -> 1 whole cent crosses, 95 carried.
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 500, topupRemainingCents: 0, pendingMillicents: 600 }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+        insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_sub', userId: 'u1', costDollars: 0.0033 });
+
+    // Not skipped — the transaction ran and the fraction was banked.
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 499, topupRemainingCents: 0, pendingMillicents: 95 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -1 });
   });
 
   it('declares the partial-index predicate on the idempotent claim so Postgres can infer the arbiter', async () => {
@@ -83,6 +159,22 @@ describe('consumeCredits', () => {
     const arg = onConflict.mock.calls[0][0] as { target?: unknown; where?: unknown };
     expect(arg).toHaveProperty('target');
     expect(arg.where).toBeDefined();
+  });
+
+  it('claims the usage row with the precise sub-cent charge (chargeMillicents) for accurate replay', async () => {
+    let claimValues: Record<string, unknown> | undefined;
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockImplementation((v: Record<string, unknown>) => {
+        claimValues = v;
+        return { onConflictDoNothing: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'led_1' }]) }) };
+      }),
+    });
+    mockDb.transaction.mockResolvedValue(undefined);
+
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.0033 });
+
+    // $0.0033 ×1.5 = 0.495 cents = 495 millicents; nominal whole-cent amount rounds to 0.
+    expect(claimValues).toMatchObject({ entryType: 'usage', chargeMillicents: 495, amountCents: 0 });
   });
 
   it('leaves the ledger row pending (never marks applied) when no balance row exists yet', async () => {
@@ -156,20 +248,22 @@ describe('settlePendingLedgerRow', () => {
           selectCall++;
           return Promise.resolve(
             selectCall === 1
-              ? [{ userId: 'u1', amountCents: -150, consumeStatus: 'pending' }] // ledger row
-              : [{ monthlyRemainingCents: 200, topupRemainingCents: 0 }],        // balance row
+              // Legacy pending row (no chargeMillicents): falls back to |amountCents|*1000.
+              ? [{ userId: 'u1', amountCents: -150, chargeMillicents: null, aiUsageLogId: 'aul_1', consumeStatus: 'pending' }]
+              : [{ monthlyRemainingCents: 200, topupRemainingCents: 0, pendingMillicents: 0 }],
           );
         } }) }) }),
         update: vi.fn()
           .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
           .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+        insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
       };
       await cb(tx);
     });
 
     await settlePendingLedgerRow('led_1');
-    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 50, topupRemainingCents: 0 });
-    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied' });
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 50, topupRemainingCents: 0, pendingMillicents: 0 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150 });
   });
 
   it('is a no-op when the row is already applied', async () => {
