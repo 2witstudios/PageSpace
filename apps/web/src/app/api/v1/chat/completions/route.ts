@@ -28,6 +28,9 @@ import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { users } from '@pagespace/db/schema/auth';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 export const maxDuration = 300;
 
@@ -83,6 +86,24 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (isProviderError(providerResult)) {
     return NextResponse.json({ error: providerResult.error }, { status: providerResult.status });
+  }
+
+  // 6b. Prepaid credit gate: block out-of-credits users before any model invocation.
+  // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+  const [gateUser] = await db
+    .select({ subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, authResult.userId));
+  const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+  if (!creditGate.allowed) {
+    auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'out_of_credits' }, riskScore: 0 });
+    return NextResponse.json(
+      {
+        error: 'out_of_credits',
+        message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+      },
+      { status: 402 }
+    );
   }
 
   // 7. Build system prompt from agent page config

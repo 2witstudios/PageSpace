@@ -19,8 +19,11 @@ import {
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 /**
  * Format tool execution results into human-readable text
@@ -201,6 +204,24 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: 'Insufficient permissions to consult this agent' },
         { status: 403 }
+      );
+    }
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    const [gateUser] = await db
+      .select({ subscriptionTier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.id, userId));
+    const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+    if (!creditGate.allowed) {
+      loggers.api.warn('Agent consultation: Out of AI credits', { userId, agentId, reason: creditGate.reason });
+      return NextResponse.json(
+        {
+          error: 'out_of_credits',
+          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+        },
+        { status: 402 }
       );
     }
 
