@@ -92,6 +92,7 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  publishSubdomain: null,
 });
 
 // Drive with access info fixture

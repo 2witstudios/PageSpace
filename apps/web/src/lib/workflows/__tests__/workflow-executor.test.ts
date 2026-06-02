@@ -144,6 +144,7 @@ const mockDrive = {
   name: 'Test Drive',
   slug: 'test-drive',
   drivePrompt: null,
+  publishSubdomain: null,
 };
 
 const mockProviderResult = {

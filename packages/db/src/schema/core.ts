@@ -16,6 +16,7 @@ export const drives = pgTable('drives', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   drivePrompt: text('drivePrompt'), // Custom AI instructions for this drive
+  publishSubdomain: text('publishSubdomain').unique(), // Globally-unique subdomain for published pages; set on first publish
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
