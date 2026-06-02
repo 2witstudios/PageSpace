@@ -8,15 +8,7 @@ import {
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
-import { RichContentRenderer } from './RichContentRenderer';
-import { RichDiffRenderer } from './RichDiffRenderer';
-import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
-import { DriveListRenderer } from './DriveListRenderer';
-import { ActionResultRenderer } from './ActionResultRenderer';
-import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
-import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
-import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
-import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
+import { renderToolContent } from './registry';
 import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 
@@ -49,139 +41,16 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
-const buildChannelTranscript = (channelMessages: unknown): string | null => {
-  if (!Array.isArray(channelMessages) || channelMessages.length === 0) {
-    return null;
-  }
-
-  const lines = channelMessages.flatMap((entry, index) => {
-    if (typeof entry !== 'object' || entry === null) {
-      return [];
-    }
-
-    const message = entry as Record<string, unknown>;
-    const lineNumber = typeof message.lineNumber === 'number' ? message.lineNumber : index + 1;
-    const createdAt = typeof message.createdAt === 'string' ? message.createdAt : '';
-    const senderName = typeof message.senderName === 'string' ? message.senderName : 'Unknown';
-    const senderType = typeof message.senderType === 'string' ? message.senderType : 'user';
-    const content = typeof message.content === 'string' ? message.content : '';
-
-    const senderPrefix = senderType === 'agent'
-      ? '[agent]'
-      : senderType === 'global_assistant'
-        ? '[assistant]'
-        : '[user]';
-
-    const timestamp = createdAt ? ` (${createdAt})` : '';
-    return [`${lineNumber}→${senderPrefix} ${senderName}${timestamp}: ${content}`];
-  });
-
-  return lines.length > 0 ? lines.join('\n') : null;
-};
-
-const getSendChannelMessagePreview = (
-  parsedInput: Record<string, unknown> | null,
-  parsedOutput: Record<string, unknown>
-): string | null => {
-  const outputPreview = parsedOutput.messagePreview;
-  if (typeof outputPreview === 'string' && outputPreview.trim().length > 0) {
-    return outputPreview.trim();
-  }
-
-  const inputContent = parsedInput?.content;
-  if (typeof inputContent === 'string' && inputContent.trim().length > 0) {
-    return inputContent.trim();
-  }
-
-  return null;
-};
-
-// Helper to parse list_pages paths format into tree structure
-// Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
-const parsePathsToTree = (paths: string[], _driveId?: string): TreeItem[] => {
-  const pathRegex = /^\S+\s+\[([^\]]+)\](?:\s+\(Task\))?\s+ID:\s+(\S+)\s+Path:\s+(.+)$/;
-
-  interface ParsedPage {
-    type: string;
-    pageId: string;
-    fullPath: string;
-    title: string;
-    pathSegments: string[];
-  }
-
-  const parsedPages: ParsedPage[] = [];
-
-  for (const path of paths) {
-    const match = path.match(pathRegex);
-    if (match) {
-      const [, type, pageId, fullPath] = match;
-      const segments = fullPath.split('/').filter(Boolean);
-      const title = segments[segments.length - 1] || 'Untitled';
-      parsedPages.push({
-        type,
-        pageId,
-        fullPath,
-        title,
-        pathSegments: segments,
-      });
-    }
-  }
-
-  // Build tree from parsed pages
-  // Use composite key (pageId + segment) to prevent duplicate titles from collapsing
-  const buildTreeFromParsed = (pages: ParsedPage[], depth: number, parentPath: string[]): TreeItem[] => {
-    const result: TreeItem[] = [];
-    const seen = new Map<string, { page?: ParsedPage; children: ParsedPage[] }>();
-
-    for (const page of pages) {
-      if (page.pathSegments.length <= depth) continue;
-
-      const currentSegment = page.pathSegments[depth];
-      const isDirectChild = page.pathSegments.length === depth + 1;
-      // Use composite key to prevent pages with same title from collapsing
-      const mapKey = isDirectChild ? `${currentSegment}:${page.pageId}` : currentSegment;
-
-      if (!seen.has(mapKey)) {
-        seen.set(mapKey, {
-          page: isDirectChild ? page : undefined,
-          children: []
-        });
-      }
-
-      const entry = seen.get(mapKey)!;
-      if (isDirectChild) {
-        entry.page = page;
-      } else {
-        entry.children.push(page);
-      }
-    }
-
-    for (const [, { page, children }] of seen) {
-      const currentPath = [...parentPath, page?.title || children[0]?.pathSegments[depth] || 'unknown'];
-      const item: TreeItem = {
-        path: '/' + currentPath.join('/'),
-        title: page?.title || children[0]?.pathSegments[depth] || 'Folder',
-        type: page?.type ?? 'FOLDER',
-        pageId: page?.pageId,
-        children: buildTreeFromParsed(children, depth + 1, currentPath),
-      };
-      result.push(item);
-    }
-
-    return result;
-  };
-
-  // Start building from depth 1 (skip drive slug at depth 0)
-  return buildTreeFromParsed(parsedPages, 1, []);
-};
-
-// Tool name mapping
+// Tool name mapping (display labels for the collapsible header)
 const TOOL_NAME_MAP: Record<string, string> = {
   // Drive tools
   'list_drives': 'Workspaces',
   'create_drive': 'Create Workspace',
   'rename_drive': 'Rename Workspace',
   'update_drive_context': 'Update Context',
+  // Member tools
+  'list_drive_members': 'Members',
+  'list_collaborators': 'Collaborators',
   // Page read tools
   'list_pages': 'Pages',
   'read_page': 'Read Page',
@@ -189,6 +58,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'list_conversations': 'Conversations',
   'read_conversation': 'Conversation',
   'send_channel_message': 'Send Message',
+  'delete_channel_message': 'Delete Message',
   // Page write tools
   'replace_lines': 'Edit Document',
   'create_page': 'Create Page',
@@ -209,15 +79,32 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'delete_task': 'Delete Task',
   'reorder_task': 'Reorder Task',
   'get_assigned_tasks': 'Assigned Tasks',
+  'create_task_status': 'Create Status',
   // Agent tools
   'update_agent_config': 'Configure Agent',
   'list_agents': 'Agents',
   'multi_drive_list_agents': 'All Agents',
   'ask_agent': 'Ask Agent',
-  // Web search
+  // Web
   'web_search': 'Web Search',
+  'web_fetch': 'Fetch Page',
   // Activity
   'get_activity': 'Activity',
+  // Calendar tools
+  'list_calendar_events': 'Calendar',
+  'get_calendar_event': 'Event',
+  'check_calendar_availability': 'Availability',
+  'create_calendar_event': 'Create Event',
+  'update_calendar_event': 'Update Event',
+  'delete_calendar_event': 'Delete Event',
+  'rsvp_calendar_event': 'RSVP',
+  'invite_calendar_attendees': 'Invite Attendees',
+  'remove_calendar_attendee': 'Remove Attendee',
+  // Workflow tools
+  'create_workflow': 'Create Workflow',
+  'list_workflows': 'Workflows',
+  'update_workflow': 'Update Workflow',
+  'delete_workflow': 'Delete Workflow',
 };
 
 // Internal renderer component with hooks
@@ -298,500 +185,11 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     return formattedToolName;
   }, [parsedInput, formattedToolName]);
 
-  // Build rich content for all supported tools
-  const richContent = useMemo((): React.ReactNode | null => {
-    // Handle errors
-    if (error) {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={false}
-          errorMessage={error}
-          title={parsedInput?.title as string}
-        />
-      );
-    }
-
-    if (!parsedOutput) return null;
-
-    // === DRIVE TOOLS ===
-    if (toolName === 'list_drives' && parsedOutput.drives) {
-      // Transform drive data: tool returns 'title' but renderer expects 'name'
-      const drives = (parsedOutput.drives as Array<{ id: string; slug: string; title?: string; name?: string; description?: string; isPersonal?: boolean; memberCount?: number }>).map(d => ({
-        id: d.id,
-        name: d.name || d.title || 'Untitled', // Prefer name, fall back to title
-        slug: d.slug,
-        description: d.description,
-        isPersonal: d.isPersonal,
-        memberCount: d.memberCount,
-      }));
-      return <DriveListRenderer drives={drives} />;
-    }
-
-    if (toolName === 'create_drive' || toolName === 'rename_drive') {
-      return (
-        <ActionResultRenderer
-          actionType={toolName === 'create_drive' ? 'create' : 'rename'}
-          success={parsedOutput.success !== false}
-          title={(parsedOutput.name || parsedOutput.title) as string | undefined}
-          oldTitle={parsedOutput.oldName as string | undefined}
-          message={parsedOutput.message as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'update_drive_context') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={parsedOutput.success !== false}
-          title="Workspace Context"
-          message={(parsedOutput.message as string | undefined) || 'Context updated successfully'}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    // === PAGE READ TOOLS ===
-    // Handle both tree format (newer) and paths format (current)
-    if (toolName === 'list_pages') {
-      if (parsedOutput.tree) {
-        return (
-          <PageTreeRenderer
-            tree={parsedOutput.tree as TreeItem[]}
-            driveName={parsedOutput.driveName as string | undefined}
-            driveId={parsedOutput.driveId as string | undefined}
-          />
-        );
-      }
-      // Convert paths array format to tree
-      if (parsedOutput.paths && Array.isArray(parsedOutput.paths)) {
-        const tree = parsePathsToTree(
-          parsedOutput.paths as string[],
-          parsedOutput.driveId as string | undefined
-        );
-        return (
-          <PageTreeRenderer
-            tree={tree}
-            driveName={(parsedOutput.driveName ?? parsedOutput.driveSlug) as string | undefined}
-            driveId={parsedOutput.driveId as string | undefined}
-          />
-        );
-      }
-    }
-
-    if (toolName === 'list_trash' && parsedOutput.tree) {
-      return (
-        <PageTreeRenderer
-          tree={parsedOutput.tree as TreeItem[]}
-          driveName={parsedOutput.driveName as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-          title="Trash"
-        />
-      );
-    }
-
-    if (toolName === 'read_page') {
-      const directContentValue = parsedOutput.rawContent ?? parsedOutput.content;
-      const directContent = typeof directContentValue === 'string' && directContentValue.length > 0
-        ? directContentValue
-        : undefined;
-      const channelTranscript = buildChannelTranscript(parsedOutput.channelMessages);
-      const hasChannelMessagesArray = Array.isArray(parsedOutput.channelMessages);
-      const content = directContent ?? channelTranscript ?? (hasChannelMessagesArray ? 'Channel has no messages yet.' : undefined);
-
-      if (content !== undefined) {
-        return (
-          <RichContentRenderer
-            title={(parsedOutput.title as string | undefined) || 'Document'}
-            content={content}
-            pageId={parsedOutput.pageId as string | undefined}
-            pageType={parsedOutput.type as string | undefined}
-          />
-        );
-      }
-    }
-
-    if (toolName === 'list_conversations' && parsedOutput.conversations) {
-      const conversations = parsedOutput.conversations as Array<{ conversationId: string; title?: string; firstMessagePreview?: string; messageCount?: number }>;
-      return (
-        <PageTreeRenderer
-          tree={conversations.map(c => ({
-            path: c.conversationId,
-            title: c.title || c.firstMessagePreview?.slice(0, 40) || `Conversation ${c.conversationId?.slice(0, 8) ?? ''}`,
-            type: 'AI_CHAT',
-            pageId: c.conversationId,
-            children: []
-          }))}
-          title="Conversations"
-        />
-      );
-    }
-
-    if (toolName === 'read_conversation' && parsedOutput.content) {
-      return (
-        <RichContentRenderer
-          title={(parsedOutput.title as string | undefined) || 'Conversation'}
-          content={parsedOutput.content as string}
-          pageId={parsedOutput.pageId as string | undefined}
-          pageType="AI_CHAT"
-        />
-      );
-    }
-
-    // === PAGE WRITE TOOLS ===
-    if (toolName === 'replace_lines') {
-      if (parsedOutput.success && parsedOutput.oldContent && parsedOutput.newContent) {
-        return (
-          <RichDiffRenderer
-            title={(parsedOutput.title as string | undefined) || 'Document'}
-            oldContent={parsedOutput.oldContent as string}
-            newContent={parsedOutput.newContent as string}
-            pageId={parsedOutput.pageId as string | undefined}
-            changeSummary={parsedOutput.summary as string | undefined}
-          />
-        );
-      }
-      if (parsedOutput.success && parsedOutput.newContent) {
-        return (
-          <RichContentRenderer
-            title={(parsedOutput.title as string | undefined) || 'Document'}
-            content={parsedOutput.newContent as string}
-            pageId={parsedOutput.pageId as string | undefined}
-          />
-        );
-      }
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
-          pageId={parsedOutput.pageId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'create_page') {
-      return (
-        <ActionResultRenderer
-          actionType="create"
-          success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
-          pageId={parsedOutput.pageId as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
-          message={parsedOutput.message as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'rename_page') {
-      return (
-        <ActionResultRenderer
-          actionType="rename"
-          success={parsedOutput.success !== false}
-          title={(parsedOutput.newTitle || parsedOutput.title) as string | undefined}
-          oldTitle={parsedOutput.oldTitle as string | undefined}
-          pageId={parsedOutput.pageId as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'trash_page' || toolName === 'trash_drive') {
-      return (
-        <ActionResultRenderer
-          actionType="trash"
-          success={parsedOutput.success !== false}
-          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
-          pageType={parsedOutput.pageType as string | undefined}
-          message={parsedOutput.message as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'restore_page' || toolName === 'restore_drive') {
-      return (
-        <ActionResultRenderer
-          actionType="restore"
-          success={parsedOutput.success !== false}
-          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
-          pageId={parsedOutput.pageId as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-          pageType={parsedOutput.pageType as string | undefined}
-          message={parsedOutput.message as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'move_page') {
-      return (
-        <ActionResultRenderer
-          actionType="move"
-          success={parsedOutput.success !== false}
-          title={parsedOutput.title as string | undefined}
-          pageId={parsedOutput.pageId as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
-          oldParent={parsedOutput.oldParentTitle as string | undefined}
-          newParent={parsedOutput.newParentTitle as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'edit_sheet_cells') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={parsedOutput.success !== false}
-          title={(parsedOutput.title as string | undefined) || 'Sheet'}
-          pageId={parsedOutput.pageId as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-          pageType="SHEET"
-          message={(parsedOutput.summary as string | undefined) || `${(parsedOutput.updatedCount as number | undefined) || 0} cells updated`}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    // === CHANNEL TOOLS ===
-    if (toolName === 'send_channel_message') {
-      const messagePreview = getSendChannelMessagePreview(parsedInput, parsedOutput);
-      const channelTitle = parsedOutput.channelTitle;
-      const previewTitle = typeof channelTitle === 'string' && channelTitle.length > 0
-        ? `Message Preview · #${channelTitle}`
-        : 'Message Preview';
-
-      return (
-        <div>
-          <ActionResultRenderer
-            actionType="update"
-            success={parsedOutput.success !== false}
-            title={channelTitle as string | undefined}
-            pageId={parsedOutput.channelId as string | undefined}
-            pageType="CHANNEL"
-            message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
-            errorMessage={parsedOutput.error as string | undefined}
-          />
-          {messagePreview && (
-            <RichContentRenderer
-              title={previewTitle}
-              content={messagePreview}
-              pageId={parsedOutput.channelId as string | undefined}
-              pageType="CHANNEL"
-              maxHeight={220}
-            />
-          )}
-        </div>
-      );
-    }
-
-    // === SEARCH TOOLS ===
-    if (toolName === 'regex_search' && parsedOutput.results) {
-      return (
-        <SearchResultsRenderer
-          results={parsedOutput.results as SearchResult[]}
-          query={parsedInput?.pattern as string}
-          searchType="regex"
-          totalMatches={parsedOutput.totalMatches as number | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'glob_search' && parsedOutput.results) {
-      return (
-        <SearchResultsRenderer
-          results={parsedOutput.results as SearchResult[]}
-          query={parsedInput?.pattern as string}
-          searchType="glob"
-        />
-      );
-    }
-
-    if (toolName === 'multi_drive_search' && parsedOutput.results) {
-      return (
-        <SearchResultsRenderer
-          results={parsedOutput.results as SearchResult[]}
-          query={(parsedInput?.pattern || parsedInput?.query) as string}
-          searchType="multi-drive"
-          totalMatches={parsedOutput.totalMatches as number | undefined}
-        />
-      );
-    }
-
-    // === AGENT TOOLS ===
-    if (toolName === 'list_agents' && parsedOutput.agents) {
-      return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} />;
-    }
-
-    if (toolName === 'multi_drive_list_agents' && parsedOutput.agents) {
-      return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} isMultiDrive />;
-    }
-
-    if (toolName === 'update_agent_config') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={parsedOutput.success !== false}
-          title={(parsedOutput.agentTitle as string | undefined) || 'Agent Configuration'}
-          message={(parsedOutput.message as string | undefined) || 'Configuration updated'}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    // === WEB SEARCH ===
-    if (toolName === 'web_search' && parsedOutput.results) {
-      return (
-        <WebSearchRenderer
-          results={parsedOutput.results as WebSearchResult[]}
-          query={parsedInput?.query as string}
-        />
-      );
-    }
-
-    // === ACTIVITY ===
-    // Handle both flat 'activities' format and grouped 'drives' format
-    if (toolName === 'get_activity') {
-      // Direct activities array format
-      if (parsedOutput.activities) {
-        return (
-          <ActivityRenderer
-            activities={parsedOutput.activities as ActivityItem[]}
-            period={parsedOutput.period as string | undefined}
-          />
-        );
-      }
-      // Grouped drives format from activity-tools.ts
-      if (parsedOutput.drives && Array.isArray(parsedOutput.drives)) {
-        const actors = (parsedOutput.actors || []) as Array<{ email: string; name: string | null; isYou: boolean; count: number }>;
-        const driveGroups = parsedOutput.drives as Array<{
-          drive: { id: string; name: string; slug: string; context: string | null };
-          activities: Array<{
-            id: string;
-            ts: string;
-            op: string;
-            res: string;
-            title: string | null;
-            pageId: string | null;
-            actor: number;
-            ai?: string;
-            fields?: string[];
-            delta?: Record<string, unknown>;
-          }>;
-          stats: { total: number; byOp: Record<string, number>; aiCount: number };
-        }>;
-
-        // Map operation names to action types
-        const opToAction = (op: string): 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'commented' | 'renamed' => {
-          switch (op) {
-            case 'create': return 'created';
-            case 'update': return 'updated';
-            case 'delete':
-            case 'trash': return 'deleted';
-            case 'restore': return 'restored';
-            case 'move':
-            case 'reorder': return 'moved';
-            case 'rename': return 'renamed';
-            default: return 'updated';
-          }
-        };
-
-        // Flatten grouped activities
-        const flatActivities: ActivityItem[] = [];
-        for (const group of driveGroups) {
-          for (const activity of group.activities) {
-            const actor = actors[activity.actor];
-            flatActivities.push({
-              id: activity.id,
-              action: opToAction(activity.op),
-              pageId: activity.pageId || undefined,
-              pageTitle: activity.title || undefined,
-              pageType: activity.res === 'page' ? undefined : activity.res,
-              driveId: group.drive.id,
-              driveName: group.drive.name,
-              actorName: actor?.name || actor?.email || undefined,
-              timestamp: activity.ts,
-              summary: activity.ai ? `AI-generated (${activity.ai})` : undefined,
-            });
-          }
-        }
-
-        // Sort by timestamp descending
-        flatActivities.sort((a, b) => {
-          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-          return timeB - timeA;
-        });
-
-        const meta = parsedOutput.meta as { window?: string } | undefined;
-        const period = meta?.window ? `Last ${meta.window}` : undefined;
-
-        return (
-          <ActivityRenderer
-            activities={flatActivities}
-            period={period}
-          />
-        );
-      }
-    }
-
-    // === TASK TOOLS ===
-    if (toolName === 'get_assigned_tasks' && parsedOutput.tasks) {
-      const tasks = parsedOutput.tasks as Array<{ id: string; title: string; status?: string; pageId?: string }>;
-      return (
-        <PageTreeRenderer
-          tree={tasks.map(t => ({
-            path: t.id,
-            title: `${t.status === 'completed' ? '[Done] ' : ''}${t.title}`,
-            type: 'TASK_LIST',
-            pageId: t.pageId,
-            children: []
-          }))}
-          title="Assigned Tasks"
-        />
-      );
-    }
-
-    // Default: show success/failure for any tool with success field
-    if (typeof parsedOutput.success === 'boolean') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={parsedOutput.success}
-          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
-          message={parsedOutput.message as string | undefined}
-          errorMessage={parsedOutput.error as string | undefined}
-        />
-      );
-    }
-
-    // Fallback: display raw output for unhandled tools (preserves debugging visibility)
-    if (output != null) {
-      const rawContent = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
-      return (
-        <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
-          <div className="px-3 py-2 bg-muted/30 border-b">
-            <span className="text-sm font-medium text-muted-foreground">Result</span>
-          </div>
-          <pre className="p-3 text-xs overflow-auto max-h-[300px] bg-muted/20">
-            <code>{rawContent}</code>
-          </pre>
-        </div>
-      );
-    }
-
-    return null;
-  }, [toolName, parsedInput, parsedOutput, error, output]);
+  // Build rich content via the tool renderer registry
+  const richContent = useMemo(
+    () => renderToolContent({ toolName, parsedInput, parsedOutput, output, error }),
+    [toolName, parsedInput, parsedOutput, output, error]
+  );
 
   // Render with rich content (no Parameters/Result wrappers)
   return (
