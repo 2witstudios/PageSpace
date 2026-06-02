@@ -46,7 +46,7 @@ import {
   broadcastDriveMemberEvent,
   broadcastDriveMemberEventToRecipients,
   broadcastTaskEvent,
-  broadcastUsageEvent,
+  broadcastCreditsEvent,
   broadcastAiStreamStart,
   broadcastChatUserMessage,
   broadcastAiMessageEdited,
@@ -66,7 +66,7 @@ import {
   type DriveEventPayload,
   type DriveMemberEventPayload,
   type TaskEventPayload,
-  type UsageEventPayload,
+  type CreditsEventPayload,
   type AiStreamStartPayload,
   type AiStreamCompletePayload,
 } from '../socket-utils';
@@ -445,23 +445,25 @@ describe('socket-utils', () => {
     });
   });
 
-  describe('broadcastUsageEvent', () => {
-    it('given usage event, should route to notifications:{userId} channel', async () => {
-      const payload: UsageEventPayload = {
+  describe('broadcastCreditsEvent', () => {
+    it('given credits event, should route to notifications:{userId} channel', async () => {
+      const payload: CreditsEventPayload = {
         userId: 'user-123',
         operation: 'updated',
-        subscriptionTier: 'pro',
-        standard: { current: 50, limit: 100, remaining: 50 },
-        pro: { current: 200, limit: 500, remaining: 300 },
+        billingEnabled: true,
+        monthly: { remaining: 350, allowance: 500, periodEnd: null },
+        topup: { remaining: 1000 },
+        spendable: 1350,
+        reserved: 0,
       };
 
-      await broadcastUsageEvent(payload);
+      await broadcastCreditsEvent(payload);
 
       const fetchCall = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(fetchCall[1].body);
 
       expect(requestBody.channelId).toBe('notifications:user-123');
-      expect(requestBody.event).toBe('usage:updated');
+      expect(requestBody.event).toBe('credits:updated');
     });
   });
 
@@ -890,13 +892,15 @@ describe('socket-utils', () => {
       expect(body.channelId).toBe('user:test-user:tasks');
     });
 
-    it('given usage event, should route to user notifications channel', async () => {
-      await broadcastUsageEvent({
+    it('given credits event, should route to user notifications channel', async () => {
+      await broadcastCreditsEvent({
         userId: 'test-user',
         operation: 'updated',
-        subscriptionTier: 'free',
-        standard: { current: 0, limit: 100, remaining: 100 },
-        pro: { current: 0, limit: 0, remaining: 0 },
+        billingEnabled: true,
+        monthly: { remaining: 500, allowance: 500, periodEnd: null },
+        topup: { remaining: 0 },
+        spendable: 500,
+        reserved: 0,
       });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);

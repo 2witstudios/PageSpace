@@ -11,7 +11,7 @@ import InlineSearch from "@/components/search/InlineSearch";
 import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
 import RecentsDropdown from "@/components/shared/RecentsDropdown";
-import { UsageCounter } from "@/components/billing/UsageCounter";
+import { CreditBalance } from "@/components/billing/CreditBalance";
 import NavButtons from "./NavButtons";
 
 interface TopBarProps {
@@ -75,7 +75,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
         </div>
 
         <div className="flex flex-shrink-0 items-center gap-2">
-          <UsageCounter />
+          <CreditBalance />
 
           <VerifyEmailButton />
 

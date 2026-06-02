@@ -19,6 +19,7 @@ import { requiresProSubscription } from '@/lib/subscription/rate-limit-middlewar
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
@@ -1053,7 +1054,11 @@ export async function POST(request: Request) {
                   cachedInputTokens: usage?.cachedInputTokens,
                 }
               });
-              
+
+              // Push the user's new credit balance to their open tabs so the header
+              // widget updates live after the call settles. Best-effort; never blocks.
+              void emitCreditsUpdated(userId!, { conversationId, pageId: chatId });
+
               // Track tool usage separately for analytics
               if (extractedToolCalls.length > 0) {
                 for (const toolCall of extractedToolCalls) {

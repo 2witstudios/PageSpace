@@ -104,7 +104,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/websocket', () => ({
-  broadcastUsageEvent: vi.fn(),
+  broadcastCreditsEvent: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/core', () => ({
