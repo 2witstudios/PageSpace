@@ -47,7 +47,7 @@ vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
 }));
 
 vi.mock('@/lib/websocket', () => ({
-  broadcastUsageEvent: vi.fn(),
+  broadcastCreditsEvent: vi.fn(),
   broadcastChatUserMessage: mockBroadcastChatUserMessage,
 }));
 

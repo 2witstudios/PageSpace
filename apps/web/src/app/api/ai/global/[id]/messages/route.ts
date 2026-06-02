@@ -7,6 +7,7 @@ import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-mid
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
@@ -1030,6 +1031,10 @@ MENTION PROCESSING:
             // NOTE: daily per-call counting/broadcast removed — prepaid credits are
             // the sole volume limiter. The credit hold placed by the gate is settled
             // by the AIMonitoring.trackUsage call above (holdId threaded in).
+
+            // Push the user's new credit balance to their open tabs so the header
+            // widget updates live after the call settles. Best-effort; never blocks.
+            void emitCreditsUpdated(userId!, { conversationId });
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }

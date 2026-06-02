@@ -39,6 +39,8 @@ import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { getAIErrorMessage, isOutOfCreditsError } from '@/lib/ai/shared/error-messages';
+import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
@@ -883,25 +885,21 @@ const SidebarChatTab: React.FC = () => {
         }}
       >
         {error && showError && (
-          <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex items-center justify-between">
-            <p className="text-red-700 dark:text-red-300">
-              {error.message?.includes('Unauthorized') || error.message?.includes('401')
-                ? 'Authentication failed. Please refresh the page and try again.'
-                : (error.message?.toLowerCase().includes('rate') ||
-                   error.message?.toLowerCase().includes('limit') ||
-                   error.message?.includes('429') ||
-                   error.message?.includes('402') ||
-                   error.message?.includes('Failed after') ||
-                   error.message?.includes('Provider returned error'))
-                ? 'Free tier rate limit hit. Please try again in a few seconds or subscribe for premium models and access.'
-                : 'Something went wrong. Please try again.'}
-            </p>
-            <button
-              onClick={() => setShowError(false)}
-              className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 underline"
-            >
-              Clear
-            </button>
+          <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-red-700 dark:text-red-300">
+                {getAIErrorMessage(error.message)}
+              </p>
+              <button
+                onClick={() => setShowError(false)}
+                className="shrink-0 text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 underline"
+              >
+                Clear
+              </button>
+            </div>
+            {isOutOfCreditsError(error.message) && (
+              <BuyCreditsButton variant="default" size="sm" className="self-start" />
+            )}
           </div>
         )}
 

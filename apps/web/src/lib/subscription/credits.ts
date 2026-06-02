@@ -1,0 +1,66 @@
+/**
+ * In-app AI-credit copy helpers — the single source of truth for any credit/pricing
+ * number shown inside `apps/web` (plan cards, settings, the balance widget).
+ *
+ * Every dollar figure is derived from the canonical billing constants in
+ * `@pagespace/lib/billing/credit-pricing` (`TIER_MONTHLY_ALLOWANCE_CENTS` and
+ * `CREDIT_PACKS`) so in-app pricing copy can never drift from what the app meters.
+ * Mirrors `apps/marketing/src/lib/credits.ts` for the marketing surface. Do NOT
+ * hardcode tier dollar amounts or top-up pack values elsewhere in `apps/web` —
+ * import from this module instead.
+ *
+ * NOTE: env overrides in credit-pricing read `process.env`, which is inlined as the
+ * compile-time default in the client bundle. These display values therefore reflect
+ * the built-in defaults on the client, which is correct for marketing/plan copy; the
+ * authoritative live balance always comes from `GET /api/credits`.
+ */
+import {
+  TIER_MONTHLY_ALLOWANCE_CENTS,
+  CREDIT_PACKS,
+  type CreditPack,
+} from '@pagespace/lib/billing/credit-pricing';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+
+/** Format whole cents as a dollar string, dropping a trailing ".00" for whole dollars. */
+export function formatCreditDollars(cents: number): string {
+  const dollars = cents / 100;
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
+}
+
+/** Monthly included AI-credit allowance per tier, in whole cents. */
+export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = {
+  free: TIER_MONTHLY_ALLOWANCE_CENTS.free,
+  pro: TIER_MONTHLY_ALLOWANCE_CENTS.pro,
+  founder: TIER_MONTHLY_ALLOWANCE_CENTS.founder,
+  business: TIER_MONTHLY_ALLOWANCE_CENTS.business,
+};
+
+/** Monthly included AI-credit allowance per tier, as display strings (e.g. "$5"). */
+export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = {
+  free: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.free),
+  pro: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.pro),
+  founder: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.founder),
+  business: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.business),
+};
+
+/** "$5/month in AI credits" style phrase for a tier. */
+export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
+  return `${MONTHLY_CREDITS[tier]}/month in AI credits`;
+}
+
+/** Buyable top-up packs, sorted by ascending credit value. */
+export const CREDIT_PACK_LIST: CreditPack[] = Object.values(CREDIT_PACKS).sort(
+  (a, b) => a.cents - b.cents,
+);
+
+/** Buyable top-up packs as display strings (e.g. "$10"), sorted by value. */
+export const CREDIT_PACKS_DISPLAY: string[] = CREDIT_PACK_LIST.map((pack) =>
+  formatCreditDollars(pack.cents),
+);
+
+/** Top-up packs joined for prose, e.g. "$10, $25, or $50". */
+export function creditPacksPhrase(): string {
+  const packs = CREDIT_PACKS_DISPLAY;
+  if (packs.length <= 1) return packs.join('');
+  return `${packs.slice(0, -1).join(', ')}, or ${packs[packs.length - 1]}`;
+}

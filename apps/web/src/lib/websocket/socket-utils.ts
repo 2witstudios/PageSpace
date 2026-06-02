@@ -16,7 +16,7 @@ export type PageOperation = 'created' | 'updated' | 'moved' | 'deleted' | 'resto
 export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
-export type UsageOperation = 'updated';
+export type CreditsOperation = 'updated';
 export type ActivityOperation = 'logged';
 export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
 export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed' | 'thread_updated';
@@ -69,20 +69,33 @@ export interface TaskEventPayload {
   };
 }
 
-export interface UsageEventPayload {
+/**
+ * Live prepaid-credit balance pushed to a user's notifications channel after their
+ * balance changes (an AI call settles, a monthly refill lands, or a top-up pack is
+ * purchased). Replaces the retired daily-quota `usage:updated` payload — the cutover
+ * to metered credits removed the per-day call counters this used to carry.
+ *
+ * All money fields are whole cents of customer-facing credit value, mirroring
+ * `GET /api/credits`. `conversationId`/`pageId` are optional scoping hints set only
+ * by the AI-stream emitters so the per-conversation usage monitor can refresh just
+ * the relevant view; the funding emitter omits them.
+ */
+export interface CreditsEventPayload {
   userId: string;
-  operation: UsageOperation;
-  subscriptionTier: 'free' | 'pro' | 'business';
-  standard: {
-    current: number;
-    limit: number;
+  operation: CreditsOperation;
+  billingEnabled: boolean;
+  monthly: {
+    remaining: number;
+    allowance: number;
+    periodEnd: string | null;
+  };
+  topup: {
     remaining: number;
   };
-  pro: {
-    current: number;
-    limit: number;
-    remaining: number;
-  };
+  spendable: number;
+  reserved: number;
+  conversationId?: string;
+  pageId?: string;
 }
 
 export interface KickPayload {
@@ -514,15 +527,18 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
 }
 
 /**
- * Broadcasts a usage event to the realtime server
- * @param payload - The usage event payload to broadcast
+ * Broadcasts a prepaid-credit balance update to the user's notifications channel.
+ * Emitted after the balance changes — an AI call settles, a monthly refill lands,
+ * or a top-up pack is purchased — so the credit-balance widget updates live without
+ * polling. Best-effort: a broadcast failure is logged and swallowed, never thrown.
+ * @param payload - The credits event payload to broadcast
  */
-export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<void> {
+export async function broadcastCreditsEvent(payload: CreditsEventPayload): Promise<void> {
   // Only broadcast if realtime URL is configured
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
-    realtimeLogger.warn('Realtime URL not configured, skipping usage event broadcast', {
-      event: 'usage'
+    realtimeLogger.warn('Realtime URL not configured, skipping credits event broadcast', {
+      event: 'credits'
     });
     return;
   }
@@ -530,7 +546,7 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
   try {
     const requestBody = JSON.stringify({
       channelId: `notifications:${payload.userId}`,
-      event: `usage:${payload.operation}`,
+      event: `credits:${payload.operation}`,
       payload,
     });
 
@@ -542,20 +558,19 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
     });
 
     if (verboseRealtimeLogging) {
-      realtimeLogger.debug('Usage event broadcasted', {
+      realtimeLogger.debug('Credits event broadcasted', {
         userId: maskIdentifier(payload.userId),
         operation: payload.operation,
-        standard: `${payload.standard.current}/${payload.standard.limit}`,
-        pro: `${payload.pro.current}/${payload.pro.limit}`
+        spendable: payload.spendable,
       });
     }
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
     realtimeLogger.error(
-      'Failed to broadcast usage event',
+      'Failed to broadcast credits event',
       error instanceof Error ? error : undefined,
       {
-        event: 'usage',
+        event: 'credits',
         channel: `notifications:${maskIdentifier(payload.userId)}`
       }
     );

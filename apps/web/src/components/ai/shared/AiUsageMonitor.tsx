@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSocketStore } from '@/stores/useSocketStore';
-import type { UsageEventPayload } from '@/lib/websocket';
+import type { CreditsEventPayload } from '@/lib/websocket';
 import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 
 interface AiUsageMonitorProps {
@@ -46,13 +46,16 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     connect();
   }, [connect]);
 
-  // Socket.IO listener for real-time usage updates
-  // Reactive to `socket` so the listener is registered once the async connection completes
+  // Socket.IO listener for real-time usage updates. A `credits:updated` event fires
+  // after an AI call settles (it carries the new balance for the header widget); we
+  // piggyback on it as a "a call just completed, refresh my token/context view" ping.
+  // Reactive to `socket` so the listener is registered once the async connection completes.
   useEffect(() => {
     if (!socket) return;
 
-    const handleUsageUpdated = (payload: UsageEventPayload & { conversationId?: string; pageId?: string }) => {
-      // Skip events targeting a different conversation or page
+    const handleCreditsUpdated = (payload: CreditsEventPayload) => {
+      // Skip events scoped to a different conversation or page (the AI-stream emitters
+      // set these hints; the funding emitter omits them, so unscoped events refresh).
       if (payload.conversationId && payload.conversationId !== conversationId) return;
       if (payload.pageId && payload.pageId !== pageId) return;
 
@@ -63,10 +66,10 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
       }
     };
 
-    socket.on('usage:updated', handleUsageUpdated);
+    socket.on('credits:updated', handleCreditsUpdated);
 
     return () => {
-      socket.off('usage:updated', handleUsageUpdated);
+      socket.off('credits:updated', handleCreditsUpdated);
     };
   }, [socket, conversationId, pageId, mutateConversation, mutatePage]);
 

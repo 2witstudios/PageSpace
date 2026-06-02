@@ -8,6 +8,7 @@ import type { SubscriptionTier } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,15 +63,26 @@ export async function POST(request: NextRequest) {
           await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
           break;
 
-        case 'checkout.session.completed':
+        case 'checkout.session.completed': {
           // Whole path is retryable: a transient failure in EITHER the handler or
           // funding clears the idempotency marker so Stripe redelivers (see below).
+          const session = event.data.object as Stripe.Checkout.Session;
           await withFundingRetry(event.id, async () => {
-            await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+            await handleCheckoutCompleted(session);
             // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
             await applyStripeFunding(event);
           });
+          // Push the buyer's new balance to their open tabs so the top-up appears
+          // live. Best-effort, post-commit; never blocks the webhook ack.
+          if (
+            session.mode === 'payment' &&
+            session.metadata?.kind === 'credit_pack' &&
+            session.metadata?.userId
+          ) {
+            void emitCreditsUpdated(session.metadata.userId);
+          }
           break;
+        }
 
         case 'invoice.payment_failed':
           await handlePaymentFailed(event.data.object as Stripe.Invoice);
@@ -85,6 +97,18 @@ export async function POST(request: NextRequest) {
             // of the subscription webhook still grants the correct (paid) allowance.
             await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
           });
+          // Push the refilled balance to the user's open tabs. Best-effort, post-commit.
+          {
+            const customerId = invoice.customer as string | null;
+            if (customerId) {
+              const refilled = await db
+                .select({ id: users.id })
+                .from(users)
+                .where(eq(users.stripeCustomerId, customerId))
+                .limit(1);
+              if (refilled[0]) void emitCreditsUpdated(refilled[0].id);
+            }
+          }
           break;
         }
 

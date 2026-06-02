@@ -78,7 +78,7 @@ const fetcher = async (url: string) => {
  * Hook for fetching AI usage data for a specific conversation.
  *
  * Usage data only changes when a message completes, so polling is disabled
- * by default. Updates are driven by Socket.IO `usage:updated` events which
+ * by default. Updates are driven by Socket.IO `credits:updated` events which
  * trigger SWR `mutate()` in AiUsageMonitor.
  *
  * @param conversationId - The conversation ID to fetch usage for
