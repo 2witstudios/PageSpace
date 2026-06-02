@@ -92,6 +92,7 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn().mockReturnValue(false),
   createRateLimitResponse: vi.fn(),
   createSubscriptionRequiredResponse: vi.fn(),
+  createAdminRestrictedResponse: vi.fn(),
 }));
 
 // The credit gate under test. Default: allowed. Individual tests override.

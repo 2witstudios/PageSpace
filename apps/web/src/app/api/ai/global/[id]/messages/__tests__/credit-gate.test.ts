@@ -120,7 +120,7 @@ vi.mock('@/lib/subscription/usage-service', () => ({
   }),
 }));
 
-vi.mock('@/lib/subscription/rate-limit-middleware', () => ({ createRateLimitResponse: vi.fn() }));
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({ createRateLimitResponse: vi.fn(), createAdminRestrictedResponse: vi.fn() }));
 
 // The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
@@ -215,6 +215,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn(
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
   getProviderTier: vi.fn().mockReturnValue('standard'),
+  isAdminOnlyProvider: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/lib/ai/core/tool-utils', () => ({
   mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })),
