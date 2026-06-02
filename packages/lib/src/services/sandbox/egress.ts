@@ -26,6 +26,15 @@
  *
  * The allow map is built from a frozen, deduped copy of the input so a caller
  * cannot mutate the shared policy array through the returned object.
+ *
+ * Allowlist entries are VALIDATED before they become `domain` allow rules: under
+ * Sprites' first-match-wins ordered evaluation a `'*'` allow entry would shadow
+ * the terminating `{ domain: '*', action: 'deny' }` catch-all and silently open
+ * all egress, and passing arbitrary non-host strings (IP literals, URLs, ports)
+ * into `domain` is not a fail-closed stance for an egress boundary. Only literal
+ * hostnames (optionally a single leading `*.` wildcard label) survive; everything
+ * else — bare `*`, IPv4/IPv6 literals, schemes/paths/ports, `localhost` — is
+ * dropped. Validation is label-by-label against a bounded pattern (no ReDoS).
  */
 
 import type { NetworkPolicy, PolicyRule } from '@fly/sprites';
@@ -37,12 +46,44 @@ const INCLUDE_DEFAULTS: PolicyRule = Object.freeze({ include: 'defaults' });
 
 const DENY_ALL: PolicyRule = Object.freeze({ domain: '*', action: 'deny' });
 
+// A single DNS label: 1–63 chars, alphanumeric with internal hyphens. Bounded
+// quantifier (no unbounded backtracking) so per-label testing is ReDoS-safe.
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Normalize and validate one allowlist entry to a literal hostname (optionally a
+ * single leading `*.` wildcard). Returns the canonical lowercase host, or null
+ * when the entry is not a safe hostname to emit as a Sprites `domain` allow rule.
+ */
+export function normalizeEgressHost(raw: string): string | null {
+  const host = raw.trim().toLowerCase();
+  if (host.length === 0 || host.length > 253) return null;
+  // Reject schemes, paths, credentials, ports, whitespace, and IPv6 colons.
+  if (/[/@\s:]/.test(host)) return null;
+  let labels = host.split('.');
+  // Must be a dotted domain — rejects bare '*', 'localhost', and single labels.
+  if (labels.length < 2) return null;
+  // Allow exactly one leading wildcard label ('*.example.com'); validate the rest.
+  if (labels[0] === '*') labels = labels.slice(1);
+  // An all-numeric final label means an IPv4 literal (e.g. 1.2.3.4) or otherwise
+  // non-DNS target — domain rules only match name-resolved traffic, so drop it.
+  const tld = labels[labels.length - 1];
+  if (!/^[a-z]{2,}$/.test(tld)) return null;
+  return labels.every((label) => DNS_LABEL.test(label)) ? host : null;
+}
+
 export function buildSpriteNetworkPolicy({
   egressAllowlist = [],
 }: {
   egressAllowlist?: readonly string[];
 } = {}): NetworkPolicy {
-  const hosts = [...new Set(egressAllowlist)].filter((h) => h.length > 0);
+  const hosts = [
+    ...new Set(
+      egressAllowlist
+        .map(normalizeEgressHost)
+        .filter((host): host is string => host !== null),
+    ),
+  ];
   if (hosts.length === 0) {
     // Default-deny: no outbound at all. Pure deny-all — no preset semantics.
     return { rules: [{ ...DENY_ALL }] };
