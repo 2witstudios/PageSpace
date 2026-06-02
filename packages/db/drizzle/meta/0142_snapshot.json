@@ -1,5 +1,5 @@
 {
-  "id": "1e4c9c43-0c63-43b1-bfee-b5ce34c1c93c",
+  "id": "59475dac-753c-4b26-882d-1dead014cfef",
   "prevId": "66736726-002c-43bd-9038-758a176d5dd6",
   "version": "7",
   "dialect": "postgresql",
@@ -1597,12 +1597,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "publishSubdomain": {
-          "name": "publishSubdomain",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -1659,15 +1653,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "drives_publishSubdomain_unique": {
-          "name": "drives_publishSubdomain_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "publishSubdomain"
-          ]
-        }
-      }
+      "uniqueConstraints": {}
     },
     "public.favorites": {
       "name": "favorites",
@@ -2114,6 +2100,13 @@
           "primaryKey": false,
           "notNull": false,
           "default": "'children'"
+        },
+        "toolExposureMode": {
+          "name": "toolExposureMode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'upfront'"
         },
         "fileSize": {
           "name": "fileSize",
@@ -15295,152 +15288,6 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
-    },
-    "public.published_pages": {
-      "name": "published_pages",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "drive_id": {
-          "name": "drive_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "page_id": {
-          "name": "page_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "artifact_key": {
-          "name": "artifact_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "published_by": {
-          "name": "published_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "published_at": {
-          "name": "published_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "published_pages_drive_id_idx": {
-          "name": "published_pages_drive_id_idx",
-          "columns": [
-            {
-              "expression": "drive_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "published_pages_page_id_idx": {
-          "name": "published_pages_page_id_idx",
-          "columns": [
-            {
-              "expression": "page_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "published_pages_drive_id_drives_id_fk": {
-          "name": "published_pages_drive_id_drives_id_fk",
-          "tableFrom": "published_pages",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "drive_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "published_pages_page_id_pages_id_fk": {
-          "name": "published_pages_page_id_pages_id_fk",
-          "tableFrom": "published_pages",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "page_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "published_pages_published_by_users_id_fk": {
-          "name": "published_pages_published_by_users_id_fk",
-          "tableFrom": "published_pages",
-          "tableTo": "users",
-          "columnsFrom": [
-            "published_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "published_pages_page_id_key": {
-          "name": "published_pages_page_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "page_id"
-          ]
-        },
-        "published_pages_drive_id_path_key": {
-          "name": "published_pages_drive_id_path_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "drive_id",
-            "path"
-          ]
-        }
-      }
     }
   },
   "enums": {

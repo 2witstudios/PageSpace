@@ -12,6 +12,7 @@ import { eq } from '@pagespace/db/operators'
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { createAIProvider, isProviderError } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { DiscoveryResult } from './discovery-service';
 
 export interface UserPersonalizationData {
@@ -208,6 +209,19 @@ Remember: Only approve genuinely new, significant insights. Return JSON with dec
       ],
       temperature: 0.2,
       maxRetries: 2,
+    });
+
+    AIMonitoring.trackUsage({
+      userId,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      totalTokens: result.usage
+        ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
+        : undefined,
+      success: true,
+      metadata: { feature: 'memory_integration' },
     });
 
     const text = result.text.trim();

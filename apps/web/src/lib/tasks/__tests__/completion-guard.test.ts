@@ -12,7 +12,13 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id', parentId: 'parentId', isTrashed: 'isTrashed' } }));
 vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: { completedAt: 'completedAt', pageId: 'pageId' } }));
 
-import { assertSubTasksComplete, SubtasksIncompleteError } from '../completion-guard';
+import {
+  assertSubTasksComplete,
+  SubtasksIncompleteError,
+  checkSubTasksComplete,
+  toBlockedPayload,
+  toToolFailure,
+} from '../completion-guard';
 import { db } from '@pagespace/db/db';
 
 function mockSubTasks(rows: Array<{ completedAt: Date | null }>) {
@@ -69,6 +75,48 @@ describe('assertSubTasksComplete', () => {
     expect(error).toBeInstanceOf(SubtasksIncompleteError);
     expect(error.pending).toBe(2);
     expect(error.total).toBe(2);
+  });
+});
+
+describe('checkSubTasksComplete', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns null when all sub-tasks are complete', async () => {
+    mockSubTasks([{ completedAt: new Date() }]);
+    await expect(checkSubTasksComplete('task-page-1')).resolves.toBeNull();
+  });
+
+  it('returns null when there are no sub-tasks', async () => {
+    mockSubTasks([]);
+    await expect(checkSubTasksComplete('task-page-1')).resolves.toBeNull();
+  });
+
+  it('returns the canonical blocked payload when a sub-task is incomplete', async () => {
+    mockSubTasks([{ completedAt: new Date() }, { completedAt: null }]);
+    await expect(checkSubTasksComplete('task-page-1')).resolves.toEqual({
+      code: 'SUBTASKS_INCOMPLETE',
+      error: 'Complete all sub-tasks first (1 of 2 remaining)',
+      pending: 1,
+      total: 2,
+    });
+  });
+});
+
+describe('toBlockedPayload / toToolFailure', () => {
+  it('toBlockedPayload maps the error into the canonical payload', () => {
+    expect(toBlockedPayload(new SubtasksIncompleteError(2, 3))).toEqual({
+      code: 'SUBTASKS_INCOMPLETE',
+      error: 'Complete all sub-tasks first (2 of 3 remaining)',
+      pending: 2,
+      total: 3,
+    });
+  });
+
+  it('toToolFailure wraps the payload as an AI-tool failure result', () => {
+    const payload = { code: 'SUBTASKS_INCOMPLETE' as const, error: 'x', pending: 1, total: 2 };
+    expect(toToolFailure(payload)).toEqual({ success: false, ...payload });
   });
 });
 

@@ -11,7 +11,7 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { getProviderTier, ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, ONPREM_ALLOWED_PROVIDERS, isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -54,6 +54,10 @@ import {
   sanitizeToolNamesForProvider,
   getUserPersonalization,
 } from '@/lib/ai/core';
+import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+
+// Runtime-toggled tools that must stay directly callable even in search mode.
+const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -420,10 +424,23 @@ export async function POST(request: Request) {
       .catch(() => [] as { displayName: string | null }[]);
 
     // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
+
+    const isAdminUser = user?.role === 'admin';
+
+    // Admin-only providers (e.g. paid OpenRouter) are restricted to global admins, even if a
+    // stored selection survives a role downgrade.
+    if (isAdminOnlyProvider(currentProvider) && !isAdminUser) {
+      loggers.ai.warn('AI Chat API: admin-only provider blocked for non-admin', {
+        userId,
+        provider: currentProvider,
+        model: currentModel,
+      });
+      return createAdminRestrictedResponse();
+    }
 
     // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier)) {
+    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier, isAdminUser)) {
       loggers.ai.warn('AI Chat API: Pro subscription required', {
         userId,
         provider: currentProvider,
@@ -490,7 +507,10 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    const { model } = providerResult;
+    // Use the resolved model name for billing. currentModel may be a PageSpace
+    // tier alias ('standard'/'pro') or an unpriced default ('glm-4.5-air'), which
+    // would meter at $0; providerResult.modelName is the real backend model id.
+    const { model, modelName: resolvedModelName } = providerResult;
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
@@ -567,11 +587,25 @@ export async function POST(request: Request) {
       filteredTools = { ...filteredTools, web_search: webSearchToolDef };
     }
 
+    // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
+    // schema directly. 'search' mirrors the Global Assistant — only core tools go
+    // upfront; the rest are reached via tool_search/execute_tool. The allowlist has
+    // already been applied above, so search mode can never discover a blocked tool.
+    // web_search is a runtime override (added by the webSearchEnabled toggle above,
+    // independent of the saved allowlist), so it must stay directly callable in
+    // search mode too — routing it through execute_tool would hit that tool's
+    // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
+    const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+    filteredTools = exposure.tools;
+    const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+
     loggers.ai.debug('AI Page Chat API: Tools built from baseline + runtime toggles', {
       totalTools: Object.keys(pageSpaceTools).length,
       filteredTools: Object.keys(filteredTools).length,
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
+      toolExposureMode,
       enabledToolsAllowlist: agentEnabledTools?.length ?? 'unrestricted',
     });
 
@@ -861,7 +895,7 @@ export async function POST(request: Request) {
         execute: async ({ writer }) => {
           const aiResult = streamText({
             model,
-            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt,
+            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
             messages: modelMessages,
             tools: filteredTools,
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
@@ -1064,7 +1098,7 @@ export async function POST(request: Request) {
               await AIMonitoring.trackUsage({
                 userId: userId!,
                 provider: currentProvider,
-                model: currentModel,
+                model: resolvedModelName,
                 inputTokens,
                 outputTokens,
                 totalTokens,
@@ -1090,7 +1124,7 @@ export async function POST(request: Request) {
                   await AIMonitoring.trackToolUsage({
                     userId: userId!,
                     provider: currentProvider,
-                    model: currentModel,
+                    model: resolvedModelName,
                     toolName: toolCall.toolName,
                     toolId: toolCall.toolCallId,
                     args: undefined,
@@ -1284,7 +1318,14 @@ async function validateProviderModel(
   // Check subscription requirements for pro models
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
-    if (requiresProSubscription(provider, model, user?.subscriptionTier)) {
+    const isAdminUser = user?.role === 'admin';
+    if (isAdminOnlyProvider(provider) && !isAdminUser) {
+      return {
+        valid: false,
+        reason: 'This provider is restricted to administrators'
+      };
+    }
+    if (requiresProSubscription(provider, model, user?.subscriptionTier, isAdminUser)) {
       return {
         valid: false,
         reason: 'Pro or Business subscription required for this model'

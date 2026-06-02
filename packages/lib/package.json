@@ -47,6 +47,26 @@
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
     },
+    "./billing/credit-pricing": {
+      "types": "./dist/billing/credit-pricing.d.ts",
+      "import": "./dist/billing/credit-pricing.js",
+      "require": "./dist/billing/credit-pricing.js"
+    },
+    "./billing/credit-gate": {
+      "types": "./dist/billing/credit-gate.d.ts",
+      "import": "./dist/billing/credit-gate.js",
+      "require": "./dist/billing/credit-gate.js"
+    },
+    "./billing/credit-backfill": {
+      "types": "./dist/billing/credit-backfill.d.ts",
+      "import": "./dist/billing/credit-backfill.js",
+      "require": "./dist/billing/credit-backfill.js"
+    },
+    "./billing/credit-core": {
+      "types": "./dist/billing/credit-core.d.ts",
+      "import": "./dist/billing/credit-core.js",
+      "require": "./dist/billing/credit-core.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -755,6 +775,18 @@
       ],
       "logging/ai-usage-purge": [
         "./dist/logging/ai-usage-purge.d.ts"
+      ],
+      "billing/credit-core": [
+        "./dist/billing/credit-core.d.ts"
+      ],
+      "billing/credit-pricing": [
+        "./dist/billing/credit-pricing.d.ts"
+      ],
+      "billing/credit-gate": [
+        "./dist/billing/credit-gate.d.ts"
+      ],
+      "billing/credit-backfill": [
+        "./dist/billing/credit-backfill.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"

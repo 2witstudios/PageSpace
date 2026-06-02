@@ -7,6 +7,7 @@ import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { writeAiUsage } from '../logging/logger-database';
+import { consumeCredits } from '../billing/credit-consume';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -16,6 +17,8 @@ import { loggers } from '../logging/logger-config';
  */
 export const AI_PRICING = {
   // OpenRouter - Anthropic (source: openrouter.ai/api/v1/models)
+  'anthropic/claude-opus-4.8': { input: 5.00, output: 25.00 },
+  'anthropic/claude-opus-4.8-fast': { input: 10.00, output: 50.00 },
   'anthropic/claude-opus-4.7': { input: 5.00, output: 25.00 },
   'anthropic/claude-opus-4.7-fast': { input: 30.00, output: 150.00 },
   'anthropic/claude-opus-4.6': { input: 5.00, output: 25.00 },
@@ -33,6 +36,17 @@ export const AI_PRICING = {
 
   // OpenRouter - OpenAI (source: openrouter.ai/api/v1/models)
   'openai/gpt-5.5-pro': { input: 30.00, output: 180.00 },
+  'openai/gpt-5.2-pro': { input: 21.00, output: 168.00 },
+  'openai/gpt-5.2-chat': { input: 1.75, output: 14.00 },
+  'openai/gpt-5.1-chat': { input: 1.25, output: 10.00 },
+  'openai/gpt-5.1-codex-max': { input: 1.25, output: 10.00 },
+  'openai/gpt-5-pro': { input: 15.00, output: 120.00 },
+  'openai/gpt-5-codex': { input: 1.25, output: 10.00 },
+  'openai/o3': { input: 2.00, output: 8.00 },
+  'openai/o3-pro': { input: 20.00, output: 80.00 },
+  'openai/o4-mini': { input: 1.10, output: 4.40 },
+  'openai/gpt-4.1': { input: 2.00, output: 8.00 },
+  'openai/gpt-4.1-mini': { input: 0.40, output: 1.60 },
   'openai/gpt-5.5': { input: 5.00, output: 30.00 },
   'openai/gpt-5.4-pro': { input: 30.00, output: 180.00 },
   'openai/gpt-5.4': { input: 2.50, output: 15.00 },
@@ -81,7 +95,10 @@ export const AI_PRICING = {
   'meta-llama/llama-3.1-405b-instruct': { input: 3.00, output: 3.00 },
 
   // OpenRouter - Mistral (source: openrouter.ai/api/v1/models)
+  'mistralai/mistral-large-2512': { input: 0.50, output: 1.50 },
   'mistralai/mistral-medium-3-5': { input: 1.50, output: 7.50 },
+  'mistralai/mistral-medium-3': { input: 0.40, output: 2.00 },
+  'mistralai/devstral-2512': { input: 0.40, output: 2.00 },
   'mistralai/mistral-small-2603': { input: 0.15, output: 0.60 },
   'mistralai/mistral-medium-3.1': { input: 2.70, output: 8.10 },
   'mistralai/mistral-small-3.2-24b-instruct': { input: 0.20, output: 0.60 },
@@ -90,13 +107,17 @@ export const AI_PRICING = {
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
+  'z-ai/glm-5.1': { input: 0.98, output: 3.08 },
   'z-ai/glm-5-turbo': { input: 1.20, output: 4.00 },
   'z-ai/glm-5': { input: 0.80, output: 2.56 },
+  'z-ai/glm-4.7-flash': { input: 0.06, output: 0.40 },
   'z-ai/glm-4.7': { input: 0.39, output: 1.90 },
+  'z-ai/glm-4.6': { input: 0.43, output: 1.74 },
   'z-ai/glm-4.5v': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5': { input: 0.48, output: 1.44 },
   'z-ai/glm-4.5-air': { input: 0.35, output: 1.55 },
   'z-ai/glm-4-32b': { input: 0.35, output: 1.55 },
+  'qwen/qwen3.7-max': { input: 1.25, output: 3.75 },
   'qwen/qwen3.6-max-preview': { input: 1.04, output: 6.24 },
   'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
   'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
@@ -113,9 +134,13 @@ export const AI_PRICING = {
   'qwen/qwen3-235b-a22b-thinking-2507': { input: 0.50, output: 2.00 },
   'qwen/qwen3-235b-a22b-2507': { input: 0.50, output: 2.00 },
   'qwen/qwen3-coder': { input: 0.50, output: 2.00 },
+  'moonshotai/kimi-k2.6': { input: 0.684, output: 3.42 },
+  'moonshotai/kimi-k2-thinking': { input: 0.60, output: 2.50 },
   'moonshotai/kimi-k2': { input: 0.48, output: 2.00 },
+  'minimax/minimax-m3': { input: 0.30, output: 1.20 },
   'minimax/minimax-m2.7': { input: 0.279, output: 1.20 },
   'minimax/minimax-m2.5': { input: 0.30, output: 1.20 },
+  'minimax/minimax-m2.1': { input: 0.29, output: 0.95 },
   'minimax/minimax-m1': { input: 0.44, output: 1.76 },
   'bytedance-seed/seed-2.0-lite': { input: 0.25, output: 2.00 },
   'bytedance-seed/seed-2.0-mini': { input: 0.10, output: 0.40 },
@@ -135,12 +160,16 @@ export const AI_PRICING = {
   'x-ai/grok-4.3': { input: 1.25, output: 2.50 },
   'x-ai/grok-4.20': { input: 1.25, output: 2.50 },
   'x-ai/grok-4.20-multi-agent': { input: 2.00, output: 6.00 },
+  'x-ai/grok-build-0.1': { input: 1.00, output: 2.00 },
+  // Delisted from OpenRouter + removed from the selectable catalog, but pricing is kept
+  // as a superset so any lingering saved selection still meters correctly (not $0).
   'x-ai/grok-4-fast': { input: 0.20, output: 0.50 },
   'x-ai/grok-4': { input: 3.00, output: 15.00 },
 
   // OpenRouter - Other (source: openrouter.ai/api/v1/models)
   'inception/mercury-2': { input: 0.25, output: 0.75 },
   'inception/mercury': { input: 0.50, output: 1.50 },
+  'writer/palmyra-x5': { input: 0.60, output: 6.00 },
 
   // Google AI Direct (source: ai.google.dev/gemini-api/docs/pricing, 2026-05)
   'gemini-3.5-flash': { input: 1.50, output: 9.00 },
@@ -247,6 +276,7 @@ export const AI_PRICING = {
   'glm-5': { input: 1.00, output: 3.20 },
   'glm-4.7': { input: 0.39, output: 1.90 },
   'glm-4.6': { input: 0.39, output: 1.90 },
+  'glm-4.5-air': { input: 0.35, output: 1.55 },
 
   // MiniMax Direct Models (Native)
   'MiniMax-M2.5': { input: 0.30, output: 1.20 },
@@ -272,6 +302,8 @@ export const AI_PRICING = {
  */
 export const MODEL_CONTEXT_WINDOWS = {
   // OpenRouter Models - Anthropic
+  'anthropic/claude-opus-4.8': 1000000,
+  'anthropic/claude-opus-4.8-fast': 1000000,
   'anthropic/claude-opus-4.7': 1000000,
   'anthropic/claude-opus-4.7-fast': 1000000,
   'anthropic/claude-opus-4.6': 1000000,
@@ -289,6 +321,17 @@ export const MODEL_CONTEXT_WINDOWS = {
 
   // OpenRouter Models - OpenAI
   'openai/gpt-5.5-pro': 200000,
+  'openai/gpt-5.2-pro': 400000,
+  'openai/gpt-5.2-chat': 128000,
+  'openai/gpt-5.1-chat': 128000,
+  'openai/gpt-5.1-codex-max': 400000,
+  'openai/gpt-5-pro': 400000,
+  'openai/gpt-5-codex': 400000,
+  'openai/o3': 200000,
+  'openai/o3-pro': 200000,
+  'openai/o4-mini': 200000,
+  'openai/gpt-4.1': 1047576,
+  'openai/gpt-4.1-mini': 1047576,
   'openai/gpt-5.5': 272000,
   'openai/gpt-5.4-pro': 200000,
   'openai/gpt-5.4': 272000,
@@ -338,6 +381,9 @@ export const MODEL_CONTEXT_WINDOWS = {
   'meta-llama/llama-3.1-405b-instruct': 128000,
 
   // OpenRouter Models - Mistral
+  'mistralai/mistral-large-2512': 262144,
+  'mistralai/mistral-medium-3': 131072,
+  'mistralai/devstral-2512': 262144,
   'mistralai/mistral-medium-3-5': 262144,
   'mistralai/mistral-small-2603': 262144,
   'mistralai/mistral-medium-3.1': 128000,
@@ -347,9 +393,12 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/devstral-small': 128000,
 
   // OpenRouter Models - Chinese/Asian
+  'z-ai/glm-5.1': 202752,
   'z-ai/glm-5-turbo': 202752,
   'z-ai/glm-5': 202752,
+  'z-ai/glm-4.7-flash': 202752,
   'z-ai/glm-4.7': 200000,
+  'z-ai/glm-4.6': 202752,
   'z-ai/glm-4.5v': 128000,
   'z-ai/glm-4.5': 128000,
   'z-ai/glm-4.5-air': 128000,
@@ -370,9 +419,14 @@ export const MODEL_CONTEXT_WINDOWS = {
   'qwen/qwen3-235b-a22b-thinking-2507': 128000,
   'qwen/qwen3-235b-a22b-2507': 128000,
   'qwen/qwen3-coder': 128000,
+  'qwen/qwen3.7-max': 1000000,
+  'moonshotai/kimi-k2.6': 262144,
+  'moonshotai/kimi-k2-thinking': 262144,
   'moonshotai/kimi-k2': 128000,
+  'minimax/minimax-m3': 1048576,
   'minimax/minimax-m2.7': 204800,
   'minimax/minimax-m2.5': 204800,
+  'minimax/minimax-m2.1': 204800,
   'minimax/minimax-m1': 128000,
   'bytedance-seed/seed-2.0-lite': 262144,
   'bytedance-seed/seed-2.0-mini': 262144,
@@ -392,12 +446,14 @@ export const MODEL_CONTEXT_WINDOWS = {
   'x-ai/grok-4.3': 1000000,
   'x-ai/grok-4.20': 2000000,
   'x-ai/grok-4.20-multi-agent': 2000000,
+  'x-ai/grok-build-0.1': 256000,
   'x-ai/grok-4-fast': 2000000,
   'x-ai/grok-4': 128000,
 
   // OpenRouter Models - Other
   'inception/mercury-2': 128000,
   'inception/mercury': 128000,
+  'writer/palmyra-x5': 1040000,
 
   // Google AI Direct (source: ai.google.dev/gemini-api/docs/models, 2026-05)
   'gemini-3.5-flash': 1048576,
@@ -600,45 +656,62 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     
     // Calculate cost
     const cost = calculateCost(data.model, inputTokens, outputTokens);
-    
-    // Fire and forget - don't await
-    writeAiUsage({
-      userId: data.userId,
-      provider: data.provider,
-      model: data.model,
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      cost,
-      duration: data.duration,
-      conversationId: data.conversationId,
-      messageId: data.messageId,
-      pageId: data.pageId,
-      driveId: data.driveId,
-      success: data.success !== false,
-      error: data.error,
+    const success = data.success !== false;
 
-      // Context tracking
-      contextMessages: data.contextMessages,
-      contextSize: data.contextSize,
-      systemPromptTokens: data.systemPromptTokens,
-      toolDefinitionTokens: data.toolDefinitionTokens,
-      conversationTokens: data.conversationTokens,
-      messageCount: data.messageCount,
-      wasTruncated: data.wasTruncated,
-      truncationStrategy: data.truncationStrategy,
+    // Persist the usage log, then (on a successful, persisted call) debit the
+    // user's prepaid credit balance (cost × markup); failed calls are not billed.
+    //
+    // AWAITED, not fire-and-forget: callers reach this from a stream onFinish or
+    // a post-response handler and `await` trackAIUsage. A detached promise can be
+    // dropped when a serverless function freezes/returns, losing BOTH the usage
+    // log AND the charge — and with no aiUsageLogs row the reconcile cron's orphan
+    // sweep has nothing to recover from. Awaiting makes the write durable before
+    // the request returns. Still never throws into the AI request (see catch).
+    try {
+      const aiUsageLogId = await writeAiUsage({
+        userId: data.userId,
+        provider: data.provider,
+        model: data.model,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        cost,
+        duration: data.duration,
+        conversationId: data.conversationId,
+        messageId: data.messageId,
+        pageId: data.pageId,
+        driveId: data.driveId,
+        success,
+        error: data.error,
 
-      metadata: {
-        ...data.metadata,
-        streamingDuration: data.streamingDuration,
-      },
-    }).catch((error) => {
+        // Context tracking
+        contextMessages: data.contextMessages,
+        contextSize: data.contextSize,
+        systemPromptTokens: data.systemPromptTokens,
+        toolDefinitionTokens: data.toolDefinitionTokens,
+        conversationTokens: data.conversationTokens,
+        messageCount: data.messageCount,
+        wasTruncated: data.wasTruncated,
+        truncationStrategy: data.truncationStrategy,
+
+        metadata: {
+          ...data.metadata,
+          streamingDuration: data.streamingDuration,
+        },
+      });
+      if (aiUsageLogId && success) {
+        await consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost })
+          .catch((error) => {
+            loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          });
+      }
+    } catch (error) {
       loggers.ai.debug('AI usage tracking failed', {
         error: (error as Error).message,
         model: data.model,
         provider: data.provider
       });
-    });
+    }
   } catch (error) {
     loggers.ai.debug('AI usage calculation failed', { 
       error: (error as Error).message 
@@ -664,8 +737,12 @@ export interface AIToolUsage {
   pageId?: string;
 }
 
-export async function trackAIToolUsage(data: AIToolUsage): Promise<void> {
-  trackAIUsage({
+export function trackAIToolUsage(data: AIToolUsage): Promise<void> {
+  // Return (not just call) trackAIUsage so the same durability guarantee applies
+  // here: a caller that `await`s trackAIToolUsage waits for the tool-analytics log
+  // (and its zero-charge ledger settlement) to persist before returning, instead
+  // of resolving immediately and risking a dropped write on a serverless freeze.
+  return trackAIUsage({
     userId: data.userId,
     provider: data.provider,
     model: data.model,

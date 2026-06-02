@@ -29,16 +29,8 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-vi.mock('@pagespace/lib/auth/verification-utils', () => ({
-  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
-}));
-
-vi.mock('@pagespace/lib/services/email-service', () => ({
-  sendEmail: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
-  VerificationEmail: vi.fn(),
+vi.mock('@/lib/auth/send-verification-email', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -70,17 +62,10 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('react', () => ({
-  default: {
-    createElement: vi.fn().mockReturnValue({}),
-  },
-}));
-
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { NextResponse } from 'next/server';
@@ -228,20 +213,18 @@ describe('POST /api/auth/resend-verification', () => {
   });
 
   describe('successful verification email', () => {
-    it('creates verification token and sends email', async () => {
+    it('sends an address-bound verification email for the current user', async () => {
       const response = await POST(createResendRequest());
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.message).toContain('Verification email sent successfully');
       expect(authRepository.findUserById).toHaveBeenCalledWith('test-user-id');
-      expect(createVerificationToken).toHaveBeenCalledWith({
+      expect(sendVerificationEmail).toHaveBeenCalledWith({
         userId: 'test-user-id',
-        type: 'email_verification',
+        email: 'test@example.com',
+        userName: 'Test User',
       });
-      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
-      expect(sendArgs.to).toBe('test@example.com');
-      expect(sendArgs.subject).toBe('Verify your PageSpace email');
     });
 
     it('logs successful email resend', async () => {
@@ -252,38 +235,11 @@ describe('POST /api/auth/resend-verification', () => {
         { userId: 'test-user-id', email: 'te***@example.com' }
       );
     });
-
-    it('constructs correct verification URL', async () => {
-      process.env.WEB_APP_URL = 'https://app.example.com';
-
-      await POST(createResendRequest());
-
-      const sendArgs = vi.mocked(sendEmail).mock.calls[0][0];
-      expect(sendArgs.to).toBe('test@example.com');
-    });
-
-    it('uses NEXT_PUBLIC_APP_URL as fallback', async () => {
-      delete process.env.WEB_APP_URL;
-      process.env.NEXT_PUBLIC_APP_URL = 'https://public.example.com';
-
-      const response = await POST(createResendRequest());
-
-      expect(response.status).toBe(200);
-    });
-
-    it('uses localhost as final fallback', async () => {
-      delete process.env.WEB_APP_URL;
-      delete process.env.NEXT_PUBLIC_APP_URL;
-
-      const response = await POST(createResendRequest());
-
-      expect(response.status).toBe(200);
-    });
   });
 
   describe('email rate limit from service', () => {
-    it('returns 429 when email service throws rate limit error', async () => {
-      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('Too many emails sent'));
+    it('returns 429 when the send throws a rate limit error', async () => {
+      vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('Too many emails sent'));
 
       const response = await POST(createResendRequest());
       const body = await response.json();
@@ -292,8 +248,8 @@ describe('POST /api/auth/resend-verification', () => {
       expect(body.error).toBe('Too many emails sent');
     });
 
-    it('propagates other email errors as 500', async () => {
-      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP connection failed'));
+    it('propagates other send errors as 500', async () => {
+      vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('SMTP connection failed'));
 
       const response = await POST(createResendRequest());
       const body = await response.json();

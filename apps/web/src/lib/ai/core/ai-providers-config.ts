@@ -4,6 +4,19 @@
  */
 
 /**
+ * OpenRouter response-cache TTL in seconds. Matches OpenRouter's default for the
+ * `X-OpenRouter-Cache` header, so we don't need to send an explicit TTL header.
+ */
+export const OPENROUTER_CACHE_TTL_SECONDS = 300;
+
+/**
+ * Granularity (ms) the AI system-prompt timestamp is floored to. Derived from the
+ * cache TTL so the two can never drift: a repeat request inside one cache window
+ * produces a byte-identical request body, which is what lets the cache HIT.
+ */
+export const TIMESTAMP_BUCKET_MS = OPENROUTER_CACHE_TTL_SECONDS * 1000;
+
+/**
  * PageSpace Model Aliases
  * Allows agents to use friendly names (standard/pro) instead of underlying model IDs.
  * This abstraction lets agents update their model without knowing the specific backend model.
@@ -85,6 +98,8 @@ export const AI_PROVIDERS = {
     name: 'OpenRouter (Paid)',
     models: {
       // Anthropic Models (2026)
+      'anthropic/claude-opus-4.8': 'Claude Opus 4.8',
+      'anthropic/claude-opus-4.8-fast': 'Claude Opus 4.8 Fast',
       'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
       'anthropic/claude-opus-4.7-fast': 'Claude Opus 4.7 Fast',
       'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
@@ -98,7 +113,6 @@ export const AI_PROVIDERS = {
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
       'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
       'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
-      'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3.5-haiku': 'Claude 3.5 Haiku',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
 
@@ -112,18 +126,27 @@ export const AI_PROVIDERS = {
       'openai/gpt-5.3-chat': 'GPT-5.3 Chat',
       'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
 
+      'openai/gpt-5.2-pro': 'GPT-5.2 Pro',
+      'openai/gpt-5.2-chat': 'GPT-5.2 Chat',
       // OpenAI Models (2025)
       'openai/gpt-5.2': 'GPT-5.2',
       'openai/gpt-5.2-codex': 'GPT-5.2 Codex',
-      'openai/gpt-5.2-mini': 'GPT-5.2 Mini',
-      'openai/gpt-5.2-nano': 'GPT-5.2 Nano',
       'openai/gpt-5.1': 'GPT-5.1',
+      'openai/gpt-5.1-chat': 'GPT-5.1 Chat',
+      'openai/gpt-5.1-codex-max': 'GPT-5.1 Codex Max',
       'openai/gpt-5.1-codex': 'GPT-5.1 Codex',
       'openai/gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
       'openai/gpt-4o': 'GPT-4o',
       'openai/gpt-4o-mini': 'GPT-4o Mini',
+      'openai/gpt-4.1': 'GPT-4.1',
+      'openai/gpt-4.1-mini': 'GPT-4.1 Mini',
+      'openai/o3': 'o3',
+      'openai/o3-pro': 'o3 Pro',
+      'openai/o4-mini': 'o4 Mini',
       'openai/o3-deep-research': 'o3 Deep Research',
       'openai/o4-mini-deep-research': 'o4 Mini Deep Research',
+      'openai/gpt-5-pro': 'GPT-5 Pro',
+      'openai/gpt-5-codex': 'GPT-5 Codex',
       'openai/gpt-5': 'GPT-5',
       'openai/gpt-5-mini': 'GPT-5 Mini',
       'openai/gpt-5-nano': 'GPT-5 Nano',
@@ -141,8 +164,6 @@ export const AI_PROVIDERS = {
       'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
       'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
       'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
-      'google/gemini-2.5-flash-lite-preview-06-17': 'Gemini 2.5 Flash Lite Preview',
-      'google/gemini-2.0-pro': 'Gemini 2.0 Pro',
       'google/gemma-4-31b-it': 'Gemma 4 31B',
       'google/gemma-4-26b-a4b-it': 'Gemma 4 26B A4B',
 
@@ -150,24 +171,29 @@ export const AI_PROVIDERS = {
       'meta-llama/llama-4-maverick': 'Llama 4 Maverick',
       'meta-llama/llama-4-scout': 'Llama 4 Scout',
       'meta-llama/llama-3.3-70b-instruct': 'Llama 3.3 70B',
-      'meta-llama/llama-3.1-405b-instruct': 'Llama 3.1 405B',
 
       // Mistral Models (source: openrouter.ai/api/v1/models)
+      'mistralai/mistral-large-2512': 'Mistral Large 3',
       'mistralai/mistral-medium-3-5': 'Mistral Medium 3.5',
       'mistralai/mistral-small-2603': 'Mistral Small (2603)',
       'mistralai/mistral-medium-3.1': 'Mistral Medium 3.1',
+      'mistralai/mistral-medium-3': 'Mistral Medium 3',
       'mistralai/mistral-small-3.2-24b-instruct': 'Mistral Small 3.2 24B',
       'mistralai/codestral-2508': 'Codestral 2508',
-      'mistralai/devstral-medium': 'Devstral Medium',
-      'mistralai/devstral-small': 'Devstral Small',
+      'mistralai/devstral-2512': 'Devstral 2',
 
       // Chinese/Asian Models (2025-2026)
+      'z-ai/glm-5.1': 'GLM 5.1',
+      'z-ai/glm-5-turbo': 'GLM 5 Turbo',
       'z-ai/glm-5': 'GLM 5',
+      'z-ai/glm-4.7-flash': 'GLM 4.7 Flash',
       'z-ai/glm-4.7': 'GLM 4.7',
+      'z-ai/glm-4.6': 'GLM 4.6',
       'z-ai/glm-4.5v': 'GLM 4.5V',
       'z-ai/glm-4.5': 'GLM 4.5',
       'z-ai/glm-4.5-air': 'GLM 4.5 Air',
       'z-ai/glm-4-32b': 'GLM 4 32B',
+      'qwen/qwen3.7-max': 'Qwen3.7 Max',
       'qwen/qwen3.6-max-preview': 'Qwen3.6 Max (Preview)',
       'qwen/qwen3.6-plus': 'Qwen3.6 Plus',
       'qwen/qwen3.6-flash': 'Qwen3.6 Flash',
@@ -184,9 +210,13 @@ export const AI_PROVIDERS = {
       'qwen/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
       'qwen/qwen3-coder': 'Qwen3 Coder',
+      'moonshotai/kimi-k2.6': 'Kimi K2.6',
+      'moonshotai/kimi-k2-thinking': 'Kimi K2 Thinking',
       'moonshotai/kimi-k2': 'Kimi K2',
+      'minimax/minimax-m3': 'MiniMax M3',
       'minimax/minimax-m2.7': 'MiniMax M2.7',
       'minimax/minimax-m2.5': 'MiniMax M2.5',
+      'minimax/minimax-m2.1': 'MiniMax M2.1',
       'minimax/minimax-m1': 'MiniMax M1',
       'bytedance-seed/seed-2.0-lite': 'Seed 2.0 Lite',
       'bytedance-seed/seed-2.0-mini': 'Seed 2.0 Mini',
@@ -202,16 +232,13 @@ export const AI_PROVIDERS = {
       'x-ai/grok-4.3': 'Grok 4.3',
       'x-ai/grok-4.20': 'Grok 4.20',
       'x-ai/grok-4.20-multi-agent': 'Grok 4.20 Multi-Agent',
-      'x-ai/grok-4-fast': 'Grok 4 Fast (2M context)',
-      'x-ai/grok-4': 'Grok 4',
+      'x-ai/grok-build-0.1': 'Grok Build 0.1',
 
       // AI21 Models
-      'ai21/jamba-mini-1.7': 'Jamba Mini 1.7',
       'ai21/jamba-large-1.7': 'Jamba Large 1.7',
 
       // Other Models
       'inception/mercury-2': 'Mercury 2',
-      'inception/mercury': 'Mercury',
       'writer/palmyra-x5': 'Palmyra X5',
     },
   },
@@ -505,6 +532,14 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
  * Providers allowed in on-prem mode (local + BAA-eligible cloud).
  */
 export const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
+
+/**
+ * Providers exposed only to global admins (role === 'admin'), regardless of subscription tier.
+ * Used to gate the paid OpenRouter provider to admins at both selection and generation time.
+ */
+export const ADMIN_ONLY_PROVIDERS = new Set<string>(['openrouter']);
+export const isAdminOnlyProvider = (provider: string): boolean =>
+  ADMIN_ONLY_PROVIDERS.has(provider);
 
 /**
  * Providers whose model list is fetched dynamically at runtime.
