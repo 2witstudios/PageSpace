@@ -6,7 +6,7 @@ import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions'
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
-import { applyStripeFunding, type FundingEvent } from '@pagespace/lib/billing/credit-funding';
+import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,9 +62,13 @@ export async function POST(request: NextRequest) {
           break;
 
         case 'checkout.session.completed':
-          await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
-          // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
-          await fundOrLetStripeRetry(event);
+          // Whole path is retryable: a transient failure in EITHER the handler or
+          // funding clears the idempotency marker so Stripe redelivers (see below).
+          await withFundingRetry(event.id, async () => {
+            await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+            // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
+            await applyStripeFunding(event);
+          });
           break;
 
         case 'invoice.payment_failed':
@@ -72,9 +76,11 @@ export async function POST(request: NextRequest) {
           break;
 
         case 'invoice.paid':
-          await handleInvoicePaid(event.data.object as Stripe.Invoice);
-          // Reset the monthly credit bucket to the tier allowance on each renewal.
-          await fundOrLetStripeRetry(event);
+          await withFundingRetry(event.id, async () => {
+            await handleInvoicePaid(event.data.object as Stripe.Invoice);
+            // Reset the monthly credit bucket to the tier allowance on each renewal.
+            await applyStripeFunding(event);
+          });
           break;
 
         default:
@@ -115,27 +121,33 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Run prepaid-credit funding for a paid event, making a funding failure RETRYABLE.
+ * Run a funding-relevant event path with RETRYABLE failure semantics.
  *
- * The stripeEvents idempotency marker is committed BEFORE processing, so a swallowed
- * funding failure would be lost forever: Stripe's redelivery would short-circuit as
- * "already processed" (the insert above conflicts and returns 200), and the local
+ * The stripeEvents idempotency marker is committed BEFORE processing, so any error
+ * in this path would otherwise be lost forever: Stripe's redelivery short-circuits
+ * as "already processed" (the insert above conflicts and returns 200), and the local
  * backfill cron reconciles only usage rows, not Stripe funding. To keep paid credit
- * from vanishing on a transient DB error, we delete that marker on a funding failure
- * and rethrow — the webhook then returns 500 and Stripe redelivers, reprocessing the
- * event. Funding is idempotent on creditLedger.stripeRef, so the balance is credited
- * exactly once even though the event is processed twice.
+ * from vanishing on a transient DB error, we delete that marker on ANY failure and
+ * rethrow — the webhook then returns 500 and Stripe redelivers, reprocessing the
+ * whole path. Funding is idempotent on creditLedger.stripeRef, so the balance is
+ * credited exactly once even though the event is processed twice.
  *
- * Safe to reprocess: the handlers that run before funding are no-ops/log-only on the
- * funding-relevant events — handleInvoicePaid only logs, and handleCheckoutCompleted
- * acts only for mode 'subscription' (a credit-pack top-up is mode 'payment').
+ * The cleanup must wrap the WHOLE path, not just the funding call: the pre-funding
+ * handler also does DB I/O (handleInvoicePaid looks the user up; handleCheckoutCompleted
+ * links the customer), and a transient failure there must be retryable too — otherwise
+ * the event is marked processed and funding never runs on redelivery.
+ *
+ * Safe to reprocess: on these events the pre-funding handlers are log-only/idempotent
+ * (handleInvoicePaid only logs; handleCheckoutCompleted's sole throwable is an
+ * idempotent customer-link upsert, and acts only for mode 'subscription' — a credit-pack
+ * top-up is mode 'payment'; its provisioning POST swallows its own errors).
  */
-async function fundOrLetStripeRetry(event: FundingEvent) {
+async function withFundingRetry(eventId: string, run: () => Promise<void>) {
   try {
-    await applyStripeFunding(event);
-  } catch (fundingError) {
-    await db.delete(stripeEvents).where(eq(stripeEvents.id, event.id));
-    throw fundingError;
+    await run();
+  } catch (err) {
+    await db.delete(stripeEvents).where(eq(stripeEvents.id, eventId));
+    throw err;
   }
 }
 
