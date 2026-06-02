@@ -14,10 +14,17 @@ describe('mapPolicyToSandboxOptions', () => {
       timeoutMs: policy.timeoutMs,
       vcpus: policy.vcpus,
       memoryMb: policy.memoryMb,
+      storageGb: policy.storageGb,
       persistent: policy.persistent,
       region: policy.region,
       egressAllowlist: policy.egressAllowlist,
     });
+  });
+
+  it('given the default policy, should carry through an explicit storage cap', () => {
+    const policy = resolveExecutionPolicy({ profile: 'default' });
+    expect(mapPolicyToSandboxOptions({ policy }).storageGb).toBe(policy.storageGb);
+    expect(mapPolicyToSandboxOptions({ policy }).storageGb).toBeGreaterThan(0);
   });
 
   it('given any v1 policy, should carry through an empty (default-deny) egress allowlist', () => {

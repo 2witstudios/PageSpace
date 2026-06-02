@@ -1,16 +1,63 @@
 import { describe, it, expect } from 'vitest';
+import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
   buildSpriteConfig,
   SandboxCommandTimeoutError,
+  SandboxOutputLimitError,
   type SpritesSdk,
   type SpriteInstanceLike,
+  type SpriteCommandLike,
   type SpriteFsLike,
 } from '../sprites';
 import { mapPolicyToSandboxOptions } from '../../sandbox-options';
 import { resolveExecutionPolicy } from '../../execution-policy';
 
 const options = mapPolicyToSandboxOptions({ policy: resolveExecutionPolicy() });
+
+/**
+ * A fake `SpriteCommand` mirroring the SDK shape the driver consumes: stdout /
+ * stderr `data` events, an `exit`/`error` event, and a recording `kill`. Output
+ * and the terminating event are emitted on a macrotask so the driver attaches
+ * its listeners (synchronously, inside the run Promise) before anything fires.
+ * `kill` only records the signal — like the real command, it sends a signal and
+ * does NOT synchronously resolve the run (exit, if any, arrives separately).
+ */
+interface FakeCommandSpec {
+  stdout?: (Buffer | string)[];
+  stderr?: (Buffer | string)[];
+  exitCode?: number;
+  error?: Error;
+  hang?: boolean;
+}
+
+function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: string[] } {
+  const events = new EventEmitter();
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const killed: string[] = [];
+
+  setTimeout(() => {
+    for (const chunk of spec.stdout ?? []) stdout.emit('data', chunk);
+    for (const chunk of spec.stderr ?? []) stderr.emit('data', chunk);
+    if (spec.error) {
+      events.emit('error', spec.error);
+      return;
+    }
+    if (spec.hang) return;
+    events.emit('exit', spec.exitCode ?? 0);
+  }, 0);
+
+  return {
+    stdout: { on: (event, listener) => stdout.on(event, listener) },
+    stderr: { on: (event, listener) => stderr.on(event, listener) },
+    on: (event, listener) => events.on(event, listener as (...args: unknown[]) => void),
+    kill: (signal) => {
+      killed.push(signal ?? 'SIGTERM');
+    },
+    killed,
+  };
+}
 
 function fakeFs(over: Partial<SpriteFsLike> = {}): SpriteFsLike {
   return {
@@ -21,11 +68,13 @@ function fakeFs(over: Partial<SpriteFsLike> = {}): SpriteFsLike {
   };
 }
 
-function fakeSprite(over: Partial<SpriteInstanceLike> & { fs?: SpriteFsLike } = {}): SpriteInstanceLike {
+function fakeSprite(
+  over: Partial<SpriteInstanceLike> & { fs?: SpriteFsLike } = {},
+): SpriteInstanceLike {
   const fs = over.fs ?? fakeFs();
   return {
     name: 'session-key',
-    execFile: async () => ({ exitCode: 0, stdout: 'out', stderr: '' }),
+    spawn: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
     filesystem: () => fs,
     updateNetworkPolicy: async () => {},
     destroy: async () => {},
@@ -51,12 +100,18 @@ function makeSdk(over: Partial<SpritesSdk> = {}) {
 }
 
 describe('buildSpriteConfig', () => {
-  it('given policy options, should map RAM, CPUs, and region from the policy', () => {
+  it('given policy options, should map RAM, CPUs, storage, and region from the policy', () => {
     expect(buildSpriteConfig({ options })).toEqual({
       ramMB: options.memoryMb,
       cpus: options.vcpus,
       region: options.region,
+      storageGB: options.storageGb,
     });
+  });
+
+  it('should set an explicit storage cap (not the platform/quota default)', () => {
+    expect(buildSpriteConfig({ options }).storageGB).toBe(options.storageGb);
+    expect(buildSpriteConfig({ options }).storageGB).toBeGreaterThan(0);
   });
 
   it('should map the Fly region (iad, not iad1)', () => {
@@ -131,7 +186,7 @@ describe('ExecutableSandbox.runCommand', () => {
   it('given a zero exit, should surface exitCode/stdout/stderr as strings', async () => {
     const { sdk } = makeSdk({
       getSprite: async () =>
-        fakeSprite({ execFile: async () => ({ exitCode: 0, stdout: Buffer.from('hi'), stderr: '' }) }),
+        fakeSprite({ spawn: () => fakeCommand({ stdout: [Buffer.from('hi')], exitCode: 0 }) }),
     });
     const client = createSpritesSandboxClient({ sdk });
     const handle = await client.get({ sandboxId: 'k' });
@@ -139,13 +194,11 @@ describe('ExecutableSandbox.runCommand', () => {
     expect(result).toEqual({ exitCode: 0, stdout: 'hi', stderr: '' });
   });
 
-  it('given a non-zero exit thrown as ExecError, should return it as a result (not throw)', async () => {
+  it('given a non-zero exit, should resolve it as a result (not throw)', async () => {
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
-          execFile: async () => {
-            throw { result: { exitCode: 2, stdout: 'partial', stderr: 'boom' } };
-          },
+          spawn: () => fakeCommand({ stdout: ['partial'], stderr: ['boom'], exitCode: 2 }),
         }),
     });
     const client = createSpritesSandboxClient({ sdk });
@@ -154,34 +207,22 @@ describe('ExecutableSandbox.runCommand', () => {
     expect(result).toEqual({ exitCode: 2, stdout: 'partial', stderr: 'boom' });
   });
 
-  it('given an ExecError with the exit output flattened on the error, should return it as a result', async () => {
-    // The real SDK ExecError also exposes exitCode/stdout/stderr directly on the
-    // error (not only under .result); the driver must surface that shape too.
+  it('given a SIGKILL (137) exit, should resolve it as a result the runner can flag as a timeout', async () => {
     const { sdk } = makeSdk({
-      getSprite: async () =>
-        fakeSprite({
-          execFile: async () => {
-            const error = Object.assign(new Error('Command failed with exit code 3'), {
-              exitCode: 3,
-              stdout: 'flat-out',
-              stderr: 'flat-err',
-            });
-            throw error;
-          },
-        }),
+      getSprite: async () => fakeSprite({ spawn: () => fakeCommand({ exitCode: 137 }) }),
     });
     const client = createSpritesSandboxClient({ sdk });
     const handle = await client.get({ sandboxId: 'k' });
-    const result = await handle!.runCommand({ cmd: 'sh', args: ['-c', 'exit 3'] });
-    expect(result).toEqual({ exitCode: 3, stdout: 'flat-out', stderr: 'flat-err' });
+    expect(await handle!.runCommand({ cmd: 'sh' })).toEqual({ exitCode: 137, stdout: '', stderr: '' });
   });
 
-  it('given a command that exceeds the timeout, should reject and DESTROY the Sprite (teardown on timeout)', async () => {
+  it('given a non-terminating command, should SIGKILL the command and reject with a timeout (not destroy the Sprite)', async () => {
     let destroyed = false;
+    const command = fakeCommand({ hang: true });
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
-          execFile: () => new Promise(() => {}), // never resolves
+          spawn: () => command,
           destroy: async () => {
             destroyed = true;
           },
@@ -192,23 +233,58 @@ describe('ExecutableSandbox.runCommand', () => {
     await expect(
       handle!.runCommand({ cmd: 'sleep', args: ['999'], timeoutMs: 20 }),
     ).rejects.toBeInstanceOf(SandboxCommandTimeoutError);
-    // Give the fire-and-forget destroy a tick to run.
-    await new Promise((r) => setTimeout(r, 0));
-    expect(destroyed).toBe(true);
+    // The COMMAND is SIGKILLed; the warm Sprite session is preserved.
+    expect(command.killed).toContain('SIGKILL');
+    expect(destroyed).toBe(false);
   });
 
-  it('given a transport error (no result), should rethrow', async () => {
+  it('given output exceeding the byte cap, should SIGKILL the command and reject with an output-limit error', async () => {
+    const command = fakeCommand({ stdout: ['x'.repeat(50)], hang: true });
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ spawn: () => command }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await expect(
+      handle!.runCommand({ cmd: 'cat', args: ['big'], maxBytes: 10 }),
+    ).rejects.toBeInstanceOf(SandboxOutputLimitError);
+    expect(command.killed).toContain('SIGKILL');
+  });
+
+  it('given a transport error (no exit), should rethrow', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({ spawn: () => fakeCommand({ error: new Error('websocket closed') }) }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await expect(handle!.runCommand({ cmd: 'sh' })).rejects.toThrow('websocket closed');
+  });
+
+  it('should spawn with a structured (file, args[]) form and the policy cwd/env (no host shell string)', async () => {
+    let seen: { file: string; args?: string[]; opts?: { cwd?: string; env?: Record<string, string> } } | null = null;
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
-          execFile: async () => {
-            throw new Error('websocket closed');
+          spawn: (file, args, opts) => {
+            seen = { file, args, opts };
+            return fakeCommand({ exitCode: 0 });
           },
         }),
     });
     const client = createSpritesSandboxClient({ sdk });
     const handle = await client.get({ sandboxId: 'k' });
-    await expect(handle!.runCommand({ cmd: 'sh' })).rejects.toThrow('websocket closed');
+    await handle!.runCommand({
+      cmd: 'sh',
+      args: ['-c', 'echo $(whoami)'],
+      cwd: '/workspace',
+      env: { NODE_ENV: 'test' },
+    });
+    expect(seen).toEqual({
+      file: 'sh',
+      args: ['-c', 'echo $(whoami)'],
+      opts: { cwd: '/workspace', env: { NODE_ENV: 'test' } },
+    });
   });
 });
 

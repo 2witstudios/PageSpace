@@ -22,6 +22,8 @@ export interface ExecutionPolicy {
   vcpus: number;
   /** Memory allocation, in megabytes. */
   memoryMb: number;
+  /** Disk allocation, in gigabytes. An explicit per-sprite cap, not the quota default. */
+  storageGb: number;
   /** Maximum stdout/stderr bytes retained before truncation. */
   maxOutputBytes: number;
   /** Egress firewall allowlist. Empty means default-deny (no outbound). */
@@ -45,6 +47,7 @@ export const SAFE_MINIMUM_PROFILE: ExecutionPolicy = Object.freeze({
   timeoutMs: 10_000,
   vcpus: 1,
   memoryMb: 512,
+  storageGb: 1,
   maxOutputBytes: 32 * 1024,
   egressAllowlist: Object.freeze([]) as readonly string[],
   persistent: false,
@@ -56,6 +59,7 @@ const DEFAULT_PROFILE: ExecutionPolicy = Object.freeze({
   timeoutMs: 30_000,
   vcpus: 1,
   memoryMb: 1024,
+  storageGb: 2,
   maxOutputBytes: 64 * 1024,
   egressAllowlist: Object.freeze([]) as readonly string[],
   persistent: false,

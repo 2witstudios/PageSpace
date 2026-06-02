@@ -7,6 +7,7 @@ describe('resolveExecutionPolicy', () => {
     expect(policy.timeoutMs).toBeGreaterThan(0);
     expect(policy.vcpus).toBeGreaterThan(0);
     expect(policy.memoryMb).toBeGreaterThan(0);
+    expect(policy.storageGb).toBeGreaterThan(0);
     expect(policy.maxOutputBytes).toBeGreaterThan(0);
   });
 
@@ -42,6 +43,7 @@ describe('resolveExecutionPolicy', () => {
     const def = resolveExecutionPolicy({ profile: 'default' });
     expect(minimal.timeoutMs).toBeLessThanOrEqual(def.timeoutMs);
     expect(minimal.memoryMb).toBeLessThanOrEqual(def.memoryMb);
+    expect(minimal.storageGb).toBeLessThanOrEqual(def.storageGb);
     expect(minimal.maxOutputBytes).toBeLessThanOrEqual(def.maxOutputBytes);
   });
 

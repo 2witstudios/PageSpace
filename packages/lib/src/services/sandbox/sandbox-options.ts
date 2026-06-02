@@ -25,6 +25,8 @@ export interface SandboxCreateOptions {
   vcpus: number;
   /** Memory allocation, in megabytes. */
   memoryMb: number;
+  /** Disk allocation, in gigabytes. An explicit per-sprite cap, not the quota default. */
+  storageGb: number;
   /** Whether the sandbox survives between runs. Always false in v1. */
   persistent: boolean;
   /** Explicit deployment region. */
@@ -44,6 +46,7 @@ export function mapPolicyToSandboxOptions({
     timeoutMs: policy.timeoutMs,
     vcpus: policy.vcpus,
     memoryMb: policy.memoryMb,
+    storageGb: policy.storageGb,
     persistent: policy.persistent,
     region: policy.region,
     egressAllowlist: policy.egressAllowlist,
