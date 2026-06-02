@@ -584,8 +584,9 @@ export const DISTRIBUTED_RATE_LIMITS = {
   },
   // Agent code execution daily run budget. Applied per scoped identifier
   // (user / drive / tenant) so one actor cannot exhaust another's allowance.
-  // The hard cost ceiling is Vercel account-level Spend Management; this is our
-  // app-level run-count control that complements per-tier concurrency limits.
+  // The hard cost ceiling lives in the Fly Sprites control plane (org-level
+  // billing / machine caps); this is our app-level run-count control that
+  // complements per-tier concurrency limits.
   CODE_EXECUTION: {
     maxAttempts: 100,
     windowMs: 24 * 60 * 60 * 1000,
