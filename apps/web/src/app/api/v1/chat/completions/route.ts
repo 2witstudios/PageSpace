@@ -6,7 +6,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateRequestWithOptions,
@@ -78,10 +78,18 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
   }
 
-  // 5. Permission check
+  // 5. Permission check. View is necessary but not sufficient: this endpoint runs
+  // the agent's server-side tools (including write tools) with the agent page as the
+  // actor, so it requires the same edit gate the in-app page chat enforces before
+  // sending a message. A view-only caller must not be able to drive writes.
   const canView = await canUserViewPage(authResult.userId, pageId);
   if (!canView) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+  const canEdit = await canUserEditPage(authResult.userId, pageId);
+  if (!canEdit) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
