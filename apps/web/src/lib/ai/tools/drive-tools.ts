@@ -11,7 +11,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { type ToolExecutionContext } from '../core';
-import { getAgentPageId, filterDriveIdsByMcpScope } from './actor-permissions';
+import { getAgentPageId, filterDriveIdsByMcpScope, driveOutsideMcpScope, isMcpScoped } from './actor-permissions';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -183,6 +183,12 @@ export const driveTools = {
         throw new Error('User authentication required');
       }
 
+      // A drive-scoped MCP token is bound to specific drives and cannot create
+      // new ones (mirrors the /api/mcp/drives REST gate). No-op for unscoped callers.
+      if (isMcpScoped(context as ToolExecutionContext)) {
+        throw new Error('This token is scoped to specific drives and cannot create new drives');
+      }
+
       try {
         // Validate name
         if (!name || name.trim().length === 0) {
@@ -273,6 +279,10 @@ export const driveTools = {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      if (driveOutsideMcpScope(context as ToolExecutionContext, driveId)) {
+        throw new Error('This token does not have access to this drive');
       }
 
       try {
@@ -387,6 +397,10 @@ This context persists across conversations and helps provide better assistance. 
       const userId = (execContext as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      if (driveOutsideMcpScope(execContext as ToolExecutionContext, driveId)) {
+        throw new Error('This token does not have access to this drive');
       }
 
       try {

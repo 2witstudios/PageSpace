@@ -205,6 +205,9 @@ export const calendarWriteTools = {
             if (instrPage.isTrashed) return { success: false, error: 'Instruction page is in trash.' };
             if (!instrPage.driveId) return { success: false, error: 'Cannot use a personal page as instructions.' };
             if (instrPage.driveId !== driveId) {
+              if (driveOutsideMcpScope(ctx as ToolExecutionContext, instrPage.driveId)) {
+                return { success: false, error: 'This token does not have access to the instruction page drive.' };
+              }
               const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
               if (!canAccessInstrDrive) return { success: false, error: 'You do not have access to the instruction page drive.' };
             }

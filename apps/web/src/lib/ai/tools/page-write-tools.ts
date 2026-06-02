@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage, canActorDeletePage } from './actor-permissions';
+import { canActorEditPage, canActorDeletePage, driveOutsideMcpScope } from './actor-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -832,6 +832,10 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
+      if (driveOutsideMcpScope(context as ToolExecutionContext, id)) {
+        throw new Error('This token does not have access to this drive');
+      }
+
       try {
         if (!confirmDriveName) {
           throw new Error('Drive name confirmation is required for trashing drives (confirmDriveName parameter)');
@@ -913,6 +917,10 @@ export const pageWriteTools = {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      if (driveOutsideMcpScope(context as ToolExecutionContext, id)) {
+        throw new Error('This token does not have access to this drive');
       }
 
       try {

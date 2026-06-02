@@ -25,9 +25,17 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
  * Whether the caller carries an MCP drive-scope restriction (a non-empty
  * allowedDriveIds). Empty/undefined means full access — session auth or an
  * unscoped token — and skips all scope checks.
+ *
+ * Exported as `isMcpScoped` for tools that should be blocked entirely for
+ * drive-scoped tokens (e.g. creating a brand-new drive), mirroring the
+ * /api/mcp/drives REST gate.
  */
-function hasMcpScope(context: ToolExecutionContext): boolean {
+export function isMcpScoped(context: ToolExecutionContext): boolean {
   return (context.mcpAllowedDriveIds?.length ?? 0) > 0;
+}
+
+function hasMcpScope(context: ToolExecutionContext): boolean {
+  return isMcpScoped(context);
 }
 
 /**
