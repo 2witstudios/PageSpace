@@ -149,7 +149,7 @@ describe('chargeCodeExecutionBudget', () => {
       userId: 'u1',
       driveId: 'd1',
       tenantId: 't1',
-      deps: { charge: async (id) => { charged.push(id); } },
+      deps: { charge: async (id) => { charged.push(id); }, refund: async () => {} },
     });
     expect(charged.sort()).toEqual(
       ['code-exec:drive:d1', 'code-exec:tenant:t1', 'code-exec:user:u1'].sort(),
@@ -161,8 +161,46 @@ describe('chargeCodeExecutionBudget', () => {
     await chargeCodeExecutionBudget({
       userId: 'u1',
       driveId: 'd1',
-      deps: { charge: async (id) => { charged.push(id); } },
+      deps: { charge: async (id) => { charged.push(id); }, refund: async () => {} },
     });
     expect(charged.sort()).toEqual(['code-exec:drive:d1', 'code-exec:user:u1']);
+  });
+
+  it('given a later scope fails, should refund the already-charged scopes and rethrow (no partial charge)', async () => {
+    const charged: string[] = [];
+    const refunded: string[] = [];
+    await expect(
+      chargeCodeExecutionBudget({
+        userId: 'u1',
+        driveId: 'd1',
+        tenantId: 't1',
+        deps: {
+          // user succeeds, drive succeeds, tenant rejects.
+          charge: async (id) => {
+            if (id === 'code-exec:tenant:t1') throw new Error('tenant budget sink down');
+            charged.push(id);
+          },
+          refund: async (id) => { refunded.push(id); },
+        },
+      }),
+    ).rejects.toThrow('tenant budget sink down');
+    // Every scope charged before the failure is compensated.
+    expect(charged.sort()).toEqual(['code-exec:drive:d1', 'code-exec:user:u1']);
+    expect(refunded.sort()).toEqual(['code-exec:drive:d1', 'code-exec:user:u1']);
+  });
+
+  it('given the FIRST scope fails, should rethrow and refund nothing', async () => {
+    const refunded: string[] = [];
+    await expect(
+      chargeCodeExecutionBudget({
+        userId: 'u1',
+        driveId: 'd1',
+        deps: {
+          charge: async () => { throw new Error('user budget sink down'); },
+          refund: async (id) => { refunded.push(id); },
+        },
+      }),
+    ).rejects.toThrow('user budget sink down');
+    expect(refunded).toEqual([]);
   });
 });

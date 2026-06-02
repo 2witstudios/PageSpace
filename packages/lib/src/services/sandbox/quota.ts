@@ -152,14 +152,21 @@ export async function checkCodeExecutionQuota({
 export interface ChargeBudgetDeps {
   /** Increment the daily budget for one scoped identifier (consumes the window). */
   charge: (id: string) => Promise<void>;
+  /** Compensating refund of one scope, to roll back a partially applied charge. */
+  refund: (id: string) => Promise<void>;
 }
 
-// The real charge increments the CODE_EXECUTION sliding window. Lazily imported
-// so unit tests that inject a fake never load the DB module graph.
+// The real charge increments the CODE_EXECUTION sliding window, with a matching
+// compensating refund (decrement) for rollback. Lazily imported so unit tests
+// that inject a fake never load the DB module graph.
 const defaultChargeDeps: ChargeBudgetDeps = {
   charge: (id) =>
     import('../../security/distributed-rate-limit').then((m) =>
       m.checkDistributedRateLimit(id, m.DISTRIBUTED_RATE_LIMITS.CODE_EXECUTION).then(() => undefined),
+    ),
+  refund: (id) =>
+    import('../../security/distributed-rate-limit').then((m) =>
+      m.decrementDistributedRateLimit(id, m.DISTRIBUTED_RATE_LIMITS.CODE_EXECUTION),
     ),
 };
 
@@ -167,8 +174,14 @@ const defaultChargeDeps: ChargeBudgetDeps = {
  * The single real per-run budget charge: increment every scope (user, drive,
  * and — when known — tenant) exactly once. Call this only after a passing
  * preflight and a successful concurrency reservation, so a denied run never
- * charges. Charges run together; a sink failure rejects (the caller treats a
- * failed charge as an `error` denial rather than running uncharged).
+ * charges.
+ *
+ * The multi-scope charge is made ATOMIC by compensation: scopes are charged
+ * sequentially, and if any scope fails the already-charged scopes are refunded
+ * before the error is surfaced. This preserves the module invariant that a run
+ * which does not execute (a partial-charge failure aborts the run) never leaves
+ * a scope's budget consumed — without it, `Promise.all` could charge the user
+ * scope while the tenant scope rejected, permanently skewing quotas.
  */
 export async function chargeCodeExecutionBudget({
   userId,
@@ -181,5 +194,17 @@ export async function chargeCodeExecutionBudget({
   tenantId?: string;
   deps?: ChargeBudgetDeps;
 }): Promise<void> {
-  await Promise.all(budgetScopeIds({ userId, driveId, tenantId }).map((id) => deps.charge(id)));
+  const ids = budgetScopeIds({ userId, driveId, tenantId });
+  const charged: string[] = [];
+  try {
+    for (const id of ids) {
+      await deps.charge(id);
+      charged.push(id);
+    }
+  } catch (error) {
+    // Roll back every scope already charged so a failed multi-scope charge leaves
+    // no partial consumption. Refunds are best-effort; the original error wins.
+    await Promise.allSettled(charged.map((id) => deps.refund(id)));
+    throw error;
+  }
 }

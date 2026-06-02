@@ -363,6 +363,33 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
 }
 
 /**
+ * Compensating decrement of a single attempt from the CURRENT window bucket,
+ * floored at zero. Used to roll back a charge that was applied to one scope but
+ * whose sibling scope(s) then failed — so a multi-scope charge stays all-or-
+ * nothing and a run that never executes leaves no skewed budget behind. Best-
+ * effort: a failed decrement is logged, not thrown (the caller is already
+ * surfacing the original failure).
+ */
+export async function decrementDistributedRateLimit(
+  identifier: string,
+  config: RateLimitConfig,
+): Promise<void> {
+  const windowStart = currentWindowStart(config.windowMs);
+  try {
+    await db
+      .update(rateLimitBuckets)
+      .set({ count: sql`GREATEST(${rateLimitBuckets.count} - 1, 0)` })
+      .where(
+        sql`${rateLimitBuckets.key} = ${identifier} AND ${rateLimitBuckets.windowStart} = ${windowStart}`,
+      );
+  } catch (error) {
+    loggers.api.warn('Postgres rate limit decrement (refund) failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Get rate limit status without incrementing.
  * In production, fails closed (reports blocked) when DB is unavailable to avoid
  * returning potentially stale in-memory status in distributed deployments.
