@@ -248,6 +248,21 @@ async function trashPage(
       });
     }
   } else {
+    // Re-home live children to the grandparent before trashing the parent, mirroring
+    // pageService.trashPage's move-children-up branch. Without this, the children would
+    // be stranded under a trashed parent and surface as bogus top-level sidebar items.
+    const children = await pageRepository.getDirectChildren(page.driveId, page.id);
+    for (const child of children) {
+      await applyPageMutation({
+        pageId: child.id,
+        operation: 'move',
+        updates: { parentId: page.parentId, originalParentId: page.id },
+        updatedFields: ['parentId', 'originalParentId'],
+        expectedRevision: typeof child.revision === 'number' ? child.revision : undefined,
+        context: baseContext,
+      });
+    }
+
     await applyPageMutation({
       pageId: page.id,
       operation: 'trash',
