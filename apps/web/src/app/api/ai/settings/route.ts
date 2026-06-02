@@ -8,7 +8,7 @@ import {
   getDefaultPageSpaceSettings,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -20,6 +20,14 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 // `openrouter_free` is the OpenRouter free tier — all models carry the `:free` suffix
 // and never count against PageSpace's paid quota, so it is safe to expose alongside pagespace.
 const USER_VISIBLE_PROVIDERS = new Set(['pagespace', 'openrouter_free']);
+
+// Providers visible to this request's user. Admins additionally see admin-only providers
+// (e.g. paid OpenRouter), gated purely on role — not on subscription tier.
+function visibleProvidersFor(role: 'user' | 'admin'): Set<string> {
+  const set = new Set(USER_VISIBLE_PROVIDERS);
+  if (role === 'admin') for (const p of ADMIN_ONLY_PROVIDERS) set.add(p);
+  return set;
+}
 
 const GONE_RESPONSE = {
   error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
@@ -46,12 +54,13 @@ export async function GET(request: Request) {
     const pageSpaceSettings = getDefaultPageSpaceSettings();
     const rawProviders = buildProviderAvailabilityMap(availabilityOptions());
     // On-prem deployments expose all configured local providers; cloud masks everything except pagespace.
+    const visible = visibleProvidersFor(auth.role);
     const providers = isOnPrem()
       ? rawProviders
       : Object.fromEntries(
           Object.entries(rawProviders).map(([k, v]) => [
             k,
-            { isAvailable: USER_VISIBLE_PROVIDERS.has(k) ? v.isAvailable : false },
+            { isAvailable: visible.has(k) ? v.isAvailable : false },
           ])
         );
 
@@ -115,7 +124,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (!isOnPrem() && !USER_VISIBLE_PROVIDERS.has(provider)) {
+    if (!isOnPrem() && !visibleProvidersFor(auth.role).has(provider)) {
       return NextResponse.json(
         { error: `Provider "${provider}" is not available on this instance.` },
         { status: 503 }
@@ -152,7 +161,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined)) {
+    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined, auth.role === 'admin')) {
       return NextResponse.json(
         {
           error: 'Subscription required',

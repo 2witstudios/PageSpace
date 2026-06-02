@@ -147,6 +147,7 @@ vi.mock('@/lib/subscription/usage-service', () => ({
 
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createRateLimitResponse: vi.fn(),
+  createAdminRestrictedResponse: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
@@ -269,6 +270,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
   getProviderTier: vi.fn().mockReturnValue('standard'),
+  isAdminOnlyProvider: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({

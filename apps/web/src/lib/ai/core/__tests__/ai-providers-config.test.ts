@@ -2,12 +2,15 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   PAGESPACE_MODEL_ALIASES,
   ONPREM_ALLOWED_PROVIDERS,
+  ADMIN_ONLY_PROVIDERS,
+  AI_PROVIDERS,
   resolvePageSpaceModel,
   isPageSpaceModelAlias,
   getPageSpaceModelTier,
   getDefaultModel,
   getUserFacingModelName,
   getVisibleProviders,
+  isAdminOnlyProvider,
 } from '../ai-providers-config';
 
 describe('ai-providers-config', () => {
@@ -143,6 +146,24 @@ describe('ai-providers-config', () => {
       expect(providers).toHaveProperty('anthropic');
       expect(providers).toHaveProperty('openai');
       expect(providers).toHaveProperty('google');
+    });
+  });
+
+  describe('admin-only providers', () => {
+    it('treats paid openrouter as admin-only', () => {
+      expect(ADMIN_ONLY_PROVIDERS.has('openrouter')).toBe(true);
+      expect(isAdminOnlyProvider('openrouter')).toBe(true);
+    });
+
+    it('does not treat pagespace or openrouter_free as admin-only', () => {
+      expect(isAdminOnlyProvider('pagespace')).toBe(false);
+      expect(isAdminOnlyProvider('openrouter_free')).toBe(false);
+    });
+  });
+
+  describe('openrouter catalog', () => {
+    it('includes minimax/minimax-m3', () => {
+      expect(AI_PROVIDERS.openrouter.models['minimax/minimax-m3']).toBe('MiniMax M3');
     });
   });
 
