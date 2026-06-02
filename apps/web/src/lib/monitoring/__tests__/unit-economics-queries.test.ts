@@ -24,6 +24,7 @@ const makeChain = vi.hoisted(() => () => {
   const chain: Record<string, unknown> = {};
   chain.from = vi.fn(() => chain);
   chain.innerJoin = vi.fn(() => chain);
+  chain.leftJoin = vi.fn(() => chain);
   chain.where = vi.fn(() => chain);
   chain.groupBy = vi.fn(() => chain);
   chain.orderBy = vi.fn(() => chain);
@@ -170,7 +171,7 @@ describe('getUnitEconomicsSummary', () => {
     expect(result.marginPct).toBeNull();
   });
 
-  it('applies date filters on aiUsageLogs.timestamp when provided', async () => {
+  it('anchors the date window on creditLedger.createdAt, not the purgeable aiUsageLogs.timestamp', async () => {
     resetQueue([{ realCostCents: 0, chargedCents: 0, appliedCents: 0, requestCount: 0 }], [{ debtCents: 0 }]);
     const start = new Date('2026-01-01');
     const end = new Date('2026-02-01');
@@ -179,11 +180,13 @@ describe('getUnitEconomicsSummary', () => {
 
     const gteCols = mockGte.mock.calls.map((c) => c[0]);
     const lteCols = mockLte.mock.calls.map((c) => c[0]);
-    expect(gteCols).toContain('AI_USAGE_TIMESTAMP');
-    expect(lteCols).toContain('AI_USAGE_TIMESTAMP');
-    // debt aggregate filters on the ledger's own createdAt, independent of usage logs
+    // Both the usage aggregate and the debt aggregate filter on the ledger's own
+    // createdAt so a ledger row whose aiUsageLog was reaped still counts.
     expect(gteCols).toContain('CREDIT_LEDGER_CREATED_AT');
     expect(lteCols).toContain('CREDIT_LEDGER_CREATED_AT');
+    // The purgeable usage-log timestamp is never used as the window filter.
+    expect(gteCols).not.toContain('AI_USAGE_TIMESTAMP');
+    expect(lteCols).not.toContain('AI_USAGE_TIMESTAMP');
   });
 });
 

@@ -37,6 +37,7 @@ import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
@@ -263,6 +264,10 @@ export async function POST(request: Request): Promise<Response> {
         controller.close();
       } catch (err) {
         loggers.ai.error('OpenAI API: stream failed', err as Error);
+        // The stream errored before onFinish could settle the charge, so the gate's
+        // reservation would otherwise linger until TTL/reconcile — leaving the user
+        // artificially short on credits. Release it now (idempotent if already settled).
+        if (holdId) await releaseHold(holdId).catch(() => {});
         controller.error(err);
       }
     },

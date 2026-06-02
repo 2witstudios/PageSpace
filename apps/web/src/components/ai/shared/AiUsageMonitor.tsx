@@ -56,8 +56,10 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
       // Skip events scoped to a different conversation or page (the AI-stream emitters
       // set these hints; the funding emitter omits them, so unscoped events refresh).
-      if (payload.conversationId && payload.conversationId !== conversationId) return;
-      if (payload.pageId && payload.pageId !== pageId) return;
+      // Only compare an id this monitor is actually scoped to: in page-agent mode
+      // conversationId is undefined here, so we must not drop events that carry one.
+      if (conversationId && payload.conversationId && payload.conversationId !== conversationId) return;
+      if (pageId && payload.pageId && payload.pageId !== pageId) return;
 
       if (conversationId) {
         mutateConversation();

@@ -334,21 +334,14 @@ export async function POST(request: Request) {
       isNewConversation: !requestConversationId
     });
 
-    // Eagerly ensure a conversations row exists so the creator can always see
-    // their own conversation. isShared defaults to false (private). Idempotent
-    // via onConflictDoNothing, so safe for every message in a conversation.
-    // Awaited so the row is visible to the broadcast gate below; errors are
-    // swallowed (non-fatal) and the gate falls back to no-broadcast on failure.
-    await conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
-
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
 
     // Load the user up front: the prepaid credit gate must run BEFORE we persist
-    // the user's message. Otherwise an out-of-credits request appends the prompt to
-    // chat history and then returns 402, leaving an orphaned message that reappears
-    // (duplicated) once the user tops up and retries.
+    // the user's message OR create the conversation row. Otherwise an out-of-credits
+    // request leaves an orphaned conversation/message that the client never receives
+    // back and that reappears (duplicated) once the user tops up and retries.
     const [user] = await db.select().from(users).where(eq(users.id, userId));
 
     // Prepaid credit gate: block out-of-credits users before persisting their
@@ -362,6 +355,14 @@ export async function POST(request: Request) {
       return creditGateErrorResponse(creditGate.reason);
     }
     holdId = creditGate.holdId;
+
+    // Eagerly ensure a conversations row exists so the creator can always see
+    // their own conversation. isShared defaults to false (private). Idempotent
+    // via onConflictDoNothing, so safe for every message in a conversation.
+    // Awaited so the row is visible to the broadcast gate below; errors are
+    // swallowed (non-fatal) and the gate falls back to no-broadcast on failure.
+    // Runs AFTER the credit gate so a denied first prompt leaves no orphaned row.
+    await conversationRepository.createConversation(conversationId, userId!, chatId).catch(() => {});
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message

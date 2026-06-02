@@ -25,9 +25,18 @@ function centsToDollars(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/**
+ * Neutralize spreadsheet formula injection: a cell starting with =, +, -, or @
+ * is evaluated as a formula by Excel/Sheets. Prefix attacker-controlled values
+ * (names/emails) with a single quote so they render as literal text.
+ */
+function sanitizeSpreadsheetCell(value: string): string {
+  return /^[=+\-@]/.test(value) ? `'${value}` : value;
+}
+
 /** Escape a CSV field per RFC 4180 (quote if it contains comma, quote, or newline). */
 function csvField(value: string | number | null): string {
-  const s = value === null ? '' : String(value);
+  const s = sanitizeSpreadsheetCell(value === null ? '' : String(value));
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

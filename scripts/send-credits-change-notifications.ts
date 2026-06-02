@@ -256,17 +256,13 @@ async function main(): Promise<void> {
   console.log(`👥 ${rows.length} user(s) returned from the database.\n`);
 
   let sentCount = 0;
+  let attemptedCount = 0;
   let skippedAlready = 0;
   let skippedInvalid = 0;
   let errorCount = 0;
   const errors: string[] = [];
 
   for (const user of rows) {
-    if (opts.limit !== null && sentCount >= opts.limit) {
-      console.log(`\n⏹️  Reached --limit=${opts.limit}; stopping.`);
-      break;
-    }
-
     const email = user.email?.trim();
     if (!email || !isValidEmail(email)) {
       skippedInvalid++;
@@ -278,6 +274,15 @@ async function main(): Promise<void> {
       skippedAlready++;
       continue;
     }
+
+    // Count ATTEMPTS, not just successes, against --limit: a provider outage must
+    // not let a `--limit=50` canary still try the whole audience. Checked after the
+    // skip filters so already-sent / invalid rows don't consume the budget.
+    if (opts.limit !== null && attemptedCount >= opts.limit) {
+      console.log(`\n⏹️  Reached --limit=${opts.limit}; stopping.`);
+      break;
+    }
+    attemptedCount++;
 
     const summary = getTierCreditSummary(normalizeTier(user.subscriptionTier));
     const component = CreditsChangeEmail({

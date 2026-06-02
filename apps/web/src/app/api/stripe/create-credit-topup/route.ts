@@ -36,10 +36,19 @@ export async function POST(request: NextRequest) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    const body = await request.json();
-    const { packId } = body as { packId?: string };
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
-    if (!packId || typeof packId !== 'string') {
+    const packId =
+      body && typeof body === 'object' && typeof (body as { packId?: unknown }).packId === 'string'
+        ? (body as { packId: string }).packId
+        : undefined;
+
+    if (!packId) {
       return NextResponse.json({ error: 'packId is required' }, { status: 400 });
     }
 

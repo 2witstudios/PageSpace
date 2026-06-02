@@ -7,6 +7,9 @@ import { getCreditBalance } from '@/lib/subscription/credit-balance';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
+const isSubscriptionTier = (value: string): value is SubscriptionTier =>
+  value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
+
 /**
  * GET /api/credits — the authenticated user's prepaid AI-credit balance.
  *
@@ -26,7 +29,8 @@ export async function GET(request: NextRequest) {
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
-    const tier = (rows[0]?.subscriptionTier as SubscriptionTier) ?? 'free';
+    const rawTier = rows[0]?.subscriptionTier;
+    const tier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'free';
 
     const balance = await getCreditBalance(userId, tier);
 

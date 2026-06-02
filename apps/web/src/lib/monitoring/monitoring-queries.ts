@@ -532,11 +532,18 @@ const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 
 // `amountCents` (no chargeMillicents) — so debt is summed from amountCents.
 const debtSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.amountCents})), 0)::int`;
 
-/** Usage-row conditions: entryType='usage' plus optional aiUsageLogs.timestamp range. */
+// Usage-row conditions: entryType='usage' plus optional time range.
+//
+// The window is anchored on the ledger's OWN `createdAt`, never on
+// `aiUsageLogs.timestamp`. The aiUsageLog is a soft link that can be purged on
+// retention; filtering (or grouping/joining) on its timestamp would drop the
+// surviving ledger row from these aggregates and silently under-report charged
+// credits and margin. The ledger is the source of truth for what we billed, so we
+// LEFT JOIN aiUsageLogs only to enrich real provider cost when it's still present.
 function usageConditions(startDate?: Date, endDate?: Date): SQL[] {
   const conditions: SQL[] = [eq(creditLedger.entryType, 'usage')];
-  if (startDate) conditions.push(gte(aiUsageLogs.timestamp, startDate));
-  if (endDate) conditions.push(lte(aiUsageLogs.timestamp, endDate));
+  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
   return conditions;
 }
 
@@ -556,7 +563,7 @@ export async function getUnitEconomicsSummary(
       requestCount: count(),
     })
     .from(creditLedger)
-    .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .where(and(...usageConditions(startDate, endDate)));
 
   // Debt is summed directly from adjustment rows (no join): an adjustment can
@@ -599,8 +606,10 @@ export async function getMarginByPeriod(
   if (granularity !== 'day' && granularity !== 'month') {
     throw new Error(`Invalid granularity: ${granularity}`);
   }
-  // Bound parameter, not string interpolation — DATE_TRUNC's unit is a value.
-  const periodExpr = sql<string>`DATE_TRUNC(${granularity}, ${aiUsageLogs.timestamp})`;
+  // Bucket on the ledger's own createdAt (not the purgeable aiUsageLogs.timestamp),
+  // so a row whose usage log was reaped still lands in the right period. Bound
+  // parameter, not string interpolation — DATE_TRUNC's unit is a value.
+  const periodExpr = sql<string>`DATE_TRUNC(${granularity}, ${creditLedger.createdAt})`;
 
   const rows = await db
     .select({
@@ -611,7 +620,7 @@ export async function getMarginByPeriod(
       requestCount: count(),
     })
     .from(creditLedger)
-    .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .where(and(...usageConditions(startDate, endDate)))
     .groupBy(periodExpr)
     .orderBy(desc(periodExpr))
@@ -641,14 +650,18 @@ export async function getMarginByModel(
       requestCount: count(),
     })
     .from(creditLedger)
-    .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .where(and(...usageConditions(startDate, endDate)))
     .groupBy(aiUsageLogs.provider, aiUsageLogs.model)
     .orderBy(desc(realCostSum))
     .limit(50);
 
+  // provider/model are null for ledger rows whose usage log was purged — bucket
+  // those under 'unknown' rather than dropping their charged credits.
   return rows.map((r) => ({
     ...r,
+    provider: r.provider ?? 'unknown',
+    model: r.model ?? 'unknown',
     marginCents: r.chargedCents - r.realCostCents,
     marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
   }));
@@ -673,7 +686,7 @@ export async function getTopSpendersByMargin(
       requestCount: count(),
     })
     .from(creditLedger)
-    .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
     .groupBy(creditLedger.userId, users.name, users.email)

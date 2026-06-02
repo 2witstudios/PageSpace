@@ -85,6 +85,17 @@ function usd(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
+/**
+ * Label a period bucket from the server's DATE_TRUNC timestamp string directly.
+ * Never reparse through `new Date(...)`: that shifts plain YYYY-MM-DD buckets for
+ * clients west of UTC and turns a monthly bucket into an arbitrary day. We slice
+ * the ISO date parts instead — YYYY-MM for month granularity, YYYY-MM-DD for day.
+ */
+function formatPeriodLabel(period: string, granularity: Granularity): string {
+  const datePart = String(period).slice(0, 10);
+  return granularity === "month" ? datePart.slice(0, 7) : datePart;
+}
+
 function pct(value: number | null): string {
   return value === null ? "—" : `${value.toFixed(1)}%`;
 }
@@ -416,7 +427,7 @@ export default function AdminUnitEconomicsPage() {
                 {data.byPeriod.map((row) => (
                   <TableRow key={row.period}>
                     <TableCell className="font-mono text-xs">
-                      {new Date(row.period).toLocaleDateString()}
+                      {formatPeriodLabel(row.period, data.granularity)}
                     </TableCell>
                     <TableCell className="text-right">{usd(row.realCostCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.chargedCents)}</TableCell>
