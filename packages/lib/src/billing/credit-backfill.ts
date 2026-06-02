@@ -36,11 +36,20 @@ export async function backfillCredits(): Promise<BackfillResult> {
   let retried = 0;
   let orphanCount = 0;
 
+  // Fingerprint of the rows a pass fetched. If two consecutive passes fetch the
+  // exact same set, nothing settled between them and re-running can't make
+  // progress — e.g. balance-less 'pending' rows that decrementAndSettle leaves
+  // untouched (credit-consume.ts), which would otherwise be re-attempted every
+  // pass up to MAX_PASSES. Stop instead of churning the same unprocessable rows.
+  let prevFingerprint = '';
+
   // Drain the backlog: each settled/consumed row drops out of the next sweep
   // (pending rows flip off 'pending'; orphans gain a ledger row), so re-querying
   // makes forward progress. Keep going until a pass returns fewer than BATCH from
-  // both sweeps (nothing more to fetch), bounded by MAX_PASSES.
-  for (let pass = 0; pass < MAX_PASSES; pass++) {
+  // both sweeps (nothing more to fetch) or stops making progress, bounded by
+  // MAX_PASSES.
+  let pass = 0;
+  for (; pass < MAX_PASSES; pass++) {
     const pending = await db
       .select({ id: creditLedger.id })
       .from(creditLedger)
@@ -96,12 +105,21 @@ export async function backfillCredits(): Promise<BackfillResult> {
     // sweep means more rows may remain — loop again (up to MAX_PASSES).
     if (pending.length < BATCH && orphans.length < BATCH) break;
 
-    if (pass === MAX_PASSES - 1) {
-      loggers.ai.debug('credit backfill hit MAX_PASSES; backlog may remain', {
-        retried,
-        orphans: orphanCount,
-      });
-    }
+    // Sorted so the comparison is order-independent (the sweeps have no ORDER BY).
+    const fingerprint =
+      pending.map((p) => p.id).sort().join(',') +
+      '|' +
+      orphans.map((o) => o.aiUsageLogId).sort().join(',');
+    if (fingerprint === prevFingerprint) break; // no forward progress — give up this run
+    prevFingerprint = fingerprint;
+  }
+
+  // Loop ran to the cap rather than draining/stalling — a real backlog remains.
+  if (pass === MAX_PASSES) {
+    loggers.ai.debug('credit backfill hit MAX_PASSES; backlog may remain', {
+      retried,
+      orphans: orphanCount,
+    });
   }
 
   return { retried, orphans: orphanCount };

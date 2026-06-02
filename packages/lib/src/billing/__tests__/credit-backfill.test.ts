@@ -122,9 +122,9 @@ describe('backfillCredits', () => {
     expect(result).toEqual({ retried: BATCH + 50, orphans: 0 });
   });
 
-  it('stops after the safety cap even if a sweep keeps returning a full batch', async () => {
-    // Every pass returns a full BATCH of orphans (simulating rows that never
-    // settle and keep reappearing). The loop must not run unbounded.
+  it('stops after the safety cap even if a sweep keeps returning a full batch of fresh rows', async () => {
+    // Every pass returns a full BATCH of DISTINCT orphans (forward progress each
+    // pass, so the no-progress break never fires). The cap must still bound it.
     for (let pass = 0; pass < 100; pass++) {
       queuePass([], fill(BATCH, (i) => ({ aiUsageLogId: `aul_${pass}_${i}`, userId: 'u1', cost: 0.01 })));
     }
@@ -134,6 +134,31 @@ describe('backfillCredits', () => {
     // MAX_PASSES = 50 -> 50 passes × 2 selects.
     expect(mockDb.select).toHaveBeenCalledTimes(100);
     expect(result.orphans).toBe(BATCH * 50);
+    // The cap (not natural drain) terminated the loop, so it must warn.
+    expect(mockAiLogger.debug).toHaveBeenCalledWith(
+      'credit backfill hit MAX_PASSES; backlog may remain',
+      expect.any(Object),
+    );
+  });
+
+  it('stops early (no-progress break) when a full batch of unprocessable rows repeats', async () => {
+    // A balance-less pending row stays 'pending' (decrementAndSettle no-ops), so
+    // every pass re-fetches the SAME full batch. The loop must detect no forward
+    // progress and stop after the second pass — not re-attempt it MAX_PASSES times.
+    const stuck = fill(BATCH, (i) => ({ id: `led_stuck_${i}` }));
+    for (let pass = 0; pass < 100; pass++) queuePass([...stuck], []);
+
+    const result = await backfillCredits();
+
+    // Pass 0 + pass 1 (identical fingerprint detected) = 2 passes × 2 selects.
+    expect(mockDb.select).toHaveBeenCalledTimes(4);
+    expect(mockSettlePending).toHaveBeenCalledTimes(BATCH * 2);
+    expect(result.retried).toBe(BATCH * 2);
+    // Stalled, not capped -> no MAX_PASSES warning.
+    expect(mockAiLogger.debug).not.toHaveBeenCalledWith(
+      'credit backfill hit MAX_PASSES; backlog may remain',
+      expect.any(Object),
+    );
   });
 
   it('bills a success:false orphan that carries real cost (errored-but-real spend)', async () => {
