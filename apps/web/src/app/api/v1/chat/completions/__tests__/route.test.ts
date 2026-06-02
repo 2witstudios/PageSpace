@@ -67,6 +67,18 @@ vi.mock('@/lib/ai/core', () => ({
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
+  pageSpaceTools: {},
+  filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('@/lib/ai/tools/tool-exposure', () => ({
+  applyToolExposureMode: vi.fn((tools: unknown) => ({ tools, toolDiscoveryPrompt: '' })),
+}));
+
+vi.mock('@/lib/ai/tools/finish-tool', () => ({
+  finishTool: {},
+  FINISH_TOOL_NAME: 'finish',
 }));
 
 vi.mock('@/lib/subscription/usage-service', () => ({

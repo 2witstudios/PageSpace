@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages } from 'ai';
+import { streamText, convertToModelMessages, hasToolCall, stepCountIs } from 'ai';
+import type { ToolSet } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -20,7 +21,12 @@ import {
   extractMessageContent,
   isProviderError,
   convertDbMessageToUIMessage,
+  pageSpaceTools,
+  filterToolsForReadOnly,
+  getModelCapabilities,
 } from '@/lib/ai/core';
+import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage } from '@/lib/subscription/usage-service';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
@@ -32,6 +38,9 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 export const maxDuration = 300;
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+
+// Runtime-toggled tools that must stay directly callable even in search mode.
+const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
 
 export async function POST(request: Request): Promise<Response> {
   // 1. Authenticate — MCP tokens only; no session, no CSRF, no browser session ID
@@ -89,6 +98,27 @@ export async function POST(request: Request): Promise<Response> {
   const systemPrompt = page.systemPrompt
     ?? buildSystemPrompt('page', undefined, false);
 
+  // 7b. Build the agent's server-side tool set (mirrors /api/ai/chat).
+  // The OpenAI request shape carries no read-only / web-search toggles, so
+  // read-only defaults to false; web_search falls through the allowlist.
+  const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+  // Per-agent allowlist: null/undefined = unrestricted; [] = none; [names] = only those.
+  const agentEnabledTools = page.enabledTools as string[] | null;
+  let filteredTools: ToolSet =
+    agentEnabledTools != null
+      ? (Object.fromEntries(
+          Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
+        ) as ToolSet)
+      : (baseTools as ToolSet);
+  // Exposure mode: 'upfront' (default) hands every tool over; 'search' defers
+  // non-core tools behind tool_search/execute_tool.
+  const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+  const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+  filteredTools = exposure.tools;
+  const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+  // Always inject the finish tool so the agentic loop can terminate cleanly.
+  filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
+
   // 8. Build message context and save new user message
   const isThreadMode = incomingConversationId !== undefined;
   const conversationId = isThreadMode ? incomingConversationId : createId();
@@ -121,8 +151,23 @@ export async function POST(request: Request): Promise<Response> {
   const sanitized = sanitizeMessagesForModel(inferenceMessages);
   const aiResult = streamText({
     model: providerResult.model,
-    system: systemPrompt,
+    system: systemPrompt + toolDiscoveryPrompt,
     messages: convertToModelMessages(sanitized),
+    tools: filteredTools,
+    stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
+    experimental_context: {
+      userId: authResult.userId,
+      conversationId,
+      aiProvider: page.aiProvider ?? undefined,
+      aiModel: page.aiModel ?? undefined,
+      modelCapabilities: await getModelCapabilities(
+        providerResult.modelName,
+        providerResult.provider,
+      ),
+      chatSource: { type: 'page' as const, agentPageId: pageId, agentTitle: page.title },
+      enabledTools: agentEnabledTools ?? null,
+    },
+    maxRetries: 20,
     onFinish: async ({ text, totalUsage }) => {
       const assistantId = createId();
       await saveMessageToDatabase({
