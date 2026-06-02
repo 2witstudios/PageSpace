@@ -11,7 +11,7 @@ import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { renderPublishedPage } from '@/lib/canvas/render-published';
-import { putPublishedArtifact, deletePublishedArtifact } from '@/lib/canvas/published-storage';
+import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact } from '@/lib/canvas/published-storage';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -152,27 +152,57 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const path = slugify(rawPath) || pageId;
 
     const html = renderPublishedPage({ html: page.content ?? '', title: page.title ?? undefined });
+    const key = buildPublishedKey(subdomain, path);
 
-    const { key } = await putPublishedArtifact({ subdomain, path, html });
+    // Capture the artifact this page currently points at, so we can clean it up
+    // below if the resolved key changed (e.g. the title/path changed).
+    const existing = await db.query.publishedPages.findFirst({
+      where: eq(publishedPages.pageId, pageId),
+      columns: { artifactKey: true },
+    });
 
-    await db
-      .insert(publishedPages)
-      .values({
-        driveId: page.driveId,
-        pageId,
-        path,
-        artifactKey: key,
-        publishedBy: userId,
-      })
-      .onConflictDoUpdate({
-        target: publishedPages.pageId,
-        set: {
+    // Reserve the (driveId, path) slot in the DB BEFORE writing storage. The unique
+    // constraint on (driveId, path) rejects a page whose resolved path is already
+    // owned by another page, so a colliding publish can never overwrite another
+    // page's already-published artifact at the shared key.
+    try {
+      await db
+        .insert(publishedPages)
+        .values({
+          driveId: page.driveId,
+          pageId,
           path,
           artifactKey: key,
           publishedBy: userId,
-          updatedAt: new Date(),
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: publishedPages.pageId,
+          set: {
+            path,
+            artifactKey: key,
+            publishedBy: userId,
+            updatedAt: new Date(),
+          },
+        });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return NextResponse.json({ error: 'Another page is already published at that path; choose a different path' }, { status: 409 });
+      }
+      throw err;
+    }
+
+    // The path is now reserved for this page — safe to write the artifact.
+    await putPublishedArtifact({ subdomain, path, html });
+
+    // Remove the previous artifact when the key changed, so a stale URL is not left
+    // publicly servable after a rename/republish.
+    if (existing?.artifactKey && existing.artifactKey !== key) {
+      try {
+        await deletePublishedArtifact(existing.artifactKey);
+      } catch (cleanupError) {
+        loggers.api.warn('Failed to delete stale published artifact', { artifactKey: existing.artifactKey, error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError) });
+      }
+    }
 
     auditRequest(req, {
       eventType: 'data.write',

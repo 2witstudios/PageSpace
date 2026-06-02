@@ -38,9 +38,11 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
     text.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '').replace(/--+/g, '-').replace(/^-+/, '').replace(/-+$/, ''),
 }));
 
+const buildPublishedKey = vi.fn();
 const putPublishedArtifact = vi.fn();
 const deletePublishedArtifact = vi.fn();
 vi.mock('@/lib/canvas/published-storage', () => ({
+  buildPublishedKey: (...args: unknown[]) => buildPublishedKey(...args),
   putPublishedArtifact: (...args: unknown[]) => putPublishedArtifact(...args),
   deletePublishedArtifact: (...args: unknown[]) => deletePublishedArtifact(...args),
 }));
@@ -104,6 +106,7 @@ beforeEach(() => {
   authenticateRequestWithOptions.mockResolvedValue({ userId: 'user-1' });
   canUserEditPage.mockResolvedValue(true);
   validatePublishSubdomain.mockReturnValue({ valid: true });
+  buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
   putPublishedArtifact.mockResolvedValue({ key: 'published/acme/welcome/index.html' });
   renderPublishedPage.mockReturnValue('<html>rendered</html>');
   updateWhere.mockResolvedValue(undefined);
@@ -203,6 +206,31 @@ describe('POST /api/pages/[pageId]/publish', () => {
     const json = await res.json();
     expect(json.subdomain).toBe('existing');
     expect(json.url).toBe('https://existing.pagespace.site/welcome');
+  });
+
+  it('returns 409 and does NOT upload when the resolved path is owned by another page (P1)', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: 'x', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'existing' });
+    // The (driveId, path) reservation collides with another page's existing row.
+    onConflictDoUpdate.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(409);
+    // Critical: storage is never written when the path is already owned by another page.
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('deletes the stale artifact when republishing changes the resolved key (P2)', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: 'x', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'existing' });
+    // Page previously published under a different path/key.
+    findFirstPublished.mockResolvedValue({ artifactKey: 'published/existing/old-title/index.html' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(putPublishedArtifact).toHaveBeenCalled();
+    // The previous (different) artifact is removed so no stale URL is left servable.
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/existing/old-title/index.html');
   });
 });
 
