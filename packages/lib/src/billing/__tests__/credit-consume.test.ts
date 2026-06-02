@@ -6,6 +6,7 @@ const mockDb = vi.hoisted(() => ({
   insert: vi.fn(),
   transaction: vi.fn(),
   update: vi.fn(),
+  delete: vi.fn(),
 }));
 const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
 
@@ -13,6 +14,7 @@ vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditBalances: { userId: 'cb.userId', monthlyRemainingCents: 'cb.monthly', topupRemainingCents: 'cb.topup', pendingMillicents: 'cb.pending' },
   creditLedger: { id: 'cl.id', aiUsageLogId: 'cl.aiUsageLogId', entryType: 'cl.entryType' },
+  creditHolds: { id: 'ch.id' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
@@ -21,7 +23,7 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
 
-import { consumeCredits, settlePendingLedgerRow } from '../credit-consume';
+import { consumeCredits, settlePendingLedgerRow, releaseHold } from '../credit-consume';
 
 // Build a claim-insert chain that resolves to `returned`.
 function claimReturning(returned: Array<{ id: string }>) {
@@ -100,6 +102,35 @@ describe('consumeCredits', () => {
       aiUsageLogId: 'aul_short',
       consumeStatus: 'applied',
     });
+  });
+
+  it('excludes an expired monthly bucket at settle (use-it-or-lose-it) and draws top-up only', async () => {
+    // Paid user past their monthly window: gate allowed via top-up. Settlement must
+    // NOT spend the expired monthly (allocateSpend draws monthly-first by default).
+    // cost $1 -> 150¢. Expired monthly 300, topup 1000 -> monthly zeroed, topup 850.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_exp' }]));
+    const captured: { balanceSet?: Record<string, number>; ledgerSet?: Record<string, unknown> } = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{
+          monthlyRemainingCents: 300,
+          topupRemainingCents: 1000,
+          pendingMillicents: 0,
+          monthlyPeriodEnd: new Date(Date.now() - 60 * 60 * 1000), // expired 1h ago
+        }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+        insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_exp', userId: 'u1', costDollars: 1 });
+
+    // Expired monthly forfeited (zeroed), top-up charged the full 150¢.
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 850, pendingMillicents: 0 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150, bucket: 'topup' });
   });
 
   it('does not insert a debt row when the balance fully covers the charge', async () => {
@@ -232,6 +263,87 @@ describe('consumeCredits', () => {
     await expect(
       consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 }),
     ).resolves.toBeUndefined();
+    expect(mockAiLogger.debug).toHaveBeenCalled();
+  });
+
+  it('releases the gate hold inside the settle transaction when a holdId is threaded through', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
+    let holdDeleted = false;
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) }),
+        insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
+        delete: vi.fn(() => ({ where: () => { holdDeleted = true; return Promise.resolve(undefined); } })),
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1, holdId: 'hold_42' });
+
+    // The hold release happens in the SAME transaction as the balance decrement.
+    expect(holdDeleted).toBe(true);
+  });
+
+  it('does NOT touch holds when no holdId is provided (backfill/orphan path)', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
+    const txDelete = vi.fn();
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })
+          .mockReturnValueOnce({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) }),
+        insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
+        delete: txDelete,
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 });
+    expect(txDelete).not.toHaveBeenCalled();
+  });
+
+  it('releases the hold on a zero-charge call without opening the balance transaction', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero' }]));
+    mockDb.update.mockReturnValue({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) });
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    mockDb.delete.mockReturnValue({ where: deleteWhere });
+
+    await consumeCredits({ aiUsageLogId: 'aul_free', userId: 'u1', costDollars: 0, holdId: 'hold_free' });
+
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    // Ledger settled 'skipped' AND the hold released, both outside a transaction.
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('releaseHold', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(true);
+  });
+
+  it('deletes the hold row by id', async () => {
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    mockDb.delete.mockReturnValue({ where: deleteWhere });
+    await releaseHold('hold_99');
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when billing is disabled', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    await releaseHold('hold_99');
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('never throws if the delete fails', async () => {
+    mockDb.delete.mockImplementation(() => { throw new Error('boom'); });
+    await expect(releaseHold('hold_99')).resolves.toBeUndefined();
     expect(mockAiLogger.debug).toHaveBeenCalled();
   });
 });

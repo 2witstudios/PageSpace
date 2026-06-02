@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ── A column reference the fake operators/select can resolve against a row ────────
 type Col = { __col: true; table: TableKey; name: string };
-type TableKey = 'creditBalances' | 'creditLedger' | 'users' | 'aiUsageLogs';
+type TableKey = 'creditBalances' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs';
 
 interface Row { [k: string]: unknown }
 type Store = Record<TableKey, Row[]>;
@@ -36,7 +36,7 @@ type Pred =
 
 // ── Hoisted shared state: one store + one fake db, shared by all four real shells ─
 const H = vi.hoisted(() => {
-  const store: Store = { creditBalances: [], creditLedger: [], users: [], aiUsageLogs: [] };
+  const store: Store = { creditBalances: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [] };
 
   const col = (table: TableKey, name: string): Col => ({ __col: true, table, name });
   const cols = (table: TableKey, names: string[]): Record<string, Col> & { __table: TableKey } => {
@@ -53,6 +53,7 @@ const H = vi.hoisted(() => {
     'id', 'userId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
     'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'consumeStatus', 'createdAt',
   ]);
+  const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
   const aiUsageLogs = cols('aiUsageLogs', ['id', 'userId', 'cost', 'timestamp', 'success']);
 
@@ -109,6 +110,9 @@ const H = vi.hoisted(() => {
         ...v,
       };
     }
+    if (table === 'creditHolds') {
+      return { id: nextId('hold'), aiUsageLogId: null, createdAt: new Date(), ...v };
+    }
     return { ...v };
   };
 
@@ -147,6 +151,11 @@ const H = vi.hoisted(() => {
   };
 
   // ── select builder ────────────────────────────────────────────────────────────
+  // Aggregate projection: any projected value that isn't a plain Col is a SQL
+  // expression (e.g. the gate's coalesce(sum(estCents)) / count(*) hold tally).
+  const isAggregate = (proj?: Record<string, unknown>): boolean =>
+    !!proj && Object.values(proj).some((v) => !isCol(v));
+
   function makeSelect(proj?: Record<string, Col>) {
     let baseKey: TableKey;
     let joinKey: TableKey | undefined;
@@ -169,6 +178,11 @@ const H = vi.hoisted(() => {
         }
       }
       const filtered = contexts.filter((c) => evalPred(wherePred, c.ctx));
+      // The gate's hold tally: coalesce(sum(estCents),0) AS reserved, count(*) AS inFlight.
+      if (isAggregate(proj)) {
+        const reserved = filtered.reduce((s, c) => s + ((c.primary.estCents as number) ?? 0), 0);
+        return [{ reserved, inFlight: filtered.length }];
+      }
       const limited = limit == null ? filtered : filtered.slice(0, limit);
       return limited.map((c) => project(proj, c.ctx, c.primary));
     };
@@ -179,6 +193,11 @@ const H = vi.hoisted(() => {
       where(p: Pred) { wherePred = p; return api; },
       limit(n: number) { return Promise.resolve(run(n)); },
       for(_mode: string) { return Promise.resolve(run()); },
+      // Awaitable terminal: `await select(...).from(...).where(...)` (the gate's hold
+      // aggregate ends at .where with no .limit/.for) resolves the rows here.
+      then(res: (v: Row[]) => void, rej?: (e: unknown) => void) {
+        try { res(run()); } catch (e) { rej?.(e); }
+      },
     };
     return api;
   }
@@ -240,9 +259,49 @@ const H = vi.hoisted(() => {
         return {
           onConflictDoNothing,
           onConflictDoUpdate,
+          // `insert(...).values(...).returning(...)` with no conflict clause (the
+          // gate's hold insert): persist and project the inserted row.
+          returning(proj?: Record<string, Col>) {
+            const row = plainInsert();
+            return Promise.resolve([project(proj, { [table]: row } as Ctx, row)]);
+          },
           // bare `await insert.values(...)` (e.g. the debt adjustment row)
           then(res: (v: unknown) => void, rej?: (e: unknown) => void) {
             try { plainInsert(); res(undefined); } catch (e) { rej?.(e); }
+          },
+        };
+      },
+    };
+  }
+
+  // ── delete builder ────────────────────────────────────────────────────────────
+  // `delete(tbl).where(p)[.returning(proj)]` — removes matching rows. Used to release
+  // a hold at settle (consume), reclaim expired holds (backfill), and releaseHold.
+  function makeDelete(tbl: { __table: TableKey }) {
+    const table = tbl.__table;
+    return {
+      where(p: Pred) {
+        const remove = (): Row[] => {
+          const removed: Row[] = [];
+          const kept: Row[] = [];
+          for (const r of store[table]) {
+            if (evalPred(p, { [table]: r } as Ctx)) removed.push(r);
+            else kept.push(r);
+          }
+          // Mutate in place so external references to store[table] stay valid.
+          store[table].length = 0;
+          store[table].push(...kept);
+          return removed;
+        };
+        let done = false;
+        const exec = (): Row[] => { if (done) return []; done = true; return remove(); };
+        return {
+          returning(proj?: Record<string, Col>) {
+            const rows = exec();
+            return Promise.resolve(rows.map((r) => project(proj, { [table]: r } as Ctx, r)));
+          },
+          then(res: (v: unknown) => void, rej?: (e: unknown) => void) {
+            try { exec(); res(undefined); } catch (e) { rej?.(e); }
           },
         };
       },
@@ -273,6 +332,7 @@ const H = vi.hoisted(() => {
     select: (proj?: Record<string, Col>) => makeSelect(proj),
     insert: (tbl: { __table: TableKey }) => makeInsert(tbl),
     update: (tbl: { __table: TableKey }) => makeUpdate(tbl),
+    delete: (tbl: { __table: TableKey }) => makeDelete(tbl),
     transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(db),
   };
 
@@ -281,13 +341,13 @@ const H = vi.hoisted(() => {
 
   return {
     store, db, isBillingEnabled, logger,
-    schema: { creditBalances, creditLedger, users, aiUsageLogs },
+    schema: { creditBalances, creditLedger, creditHolds, users, aiUsageLogs },
     ops: { eq, lt, gt, isNull, and, or, sql: sqlTag },
   };
 });
 
 vi.mock('@pagespace/db/db', () => ({ db: H.db }));
-vi.mock('@pagespace/db/schema/credits', () => ({ creditBalances: H.schema.creditBalances, creditLedger: H.schema.creditLedger }));
+vi.mock('@pagespace/db/schema/credits', () => ({ creditBalances: H.schema.creditBalances, creditLedger: H.schema.creditLedger, creditHolds: H.schema.creditHolds }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: H.schema.users }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({ aiUsageLogs: H.schema.aiUsageLogs }));
 vi.mock('@pagespace/db/operators', () => H.ops);
@@ -310,6 +370,7 @@ const store = H.store;
 function reset() {
   store.creditBalances.length = 0;
   store.creditLedger.length = 0;
+  store.creditHolds.length = 0;
   store.users.length = 0;
   store.aiUsageLogs.length = 0;
 }
@@ -369,37 +430,57 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({ stripeRef: 'in_1', amountCents: 500, consumeStatus: 'applied' });
 
-    // ── GATE: spendable 500 > reserve floor 25 → allowed ────────────────────────
-    expect(await canConsumeAI('u1', 'free')).toEqual({ allowed: true, reason: 'ok' });
+    // Each "call" below is the real lifecycle: the gate reserves a hold (25¢ est)
+    // and the matching consume releases it via the threaded holdId — so holds never
+    // accumulate and spendable returns to balance−0 between calls.
 
-    // ── CONSUME: $2 then $1 of real cost, monthly-first ─────────────────────────
-    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 2 }); // 300¢
+    // ── CALL 1: $2 real cost, monthly-first (500 spendable, reserve passes) ──────
+    let g = await canConsumeAI('u1', 'free');
+    expect(g).toMatchObject({ allowed: true, reason: 'ok' });
+    expect(g.holdId).toBeTruthy();
+    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 2, holdId: g.holdId }); // 300¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(200);
-    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1 }); // 150¢
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(50);
-    expect(await canConsumeAI('u1', 'free')).toEqual({ allowed: true, reason: 'ok' }); // 50 > 25
+    expect(store.creditHolds).toHaveLength(0); // hold released at settle
 
-    // ── TOP-UP: a $10 credit pack adds to the never-expiring top-up bucket ───────
+    // ── CALL 2: $1 real cost ────────────────────────────────────────────────────
+    g = await canConsumeAI('u1', 'free');
+    expect(g.allowed).toBe(true);
+    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1, holdId: g.holdId }); // 150¢
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(50);
+
+    // ── GATE with 50¢ left → DENIED: reserving the 25¢ estimate would leave only
+    // 25¢ == the reserve floor. The reservation guard blocks before overshoot, so a
+    // near-empty bucket can't fund a call. (Denied, so no hold is inserted.) ──────
+    expect((await canConsumeAI('u1', 'free')).allowed).toBe(false);
+    expect(store.creditHolds).toHaveLength(0);
+
+    // ── TOP-UP: a $10 credit pack unblocks the user (spendable 50 + 1000) ────────
     await applyStripeFunding(creditPackCheckout('cs_1', 'cus_1', 1000));
     expect(balanceOf('u1')!.topupRemainingCents).toBe(1000);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'topup_purchase')).toHaveLength(1);
 
-    // ── CONSUME across the bucket boundary: $0.50 spends the last 50¢ monthly + 25¢ top-up
-    await consumeCredits({ aiUsageLogId: 'log_3', userId: 'u1', costDollars: 0.5 }); // 75¢
+    // ── CALL 3 across the bucket boundary: $0.50 spends the last 50¢ monthly + 25¢ top-up
+    g = await canConsumeAI('u1', 'free');
+    expect(g.allowed).toBe(true);
+    await consumeCredits({ aiUsageLogId: 'log_3', userId: 'u1', costDollars: 0.5, holdId: g.holdId }); // 75¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(975);
 
-    // ── DRAIN: a $6.50 call empties the top-up bucket exactly ───────────────────
-    await consumeCredits({ aiUsageLogId: 'log_4', userId: 'u1', costDollars: 6.5 }); // 975¢
+    // ── CALL 4 (DRAIN): a $6.50 call empties the top-up bucket exactly ───────────
+    g = await canConsumeAI('u1', 'free');
+    expect(g.allowed).toBe(true);
+    await consumeCredits({ aiUsageLogId: 'log_4', userId: 'u1', costDollars: 6.5, holdId: g.holdId }); // 975¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
 
     // ── GATE: drained → out_of_credits ──────────────────────────────────────────
-    expect(await canConsumeAI('u1', 'free')).toEqual({ allowed: false, reason: 'out_of_credits' });
+    expect((await canConsumeAI('u1', 'free')).allowed).toBe(false);
 
     // Ledger sanity: 4 usage rows, 1 grant, 1 purchase, no debt (every call covered).
     expect(ledgerOf('u1').filter((r) => r.entryType === 'usage')).toHaveLength(4);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'adjustment')).toHaveLength(0);
+    // All holds released — no reservation leaked across the whole sequence.
+    expect(store.creditHolds).toHaveLength(0);
   });
 });
 
@@ -509,7 +590,7 @@ describe('credits flow — monthly reset', () => {
     });
 
     const gate = await canConsumeAI('u1', 'free');
-    expect(gate).toEqual({ allowed: true, reason: 'ok' });
+    expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free); // refilled
     expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
   });
@@ -534,7 +615,7 @@ describe('credits flow — monthly reset', () => {
 
     // No balance row yet → gate lazy-inits from the tier allowance and allows.
     const gate = await canConsumeAI('u2', 'pro');
-    expect(gate).toEqual({ allowed: true, reason: 'ok' });
+    expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
     expect(balanceOf('u2')!.monthlyPeriodEnd).not.toBeNull();
 
@@ -624,7 +705,7 @@ describe('credits flow — billing disabled (tenant/onprem)', () => {
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
     const result = await backfillCredits();
 
-    expect(result).toEqual({ retried: 0, orphans: 0 });
+    expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
     expect(store.creditLedger).toHaveLength(0);
     expect(store.creditBalances).toHaveLength(0);
   });

@@ -22,13 +22,15 @@ export async function GET(request: Request) {
   try {
     const result = await backfillCredits();
 
-    console.log(`[Cron] Credit reconcile: retried ${result.retried}, orphans ${result.orphans}`);
+    console.log(
+      `[Cron] Credit reconcile: retried ${result.retried}, orphans ${result.orphans}, expiredHolds ${result.expiredHolds}`,
+    );
 
     audit({
       eventType: 'data.write',
       resourceType: 'cron_job',
       resourceId: 'reconcile_credits',
-      details: { retried: result.retried, orphans: result.orphans },
+      details: { retried: result.retried, orphans: result.orphans, expiredHolds: result.expiredHolds },
     });
 
     return NextResponse.json({

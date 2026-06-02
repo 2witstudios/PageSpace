@@ -213,6 +213,17 @@ describe('POST /api/ai/chat - prepaid credit gate', () => {
     expect(streamText).not.toHaveBeenCalled();
   });
 
+  it('returns 429 too_many_in_flight (not 402) when the free in-flight cap is hit', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+
+    const response = await POST(createChatRequest());
+
+    expect(response.status).toBe(429);
+    const body = await response.json();
+    expect(body.error).toBe('too_many_in_flight');
+    expect(streamText).not.toHaveBeenCalled();
+  });
+
   it('does not block with a 402 when the gate allows', async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
 

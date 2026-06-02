@@ -15,7 +15,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
@@ -26,6 +26,12 @@ export interface ConsumeCreditsInput {
   aiUsageLogId: string;
   userId: string;
   costDollars: number;
+  /**
+   * The reservation placed by the gate for this call, released here at settle.
+   * Live requests thread it through from canConsumeAI; the reconcile cron's
+   * orphan/retry paths pass none (the hold, if any, is reclaimed by expiry).
+   */
+  holdId?: string;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -53,6 +59,7 @@ async function decrementAndSettle(
   userId: string,
   chargeMc: number,
   aiUsageLogId: string | null,
+  holdId: string | null = null,
 ): Promise<void> {
   const rows = await tx
     .select()
@@ -60,7 +67,12 @@ async function decrementAndSettle(
     .where(eq(creditBalances.userId, userId))
     .for('update');
   const bal = rows[0] as
-    | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number }
+    | {
+        monthlyRemainingCents: number;
+        topupRemainingCents: number;
+        pendingMillicents: number;
+        monthlyPeriodEnd: Date | null;
+      }
     | undefined;
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
@@ -69,10 +81,21 @@ async function decrementAndSettle(
   // silently drop the charge and hide it from both backfill sweeps.
   if (!bal) return;
 
+  // Use-it-or-lose-it must hold at SETTLE too, not just at the gate. The gate
+  // excludes an expired monthly window from the spend decision (a paid user past
+  // their period can only spend top-up); settlement must match, or allocateSpend —
+  // which always draws monthly first — would silently consume that expired
+  // allowance. So treat an expired monthly bucket as 0 here: the call draws top-up
+  // only and the stale monthly is dropped (it was forfeit anyway; a renewal's
+  // invoice.paid overwrites it). A NULL period is treated as not-yet-expired; free
+  // users are rolled forward by the gate so their window is never expired at settle.
+  const monthlyExpired = bal.monthlyPeriodEnd != null && bal.monthlyPeriodEnd < new Date();
+  const spendableMonthly = monthlyExpired ? 0 : bal.monthlyRemainingCents;
+
   // Fold the sub-cent charge into the carried remainder, then spend the whole cents.
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
   const spend = allocateSpend(
-    { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
+    { monthlyCents: spendableMonthly, topupCents: bal.topupRemainingCents },
     accrual.wholeCents,
   );
 
@@ -111,6 +134,14 @@ async function decrementAndSettle(
       aiUsageLogId,
       consumeStatus: 'applied',
     });
+  }
+
+  // Release the gate's reservation in the SAME transaction as the decrement: once
+  // this call's real cost has left the balance, its hold no longer reserves spend
+  // and must not keep shrinking spendable or counting against the in-flight cap.
+  // Idempotent — a missing/expired hold (already swept) deletes zero rows.
+  if (holdId) {
+    await tx.delete(creditHolds).where(eq(creditHolds.id, holdId));
   }
 }
 
@@ -187,6 +218,12 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
         .update(creditLedger)
         .set({ consumeStatus: 'skipped' })
         .where(eq(creditLedger.id, ledgerId));
+      // A zero-charge call still placed a hold at the gate (the gate runs before the
+      // real cost is known). Release it so it doesn't reserve phantom spend or keep
+      // counting against the in-flight cap until it expires.
+      if (input.holdId) {
+        await db.delete(creditHolds).where(eq(creditHolds.id, input.holdId));
+      }
     } catch (error) {
       loggers.ai.debug('credit zero-charge settle failed', {
         error: (error as Error).message,
@@ -199,7 +236,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
   // 2. Decrement the balance and settle the ledger row, atomically.
   try {
     await db.transaction((tx) =>
-      decrementAndSettle(tx, ledgerId, input.userId, chargeMc, input.aiUsageLogId),
+      decrementAndSettle(tx, ledgerId, input.userId, chargeMc, input.aiUsageLogId, input.holdId ?? null),
     );
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
@@ -207,6 +244,22 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
       error: (error as Error).message,
       aiUsageLogId: input.aiUsageLogId,
     });
+  }
+}
+
+/**
+ * Release a gate reservation without billing. Used when a request placed a hold
+ * but produced no billable usage — e.g. a pre-generation failure (0 tokens) that
+ * never reaches consumeCredits — so the reservation isn't left to linger against
+ * the user's spendable / in-flight cap until the reconcile cron expires it.
+ * Idempotent and never throws: a missing/expired hold deletes zero rows.
+ */
+export async function releaseHold(holdId: string): Promise<void> {
+  if (!isBillingEnabled()) return;
+  try {
+    await db.delete(creditHolds).where(eq(creditHolds.id, holdId));
+  } catch (error) {
+    loggers.ai.debug('credit hold release failed', { error: (error as Error).message, holdId });
   }
 }
 

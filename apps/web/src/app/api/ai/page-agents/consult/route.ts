@@ -23,6 +23,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 /**
@@ -151,6 +153,10 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
  * Consult another AI agent in the workspace for specialized knowledge or assistance
  */
 export async function POST(request: Request) {
+  // Credit-gate reservation, released when usage is billed below. Hoisted so the
+  // finally can free it on any pre-generation early return/throw after the gate.
+  let holdId: string | undefined;
+  let holdHandedOff = false;
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
@@ -215,15 +221,11 @@ export async function POST(request: Request) {
       .where(eq(users.id, userId));
     const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
     if (!creditGate.allowed) {
-      loggers.api.warn('Agent consultation: Out of AI credits', { userId, agentId, reason: creditGate.reason });
-      return NextResponse.json(
-        {
-          error: 'out_of_credits',
-          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
-        },
-        { status: 402 }
-      );
+      loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
+      return creditGateErrorResponse(creditGate.reason);
     }
+    // The gate's reservation for this call, released when usage is billed below.
+    holdId = creditGate.holdId;
 
     // Get the drive information for context awareness
     const [drive] = await db
@@ -498,7 +500,10 @@ export async function POST(request: Request) {
         pageId: agentId,
         driveId: agent.driveId,
         success: true,
+        holdId,
       });
+      // trackUsage owns the hold release from here.
+      holdHandedOff = true;
     } catch (aiError) {
       loggers.api.error('Agent consultation AI generation error:', aiError as Error);
       return NextResponse.json(
@@ -555,5 +560,8 @@ export async function POST(request: Request) {
       { error: `Failed to consult agent: ${error instanceof Error ? error.message : String(error)}` },
       { status: 500 }
     );
+  } finally {
+    // Generation never reached trackUsage (pre-generation error/exit) — free the hold.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

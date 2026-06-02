@@ -76,6 +76,35 @@ export const creditLedger = pgTable('credit_ledger', {
   consumeStatusIdx: index('credit_ledger_consume_status_idx').on(table.consumeStatus, table.createdAt),
 }));
 
+/**
+ * creditHolds — short-lived reservations placed by the gate BEFORE a call and
+ * released at settle. The gate checks the balance up front but the real cost is
+ * only known after the stream, so a hold does two jobs at once:
+ *   - reserves `estCents` of estimated spend, subtracted from spendable in the
+ *     gate decision so concurrent calls can't collectively overshoot the balance
+ *   - serves as the in-flight counter — the free-tier concurrency cap is just a
+ *     COUNT of this user's non-expired holds
+ * consumeCredits deletes the hold inside the settle transaction. A crashed stream
+ * leaves an orphan hold that would permanently shrink spendable, so the reconcile
+ * cron sweeps any hold past `expiresAt`. `aiUsageLogId` is a nullable soft link
+ * (no FK) recorded for provenance when the settling call is known.
+ */
+export const creditHolds = pgTable('credit_holds', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  estCents: integer('estCents').notNull(),
+  aiUsageLogId: text('aiUsageLogId'),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),
+}, (table) => ({
+  // The gate sums & counts a user's non-expired holds on every request — index the
+  // hot lookup. The expiry index keeps the reconcile sweep (DELETE WHERE expiresAt
+  // < now) cheap as the table grows.
+  userIdx: index('credit_holds_user_idx').on(table.userId),
+  expiresIdx: index('credit_holds_expires_idx').on(table.expiresAt),
+  estNonNeg: check('credit_holds_est_cents_nonneg', sql`${table.estCents} >= 0`),
+}));
+
 export const creditBalancesRelations = relations(creditBalances, ({ one }) => ({
   user: one(users, {
     fields: [creditBalances.userId],
@@ -86,6 +115,13 @@ export const creditBalancesRelations = relations(creditBalances, ({ one }) => ({
 export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
   user: one(users, {
     fields: [creditLedger.userId],
+    references: [users.id],
+  }),
+}));
+
+export const creditHoldsRelations = relations(creditHolds, ({ one }) => ({
+  user: one(users, {
+    fields: [creditHolds.userId],
     references: [users.id],
   }),
 }));

@@ -11,15 +11,16 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { getProviderTier, ONPREM_ALLOWED_PROVIDERS, isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
+import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
@@ -102,7 +103,12 @@ export async function POST(request: Request) {
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
-  const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
+  // The credit-gate reservation for this request, released when usage is billed.
+  let holdId: string | undefined;
+  // True once the stream/error handler owns the hold's release. Any earlier
+  // return/throw must release the hold (a pre-generation exit doesn't invoke the
+  // model, so the reservation would otherwise sit until the reconcile cron sweeps it).
+  let holdHandedOff = false;
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
 
   try {
@@ -346,18 +352,15 @@ export async function POST(request: Request) {
 
     // Prepaid credit gate: block out-of-credits users before persisting their
     // message or invoking any model. Safe in billing-disabled deployments (returns
-    // unlimited) and lazy-inits balances.
+    // unlimited) and lazy-inits balances. On an allowed request it places a hold
+    // (reservation + in-flight marker) whose id is threaded to billing and released
+    // at settle; out_of_credits -> 402, the free-tier in-flight cap -> 429.
     const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
     if (!creditGate.allowed) {
-      loggers.ai.warn('AI Chat API: Out of AI credits', { userId, reason: creditGate.reason });
-      return NextResponse.json(
-        {
-          error: 'out_of_credits',
-          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
-        },
-        { status: 402 }
-      );
+      loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
+      return creditGateErrorResponse(creditGate.reason);
     }
+    holdId = creditGate.holdId;
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
@@ -537,44 +540,10 @@ export async function POST(request: Request) {
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
-    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming.
-    // Per-tier daily quota applies to every managed provider; getUsageLimits
-    // already returns -1 (unlimited) when !isBillingEnabled(), so onprem/tenant
-    // bypass enforcement automatically.
-    {
-      const providerType = getProviderTier(currentProvider, currentModel);
-
-      loggers.ai.debug('AI Chat API: Checking rate limit before streaming', {
-        userId: maskIdentifier(userId),
-        provider: currentProvider,
-        model: currentModel,
-        providerType,
-        pageId: chatId
-      });
-
-      const currentUsage = await getCurrentUsage(userId, providerType);
-
-      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.ai.warn('AI Chat API: Rate limit exceeded', {
-          userId: maskIdentifier(userId),
-          providerType,
-          currentCount: currentUsage.currentCount,
-          limit: currentUsage.limit,
-          remaining: currentUsage.remainingCalls,
-          pageId: chatId
-        });
-
-        return createRateLimitResponse(providerType, currentUsage.limit);
-      }
-
-      loggers.ai.debug('AI Chat API: Rate limit check passed', {
-        userId: maskIdentifier(userId),
-        providerType,
-        remaining: currentUsage.remainingCalls,
-        limit: currentUsage.limit,
-        pageId: chatId
-      });
-    }
+    // NOTE: daily per-call rate limiting has been retired. Prepaid AI credits are
+    // now the sole volume limiter — enforced by the credit gate above (which also
+    // bounds concurrency via the in-flight hold cap). Model-tier gating
+    // (requiresProSubscription / admin-only providers) above is unchanged.
 
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
@@ -1048,65 +1017,9 @@ export async function POST(request: Request) {
               
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
 
-              // Track usage for every managed provider against the per-tier daily quota.
-              const maskedUserId = maskIdentifier(userId);
-              const maskedMessageId = maskIdentifier(messageId);
-
-              try {
-                const providerType = getProviderTier(currentProvider, currentModel);
-
-                usageLogger.debug('Incrementing usage for Page AI response', {
-                  userId: maskedUserId,
-                  provider: currentProvider,
-                  providerType,
-                  messageId: maskedMessageId,
-                });
-
-                const usageResult = await incrementUsage(userId!, providerType);
-
-                usageLogger.info('Page AI usage incremented', {
-                  userId: maskedUserId,
-                  provider: currentProvider,
-                  providerType,
-                  messageId: maskedMessageId,
-                  currentCount: usageResult.currentCount,
-                  limit: usageResult.limit,
-                  remaining: usageResult.remainingCalls,
-                  success: usageResult.success,
-                });
-
-                // Broadcast usage event for real-time updates
-                try {
-                  const currentUsageSummary = await getUserUsageSummary(userId!);
-
-                  await broadcastUsageEvent({
-                    userId: userId!,
-                    operation: 'updated',
-                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                    standard: currentUsageSummary.standard,
-                    pro: currentUsageSummary.pro
-                  });
-
-                  usageLogger.debug('Page AI usage broadcast sent', {
-                    userId: maskedUserId,
-                  });
-                } catch (broadcastError) {
-                  usageLogger.error('Page AI usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                    userId: maskedUserId,
-                  });
-                }
-
-              } catch (usageError) {
-                usageLogger.error('Page AI usage tracking failed', usageError as Error, {
-                  userId: maskedUserId,
-                  provider: currentProvider,
-                  messageId: maskedMessageId,
-                });
-
-                // Don't fail the request - usage tracking errors shouldn't break the chat
-              }
-
-              // Track enhanced AI usage with token counting and cost calculation
+              // Track enhanced AI usage with token counting and cost calculation.
+              // (Daily per-call counting/broadcast removed — prepaid credits are the
+              // sole volume limiter; the credit hold from the gate is settled below.)
               const duration = Date.now() - startTime;
 
               const usage = usagePromise ? await usagePromise : undefined;
@@ -1130,6 +1043,7 @@ export async function POST(request: Request) {
                 pageId: chatId,
                 driveId: pageContext?.driveId,
                 success: true,
+                holdId,
                 metadata: {
                   pageName: page.title,
                   toolCallsCount: extractedToolCalls.length,
@@ -1192,7 +1106,9 @@ export async function POST(request: Request) {
     }
 
     loggers.ai.debug('AI Chat API: Returning visual-content-aware stream response');
-    
+
+    // The stream's onFinish now owns hold release (via AIMonitoring.trackUsage).
+    holdHandedOff = true;
     // Return the enhanced UI message stream response with visual content injection
     return result.toUIMessageStreamResponse();
 
@@ -1227,6 +1143,7 @@ export async function POST(request: Request) {
       pageId: chatId,
       driveId: undefined,
       success: false,
+      holdId,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
         errorType: error instanceof Error ? error.name : 'UnknownError',
@@ -1234,11 +1151,16 @@ export async function POST(request: Request) {
         cachedInputTokens: usage?.cachedInputTokens,
       }
     });
-    
+    // The error-path trackUsage above released the hold; don't double-release.
+    holdHandedOff = true;
+
     // Return a proper error response
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
+  } finally {
+    // Pre-generation early return: free the reservation the stream never took over.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }
 

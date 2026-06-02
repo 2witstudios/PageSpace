@@ -72,6 +72,11 @@
       "import": "./dist/billing/credit-core.js",
       "require": "./dist/billing/credit-core.js"
     },
+    "./billing/credit-consume": {
+      "types": "./dist/billing/credit-consume.d.ts",
+      "import": "./dist/billing/credit-consume.js",
+      "require": "./dist/billing/credit-consume.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -788,6 +793,9 @@
       ],
       "billing/credit-core": [
         "./dist/billing/credit-core.d.ts"
+      ],
+      "billing/credit-consume": [
+        "./dist/billing/credit-consume.d.ts"
       ],
       "billing/credit-pricing": [
         "./dist/billing/credit-pricing.d.ts"

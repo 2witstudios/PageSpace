@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, gt, isNull } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
@@ -26,12 +26,31 @@ const MAX_PASSES = 50;
 export interface BackfillResult {
   retried: number;
   orphans: number;
+  /** Stale holds reclaimed this run (a crashed stream's reservation never settled). */
+  expiredHolds: number;
 }
 
 export async function backfillCredits(): Promise<BackfillResult> {
-  if (!isBillingEnabled()) return { retried: 0, orphans: 0 };
+  if (!isBillingEnabled()) return { retried: 0, orphans: 0, expiredHolds: 0 };
 
-  const cutoff = new Date(Date.now() - GRACE_MS);
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - GRACE_MS);
+
+  // Sweep abandoned holds FIRST: a hold from a crashed/abandoned stream that never
+  // reached consumeCredits would otherwise reserve spend (and count against the
+  // free in-flight cap) forever. Deleting them past expiresAt frees that spendable
+  // back up. A live, still-running stream's hold has a future expiresAt and is
+  // untouched. Idempotent — re-running deletes nothing new.
+  let expiredHolds = 0;
+  try {
+    const swept = await db
+      .delete(creditHolds)
+      .where(lt(creditHolds.expiresAt, now))
+      .returning({ id: creditHolds.id });
+    expiredHolds = swept.length;
+  } catch (error) {
+    loggers.ai.debug('credit hold expiry sweep failed', { error: (error as Error).message });
+  }
 
   let retried = 0;
   let orphanCount = 0;
@@ -122,5 +141,5 @@ export async function backfillCredits(): Promise<BackfillResult> {
     });
   }
 
-  return { retried, orphans: orphanCount };
+  return { retried, orphans: orphanCount, expiredHolds };
 }
