@@ -16,7 +16,7 @@
 
 import { db } from '@pagespace/db/db';
 import { creditBalances } from '@pagespace/db/schema/credits';
-import { and, eq, lt } from '@pagespace/db/operators';
+import { and, eq, lt, or, isNull } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { evaluateGate, computeMonthlyRefill, type GateResult } from './credit-core';
 import { RESERVE_FLOOR_CENTS, TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
@@ -58,13 +58,18 @@ export async function canConsumeAI(
 
   let row = await readBalance();
 
-  // Gate-driven monthly reset for free / no-subscription users. Only when the
-  // window has actually expired (monthlyPeriodEnd < now): a paid user's
-  // invoice.paid keeps monthlyPeriodEnd in the future, so this never fires for
-  // them. The UPDATE re-checks expiry in its WHERE, so if a concurrent
-  // invoice.paid rolled the window forward between our read and write, our reset
-  // matches zero rows and we simply re-read the fresh, paid balance.
-  if (row?.monthlyPeriodEnd && row.monthlyPeriodEnd < now) {
+  // Gate-driven monthly reset for free / no-subscription users. Fires when the
+  // window has expired (monthlyPeriodEnd < now) OR was never stamped
+  // (monthlyPeriodEnd IS NULL). The NULL case matters because the top-up funding
+  // path creates a bare balance row ({ userId } only, monthly 0, no period) — if a
+  // credit-pack purchase lands before the user's first AI request, that row would
+  // otherwise never receive the free monthly allowance and never reset. A paid
+  // user's invoice.paid keeps monthlyPeriodEnd in the future, so this never fires
+  // for them. The UPDATE re-checks the same predicate in its WHERE, so if a
+  // concurrent invoice.paid (or a racing gate call) rolled the window forward
+  // between our read and write, our reset matches zero rows and we re-read the
+  // fresh balance.
+  if (row && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now)) {
     const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
     const newEnd = addOneMonth(now);
     await db
@@ -75,7 +80,10 @@ export async function canConsumeAI(
         monthlyPeriodStart: now,
         monthlyPeriodEnd: newEnd,
       })
-      .where(and(eq(creditBalances.userId, userId), lt(creditBalances.monthlyPeriodEnd, now)));
+      .where(and(
+        eq(creditBalances.userId, userId),
+        or(isNull(creditBalances.monthlyPeriodEnd), lt(creditBalances.monthlyPeriodEnd, now)),
+      ));
     row = await readBalance();
   }
 

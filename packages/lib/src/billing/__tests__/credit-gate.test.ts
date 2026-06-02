@@ -18,6 +18,8 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...a) => ({ op: 'and', a })),
   lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
+  or: vi.fn((...a) => ({ op: 'or', a })),
+  isNull: vi.fn((a) => ({ op: 'isNull', a })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 
@@ -88,6 +90,27 @@ describe('canConsumeAI', () => {
     mockDb.select
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown> } = {};
+    mockDb.update.mockReturnValue(updateCapturing(sink));
+
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 1500, monthlyAllowanceCents: 1500 });
+    expect(sink.set?.monthlyPeriodStart).toBeInstanceOf(Date);
+    expect((sink.set?.monthlyPeriodEnd as Date).getTime()).toBeGreaterThan(Date.now());
+    expect(r).toEqual({ allowed: true, reason: 'ok' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('grants the monthly allowance and stamps a window when a top-up created the row without a period (period IS NULL)', async () => {
+    // A credit-pack purchase created a bare balance row (monthly 0, topup 2500, NULL
+    // period) before the user's first AI request. The gate must grant the free monthly
+    // allowance and stamp a window — otherwise the monthly bucket would stay 0 and never
+    // reset (the reset key is the period boundary).
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 1500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
     mockDb.update.mockReturnValue(updateCapturing(sink));
 

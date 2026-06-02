@@ -31,6 +31,7 @@ type Pred =
   | { kind: 'gt'; col: Col; val: unknown }
   | { kind: 'isNull'; col: Col }
   | { kind: 'and'; parts: Pred[] }
+  | { kind: 'or'; parts: Pred[] }
   | { kind: 'sql' };
 
 // ── Hoisted shared state: one store + one fake db, shared by all four real shells ─
@@ -61,6 +62,7 @@ const H = vi.hoisted(() => {
   const gt = (col: Col, val: unknown): Pred => ({ kind: 'gt', col, val });
   const isNull = (col: Col): Pred => ({ kind: 'isNull', col });
   const and = (...parts: Pred[]): Pred => ({ kind: 'and', parts });
+  const or = (...parts: Pred[]): Pred => ({ kind: 'or', parts });
   const sqlTag = (): Pred => ({ kind: 'sql' });
 
   // ── predicate evaluation against a join context {tableKey: row | null} ────────
@@ -81,6 +83,7 @@ const H = vi.hoisted(() => {
       case 'gt': { const a = resolve(p.col, ctx); const b = operand(p.val, ctx); return a != null && b != null && num(a) > num(b); }
       case 'isNull': return resolve(p.col, ctx) == null;
       case 'and': return p.parts.every((q) => evalPred(q, ctx));
+      case 'or': return p.parts.some((q) => evalPred(q, ctx));
       case 'sql': return true;
     }
   };
@@ -279,7 +282,7 @@ const H = vi.hoisted(() => {
   return {
     store, db, isBillingEnabled, logger,
     schema: { creditBalances, creditLedger, users, aiUsageLogs },
-    ops: { eq, lt, gt, isNull, and, sql: sqlTag },
+    ops: { eq, lt, gt, isNull, and, or, sql: sqlTag },
   };
 });
 
