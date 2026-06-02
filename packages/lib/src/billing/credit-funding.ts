@@ -139,6 +139,13 @@ async function applyMonthlyRefill(event: FundingEvent): Promise<void> {
         bucket: 'monthly',
         amountCents: refill.monthlyAllowanceCents,
         stripeRef,
+        // Settled on insert. consumeStatus defaults to 'pending', but the backfill
+        // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
+        // SUBTRACTS abs(amountCents) from the balance (it's built for unsettled usage
+        // charges). A pending funding row — positive amountCents — would be clawed
+        // back after the grace period, reversing the credit we just granted. Funding
+        // applies its balance change in this same transaction, so it is already settled.
+        consumeStatus: 'applied',
       })
       .onConflictDoNothing(STRIPE_REF_ARBITER)
       .returning({ id: creditLedger.id });
@@ -207,6 +214,9 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
         bucket: 'topup',
         amountCents: packCents,
         stripeRef,
+        // Settled on insert — see applyMonthlyRefill: a 'pending' funding row would be
+        // clawed back by the backfill cron's pending-usage sweep.
+        consumeStatus: 'applied',
       })
       .onConflictDoNothing(STRIPE_REF_ARBITER)
       .returning({ id: creditLedger.id });

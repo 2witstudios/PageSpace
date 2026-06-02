@@ -145,6 +145,9 @@ describe('applyStripeFunding', () => {
       bucket: 'monthly',
       amountCents: allowance,
       stripeRef: 'in_123',
+      // Must be settled on insert: a 'pending' grant would be clawed back by the
+      // backfill cron's pending-usage sweep (settlePendingLedgerRow subtracts it).
+      consumeStatus: 'applied',
     });
     expect(cap.balanceSet).toEqual({
       monthlyRemainingCents: allowance,
@@ -170,6 +173,7 @@ describe('applyStripeFunding', () => {
       bucket: 'topup',
       amountCents: 2500,
       stripeRef: 'cs_123',
+      consumeStatus: 'applied', // settled on insert; not swept/clawed back by backfill
     });
     // applyTopup(1000, 2500) = 3500 — the pack is ADDED, not reset.
     expect(cap.balanceSet).toEqual({ topupRemainingCents: 3500 });
