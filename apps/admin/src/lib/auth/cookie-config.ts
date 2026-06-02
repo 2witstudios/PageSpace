@@ -24,13 +24,17 @@ const SESSION_MAX_AGE = 7 * 24 * 60 * 60;
  * Cookie configuration constants
  */
 export const COOKIE_CONFIG = {
+  // Admin uses its own cookie names so the browser keeps the admin and web
+  // sessions side by side. The web app and admin share COOKIE_DOMAIN in
+  // production (and host on localhost in dev), so a shared `session` name would
+  // overwrite the web session on admin login. See cookie-config.ts in apps/web.
   session: {
-    name: 'session',
+    name: 'admin_session',
     maxAge: SESSION_MAX_AGE,
     path: '/',
   },
   loggedIn: {
-    name: 'ps_logged_in',
+    name: 'ps_admin_logged_in',
     value: '1',
     maxAge: SESSION_MAX_AGE,
     path: '/',

@@ -44,7 +44,7 @@ import { validateAdminAccess } from '@/lib/auth/admin-role';
 const mockValidateSession = vi.mocked(sessionService.validateSession);
 const mockAdminValidation = vi.mocked(validateAdminAccess);
 
-const FAKE_COOKIE = 'session=ps_sess_faketoken';
+const FAKE_COOKIE = 'admin_session=ps_sess_faketoken';
 
 function mockAdminAuth() {
   mockValidateSession.mockResolvedValue({

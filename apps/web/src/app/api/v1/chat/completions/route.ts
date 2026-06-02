@@ -1,16 +1,19 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages } from 'ai';
+import { streamText, convertToModelMessages, hasToolCall, stepCountIs } from 'ai';
+import type { ToolSet } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateRequestWithOptions,
   isAuthError,
   checkMCPPageScope,
+  getAllowedDriveIds,
 } from '@/lib/auth';
 import {
   createAIProvider,
@@ -20,7 +23,12 @@ import {
   extractMessageContent,
   isProviderError,
   convertDbMessageToUIMessage,
+  pageSpaceTools,
+  filterToolsForReadOnly,
+  getModelCapabilities,
 } from '@/lib/ai/core';
+import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage } from '@/lib/subscription/usage-service';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
@@ -36,6 +44,9 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 export const maxDuration = 300;
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+
+// Runtime-toggled tools that must stay directly callable even in search mode.
+const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
 
 export async function POST(request: Request): Promise<Response> {
   // 1. Authenticate — MCP tokens only; no session, no CSRF, no browser session ID
@@ -73,10 +84,18 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
   }
 
-  // 5. Permission check
+  // 5. Permission check. View is necessary but not sufficient: this endpoint runs
+  // the agent's server-side tools (including write tools) with the agent page as the
+  // actor, so it requires the same edit gate the in-app page chat enforces before
+  // sending a message. A view-only caller must not be able to drive writes.
   const canView = await canUserViewPage(authResult.userId, pageId);
   if (!canView) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+  const canEdit = await canUserEditPage(authResult.userId, pageId);
+  if (!canEdit) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -106,6 +125,36 @@ export async function POST(request: Request): Promise<Response> {
   // 7. Build system prompt from agent page config
   const systemPrompt = page.systemPrompt
     ?? buildSystemPrompt('page', undefined, false);
+
+  // 7b. Build the agent's server-side tool set (mirrors /api/ai/chat).
+  // The OpenAI request shape carries no read-only / web-search toggles, so
+  // read-only defaults to false; web_search falls through the allowlist.
+  const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+  // Per-agent allowlist: null/undefined = unrestricted; [] = none; [names] = only those.
+  const agentEnabledTools = page.enabledTools as string[] | null;
+  let filteredTools: ToolSet =
+    agentEnabledTools != null
+      ? (Object.fromEntries(
+          Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
+        ) as ToolSet)
+      : (baseTools as ToolSet);
+  // Exposure mode: 'upfront' (default) hands every tool over; 'search' defers
+  // non-core tools behind tool_search/execute_tool.
+  const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+  const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+  filteredTools = exposure.tools;
+  const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+  // Always inject the finish tool so the agentic loop can terminate cleanly.
+  filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
+
+  // Load the caller's timezone so time-aware tools (calendar, task triggers)
+  // resolve dates in the user's zone instead of defaulting to UTC, matching
+  // the in-app page chat (apps/web/src/app/api/ai/chat/route.ts:833).
+  const [user] = await db
+    .select({ timezone: users.timezone })
+    .from(users)
+    .where(eq(users.id, authResult.userId));
+  const userTimezone = user?.timezone ?? undefined;
 
   // 8. Build message context and save new user message
   const isThreadMode = incomingConversationId !== undefined;
@@ -139,8 +188,27 @@ export async function POST(request: Request): Promise<Response> {
   const sanitized = sanitizeMessagesForModel(inferenceMessages);
   const aiResult = streamText({
     model: providerResult.model,
-    system: systemPrompt,
+    system: systemPrompt + toolDiscoveryPrompt,
     messages: convertToModelMessages(sanitized),
+    tools: filteredTools,
+    stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
+    experimental_context: {
+      userId: authResult.userId,
+      conversationId,
+      timezone: userTimezone,
+      aiProvider: page.aiProvider ?? undefined,
+      aiModel: page.aiModel ?? undefined,
+      modelCapabilities: await getModelCapabilities(
+        providerResult.modelName,
+        providerResult.provider,
+      ),
+      chatSource: { type: 'page' as const, agentPageId: pageId, agentTitle: page.title },
+      enabledTools: agentEnabledTools ?? null,
+      // Bind tool execution to the MCP token's drive scope so a scoped token
+      // cannot reach drives outside its scope via the agent's broader ACL.
+      mcpAllowedDriveIds: getAllowedDriveIds(authResult),
+    },
+    maxRetries: 20,
     onFinish: async ({ text, totalUsage }) => {
       const assistantId = createId();
       await saveMessageToDatabase({

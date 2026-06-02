@@ -5,7 +5,7 @@ import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
-import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByMcpScope } from './actor-permissions';
 import {
   sanitizeMessagesForModel,
   saveMessageToDatabase,
@@ -251,7 +251,7 @@ export const agentCommunicationTools = {
       
       try {
         // Get all drives the user has access to
-        const userDrives = await db
+        const allUserDrives = await db
           .select({
             id: drives.id,
             name: drives.name,
@@ -259,7 +259,13 @@ export const agentCommunicationTools = {
           })
           .from(drives)
           .where(eq(drives.ownerId, userId)); // Simplified - you might want more complex permission logic
-        
+
+        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+        const allowedIds = new Set(
+          filterDriveIdsByMcpScope(executionContext, allUserDrives.map((d) => d.id)),
+        );
+        const userDrives = allUserDrives.filter((d) => allowedIds.has(d.id));
+
         let totalAgentCount = 0;
         const agentsByDrive = [];
         const allAgents = [];

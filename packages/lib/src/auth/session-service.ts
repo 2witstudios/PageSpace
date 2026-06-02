@@ -140,6 +140,22 @@ export class SessionService {
   }
 
   /**
+   * Revoke the user's sessions EXCEPT admin-console sessions. Used by web login
+   * flows so signing into the web app does not log the user out of the admin app.
+   */
+  async revokeWebUserSessions(userId: string, reason: string): Promise<number> {
+    return sessionRepository.revokeWebForUser(userId, reason);
+  }
+
+  /**
+   * Revoke ONLY the user's admin-console sessions. Used by the admin login flow
+   * so signing into the admin app does not log the user out of the web app.
+   */
+  async revokeAdminUserSessions(userId: string, reason: string): Promise<number> {
+    return sessionRepository.revokeAdminForUser(userId, reason);
+  }
+
+  /**
    * Revoke sessions for a specific device only, enabling multi-device login.
    * Used by login endpoints when deviceId is available. Falls back to
    * revokeAllUserSessions when deviceId is absent (backward compat).
