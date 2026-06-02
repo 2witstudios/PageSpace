@@ -69,13 +69,19 @@ export function filterDriveIdsByMcpScope(
 
 /**
  * Page-level equivalent: resolves the page's drive (only when a scope is active)
- * and fails closed if the drive cannot be determined.
+ * and checks it against the token scope.
+ *
+ * The create_page root path authorizes by passing the DRIVE id to
+ * canActorEditPage ("the drive is the parent of root pages"), so when no page
+ * row matches we fall back to treating the id as a drive id and checking that
+ * against the scope. A genuinely unknown id matches neither and stays
+ * fail-closed (the actor ACL would reject it anyway).
  */
 async function pageOutsideMcpScope(context: ToolExecutionContext, pageId: string): Promise<boolean> {
   if (!hasMcpScope(context)) return false;
   const [row] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId));
-  if (!row?.driveId) return true;
-  return !context.mcpAllowedDriveIds!.includes(row.driveId);
+  const driveId = row?.driveId ?? pageId;
+  return !context.mcpAllowedDriveIds!.includes(driveId);
 }
 
 export async function canActorEditPage(
