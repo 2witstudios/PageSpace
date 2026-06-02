@@ -43,9 +43,10 @@ const baseTools = {
  * never added to the registry, never discoverable via `tool_search`, and never
  * reachable by a model. Staged rollout rides this env kill-switch plus the
  * per-call `canRunCode` authz (drive owner/admin), not a separate flag table —
- * there is none. The sandbox factory is injected so the off-path never loads the
- * DB module graph or constructs the Vercel client, and both branches are unit
- * tested without real IO.
+ * there is none. The sandbox factory is injected and the Fly Sprites driver is
+ * dynamically imported only when a tool runs, so the off-path never constructs
+ * the client nor loads the Node-24/ESM-only `@fly/sprites` SDK, and both
+ * branches are unit tested without real IO.
  */
 export function buildPageSpaceTools({
   codeExecutionEnabled = isCodeExecutionEnabled(),

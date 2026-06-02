@@ -154,6 +154,28 @@ describe('ExecutableSandbox.runCommand', () => {
     expect(result).toEqual({ exitCode: 2, stdout: 'partial', stderr: 'boom' });
   });
 
+  it('given an ExecError with the exit output flattened on the error, should return it as a result', async () => {
+    // The real SDK ExecError also exposes exitCode/stdout/stderr directly on the
+    // error (not only under .result); the driver must surface that shape too.
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          execFile: async () => {
+            const error = Object.assign(new Error('Command failed with exit code 3'), {
+              exitCode: 3,
+              stdout: 'flat-out',
+              stderr: 'flat-err',
+            });
+            throw error;
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    const result = await handle!.runCommand({ cmd: 'sh', args: ['-c', 'exit 3'] });
+    expect(result).toEqual({ exitCode: 3, stdout: 'flat-out', stderr: 'flat-err' });
+  });
+
   it('given a command that exceeds the timeout, should reject and DESTROY the Sprite (teardown on timeout)', async () => {
     let destroyed = false;
     const { sdk } = makeSdk({

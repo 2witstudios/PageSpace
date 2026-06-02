@@ -23,7 +23,7 @@ import {
   acquireConversationSandbox,
   getSandboxSessionSecret,
 } from '@pagespace/lib/services/sandbox/session-manager';
-import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import { createDbSandboxSessionStore } from '@pagespace/lib/services/sandbox/session-store';
 import {
   acquireCodeExecutionSlot,
@@ -41,16 +41,25 @@ import { createSandboxTools, type ResolveSandboxContext } from './sandbox-tools'
 // reconnects to one DB pool and the client is stateless. Both are built lazily
 // so importing this module does no DB or SDK work at load.
 let storePromise: ReturnType<typeof createDbSandboxSessionStore> | null = null;
-let sandboxClient: ReturnType<typeof createSpritesSandboxClient> | null = null;
+let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
 
 function getStore() {
   storePromise ??= createDbSandboxSessionStore();
   return storePromise;
 }
 
-function getSandboxClient() {
-  sandboxClient ??= createSpritesSandboxClient();
-  return sandboxClient;
+// The Fly Sprites driver is loaded via a DYNAMIC import, never a static one:
+// `@fly/sprites` is ESM-only and declares `engines.node >= 24`, while the web
+// images run Node 22. A static import would pull the SDK into the module graph
+// at load — i.e. on every chat request, including the default code-execution-OFF
+// path — and evaluate an unsupported SDK. Deferring it here keeps `@fly/sprites`
+// out of the graph until a sandbox tool actually runs (only possible once the
+// kill-switch is on), so the off-path never touches it.
+function getSandboxClient(): Promise<ExecSandboxClient> {
+  sandboxClientPromise ??= import(
+    '@pagespace/lib/services/sandbox/sandbox-client/sprites'
+  ).then((m) => m.createSpritesSandboxClient());
+  return sandboxClientPromise;
 }
 
 /** Wire the real lib deps for the runners (DB-backed store + real Sprites driver). */
@@ -62,13 +71,13 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         ...input,
         deps: {
           store: await getStore(),
-          client: getSandboxClient(),
+          client: await getSandboxClient(),
           authorize: canRunCode,
           now: () => new Date(),
           secret: getSandboxSessionSecret(),
         },
       }),
-    reconnect: (sandboxId) => getSandboxClient().get({ sandboxId }),
+    reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
       releaseSlot: releaseCodeExecutionSlot,

@@ -107,22 +107,33 @@ function toText(value: string | Buffer): string {
   return typeof value === 'string' ? value : value.toString('utf8');
 }
 
-// Surface from a thrown SDK ExecError (non-zero exit) — duck-typed so tests need
-// not import the SDK class. A genuine command that exits non-zero is a RESULT,
-// not a driver failure, so it is returned, never rethrown.
+// Shape of the exec output a non-zero exit carries (on `ExecError`).
+interface ExecOutputShape {
+  exitCode: number;
+  stdout: string | Buffer;
+  stderr: string | Buffer;
+}
+
+function isExecOutputShape(value: unknown): value is ExecOutputShape {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    typeof (value as { exitCode?: unknown }).exitCode === 'number'
+  );
+}
+
+// Surface from a thrown SDK `ExecError` (non-zero exit) — duck-typed so tests
+// need not import the SDK class. The Sprites `ExecError` exposes the exit
+// output BOTH nested under `.result` and flattened on the error itself (via
+// `exitCode`/`stdout`/`stderr` getters); we accept either so a version skew in
+// the SDK's surface can't turn a real non-zero exit into a transport failure. A
+// genuine command that exits non-zero is a RESULT, not a driver failure, so it
+// is returned, never rethrown.
 function execResultFromError(error: unknown): SandboxRunResult | null {
-  if (
-    error &&
-    typeof error === 'object' &&
-    'result' in error &&
-    typeof (error as { result?: unknown }).result === 'object' &&
-    (error as { result: { exitCode?: unknown } }).result.exitCode !== undefined
-  ) {
-    const result = (error as { result: { exitCode: number; stdout: string | Buffer; stderr: string | Buffer } })
-      .result;
-    return { exitCode: result.exitCode, stdout: toText(result.stdout), stderr: toText(result.stderr) };
-  }
-  return null;
+  const nested = (error as { result?: unknown } | null)?.result;
+  const output = isExecOutputShape(nested) ? nested : isExecOutputShape(error) ? error : null;
+  if (!output) return null;
+  return { exitCode: output.exitCode, stdout: toText(output.stdout), stderr: toText(output.stderr) };
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number | undefined): Promise<T> {
