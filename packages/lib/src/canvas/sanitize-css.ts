@@ -14,6 +14,8 @@
  * - Animations and transforms
  * - CSS variables
  * - All standard CSS properties
+ *
+ * Pure string transform: no DOM dependency, safe to run server-side.
  */
 export function sanitizeCSS(css: string): string {
   if (!css) return '';

@@ -89,6 +89,7 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  publishSubdomain: null,
 });
 
 // Helper to create mock drive member

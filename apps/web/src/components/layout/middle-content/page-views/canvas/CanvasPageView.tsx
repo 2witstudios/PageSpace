@@ -15,6 +15,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { openExternalUrl } from '@/lib/navigation/app-navigation';
 import { useFindStore } from '@/stores/useFindStore';
+import CanvasPublishControls from './CanvasPublishControls';
 
 interface CanvasPageViewProps {
   pageId: string;
@@ -207,7 +208,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
 
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
-      <div className="flex border-b">
+      <div className="relative flex items-center border-b">
         <button
           className={`px-4 py-2 ${activeTab === 'code' ? 'border-b-2 border-blue-500' : ''}`}
           onClick={() => setActiveTab('code')}
@@ -220,6 +221,9 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         >
           View
         </button>
+        <div className="ml-auto">
+          <CanvasPublishControls pageId={pageId} />
+        </div>
       </div>
       {activeTab === 'code' && (
         <div className="flex-1 min-h-0">
