@@ -22,18 +22,23 @@ describe('buildSpriteNetworkPolicy', () => {
     expect(rules[rules.length - 1]).toEqual({ domain: '*', action: 'deny' });
   });
 
-  it('given a widened allowlist, should deny the internal Fly surface BEFORE any allow', () => {
+  it('given a widened allowlist, should include the SDK internal-blocking defaults BEFORE any allow', () => {
     const { rules } = buildSpriteNetworkPolicy({ egressAllowlist: ['registry.npmjs.org'] });
-    const denyInternalIdx = rules.findIndex(
-      (r) => r.domain === '*.internal' && r.action === 'deny',
-    );
+    const includeIdx = rules.findIndex((r) => r.include === 'defaults');
     const allowIdx = rules.findIndex((r) => r.domain === 'registry.npmjs.org');
-    expect(denyInternalIdx).toBeGreaterThanOrEqual(0);
-    expect(denyInternalIdx).toBeLessThan(allowIdx);
-    // Tigris + metadata + flycast are denied too.
-    expect(rules).toContainEqual({ domain: '*.tigris.dev', action: 'deny' });
-    expect(rules).toContainEqual({ domain: '_api.internal', action: 'deny' });
-    expect(rules).toContainEqual({ domain: '*.flycast', action: 'deny' });
+    // The internal surface is denied via the maintained `defaults` preset, placed
+    // first so a later `*` allow could never reach it.
+    expect(includeIdx).toBe(0);
+    expect(includeIdx).toBeLessThan(allowIdx);
+    expect(rules[0]).toEqual({ include: 'defaults' });
+    // Still terminates in default-deny.
+    expect(rules[rules.length - 1]).toEqual({ domain: '*', action: 'deny' });
+  });
+
+  it('given an empty allowlist, should NOT include the defaults preset (pure deny-all, no preset semantics)', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressAllowlist: [] });
+    expect(rules.some((r) => r.include === 'defaults')).toBe(false);
+    expect(rules).toEqual([{ domain: '*', action: 'deny' }]);
   });
 
   it('given duplicate/empty hosts, should dedupe and drop blanks', () => {
