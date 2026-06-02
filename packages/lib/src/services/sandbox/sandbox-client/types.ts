@@ -26,10 +26,16 @@ export interface RunCommandArgs {
   cwd?: string;
   env?: Record<string, string>;
   /**
-   * Hard wall-clock cap, in ms, enforced by the driver. On expiry the run is
-   * aborted; the driver tears the sandbox down so no process keeps running.
+   * Hard wall-clock cap, in ms, enforced by the driver. On expiry the driver
+   * SIGKILLs the running command so no process keeps running past the cap.
    */
   timeoutMs?: number;
+  /**
+   * Hard cap, in bytes, on buffered stdout+stderr (the policy output cap). The
+   * driver maps this onto the SDK's `maxBuffer`: exceeding it SIGKILLs the
+   * command and fails the run, bounding host memory against an output flood.
+   */
+  maxBytes?: number;
 }
 
 export interface WriteFileEntry {

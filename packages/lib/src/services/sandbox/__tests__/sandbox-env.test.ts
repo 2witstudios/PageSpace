@@ -74,4 +74,16 @@ describe('buildSandboxEnv', () => {
       expect(typeof value).toBe('string');
     }
   });
+
+  it('given an empty injected env, should return an empty record without reading any global or throwing (pure)', () => {
+    // The validated env is injected, never read from a global here, so an empty
+    // input yields an empty result deterministically — no NODE_ENV leaks in from
+    // the host process and the call cannot throw on a missing/invalid global.
+    expect(buildSandboxEnv({ env: {} })).toEqual({});
+  });
+
+  it('given the allowlisted key absent, should omit it rather than copy an undefined', () => {
+    const env = buildSandboxEnv({ env: { DATABASE_URL: 'x' } as never });
+    expect(env).not.toHaveProperty('NODE_ENV');
+  });
 });
