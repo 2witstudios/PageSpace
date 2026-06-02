@@ -190,6 +190,9 @@ function runSpawned(
     const succeed = (result: SandboxRunResult) => settle(() => resolve(result));
 
     const collect = (chunks: Buffer[], chunk: Buffer | string, len: number): number => {
+      // Once settled (overflow / timeout / exit) stop retaining: late chunks from
+      // a not-yet-dead command must not grow memory past the run we already ended.
+      if (settled) return len;
       const buf = toBuffer(chunk);
       chunks.push(buf);
       const next = len + buf.length;
