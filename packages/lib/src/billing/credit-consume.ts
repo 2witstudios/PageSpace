@@ -126,6 +126,26 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
     return;
   }
 
+  // A zero-charge call (free/local model, or a tool-only analytics log carrying
+  // no tokens) has nothing to draw down. Settle the claimed row as 'skipped'
+  // without opening the balance transaction — no row lock, no $0 decrement. The
+  // claim row still exists, so the reconcile cron's orphan sweep treats this call
+  // as already handled and never re-processes it.
+  if (amountCents === 0) {
+    try {
+      await db
+        .update(creditLedger)
+        .set({ consumeStatus: 'skipped' })
+        .where(eq(creditLedger.id, ledgerId));
+    } catch (error) {
+      loggers.ai.debug('credit zero-charge settle failed', {
+        error: (error as Error).message,
+        aiUsageLogId: input.aiUsageLogId,
+      });
+    }
+    return;
+  }
+
   // 2. Decrement the balance and settle the ledger row, atomically.
   try {
     await db.transaction((tx) => decrementAndSettle(tx, ledgerId, input.userId, amountCents));
