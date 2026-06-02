@@ -108,7 +108,14 @@ export async function createAIProvider(
       if (currentProvider === 'openrouter_free' && !currentModel.endsWith(':free')) {
         return { error: 'openrouter_free only accepts models with the ":free" suffix', status: 400 };
       }
-      const openrouter = createOpenRouter({ apiKey: managed.apiKey });
+      // X-OpenRouter-Cache enables OpenRouter's response cache (default 300s TTL):
+      // byte-identical repeat requests are served from cache at $0 with zeroed
+      // usage. See timestamp-utils.ts — the system-prompt timestamp is bucketed
+      // to the cache window so genuine repeats (regenerate/retry) can HIT.
+      const openrouter = createOpenRouter({
+        apiKey: managed.apiKey,
+        headers: { 'X-OpenRouter-Cache': 'true' },
+      });
       model = openrouter.chat(currentModel);
     } else if (currentProvider === 'google') {
       const managed = getManagedProviderKey('google');
