@@ -1,27 +1,47 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockHasAgentDriveMembership, mockCheckDriveAccess } = vi.hoisted(() => ({
+const {
+  mockHasAgentDriveMembership,
+  mockCheckDriveAccess,
+  mockGetUserDriveAccess,
+  mockGetAgentAccessLevel,
+  mockDbWhere,
+} = vi.hoisted(() => ({
   mockHasAgentDriveMembership: vi.fn(),
   mockCheckDriveAccess: vi.fn(),
+  mockGetUserDriveAccess: vi.fn(),
+  mockGetAgentAccessLevel: vi.fn(),
+  mockDbWhere: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
-  getUserDriveAccess: vi.fn(),
+  getUserDriveAccess: mockGetUserDriveAccess,
   canUserEditPage: vi.fn(),
   canUserDeletePage: vi.fn(),
   getUserAccessiblePagesInDriveWithDetails: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
-  getAgentAccessLevel: vi.fn(),
+  getAgentAccessLevel: mockGetAgentAccessLevel,
   getAgentAccessiblePagesInDrive: vi.fn(),
   hasAgentDriveMembership: mockHasAgentDriveMembership,
 }));
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: mockCheckDriveAccess,
 }));
+vi.mock('@pagespace/db/db', () => ({
+  db: { select: () => ({ from: () => ({ where: mockDbWhere }) }) },
+}));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id', driveId: 'driveId' } }));
 
-import { canActorManageDrive } from '../actor-permissions';
+import {
+  canActorManageDrive,
+  canActorAccessDrive,
+  canActorEditPage,
+  filterDriveIdsByMcpScope,
+  driveOutsideMcpScope,
+} from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core';
 
 const DRIVE = 'drive-1';
@@ -65,5 +85,72 @@ describe('canActorManageDrive', () => {
   it('denies an agent that is not a drive member', async () => {
     mockHasAgentDriveMembership.mockResolvedValue(false);
     expect(await canActorManageDrive(agentCtx, DRIVE)).toBe(false);
+  });
+});
+
+describe('MCP drive-scope enforcement', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // A scoped MCP token acting as an agent that DOES have access to the target.
+  const scopedAgentCtx = {
+    userId: 'user-1',
+    chatSource: { type: 'page', agentPageId: 'agent-1' },
+    mcpAllowedDriveIds: ['drive-A'],
+  } as ToolExecutionContext;
+
+  it('canActorAccessDrive: denies a drive outside the token scope before any ACL check', async () => {
+    expect(await canActorAccessDrive(scopedAgentCtx, 'drive-B')).toBe(false);
+    // Fails closed at the scope ceiling — the agent ACL is never consulted.
+    expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it('canActorAccessDrive: allows an in-scope drive (then defers to the agent ACL)', async () => {
+    mockHasAgentDriveMembership.mockResolvedValue(true);
+    expect(await canActorAccessDrive(scopedAgentCtx, 'drive-A')).toBe(true);
+    expect(mockHasAgentDriveMembership).toHaveBeenCalledWith('agent-1', 'drive-A');
+  });
+
+  it('canActorEditPage: denies when the page lives in a drive outside the token scope', async () => {
+    mockDbWhere.mockResolvedValue([{ driveId: 'drive-B' }]);
+    expect(await canActorEditPage(scopedAgentCtx, 'page-x')).toBe(false);
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: fails closed when the page drive cannot be resolved', async () => {
+    mockDbWhere.mockResolvedValue([]);
+    expect(await canActorEditPage(scopedAgentCtx, 'missing-page')).toBe(false);
+  });
+
+  it('canActorEditPage: allows an in-scope page (then defers to the agent ACL)', async () => {
+    mockDbWhere.mockResolvedValue([{ driveId: 'drive-A' }]);
+    mockGetAgentAccessLevel.mockResolvedValue({ canEdit: true });
+    expect(await canActorEditPage(scopedAgentCtx, 'page-y')).toBe(true);
+  });
+
+  it('unscoped caller (no mcpAllowedDriveIds) skips scope checks entirely', async () => {
+    const unscoped = { userId: 'user-1', mcpAllowedDriveIds: [] } as ToolExecutionContext;
+    mockGetUserDriveAccess.mockResolvedValue(true);
+    expect(await canActorAccessDrive(unscoped, 'drive-B')).toBe(true);
+    // No page-drive lookup happens for drive-level checks.
+    expect(mockDbWhere).not.toHaveBeenCalled();
+  });
+});
+
+describe('filterDriveIdsByMcpScope / driveOutsideMcpScope', () => {
+  const scoped = { userId: 'u', mcpAllowedDriveIds: ['a', 'b'] } as ToolExecutionContext;
+  const unscoped = { userId: 'u' } as ToolExecutionContext;
+
+  it('filters a drive list down to the token scope', () => {
+    expect(filterDriveIdsByMcpScope(scoped, ['a', 'c', 'b', 'd'])).toEqual(['a', 'b']);
+  });
+
+  it('returns the list unchanged for an unscoped caller', () => {
+    expect(filterDriveIdsByMcpScope(unscoped, ['a', 'c'])).toEqual(['a', 'c']);
+  });
+
+  it('driveOutsideMcpScope: true for out-of-scope, false for in-scope and unscoped', () => {
+    expect(driveOutsideMcpScope(scoped, 'c')).toBe(true);
+    expect(driveOutsideMcpScope(scoped, 'a')).toBe(false);
+    expect(driveOutsideMcpScope(unscoped, 'c')).toBe(false);
   });
 });

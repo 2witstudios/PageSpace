@@ -11,7 +11,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { type ToolExecutionContext } from '../core';
-import { getAgentPageId } from './actor-permissions';
+import { getAgentPageId, filterDriveIdsByMcpScope } from './actor-permissions';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -53,7 +53,12 @@ export const driveTools = {
       const agentPageId = getAgentPageId(context as ToolExecutionContext);
       if (agentPageId) {
         try {
-          const agentDrives = await listAgentDrives(agentPageId);
+          const allAgentDrives = await listAgentDrives(agentPageId);
+          // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+          const scopedIds = new Set(
+            filterDriveIdsByMcpScope(context as ToolExecutionContext, allAgentDrives.map((d) => d.driveId)),
+          );
+          const agentDrives = allAgentDrives.filter((d) => scopedIds.has(d.driveId));
           return {
             success: true,
             drives: agentDrives.map((d) => ({
@@ -127,7 +132,15 @@ export const driveTools = {
 
         // 4. Combine all drives and deduplicate
         const allDrives = [...ownedDrives, ...memberDrives, ...permissionDrives];
-        const uniqueDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
+        const dedupedDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
+        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+        const scopedIds = new Set(
+          filterDriveIdsByMcpScope(
+            context as ToolExecutionContext,
+            dedupedDrives.map(d => d.id).filter((id): id is string => id != null),
+          ),
+        );
+        const uniqueDrives = dedupedDrives.filter(d => d.id != null && scopedIds.has(d.id));
 
         return {
           success: true,

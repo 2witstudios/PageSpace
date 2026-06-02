@@ -13,6 +13,7 @@ import {
   authenticateRequestWithOptions,
   isAuthError,
   checkMCPPageScope,
+  getAllowedDriveIds,
 } from '@/lib/auth';
 import {
   createAIProvider,
@@ -185,6 +186,9 @@ export async function POST(request: Request): Promise<Response> {
       ),
       chatSource: { type: 'page' as const, agentPageId: pageId, agentTitle: page.title },
       enabledTools: agentEnabledTools ?? null,
+      // Bind tool execution to the MCP token's drive scope so a scoped token
+      // cannot reach drives outside its scope via the agent's broader ACL.
+      mcpAllowedDriveIds: getAllowedDriveIds(authResult),
     },
     maxRetries: 20,
     onFinish: async ({ text, totalUsage }) => {

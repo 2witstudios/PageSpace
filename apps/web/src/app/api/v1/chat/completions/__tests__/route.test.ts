@@ -7,6 +7,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
