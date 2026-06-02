@@ -62,9 +62,13 @@ export async function POST(request: NextRequest) {
           break;
 
         case 'checkout.session.completed':
-          await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
-          // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
-          await applyStripeFunding(event);
+          // Whole path is retryable: a transient failure in EITHER the handler or
+          // funding clears the idempotency marker so Stripe redelivers (see below).
+          await withFundingRetry(event.id, async () => {
+            await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+            // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
+            await applyStripeFunding(event);
+          });
           break;
 
         case 'invoice.payment_failed':
@@ -72,9 +76,11 @@ export async function POST(request: NextRequest) {
           break;
 
         case 'invoice.paid':
-          await handleInvoicePaid(event.data.object as Stripe.Invoice);
-          // Reset the monthly credit bucket to the tier allowance on each renewal.
-          await applyStripeFunding(event);
+          await withFundingRetry(event.id, async () => {
+            await handleInvoicePaid(event.data.object as Stripe.Invoice);
+            // Reset the monthly credit bucket to the tier allowance on each renewal.
+            await applyStripeFunding(event);
+          });
           break;
 
         default:
@@ -111,6 +117,37 @@ export async function POST(request: NextRequest) {
       { error: 'Webhook processing failed' },
       { status: 500 }
     );
+  }
+}
+
+/**
+ * Run a funding-relevant event path with RETRYABLE failure semantics.
+ *
+ * The stripeEvents idempotency marker is committed BEFORE processing, so any error
+ * in this path would otherwise be lost forever: Stripe's redelivery short-circuits
+ * as "already processed" (the insert above conflicts and returns 200), and the local
+ * backfill cron reconciles only usage rows, not Stripe funding. To keep paid credit
+ * from vanishing on a transient DB error, we delete that marker on ANY failure and
+ * rethrow — the webhook then returns 500 and Stripe redelivers, reprocessing the
+ * whole path. Funding is idempotent on creditLedger.stripeRef, so the balance is
+ * credited exactly once even though the event is processed twice.
+ *
+ * The cleanup must wrap the WHOLE path, not just the funding call: the pre-funding
+ * handler also does DB I/O (handleInvoicePaid looks the user up; handleCheckoutCompleted
+ * links the customer), and a transient failure there must be retryable too — otherwise
+ * the event is marked processed and funding never runs on redelivery.
+ *
+ * Safe to reprocess: on these events the pre-funding handlers are log-only/idempotent
+ * (handleInvoicePaid only logs; handleCheckoutCompleted's sole throwable is an
+ * idempotent customer-link upsert, and acts only for mode 'subscription' — a credit-pack
+ * top-up is mode 'payment'; its provisioning POST swallows its own errors).
+ */
+async function withFundingRetry(eventId: string, run: () => Promise<void>) {
+  try {
+    await run();
+  } catch (err) {
+    await db.delete(stripeEvents).where(eq(stripeEvents.id, eventId));
+    throw err;
   }
 }
 

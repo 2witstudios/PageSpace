@@ -240,11 +240,21 @@ describe('applyStripeFunding', () => {
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
-  it('never throws out of the webhook: a funding failure is logged and swallowed', async () => {
+  it('rethrows a genuine funding failure (logged) so the webhook can let Stripe redeliver', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     mockDb.transaction.mockRejectedValueOnce(new Error('db boom'));
-    await expect(applyStripeFunding(invoiceEvent)).resolves.toBeUndefined();
+    await expect(applyStripeFunding(invoiceEvent)).rejects.toThrow('db boom');
     expect(mockApiLogger.error).toHaveBeenCalled();
+  });
+
+  it('does NOT throw for non-actionable cases (unknown customer, ignored, billing-disabled)', async () => {
+    // "Nothing to do" must not look like a failure — otherwise the webhook would
+    // needlessly clear the idempotency marker and 500 on a no-op.
+    mockDb.select.mockReturnValue(userSelectReturning([])); // no user
+    await expect(applyStripeFunding(invoiceEvent)).resolves.toBeUndefined();
+    await expect(applyStripeFunding(subscriptionCheckoutEvent)).resolves.toBeUndefined(); // ignored
+    mockIsBillingEnabled.mockReturnValue(false);
+    await expect(applyStripeFunding(invoiceEvent)).resolves.toBeUndefined(); // billing disabled
   });
 
   it('skips funding (and never opens a transaction) when no user matches the Stripe customer', async () => {
