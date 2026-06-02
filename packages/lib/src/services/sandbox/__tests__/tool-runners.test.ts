@@ -234,6 +234,38 @@ describe('runBashInSandbox', () => {
     await runBashInSandbox({ command: 'echo $(whoami)', ctx: makeCtx(), deps });
     expect(seen).toEqual({ cmd: 'sh', args: ['-c', 'echo $(whoami)'] });
   });
+
+  it('should forward the policy wall-clock timeout and output-byte cap to the driver', async () => {
+    let seen: { timeoutMs?: number; maxBytes?: number } | null = null;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seen = { timeoutMs: a.timeoutMs, maxBytes: a.maxBytes };
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    // default profile: 30s wall-clock, 64KB output cap.
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ profile: 'default' }), deps });
+    expect(seen).toEqual({ timeoutMs: 30_000, maxBytes: 64 * 1024 });
+  });
+
+  it('given the minimal profile, should forward its tighter timeout and output cap', async () => {
+    let seen: { timeoutMs?: number; maxBytes?: number } | null = null;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seen = { timeoutMs: a.timeoutMs, maxBytes: a.maxBytes };
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    // minimal profile: 10s wall-clock, 32KB output cap.
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ profile: 'minimal' }), deps });
+    expect(seen).toEqual({ timeoutMs: 10_000, maxBytes: 32 * 1024 });
+  });
 });
 
 describe('writeSandboxFile', () => {

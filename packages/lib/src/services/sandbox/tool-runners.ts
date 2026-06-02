@@ -31,6 +31,7 @@ import { evaluateCommandPolicy } from './command-policy';
 import { truncateToBytes } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { buildSandboxEnv } from './sandbox-env';
+import { getValidatedEnv } from '../../config/env-validation';
 import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionQuotaDecision } from './quota';
@@ -301,6 +302,7 @@ export async function runBashInSandbox({
         cwd: resolvedCwd,
         env: deps.buildEnv(),
         timeoutMs: policy.timeoutMs,
+        maxBytes: policy.maxOutputBytes,
       });
     } catch {
       const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -465,5 +467,10 @@ export async function readSandboxFile({
   }
 }
 
-/** Default env builder used by the production tool wrappers. */
-export const defaultBuildEnv = (): Record<string, string> => buildSandboxEnv();
+/**
+ * Default env builder used by the production tool wrappers. This is the effect
+ * seam that sources the validated env from the global and hands it to the pure
+ * `buildSandboxEnv`, keeping the allowlist construction itself IO-free.
+ */
+export const defaultBuildEnv = (): Record<string, string> =>
+  buildSandboxEnv({ env: getValidatedEnv() });

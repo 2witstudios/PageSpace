@@ -11,9 +11,14 @@
  * Building by allowlist (rather than denylist) is the provable construction:
  * a newly-added secret is excluded by default unless someone deliberately adds
  * its key here — which the review gate would catch.
+ *
+ * Pure by construction: the validated env is INJECTED, never read from a global
+ * here. The production wiring (`defaultBuildEnv` in `tool-runners`) sources it
+ * from `getValidatedEnv()`; this function reads no globals and never throws, so
+ * it is deterministic and trivially testable.
  */
 
-import { getValidatedEnv, type ServerEnv } from '../../config/env-validation';
+import type { ServerEnv } from '../../config/env-validation';
 
 /**
  * The only keys ever forwarded into a sandbox. Each must be non-secret and
@@ -24,8 +29,8 @@ const SANDBOX_ENV_ALLOWLIST = ['NODE_ENV'] as const;
 type AllowlistedKey = (typeof SANDBOX_ENV_ALLOWLIST)[number];
 
 export function buildSandboxEnv({
-  env = getValidatedEnv(),
-}: { env?: Partial<ServerEnv> } = {}): Record<AllowlistedKey, string> {
+  env,
+}: { env: Partial<ServerEnv> }): Record<AllowlistedKey, string> {
   const result = {} as Record<AllowlistedKey, string>;
   for (const key of SANDBOX_ENV_ALLOWLIST) {
     const value = env[key];
