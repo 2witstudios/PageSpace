@@ -39,14 +39,14 @@ In practice nothing breaks. Open an AI Chat, pick a model, send a message. The m
 - **Your previously-stored keys are gone from our side.** We've deleted them. Your accounts at OpenAI, Anthropic, Google AI, and the other providers are untouched — those keys still exist with the upstream provider. Revoke them there if you want, but you don't have to.
 - **Provider availability is now a deployment-level concern.** On pagespace.ai cloud, that's whatever PageSpace has enabled. On a self-hosted install, it's whatever your operator has configured via environment variables.
 
-## Standard vs pro tier
+## Standard vs pro models
 
-Every paid plan has a daily AI quota split into two tiers:
+AI usage is metered against a monthly AI-credit allowance, and which models you can reach depends on your plan:
 
-- **Standard** covers smaller and mid-tier models — Gemini Flash, Claude Haiku, GPT mini variants, GLM 4.7, and similar.
-- **Pro** covers frontier flagships — Claude Opus, the GPT-5 family, OpenAI o3, and GLM-5.
+- **Standard** covers smaller and mid-tier models — Gemini Flash, Claude Haiku, GPT mini variants, GLM 4.7, and similar. Available on every plan, including Free.
+- **Pro** covers frontier flagships — Claude Opus, the GPT-5 family, OpenAI o3, and GLM-5. Available on paid plans.
 
-If you regularly hit the pro daily limit, [upgrade to a higher plan](/pricing) for more pro capacity.
+Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime or wait for your monthly allowance to reset — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
 
 ## Why we did this
 
@@ -403,7 +403,7 @@ Practical example: create a recurring event, "Weekly Metrics Review," every Mond
 
 Another one. Project deadline is Friday. Create an event, "Pre-deadline check," Thursday at 4pm. Attach a project agent with instructions to review the open tasks and post a status summary. Thursday afternoon, the agent runs a check for you while you're still in meetings.
 
-The trigger system checks drive access, agent page existence, and your daily AI usage limit before executing. If any check fails, nothing runs and nothing breaks.
+The trigger system checks drive access, agent page existence, and your available AI credits before executing. If any check fails, nothing runs and nothing breaks.
 
 The calendar becomes a scheduler for AI work.
 

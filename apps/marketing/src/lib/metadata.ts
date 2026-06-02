@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { MONTHLY_CREDITS } from "./credits";
 
 const SITE_NAME = "PageSpace";
 export const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
@@ -169,7 +170,7 @@ export const pageMetadata = {
   pricing: createMetadata({
     title: "Pricing",
     description:
-      "Simple, transparent pricing for individuals, teams, and enterprises. Start free with 500MB storage and 50 daily AI calls.",
+      `Simple, transparent pricing for individuals, teams, and enterprises. Start free with 500MB storage and ${MONTHLY_CREDITS.free}/month of AI credits.`,
     path: "/pricing",
     keywords: ["pricing", "plans", "free tier", "subscription"],
   }),
