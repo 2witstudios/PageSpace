@@ -281,11 +281,22 @@ export async function runBashInSandbox({
     return fail(commandPolicy.reason);
   }
 
-  // A provided working directory must also stay inside the sandbox root.
+  // A provided working directory must also stay inside the sandbox root. A blocked
+  // cwd escape is audited as an anomaly — like writeFile/readFile path escapes —
+  // so an attempted sandbox break on the bash path is never silently dropped.
   let resolvedCwd: string = SANDBOX_ROOT;
   if (cwd !== undefined) {
     const candidate = resolveSandboxPath(cwd);
-    if (!candidate) return fail('path_escape');
+    if (!candidate) {
+      await safeAudit(deps, ctx, {
+        profile: policy.profile,
+        code: `bash cwd ${cwd}`,
+        exitCode: null,
+        durationMs: 0,
+        anomaly: 'blocked_command',
+      });
+      return fail('path_escape');
+    }
     resolvedCwd = candidate;
   }
 
@@ -428,6 +439,13 @@ export async function readSandboxFile({
     const startedAt = deps.now();
     let buffer: Buffer | null;
     try {
+      // NOTE (host-memory bound): the driver's fs read materializes the whole
+      // file before we apply `truncateToBytes`, so the file's size — bounded by
+      // the per-sprite storage cap, not by `maxOutputBytes` — is what reaches host
+      // memory here. A true read-side host-memory cap needs a bounded/streamed
+      // read at the SDK boundary (the `@fly/sprites` RC fs API exposes neither
+      // stat nor a ranged/streamed read); enforcing it is tracked as an
+      // enablement-gate hardening item before the feature is flagged on.
       buffer = await session.sandbox.readFileToBuffer({ path: resolved });
     } catch {
       const durationMs = deps.now().getTime() - startedAt.getTime();

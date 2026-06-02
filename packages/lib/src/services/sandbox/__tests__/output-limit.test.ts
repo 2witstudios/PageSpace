@@ -28,6 +28,16 @@ describe('truncateToBytes', () => {
     expect(typeof result.text).toBe('string');
   });
 
+  it('should never return text exceeding maxBytes, even when the replacement char would inflate it', () => {
+    // The U+FFFD replacement char is 3 bytes; a naive cut+decode at maxBytes=2
+    // would return a 3-byte string. The result must stay within the cap.
+    for (const maxBytes of [1, 2, 3, 5, 7]) {
+      const result = truncateToBytes({ text: '😀😀😀', maxBytes });
+      expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(maxBytes);
+      expect(result.truncated).toBe(true);
+    }
+  });
+
   it('given empty/no text, should be safe', () => {
     expect(truncateToBytes({ maxBytes: 8 })).toEqual({
       text: '',

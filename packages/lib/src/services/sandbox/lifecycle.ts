@@ -69,7 +69,13 @@ export function planSandboxLifecycle({
   }
 
   // Resume re-authz gate: deny before considering any existing warm sandbox, so
-  // an unauthorized actor is never handed back another session's state.
+  // an unauthorized actor is never handed back another session's state. We do
+  // NOT opportunistically reclaim an idle-expired session for a denied actor
+  // here: that would either re-provision for an unauthorized caller (wrong) or
+  // split this planner's single-action contract for marginal benefit. Idle
+  // sessions of now-unauthorized actors are reclaimed by the durable idle reaper
+  // (an enablement gate before flag-on), which is the reclaim path regardless of
+  // who next touches the conversation.
   if (!authorization.ok) {
     return { action: 'deny', reason: authorization.reason };
   }

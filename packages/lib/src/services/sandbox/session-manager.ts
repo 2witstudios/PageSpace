@@ -13,8 +13,9 @@
  *    denial returns no handle, and the warm sandbox is never reconnected.
  *  - **Guaranteed teardown / no orphans**: if the link cannot be persisted after
  *    a create, the just-created sandbox is stopped; `teardownConversationSandbox`
- *    guards its lookup and runs the VM stop and link removal best-effort, so
- *    cleanup never throws and leaves no orphaned sandbox behind.
+ *    guards its lookup and runs the VM stop best-effort, removing the link only
+ *    after a CONFIRMED stop — an unconfirmed stop keeps the link so the VM is
+ *    reclaimable (by retry / the idle reaper) instead of orphaned.
  */
 
 import { getValidatedEnv } from '../../config/env-validation';
@@ -81,13 +82,18 @@ export function getSandboxSessionSecret(): string {
   }
 }
 
-// Stop a sandbox best-effort. Teardown must never throw or block — a failed stop
-// is logged-and-swallowed; the platform's own timeout cap reclaims a stuck VM.
-async function safeStop(client: SandboxClient, sandboxId: string): Promise<void> {
+// Stop a sandbox best-effort, reporting whether the stop was CONFIRMED. Never
+// throws or blocks: a failed stop is swallowed and reported as `false` so the
+// caller can decide whether it is safe to drop the session link (only after a
+// confirmed stop) or must keep it for a retry / the idle reaper — deleting the
+// link for a VM that may still be alive would orphan it.
+async function safeStop(client: SandboxClient, sandboxId: string): Promise<boolean> {
   try {
     await client.stop({ sandboxId });
+    return true;
   } catch {
     // Intentionally swallowed: cleanup is best-effort and must not surface.
+    return false;
   }
 }
 
@@ -232,9 +238,12 @@ export interface TeardownSandboxInput {
 /**
  * Tear down a conversation's sandbox on session end / idle / crash / failure.
  * Idempotent and never throws: the lookup is guarded and the VM stop + link
- * removal are best-effort, so a store or stop failure during cleanup never
- * propagates. A lingering link after a failed removal is self-correcting (the
- * next acquire reconnects to a stopped VM and re-provisions under the same key).
+ * removal are best-effort. The link is removed ONLY after a CONFIRMED stop — an
+ * unconfirmed stop (the VM may still be alive) keeps the link and reports
+ * `torn: false`, so a later teardown or the idle reaper can reclaim the VM rather
+ * than orphaning it with no DB record. A lingering link after a *confirmed* stop
+ * but failed removal is self-correcting (the next acquire reconnects to a stopped
+ * VM → null and re-provisions under the same key).
  */
 export async function teardownConversationSandbox({
   tenantId,
@@ -261,7 +270,12 @@ export async function teardownConversationSandbox({
     return { torn: false };
   }
 
-  await safeStop(deps.client, existing.sandboxId);
+  const stopped = await safeStop(deps.client, existing.sandboxId);
+  if (!stopped) {
+    // Unconfirmed stop: the VM may still be running. Keep the link so a retry or
+    // the idle reaper can reclaim it; deleting it now would orphan a live VM.
+    return { torn: false };
+  }
   await safeRemove(deps.store, key);
   return { torn: true };
 }

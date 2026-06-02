@@ -7,10 +7,15 @@
  * `getOrCreate` resumes an existing Sprite by name or creates a fresh one.
  *
  * Provisioning is locked down, never platform defaults:
- *  - **Egress** — immediately after a fresh create, the deny-by-default L3
- *    network policy is applied. If that application fails the just-created
- *    Sprite is destroyed and the create rejects: a Sprite is NEVER handed back
- *    without its egress lockdown in place.
+ *  - **Egress** — the deny-by-default L3 network policy is (re-)applied on EVERY
+ *    hand-back, whether the Sprite was just created or resumed by name. Sprites
+ *    default to open outbound, so a Sprite reused after a crash between
+ *    `createSprite` and its original lockdown would otherwise run the next
+ *    command with open egress; reapplying on resume closes that window (and lets
+ *    a tightened allowlist take effect on a warm session). On a FRESH Sprite a
+ *    lockdown failure destroys it and rejects; on a RESUMED one we never destroy
+ *    a warm session we don't own the lifecycle of, but we still refuse to hand it
+ *    back — the call rejects so no command runs without a confirmed policy.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
  *    defaults.
@@ -275,6 +280,44 @@ function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
   };
 }
 
+/**
+ * Whether an error from `sdk.getSprite` means the named Sprite does not exist —
+ * a cache miss that should create-fresh (`getOrCreate`) or reconnect-null
+ * (`get`). Auth failures, rate limits, and control-plane outages must NOT be
+ * treated as "vanished": swallowing them would spuriously create a duplicate
+ * Sprite under a name that still has a live VM (orphaning it), or silently tear
+ * down and re-provision a healthy session. The `@fly/sprites` RC SDK exports no
+ * typed `NotFoundError`, so we classify defensively on HTTP status / error code
+ * and fall back to a conservative message match; a KNOWN non-404 status is never
+ * a cache miss.
+ */
+export function isSpriteNotFoundError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const e = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    code?: unknown;
+    name?: unknown;
+    message?: unknown;
+  };
+  const status =
+    typeof e.status === 'number'
+      ? e.status
+      : typeof e.statusCode === 'number'
+        ? e.statusCode
+        : undefined;
+  // 404 Not Found / 410 Gone both mean the named Sprite is no longer there.
+  if (status === 404 || status === 410) return true;
+  // Any other explicit HTTP status (401/403/429/5xx) is an error to surface.
+  if (status !== undefined) return false;
+  const code = typeof e.code === 'string' ? e.code.toUpperCase() : '';
+  if (code === 'NOT_FOUND' || code === 'ENOTFOUND' || code === 'ERR_NOT_FOUND') return true;
+  const name = typeof e.name === 'string' ? e.name : '';
+  if (/notfound/i.test(name)) return true;
+  const message = typeof e.message === 'string' ? e.message.toLowerCase() : '';
+  return /\bnot found\b|no such|does not exist|\b404\b|\b410\b|\bgone\b|vanished/.test(message);
+}
+
 const defaultSdk = (): SpritesSdk => {
   const client = new SpritesClient(resolveSpritesToken());
   return {
@@ -286,21 +329,32 @@ const defaultSdk = (): SpritesSdk => {
 };
 
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
-// If the egress lockdown cannot be applied the Sprite is destroyed and the
-// error propagates — a Sprite is never returned with open/unknown egress.
-async function lockdownFreshSprite(
-  sdk: SpritesSdk,
-  sprite: SpriteInstanceLike,
-  options: SandboxCreateOptions,
-): Promise<void> {
+// Called on every hand-back (fresh or resumed) so a Sprite is never returned
+// with open/unknown egress. When `destroyOnFailure` is set (a FRESH create), a
+// lockdown failure destroys the just-created Sprite before propagating; on a
+// resumed Sprite we never destroy a warm session, but the error still propagates
+// so the caller refuses to hand back a Sprite without a confirmed policy.
+async function applyEgressLockdown({
+  sdk,
+  sprite,
+  options,
+  destroyOnFailure,
+}: {
+  sdk: SpritesSdk;
+  sprite: SpriteInstanceLike;
+  options: SandboxCreateOptions;
+  destroyOnFailure: boolean;
+}): Promise<void> {
   try {
     await sprite.updateNetworkPolicy(buildSpriteNetworkPolicy({ egressAllowlist: options.egressAllowlist }));
     await sprite.filesystem('/').mkdir(SANDBOX_ROOT, { recursive: true });
   } catch (error) {
-    try {
-      await sdk.deleteSprite(sprite.name);
-    } catch {
-      // Best-effort cleanup of a Sprite we refuse to hand back.
+    if (destroyOnFailure) {
+      try {
+        await sdk.deleteSprite(sprite.name);
+      } catch {
+        // Best-effort cleanup of a Sprite we refuse to hand back.
+      }
     }
     throw error;
   }
@@ -311,24 +365,32 @@ export function createSpritesSandboxClient({
 }: { sdk?: SpritesSdk } = {}): ExecSandboxClient {
   return {
     async getOrCreate({ name, options }) {
-      // Resume by name when the Sprite already exists; otherwise create fresh and
-      // lock it down before returning.
+      // Resume by name when the Sprite already exists; create fresh ONLY on a
+      // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
+      // rather than spawning a duplicate Sprite under a name that may still be live.
+      let sprite: SpriteInstanceLike;
+      let fresh = false;
       try {
-        return wrap(await sdk.getSprite(name));
-      } catch {
-        const sprite = await sdk.createSprite(name, buildSpriteConfig({ options }));
-        await lockdownFreshSprite(sdk, sprite, options);
-        return wrap(sprite);
+        sprite = await sdk.getSprite(name);
+      } catch (error) {
+        if (!isSpriteNotFoundError(error)) throw error;
+        sprite = await sdk.createSprite(name, buildSpriteConfig({ options }));
+        fresh = true;
       }
+      // Re-apply the deny-default egress lockdown on BOTH paths — see file header.
+      await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: fresh });
+      return wrap(sprite);
     },
 
     async get({ sandboxId }) {
-      // Reconnect by name; a vanished Sprite surfaces as an error → null so the
-      // lifecycle re-provisions under the same key rather than throwing.
+      // Reconnect by name; a genuinely vanished Sprite (not-found) → null so the
+      // lifecycle re-provisions under the same key. Other errors (auth, rate
+      // limit, outage) surface rather than masquerading as a vanished session.
       try {
         return wrap(await sdk.getSprite(sandboxId));
-      } catch {
-        return null;
+      } catch (error) {
+        if (isSpriteNotFoundError(error)) return null;
+        throw error;
       }
     },
 

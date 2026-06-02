@@ -293,7 +293,7 @@ describe('teardownConversationSandbox', () => {
     expect(calls.stop).toEqual(['sbx-existing']);
   });
 
-  it('given the VM stop throwing, should still remove the link and not throw (guaranteed teardown)', async () => {
+  it('given an unconfirmed VM stop, should KEEP the link and report not torn (no orphan), without throwing', async () => {
     const { store, calls: storeCalls } = makeStore(seedRecord());
     const { client } = makeClient({
       stop: async () => {
@@ -305,7 +305,9 @@ describe('teardownConversationSandbox', () => {
       reason: 'crash',
       deps: { store, client, secret: SECRET },
     });
-    expect(result).toEqual({ torn: true });
-    expect(storeCalls.remove).toBe(1);
+    // The VM may still be alive — deleting the link would orphan it. Keep the
+    // link so a retry or the idle reaper can reclaim it.
+    expect(result).toEqual({ torn: false });
+    expect(storeCalls.remove).toBe(0);
   });
 });

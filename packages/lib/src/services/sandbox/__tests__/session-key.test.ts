@@ -47,7 +47,11 @@ describe('deriveSessionKey', () => {
   it('given any inputs, should produce a namespaced, sandbox-name-safe key', () => {
     const key = deriveSessionKey(base);
     expect(key.startsWith('pgs-sbx-')).toBe(true);
-    // Only lowercase hex + the literal prefix — safe as a Vercel sandbox name.
+    // Only lowercase hex + the literal prefix — safe as a Sprite name.
     expect(key).toMatch(/^pgs-sbx-[0-9a-f]{64}$/);
+  });
+
+  it('given an empty secret, should throw (fail closed — never derive a guessable key)', () => {
+    expect(() => deriveSessionKey({ ...base, secret: '' })).toThrow(/non-empty secret/);
   });
 });

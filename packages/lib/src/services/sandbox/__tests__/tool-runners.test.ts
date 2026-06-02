@@ -207,9 +207,9 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
-  it('given a cwd that escapes the sandbox root, should deny path_escape before provisioning', async () => {
+  it('given a cwd that escapes the sandbox root, should deny path_escape, audit it, and never provision', async () => {
     let acquired = false;
-    const { deps } = makeDeps({
+    const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
         return { ok: true, sandboxId: 'sbx-1', resumed: false };
@@ -218,6 +218,9 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'ls', cwd: '../../etc', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'path_escape' });
     expect(acquired).toBe(false);
+    // The attempted cwd escape on the bash path must be audited, like writeFile/
+    // readFile path escapes — not silently dropped.
+    expect(audits[0]?.anomaly).toBe('blocked_command');
   });
 
   it('given a sh -c invocation, should pass the command as a structured arg array (no host shell string)', async () => {

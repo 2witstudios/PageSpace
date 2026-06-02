@@ -167,8 +167,18 @@ const defaultChargeDeps: ChargeBudgetDeps = {
  * The single real per-run budget charge: increment every scope (user, drive,
  * and — when known — tenant) exactly once. Call this only after a passing
  * preflight and a successful concurrency reservation, so a denied run never
- * charges. Charges run together; a sink failure rejects (the caller treats a
- * failed charge as an `error` denial rather than running uncharged).
+ * charges. Charges run together; a sink failure rejects and the caller treats a
+ * failed charge as an `error` denial rather than running uncharged.
+ *
+ * NOT atomic across scopes: each scope is an independent sliding-window key, and
+ * the distributed rate limiter exposes no multi-key transaction, so a partial
+ * failure (one scope incremented, a later one rejected) leaves those scopes
+ * charged for a run that does not execute. This skew is intentionally
+ * FAIL-SAFE — it over-counts, never under-counts, so it can only ever tighten a
+ * budget, never let a run exceed it; it cannot be driven by the actor (they do
+ * not control which sink fails). True cross-scope atomicity would require a
+ * transactional multi-key primitive in `distributed-rate-limit` and is tracked
+ * as a follow-up, not a blocker for a dark-shipped feature.
  */
 export async function chargeCodeExecutionBudget({
   userId,

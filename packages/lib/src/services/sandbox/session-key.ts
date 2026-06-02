@@ -1,7 +1,7 @@
 /**
  * Sandbox session-key derivation (pure).
  *
- * A conversation's warm sandbox is addressed by `Sandbox.getOrCreate({ name })`,
+ * A conversation's warm sandbox is addressed by `getOrCreate({ name })`,
  * so the name IS the access boundary: anyone who can name a sandbox can resume
  * it (subject to the resume re-authz gate in the lifecycle layer). The key must
  * therefore be both:
@@ -47,6 +47,12 @@ export function deriveSessionKey({
   conversationId,
   secret,
 }: SessionKeyInput): string {
+  // Fail closed at the boundary: an empty secret collapses the HMAC into a plain
+  // digest of public ids, making the sandbox name guessable. Don't rely solely on
+  // upstream env validation — refuse to derive a non-secret key here.
+  if (secret.length === 0) {
+    throw new Error('deriveSessionKey requires a non-empty secret');
+  }
   const payload = [NAMESPACE_VERSION, tenantId, driveId, conversationId].join('\0');
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-sbx-${digest}`;

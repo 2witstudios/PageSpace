@@ -2,11 +2,15 @@ name: Security Tests
 
 on:
   push:
-    branches: [master, develop]
+    branches: [master, develop, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/services/sandbox/**'
       - 'packages/db/src/schema/sandbox-sessions.ts'
+      - 'packages/db/drizzle/**'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools.ts'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts'
+      - 'apps/web/src/lib/ai/core/ai-tools.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
@@ -32,6 +36,10 @@ on:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/services/sandbox/**'
       - 'packages/db/src/schema/sandbox-sessions.ts'
+      - 'packages/db/drizzle/**'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools.ts'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts'
+      - 'apps/web/src/lib/ai/core/ai-tools.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'

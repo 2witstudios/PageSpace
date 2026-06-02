@@ -55,10 +55,38 @@ function getStore() {
 // path — and evaluate an unsupported SDK. Deferring it here keeps `@fly/sprites`
 // out of the graph until a sandbox tool actually runs (only possible once the
 // kill-switch is on), so the off-path never touches it.
+const MIN_SANDBOX_NODE_MAJOR = 24;
+
+// Deferring the import only protects the OFF path; the ENABLED path still has to
+// run on a compatible runtime. Fail CLOSED with an actionable message if a
+// Node < 24 process tries to load the SDK, so flipping the flag on a Node 22
+// image surfaces the deployment gate ("run the sandbox driver on Node 24+")
+// instead of a cryptic ESM/engine failure deep inside the SDK.
+function assertSandboxRuntime(): void {
+  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  if (Number.isNaN(major) || major < MIN_SANDBOX_NODE_MAJOR) {
+    throw new Error(
+      `Agent code execution requires Node.js >= ${MIN_SANDBOX_NODE_MAJOR} ` +
+        `(the @fly/sprites SDK is Node ${MIN_SANDBOX_NODE_MAJOR}+ / ESM-only); ` +
+        `this process is Node ${process.versions.node}. Run the sandbox driver on a ` +
+        `Node ${MIN_SANDBOX_NODE_MAJOR}+ runtime before enabling code execution.`,
+    );
+  }
+}
+
 function getSandboxClient(): Promise<ExecSandboxClient> {
-  sandboxClientPromise ??= import(
-    '@pagespace/lib/services/sandbox/sandbox-client/sprites'
-  ).then((m) => m.createSpritesSandboxClient());
+  sandboxClientPromise ??= (async () => {
+    assertSandboxRuntime();
+    const m = await import('@pagespace/lib/services/sandbox/sandbox-client/sprites');
+    return m.createSpritesSandboxClient();
+  })().catch((error) => {
+    // Never memoize a rejection: a transient lazy-load failure (or a fixable
+    // runtime/version misconfiguration) must not poison every later
+    // code-execution request in this process until a restart. Clear the cache so
+    // the next call retries the import.
+    sandboxClientPromise = null;
+    throw error;
+  });
   return sandboxClientPromise;
 }
 
