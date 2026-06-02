@@ -1,13 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
-// The module wires production DB-backed helpers at import time; stub those
-// boundaries so the factory can be exercised with injected fakes (no DB, no
-// real Vercel API). The tests only drive createSandboxTools.
-vi.mock('@pagespace/db/db', () => ({ db: { query: {} } }));
-vi.mock('@pagespace/db/operators', () => ({ eq: () => undefined }));
-vi.mock('@pagespace/db/schema/core', () => ({ drives: {} }));
-vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
-
+// The factory is provider-agnostic and imports no DB or backing-provider SDK, so
+// it is exercised directly with injected fakes (the production wiring + the Fly
+// Sprites driver live in sandbox-tools-runtime.ts).
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 
