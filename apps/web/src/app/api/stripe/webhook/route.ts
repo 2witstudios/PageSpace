@@ -6,6 +6,7 @@ import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions'
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,6 +63,8 @@ export async function POST(request: NextRequest) {
 
         case 'checkout.session.completed':
           await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+          // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
+          await applyStripeFunding(event);
           break;
 
         case 'invoice.payment_failed':
@@ -70,6 +73,8 @@ export async function POST(request: NextRequest) {
 
         case 'invoice.paid':
           await handleInvoicePaid(event.data.object as Stripe.Invoice);
+          // Reset the monthly credit bucket to the tier allowance on each renewal.
+          await applyStripeFunding(event);
           break;
 
         default:
