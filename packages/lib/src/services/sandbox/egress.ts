@@ -86,8 +86,9 @@ export function buildSpriteNetworkPolicy({
   }
   return {
     rules: [
-      // Internal surface denied first, via the SDK preset, so a widened allowlist
-      // can never reach it even if a later rule allowed `*`.
+      // Internal surface denied first, via the SDK preset — defence in depth on
+      // top of the allowlist sanitization, so a widened allowlist can never reach
+      // the internal surface regardless of later rules.
       { ...INCLUDE_DEFAULTS },
       ...hosts.map((domain): PolicyRule => ({ domain, action: 'allow' })),
       { ...DENY_ALL },
