@@ -251,6 +251,29 @@ describe('trackAIUsage', () => {
     expect(arg.costDollars).toBeGreaterThan(0);
   });
 
+  it('awaits persistence before returning so the write/charge cannot be dropped on a serverless freeze', async () => {
+    // Durability: trackAIUsage must not return until writeAiUsage AND the consume
+    // have settled. We resolve writeAiUsage on a later microtask and assert that,
+    // by the time the awaited trackAIUsage resolves, consumeCredits already ran —
+    // WITHOUT any post-call setTimeout flush. A fire-and-forget chain would fail this.
+    let resolveWrite!: (id: string) => void;
+    mockWriteAiUsage.mockReturnValueOnce(new Promise<string>((res) => { resolveWrite = res; }));
+    const tracked = trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(mockConsumeCredits).not.toHaveBeenCalled(); // write hasn't resolved yet
+    resolveWrite('aul_durable');
+    await tracked;
+    // No setTimeout(0) flush here — if trackAIUsage were fire-and-forget this would be empty.
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_durable', userId: 'user-1' }),
+    );
+  });
+
   it('does not debit credits when the call failed (success=false)', async () => {
     mockWriteAiUsage.mockResolvedValueOnce('aul_43');
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
@@ -405,6 +428,30 @@ describe('trackAIToolUsage', () => {
         metadata: expect.objectContaining({ type: 'tool_call', toolName: 'searchPages', toolId: 'tool-123' }),
       })
     );
+  });
+
+  it('propagates the awaited persistence promise so the tool-call path is durable too', async () => {
+    // trackAIToolUsage must RETURN trackAIUsage's promise — otherwise a caller that
+    // `await`s trackToolUsage resolves before writeAiUsage settles, and the analytics
+    // log can be dropped on a serverless freeze. We hold writeAiUsage open and assert
+    // the awaited trackAIToolUsage does NOT resolve until the write settles. A wrapper
+    // that didn't return the inner promise would resolve immediately and fail this.
+    let resolveWrite!: (id: string) => void;
+    mockWriteAiUsage.mockReturnValueOnce(new Promise<string>((res) => { resolveWrite = res; }));
+    let resolved = false;
+    const tracked = trackAIToolUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      toolName: 'searchPages',
+      success: true,
+    }).then(() => { resolved = true; });
+    await Promise.resolve(); // flush microtasks — write is still pending
+    expect(resolved).toBe(false);
+    resolveWrite('aul_tool');
+    await tracked;
+    expect(resolved).toBe(true);
+    expect(mockWriteAiUsage).toHaveBeenCalledTimes(1);
   });
 });
 
