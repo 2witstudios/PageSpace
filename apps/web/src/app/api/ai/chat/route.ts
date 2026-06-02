@@ -17,6 +17,8 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
@@ -435,6 +437,25 @@ export async function POST(request: Request) {
         subscriptionTier: user?.subscriptionTier
       });
       return createSubscriptionRequiredResponse();
+    }
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
+    if (!creditGate.allowed) {
+      loggers.ai.warn('AI Chat API: Out of AI credits', {
+        userId,
+        provider: currentProvider,
+        model: currentModel,
+        reason: creditGate.reason,
+      });
+      return NextResponse.json(
+        {
+          error: 'out_of_credits',
+          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+        },
+        { status: 402 }
+      );
     }
 
     // Usage tracking will be handled in onFinish callback for PageSpace providers only

@@ -37,6 +37,8 @@ import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
@@ -66,6 +68,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
     const userName = user.name || user.email?.split('@')[0] || 'there';
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    // This is the on-demand (user-triggered) Pulse path; the cron path is intentionally
+    // NOT gated so a failed bill can't 500 the batch.
+    const creditGate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier);
+    if (!creditGate.allowed) {
+      loggers.api.warn('Pulse generate: Out of AI credits', { userId, reason: creditGate.reason });
+      return NextResponse.json(
+        {
+          error: 'out_of_credits',
+          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+        },
+        { status: 402 }
+      );
+    }
 
     // Determine timezone: use client-provided, then stored preference, then UTC
     const userTimezone = clientTimezone || normalizeTimezone(user?.timezone);

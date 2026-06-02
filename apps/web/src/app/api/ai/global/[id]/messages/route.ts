@@ -5,6 +5,8 @@ import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
@@ -437,6 +439,32 @@ export async function POST(
         limit: currentUsage.limit,
         conversationId
       });
+    }
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    {
+      const [gateUser] = await db
+        .select({ subscriptionTier: users.subscriptionTier })
+        .from(users)
+        .where(eq(users.id, userId));
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+      if (!creditGate.allowed) {
+        loggers.api.warn('Global Assistant Chat API: Out of AI credits', {
+          userId: maskIdentifier(userId),
+          provider: currentProvider,
+          model: currentModel,
+          reason: creditGate.reason,
+          conversationId,
+        });
+        return NextResponse.json(
+          {
+            error: 'out_of_credits',
+            message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+          },
+          { status: 402 }
+        );
+      }
     }
 
     loggers.api.debug('Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });
@@ -975,39 +1003,39 @@ MENTION PROCESSING:
 
             loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
 
-            // Track detailed AI usage (tokens, cost, etc.)
+            // Track detailed AI usage (tokens, cost, etc.).
+            // ALWAYS log a row — even when the provider returns no usage metadata —
+            // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
+            // row, not a skipped one (which would silently front the spend).
             try {
               const usage = usagePromise ? await usagePromise : undefined;
+              const duration = Date.now() - startTime;
 
-              if (usage && usage.totalTokens && usage.totalTokens > 0) {
-                const duration = Date.now() - startTime;
-
-                await AIMonitoring.trackUsage({
-                  userId: userId!,
-                  provider: currentProvider,
-                  model: currentModel,
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                  totalTokens: usage.totalTokens,
-                  duration,
-                  conversationId,
-                  messageId,
-                  success: true,
-                  contextMessages: contextCalculation.messageIds,
-                  contextSize: contextCalculation.totalTokens,
-                  systemPromptTokens: contextCalculation.systemPromptTokens,
-                  toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
-                  conversationTokens: contextCalculation.conversationTokens,
-                  messageCount: contextCalculation.messageCount,
-                  wasTruncated: contextCalculation.wasTruncated,
-                  truncationStrategy: contextCalculation.truncationStrategy,
-                  metadata: {
-                    toolCallsCount: extractedToolCalls.length,
-                    toolResultsCount: extractedToolResults.length,
-                    isReadOnly: readOnlyMode,
-                  }
-                });
-              }
+              await AIMonitoring.trackUsage({
+                userId: userId!,
+                provider: currentProvider,
+                model: currentModel,
+                inputTokens: usage?.inputTokens,
+                outputTokens: usage?.outputTokens,
+                totalTokens: usage?.totalTokens,
+                duration,
+                conversationId,
+                messageId,
+                success: true,
+                contextMessages: contextCalculation.messageIds,
+                contextSize: contextCalculation.totalTokens,
+                systemPromptTokens: contextCalculation.systemPromptTokens,
+                toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+                conversationTokens: contextCalculation.conversationTokens,
+                messageCount: contextCalculation.messageCount,
+                wasTruncated: contextCalculation.wasTruncated,
+                truncationStrategy: contextCalculation.truncationStrategy,
+                metadata: {
+                  toolCallsCount: extractedToolCalls.length,
+                  toolResultsCount: extractedToolResults.length,
+                  isReadOnly: readOnlyMode,
+                }
+              });
             } catch (trackingError) {
               loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
                 conversationId: maskIdentifier(conversationId),

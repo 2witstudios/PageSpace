@@ -1009,6 +1009,13 @@
       "when": 1780351641885,
       "tag": "0143_yielding_praxagora",
       "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1780359398054,
+      "tag": "0144_big_valkyrie",
+      "breakpoints": true
     }
   ]
 }
