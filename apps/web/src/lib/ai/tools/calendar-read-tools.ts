@@ -8,6 +8,7 @@ import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { type ToolExecutionContext } from '../core';
+import { driveOutsideMcpScope, filterDriveIdsByMcpScope } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 
 /**
@@ -15,8 +16,15 @@ import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNa
  */
 async function canAccessEvent(
   userId: string,
-  event: typeof calendarEvents.$inferSelect
+  event: typeof calendarEvents.$inferSelect,
+  context?: ToolExecutionContext
 ): Promise<boolean> {
+  // A scoped MCP token may never reach a drive-tied event outside its scope,
+  // even one it created (no-op for unscoped callers / personal events).
+  if (context && event.driveId && driveOutsideMcpScope(context, event.driveId)) {
+    return false;
+  }
+
   // Creator always has access
   if (event.createdById === userId) {
     return true;
@@ -238,6 +246,10 @@ export const calendarReadTools = {
             };
           }
 
+          if (driveOutsideMcpScope(ctx as ToolExecutionContext, driveId)) {
+            return { success: false, error: 'This token does not have access to this drive.' };
+          }
+
           const canView = await isUserDriveMember(userId, driveId);
           if (!canView) {
             return {
@@ -324,8 +336,12 @@ export const calendarReadTools = {
           };
         }
 
-        // User context: aggregate events from all sources
-        const driveIds = await getDriveIdsForUser(userId);
+        // User context: aggregate events from all sources. Ceiling a scoped MCP
+        // token to its allowed drives (no-op for unscoped callers).
+        const driveIds = filterDriveIdsByMcpScope(
+          ctx as ToolExecutionContext,
+          await getDriveIdsForUser(userId),
+        );
         const conditions = [];
 
         // Personal events
@@ -398,23 +414,30 @@ export const calendarReadTools = {
           orderBy: [desc(calendarEvents.startAt)],
         });
 
+        // Final ceiling: drop any drive-tied event outside a scoped MCP token's
+        // drives (e.g. reached via the attendee branch). No-op for unscoped
+        // callers; personal events (no driveId) are unaffected.
+        const scopedEvents = events.filter(
+          (e) => !e.driveId || !driveOutsideMcpScope(ctx as ToolExecutionContext, e.driveId),
+        );
+
         const userTzForList = (ctx as ToolExecutionContext)?.timezone;
-        const triggerMapAll = await fetchTriggerInfoForEvents(events);
-        const formattedEvents = events.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
+        const triggerMapAll = await fetchTriggerInfoForEvents(scopedEvents);
+        const formattedEvents = scopedEvents.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
 
         return {
           success: true,
           data: { events: formattedEvents },
-          summary: `Found ${events.length} event${events.length === 1 ? '' : 's'} from ${startDate} to ${endDate}`,
+          summary: `Found ${scopedEvents.length} event${scopedEvents.length === 1 ? '' : 's'} from ${startDate} to ${endDate}`,
           stats: {
-            eventCount: events.length,
+            eventCount: scopedEvents.length,
             dateRange: { start: startDate, end: endDate },
             context: 'user',
             includedDrives: driveIds.length,
             includePersonal,
           },
           nextSteps:
-            events.length > 0
+            scopedEvents.length > 0
               ? [
                   'Use get_calendar_event to see full details of a specific event',
                   'Use create_calendar_event to schedule new meetings',
@@ -488,7 +511,7 @@ export const calendarReadTools = {
         }
 
         // Check access
-        const hasAccess = await canAccessEvent(userId, event);
+        const hasAccess = await canAccessEvent(userId, event, ctx as ToolExecutionContext);
         if (!hasAccess) {
           return {
             success: false,
@@ -608,6 +631,9 @@ export const calendarReadTools = {
 
         // Validate drive access if specified
         if (driveId) {
+          if (driveOutsideMcpScope(ctx as ToolExecutionContext, driveId)) {
+            return { success: false, error: 'This token does not have access to this drive.' };
+          }
           const canView = await isUserDriveMember(userId, driveId);
           if (!canView) {
             return {
@@ -617,8 +643,12 @@ export const calendarReadTools = {
           }
         }
 
-        // Get user's events in the date range
-        const driveIds = driveId ? [driveId] : await getDriveIdsForUser(userId);
+        // Get user's events in the date range. Ceiling a scoped MCP token to its
+        // allowed drives (no-op for unscoped callers).
+        const driveIds = filterDriveIdsByMcpScope(
+          ctx as ToolExecutionContext,
+          driveId ? [driveId] : await getDriveIdsForUser(userId),
+        );
         const conditions = [];
 
         // Personal events (user is creator, no drive)
@@ -662,9 +692,17 @@ export const calendarReadTools = {
             startAt: true,
             endAt: true,
             allDay: true,
+            driveId: true,
           },
           orderBy: [calendarEvents.startAt],
         });
+
+        // Final ceiling: a scoped MCP token must not learn the timing of
+        // out-of-scope drive events via the creator/attendee branches above
+        // (no-op for unscoped callers; personal events have no driveId).
+        const scopedEvents = events.filter(
+          (e) => !e.driveId || !driveOutsideMcpScope(ctx as ToolExecutionContext, e.driveId),
+        );
 
         // Find free slots using user's timezone for working hour boundaries
         const userTz = normalizeTimezone((ctx as ToolExecutionContext)?.timezone);
@@ -672,7 +710,7 @@ export const calendarReadTools = {
         const freeSlots: Array<{ start: string; end: string; durationMinutes: number }> = [];
 
         // Create busy intervals from events
-        const busyIntervals = events.map((e) => ({
+        const busyIntervals = scopedEvents.map((e) => ({
           start: e.startAt.getTime(),
           end: e.endAt.getTime(),
         }));

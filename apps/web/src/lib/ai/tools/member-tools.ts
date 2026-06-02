@@ -8,6 +8,7 @@ import { userProfiles } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
+import { driveOutsideMcpScope } from './actor-permissions';
 
 export const memberTools = {
   list_drive_members: tool({
@@ -18,6 +19,10 @@ export const memberTools = {
     execute: async ({ driveId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) throw new Error('User authentication required');
+
+      if (driveOutsideMcpScope(context as ToolExecutionContext, driveId)) {
+        return { success: false, error: 'This token does not have access to this drive' };
+      }
 
       const access = await checkDriveAccess(driveId, userId);
       if (!access.drive) return { success: false, error: 'Drive not found' };

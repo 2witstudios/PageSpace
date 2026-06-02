@@ -7,6 +7,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => []),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -44,6 +45,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn().mockResolvedValue(true),
+  canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -67,6 +69,18 @@ vi.mock('@/lib/ai/core', () => ({
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
+  pageSpaceTools: {},
+  filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('@/lib/ai/tools/tool-exposure', () => ({
+  applyToolExposureMode: vi.fn((tools: unknown) => ({ tools, toolDiscoveryPrompt: '' })),
+}));
+
+vi.mock('@/lib/ai/tools/finish-tool', () => ({
+  finishTool: {},
+  FINISH_TOOL_NAME: 'finish',
 }));
 
 vi.mock('@/lib/subscription/usage-service', () => ({
@@ -109,7 +123,7 @@ import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { sanitizeMessagesForModel } from '@/lib/ai/core';
@@ -153,6 +167,7 @@ describe('POST /api/v1/chat/completions', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([agentPage]),
@@ -235,6 +250,18 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'return 404 Not Found',
       actual: response.status,
       expected: 404,
+    });
+  });
+
+  test('returns 403 when the caller can view but cannot edit the agent page', async () => {
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(canUserEditPage).mockResolvedValue(false);
+    const response = await POST(makeRequest(validBody));
+    assert({
+      given: 'a view-only caller (no edit permission) on an agent that exposes write tools',
+      should: 'return 403 so a view-only user cannot drive server-side tool writes',
+      actual: response.status,
+      expected: 403,
     });
   });
 

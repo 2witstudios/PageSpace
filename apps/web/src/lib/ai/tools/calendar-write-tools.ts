@@ -18,6 +18,7 @@ import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-serv
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
+import { driveOutsideMcpScope } from './actor-permissions';
 import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
@@ -153,6 +154,9 @@ export const calendarWriteTools = {
 
         // Validate drive access if driveId is provided
         if (driveId) {
+          if (driveOutsideMcpScope(ctx as ToolExecutionContext, driveId)) {
+            return { success: false, error: 'This token does not have access to this drive.' };
+          }
           const canAccess = await isUserDriveMember(userId, driveId);
           if (!canAccess) {
             return {
@@ -183,6 +187,9 @@ export const calendarWriteTools = {
           if (agent.isTrashed) return { success: false, error: `Agent "${agent.title}" is in trash.` };
           if (!agent.driveId) return { success: false, error: 'Cannot trigger a personal agent page. Use a drive-based agent.' };
           if (agent.driveId !== driveId) {
+            if (driveOutsideMcpScope(ctx as ToolExecutionContext, agent.driveId)) {
+              return { success: false, error: 'This token does not have access to the drive containing this agent.' };
+            }
             const canAccessAgentDrive = await isUserDriveMember(userId, agent.driveId);
             if (!canAccessAgentDrive) return { success: false, error: 'You do not have access to the drive containing this agent.' };
           }
@@ -198,6 +205,9 @@ export const calendarWriteTools = {
             if (instrPage.isTrashed) return { success: false, error: 'Instruction page is in trash.' };
             if (!instrPage.driveId) return { success: false, error: 'Cannot use a personal page as instructions.' };
             if (instrPage.driveId !== driveId) {
+              if (driveOutsideMcpScope(ctx as ToolExecutionContext, instrPage.driveId)) {
+                return { success: false, error: 'This token does not have access to the instruction page drive.' };
+              }
               const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
               if (!canAccessInstrDrive) return { success: false, error: 'You do not have access to the instruction page drive.' };
             }
@@ -460,6 +470,12 @@ export const calendarWriteTools = {
           };
         }
 
+        // A scoped MCP token may only touch events whose drive is in scope,
+        // even for events it created in another drive (no-op for unscoped callers).
+        if (event.driveId && driveOutsideMcpScope(ctx as ToolExecutionContext, event.driveId)) {
+          return { success: false, error: 'This token does not have access to this event’s drive.' };
+        }
+
         // Check edit permission
         const editCheck = await canEditEvent(userId, event);
         if (!editCheck.canEdit) {
@@ -678,6 +694,12 @@ export const calendarWriteTools = {
             success: false,
             error: 'Event not found.',
           };
+        }
+
+        // A scoped MCP token may only touch events whose drive is in scope,
+        // even for events it created in another drive (no-op for unscoped callers).
+        if (event.driveId && driveOutsideMcpScope(ctx as ToolExecutionContext, event.driveId)) {
+          return { success: false, error: 'This token does not have access to this event’s drive.' };
         }
 
         // Check edit permission
