@@ -317,7 +317,7 @@ describe('teardownConversationSandbox', () => {
     expect(calls.stop).toEqual(['sbx-existing']);
   });
 
-  it('given the VM stop throwing, should still remove the link and not throw (guaranteed teardown)', async () => {
+  it('given the VM stop throwing (UNCONFIRMED), should keep the link and not throw (no orphaned-VM leak)', async () => {
     const { store, calls: storeCalls } = makeStore(seedRecord());
     const { client } = makeClient({
       stop: async () => {
@@ -329,7 +329,9 @@ describe('teardownConversationSandbox', () => {
       reason: 'crash',
       deps: { store, client, secret: SECRET },
     });
-    expect(result).toEqual({ torn: true });
-    expect(storeCalls.remove).toBe(1);
+    // Stop unconfirmed -> the VM may still be alive, so the link is RETAINED for a
+    // later retry rather than dropped as if the teardown succeeded.
+    expect(result).toEqual({ torn: false });
+    expect(storeCalls.remove).toBe(0);
   });
 });
