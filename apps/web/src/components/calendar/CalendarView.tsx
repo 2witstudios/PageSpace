@@ -82,7 +82,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   const [showTasks, setShowTasks] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
-  const [deepLinkHandled, setDeepLinkHandled] = useState(false);
+  // Track which deep-linked event id we've already opened, so a second event
+  // link clicked on the same page (no remount) still opens.
+  const [handledDeepLinkId, setHandledDeepLinkId] = useState<string | null>(null);
   const [newEventDefaults, setNewEventDefaults] = useState<{
     startAt: Date;
     endAt: Date;
@@ -111,16 +113,26 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     includeTasks: showTasks,
   });
 
-  // Open the deep-linked event once it appears in the loaded set (one-shot).
+  // Open the deep-linked event once it appears in the loaded set. Keyed on the
+  // event id (not a one-shot flag) so clicking a different event link while
+  // already on the calendar opens the new event too. If the target isn't in the
+  // current window yet, jump the view to its date so the fetch includes it.
   useEffect(() => {
-    if (!deepLinkEventId || deepLinkHandled) return;
+    if (!deepLinkEventId || deepLinkEventId === handledDeepLinkId) return;
     const match = events.find((e) => e.id === deepLinkEventId);
     if (match) {
       setSelectedEvent(match);
       setIsEventModalOpen(true);
-      setDeepLinkHandled(true);
+      setHandledDeepLinkId(deepLinkEventId);
+      return;
     }
-  }, [deepLinkEventId, deepLinkHandled, events]);
+    if (deepLinkDate) {
+      const target = new Date(deepLinkDate);
+      if (!isNaN(target.getTime()) && target.getTime() !== currentDate.getTime()) {
+        setCurrentDate(target);
+      }
+    }
+  }, [deepLinkEventId, deepLinkDate, handledDeepLinkId, events, currentDate]);
 
   // Drive filtering (root calendar only)
   const drives = useDriveStore((s) => s.drives);
