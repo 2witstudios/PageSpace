@@ -51,6 +51,12 @@
 # Detects and deletes file records with zero references + physical files
 0 6 * * 0 cron-curl GET __WEB_URL__/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
 
+# Credit reconcile - Every 10 minutes
+# Re-settles ledger rows stuck 'pending' and bills usage rows that never
+# decremented the prepaid balance, so every AI call is charged exactly once
+# across crashes/deploys. Local-only — makes no Stripe calls.
+*/10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3). Short cadence matches the 5-minute default
