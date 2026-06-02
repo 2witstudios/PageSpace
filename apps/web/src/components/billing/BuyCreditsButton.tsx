@@ -13,6 +13,7 @@ import {
 import { CreditCard, Loader2 } from 'lucide-react';
 import { post } from '@/lib/auth/auth-fetch';
 import { CREDIT_PACK_LIST, formatCreditDollars } from '@/lib/subscription/credits';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 
 interface BuyCreditsButtonProps {
   /** Visual variant for the trigger button. */
@@ -36,6 +37,7 @@ export function BuyCreditsButton({
   className,
   label = 'Buy credits',
 }: BuyCreditsButtonProps) {
+  const { showBilling } = useBillingVisibility();
   const [loadingPackId, setLoadingPackId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +59,11 @@ export function BuyCreditsButton({
   };
 
   const isLoading = loadingPackId !== null;
+
+  // Hide on iOS Capacitor (App Store policy — no in-app Stripe purchases) and on
+  // billing-disabled deployments. Self-hiding here keeps every call site compliant,
+  // including the out-of-credits chat error CTAs.
+  if (!showBilling) return null;
 
   return (
     <div className={className}>
