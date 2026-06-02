@@ -6,7 +6,7 @@ import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions'
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
-import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { applyStripeFunding, type FundingEvent } from '@pagespace/lib/billing/credit-funding';
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
         case 'checkout.session.completed':
           await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
           // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
-          await applyStripeFunding(event);
+          await fundOrLetStripeRetry(event);
           break;
 
         case 'invoice.payment_failed':
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         case 'invoice.paid':
           await handleInvoicePaid(event.data.object as Stripe.Invoice);
           // Reset the monthly credit bucket to the tier allowance on each renewal.
-          await applyStripeFunding(event);
+          await fundOrLetStripeRetry(event);
           break;
 
         default:
@@ -111,6 +111,31 @@ export async function POST(request: NextRequest) {
       { error: 'Webhook processing failed' },
       { status: 500 }
     );
+  }
+}
+
+/**
+ * Run prepaid-credit funding for a paid event, making a funding failure RETRYABLE.
+ *
+ * The stripeEvents idempotency marker is committed BEFORE processing, so a swallowed
+ * funding failure would be lost forever: Stripe's redelivery would short-circuit as
+ * "already processed" (the insert above conflicts and returns 200), and the local
+ * backfill cron reconciles only usage rows, not Stripe funding. To keep paid credit
+ * from vanishing on a transient DB error, we delete that marker on a funding failure
+ * and rethrow — the webhook then returns 500 and Stripe redelivers, reprocessing the
+ * event. Funding is idempotent on creditLedger.stripeRef, so the balance is credited
+ * exactly once even though the event is processed twice.
+ *
+ * Safe to reprocess: the handlers that run before funding are no-ops/log-only on the
+ * funding-relevant events — handleInvoicePaid only logs, and handleCheckoutCompleted
+ * acts only for mode 'subscription' (a credit-pack top-up is mode 'payment').
+ */
+async function fundOrLetStripeRetry(event: FundingEvent) {
+  try {
+    await applyStripeFunding(event);
+  } catch (fundingError) {
+    await db.delete(stripeEvents).where(eq(stripeEvents.id, event.id));
+    throw fundingError;
   }
 }
 

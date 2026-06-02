@@ -16,11 +16,11 @@
  *     so a redelivered Stripe event credits the balance exactly once.
  *   - Atomic: the ledger insert and the balance write share one transaction, so a
  *     failure rolls back both — funding is all-or-nothing, never half-applied.
- *   - Safe: never throws into the webhook. A funding failure is logged and the
- *     subscription/payment record is unaffected; the balance is simply not updated
- *     for that event. (Recovery is not automatic — the webhook's coarse
- *     stripeEvents guard means a swallowed failure won't be retried by Stripe — so
- *     funding failures are surfaced via the logs above for operator follow-up.)
+ *   - Retryable: a genuine failure (e.g. a transient DB/transaction error) is logged
+ *     and RE-THROWN, not swallowed, so the webhook can let Stripe redeliver the
+ *     event. Because funding keys on stripeRef, a reprocess credits exactly once.
+ *     Non-actionable cases (billing disabled, ignored events, unknown customer,
+ *     missing ids) return quietly — they are "nothing to do", not failures.
  */
 
 import { db } from '@pagespace/db/db';
@@ -261,8 +261,9 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
  * classifier, then runs the matching funding path. A no-op when billing is
  * disabled (tenant/onprem), for tier_change events (the next invoice.paid refills
  * at the new allowance — tier persistence is handled by the subscription handler),
- * and for ignored events. Never throws: a funding failure is logged and swallowed
- * so the webhook's subscription/payment handling and 200 response are unaffected.
+ * and for ignored events. On a genuine failure it logs and RE-THROWS so the caller
+ * (the webhook) can surface a non-2xx and let Stripe redeliver; funding is
+ * idempotent on stripeRef, so a reprocess credits exactly once.
  */
 export async function applyStripeFunding(event: FundingEvent): Promise<void> {
   if (!isBillingEnabled()) return; // tenant/onprem credit via the control plane, not Stripe
@@ -281,10 +282,15 @@ export async function applyStripeFunding(event: FundingEvent): Promise<void> {
         break;
     }
   } catch (error) {
+    // Log with funding context, then rethrow: the webhook clears the processed-event
+    // marker on a funding failure so Stripe's redelivery reprocesses (otherwise the
+    // coarse stripeEvents guard would short-circuit the retry and the paid credit
+    // would be lost permanently).
     loggers.api.error(
-      'credit funding failed',
+      'credit funding failed; rethrowing so Stripe can redeliver',
       error instanceof Error ? error : undefined,
       { eventId: event.id, kind: action.kind },
     );
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
