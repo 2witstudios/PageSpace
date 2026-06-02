@@ -74,14 +74,16 @@ export type SubdomainValidationResult =
  * and strip any leading/trailing hyphens.
  */
 export const normalizeSubdomain = (input: string): string => {
-  return input
-    .toString()
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '')
+  // Collapse every run of non-alphanumerics (hyphens included) into a single '-'.
+  // After this pass the value holds only [a-z0-9] and single '-' separators.
+  const collapsed = input.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-');
+  // Strip leading/trailing separators with a linear scan rather than anchored
+  // `/^-+/` + `/-+$/` regexes, which are polynomial (ReDoS) on long '-' runs.
+  let start = 0;
+  let end = collapsed.length;
+  while (start < end && collapsed[start] === '-') start += 1;
+  while (end > start && collapsed[end - 1] === '-') end -= 1;
+  return collapsed.slice(start, end);
 }
 
 /**
