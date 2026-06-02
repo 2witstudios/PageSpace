@@ -194,18 +194,20 @@ function runSpawned(
       // a not-yet-dead command must not grow memory past the run we already ended.
       if (settled) return len;
       const buf = toBuffer(chunk);
-      chunks.push(buf);
       const next = len + buf.length;
       if (next > maxBuffer) {
-        // Output flood: SIGKILL the firehose and fail, mirroring the SDK's own
-        // maxBuffer-exceeded behaviour (a DoS guard on host memory).
+        // Output flood: SIGKILL the firehose and fail WITHOUT retaining the
+        // overflowing chunk, so buffered memory never exceeds the cap (a DoS
+        // guard on host memory).
         try {
           command.kill('SIGKILL');
         } catch {
           // Best-effort kill; the wall-clock timer / idle reaper still bound it.
         }
         fail(new SandboxOutputLimitError(maxBuffer));
+        return len;
       }
+      chunks.push(buf);
       return next;
     };
 
