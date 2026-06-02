@@ -5,6 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -127,6 +128,15 @@ export async function POST(request: Request): Promise<Response> {
   // Always inject the finish tool so the agentic loop can terminate cleanly.
   filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
+  // Load the caller's timezone so time-aware tools (calendar, task triggers)
+  // resolve dates in the user's zone instead of defaulting to UTC, matching
+  // the in-app page chat (apps/web/src/app/api/ai/chat/route.ts:833).
+  const [user] = await db
+    .select({ timezone: users.timezone })
+    .from(users)
+    .where(eq(users.id, authResult.userId));
+  const userTimezone = user?.timezone ?? undefined;
+
   // 8. Build message context and save new user message
   const isThreadMode = incomingConversationId !== undefined;
   const conversationId = isThreadMode ? incomingConversationId : createId();
@@ -166,6 +176,7 @@ export async function POST(request: Request): Promise<Response> {
     experimental_context: {
       userId: authResult.userId,
       conversationId,
+      timezone: userTimezone,
       aiProvider: page.aiProvider ?? undefined,
       aiModel: page.aiModel ?? undefined,
       modelCapabilities: await getModelCapabilities(
