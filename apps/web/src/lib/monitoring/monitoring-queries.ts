@@ -516,9 +516,21 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 }
 
 // Reusable SQL aggregate expressions over the ledger usage rows.
-const realCostSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.realCostCents})), 0)::int`;
-const chargedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.amountCents})), 0)::int`;
+//
+// IMPORTANT (sub-cent accuracy): a single cheap-model call can cost a fraction
+// of a cent. The ledger stores the PRECISE charge in `chargeMillicents`
+// (1/1000 cent) and the precise real cost lives in `aiUsageLogs.cost` (dollars);
+// the whole-cent `amountCents`/`realCostCents` columns are per-row rounded for
+// audit. Summing the rounded columns would round high-volume sub-cent traffic to
+// $0 and report a bogus margin — so we SUM the precise fields and round ONCE at
+// the end. `appliedCents` is exempt: it is the whole-cent amount actually debited
+// (the sub-cent remainder is banked in pendingMillicents), so its sum is exact.
+const realCostSum = sql<number>`ROUND(COALESCE(SUM(${aiUsageLogs.cost}::numeric), 0) * 100)::int`;
+const chargedSum = sql<number>`ROUND(COALESCE(SUM(COALESCE(${creditLedger.chargeMillicents}, ABS(${creditLedger.amountCents}) * 1000)), 0) / 1000.0)::int`;
 const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 0)::int`;
+// Debt comes from 'adjustment' rows, which carry only the whole-cent shortfall in
+// `amountCents` (no chargeMillicents) — so debt is summed from amountCents.
+const debtSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.amountCents})), 0)::int`;
 
 /** Usage-row conditions: entryType='usage' plus optional aiUsageLogs.timestamp range. */
 function usageConditions(startDate?: Date, endDate?: Date): SQL[] {
@@ -555,7 +567,7 @@ export async function getUnitEconomicsSummary(
   if (endDate) debtConditions.push(lte(creditLedger.createdAt, endDate));
 
   const debt = await db
-    .select({ debtCents: chargedSum })
+    .select({ debtCents: debtSum })
     .from(creditLedger)
     .where(and(...debtConditions));
 
@@ -692,13 +704,13 @@ export async function getOutstandingDebtByUser(
       userId: creditLedger.userId,
       userName: users.name,
       userEmail: users.email,
-      debtCents: chargedSum,
+      debtCents: debtSum,
     })
     .from(creditLedger)
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...conditions))
     .groupBy(creditLedger.userId, users.name, users.email)
-    .orderBy(desc(chargedSum))
+    .orderBy(desc(debtSum))
     .limit(limit);
 
   return rows.map((r) => ({

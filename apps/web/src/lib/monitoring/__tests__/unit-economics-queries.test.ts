@@ -65,6 +65,7 @@ vi.mock('@pagespace/db/schema/credits', () => ({
     bucket: 'CREDIT_LEDGER_BUCKET',
     amountCents: 'CREDIT_LEDGER_AMOUNT_CENTS',
     appliedCents: 'CREDIT_LEDGER_APPLIED_CENTS',
+    chargeMillicents: 'CREDIT_LEDGER_CHARGE_MILLICENTS',
     realCostCents: 'CREDIT_LEDGER_REAL_COST_CENTS',
     aiUsageLogId: 'CREDIT_LEDGER_AI_USAGE_LOG_ID',
     createdAt: 'CREDIT_LEDGER_CREATED_AT',
