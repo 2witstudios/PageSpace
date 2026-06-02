@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 # Install dependencies only when needed
-FROM node:22.17.0-alpine AS deps
+FROM node:24.16.0-alpine AS deps
 WORKDIR /app
 
 COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
@@ -31,7 +31,7 @@ COPY tsconfig.json ./
 COPY types ./types
 
 # Rebuild the source code only when needed
-FROM node:22.17.0-alpine AS builder
+FROM node:24.16.0-alpine AS builder
 WORKDIR /app
 
 COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
@@ -71,7 +71,7 @@ RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" bun run build
 ENV NODE_ENV=production
 
 # Production image, copy all the files and run next
-FROM node:22.17.0-alpine AS runner
+FROM node:24.16.0-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
