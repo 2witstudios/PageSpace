@@ -169,6 +169,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn(
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { saveMessageToDatabase } from '@/lib/ai/core';
 import { streamText } from 'ai';
 
 const mockUserId = 'user_123';
@@ -210,6 +211,9 @@ describe('POST /api/ai/chat - prepaid credit gate', () => {
     const body = await response.json();
     expect(body.error).toBe('out_of_credits');
     expect(streamText).not.toHaveBeenCalled();
+    // Side-effect-free denial: the user message must NOT be persisted, so a
+    // retry after a 402 cannot create orphan user-only messages.
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
   });
 
   it('does not block with a 402 when the gate allows', async () => {

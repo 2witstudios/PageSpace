@@ -314,10 +314,38 @@ export async function POST(
     // Parse web search mode (defaults to false - disabled)
     const webSearchMode = webSearchEnabled === true;
 
+    // Prepaid credit gate: block out-of-credits users BEFORE any DB writes — the
+    // user-message persistence and conversation metadata update happen below.
+    // Running the gate first keeps a denied request side-effect free, so an
+    // out-of-credits user (or a client retrying after a 402) can't leave a
+    // visible user-only message / conversation update with no model response.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    {
+      const [gateUser] = await db
+        .select({ subscriptionTier: users.subscriptionTier })
+        .from(users)
+        .where(eq(users.id, userId));
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+      if (!creditGate.allowed) {
+        loggers.api.warn('Global Assistant Chat API: Out of AI credits', {
+          userId: maskIdentifier(userId),
+          reason: creditGate.reason,
+          conversationId,
+        });
+        return NextResponse.json(
+          {
+            error: 'out_of_credits',
+            message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+          },
+          { status: 402 }
+        );
+      }
+    }
+
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
-    
+
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
     if (userMessage && userMessage.role === 'user') {
@@ -439,32 +467,6 @@ export async function POST(
         limit: currentUsage.limit,
         conversationId
       });
-    }
-
-    // Prepaid credit gate: block out-of-credits users before any model invocation.
-    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
-    {
-      const [gateUser] = await db
-        .select({ subscriptionTier: users.subscriptionTier })
-        .from(users)
-        .where(eq(users.id, userId));
-      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
-      if (!creditGate.allowed) {
-        loggers.api.warn('Global Assistant Chat API: Out of AI credits', {
-          userId: maskIdentifier(userId),
-          provider: currentProvider,
-          model: currentModel,
-          reason: creditGate.reason,
-          conversationId,
-        });
-        return NextResponse.json(
-          {
-            error: 'out_of_credits',
-            message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
-          },
-          { status: 402 }
-        );
-      }
     }
 
     loggers.api.debug('Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });

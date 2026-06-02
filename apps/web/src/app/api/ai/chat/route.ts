@@ -258,10 +258,50 @@ export async function POST(request: Request) {
       userId: maskedUserId,
       chatId: maskedChatId,
     });
-    
-    loggers.ai.info('AI Chat API: Validation passed', { 
-      messageCount: messages.length, 
-      chatId 
+
+    // Resolve the user's provider/model + enforce both pre-model gates (Pro
+    // subscription and prepaid credits) BEFORE any DB writes — conversation
+    // creation, user-message persistence, and mention notifications all happen
+    // below. Running the gates first keeps a denied request side-effect free, so
+    // an out-of-credits user (or a client retrying after a 402) can't create
+    // orphan user-only messages or notifications with no assistant response.
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
+    const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+
+    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier)) {
+      loggers.ai.warn('AI Chat API: Pro subscription required', {
+        userId,
+        provider: currentProvider,
+        model: currentModel,
+        subscriptionTier: user?.subscriptionTier
+      });
+      return createSubscriptionRequiredResponse();
+    }
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
+    if (!creditGate.allowed) {
+      loggers.ai.warn('AI Chat API: Out of AI credits', {
+        userId,
+        provider: currentProvider,
+        model: currentModel,
+        reason: creditGate.reason,
+      });
+      return NextResponse.json(
+        {
+          error: 'out_of_credits',
+          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+        },
+        { status: 402 }
+      );
+    }
+
+    loggers.ai.info('AI Chat API: Validation passed', {
+      messageCount: messages.length,
+      chatId
     });
 
     // Get page configuration for custom agent settings (needed early for message saving)
@@ -409,11 +449,6 @@ export async function POST(request: Request) {
         }, { status: 500 });
       }
     }
-    
-    // Get user's current AI provider settings
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
-    const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
 
     // Kick off the userProfiles displayName fetch early so it overlaps with downstream
     // setup (rate-limit checks, tool resolution, conversation load) and never blocks the
@@ -424,39 +459,6 @@ export async function POST(request: Request) {
       .where(eq(userProfiles.userId, userId))
       .limit(1)
       .catch(() => [] as { displayName: string | null }[]);
-
-    // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
-
-    // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier)) {
-      loggers.ai.warn('AI Chat API: Pro subscription required', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-        subscriptionTier: user?.subscriptionTier
-      });
-      return createSubscriptionRequiredResponse();
-    }
-
-    // Prepaid credit gate: block out-of-credits users before any model invocation.
-    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
-    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
-    if (!creditGate.allowed) {
-      loggers.ai.warn('AI Chat API: Out of AI credits', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-        reason: creditGate.reason,
-      });
-      return NextResponse.json(
-        {
-          error: 'out_of_credits',
-          message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
-        },
-        { status: 402 }
-      );
-    }
 
     // Usage tracking will be handled in onFinish callback for PageSpace providers only
     loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {

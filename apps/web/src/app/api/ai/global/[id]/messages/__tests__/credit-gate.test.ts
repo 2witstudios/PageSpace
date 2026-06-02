@@ -278,6 +278,9 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(body.error).toBe('out_of_credits');
     expect(streamText).not.toHaveBeenCalled();
     expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    // Side-effect-free denial: the user message must NOT be persisted, so a
+    // retry after a 402 cannot leave a visible user-only message.
+    expect(mockSaveGlobalAssistantMessageToDatabase).not.toHaveBeenCalled();
   });
 
   it('does not block with a 402 when the gate allows', async () => {
