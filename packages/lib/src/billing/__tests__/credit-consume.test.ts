@@ -104,6 +104,35 @@ describe('consumeCredits', () => {
     });
   });
 
+  it('excludes an expired monthly bucket at settle (use-it-or-lose-it) and draws top-up only', async () => {
+    // Paid user past their monthly window: gate allowed via top-up. Settlement must
+    // NOT spend the expired monthly (allocateSpend draws monthly-first by default).
+    // cost $1 -> 150¢. Expired monthly 300, topup 1000 -> monthly zeroed, topup 850.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_exp' }]));
+    const captured: { balanceSet?: Record<string, number>; ledgerSet?: Record<string, unknown> } = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const tx = {
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{
+          monthlyRemainingCents: 300,
+          topupRemainingCents: 1000,
+          pendingMillicents: 0,
+          monthlyPeriodEnd: new Date(Date.now() - 60 * 60 * 1000), // expired 1h ago
+        }]) }) }) }),
+        update: vi.fn()
+          .mockReturnValueOnce({ set: (v: Record<string, number>) => { captured.balanceSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } })
+          .mockReturnValueOnce({ set: (v: Record<string, unknown>) => { captured.ledgerSet = v; return { where: vi.fn().mockResolvedValue(undefined) }; } }),
+        insert: vi.fn().mockReturnValue({ values: () => Promise.resolve(undefined) }),
+      };
+      await cb(tx);
+    });
+
+    await consumeCredits({ aiUsageLogId: 'aul_exp', userId: 'u1', costDollars: 1 });
+
+    // Expired monthly forfeited (zeroed), top-up charged the full 150¢.
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 850, pendingMillicents: 0 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150, bucket: 'topup' });
+  });
+
   it('does not insert a debt row when the balance fully covers the charge', async () => {
     mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_ok' }]));
     let insertCalled = false;

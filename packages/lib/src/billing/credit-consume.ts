@@ -67,7 +67,12 @@ async function decrementAndSettle(
     .where(eq(creditBalances.userId, userId))
     .for('update');
   const bal = rows[0] as
-    | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number }
+    | {
+        monthlyRemainingCents: number;
+        topupRemainingCents: number;
+        pendingMillicents: number;
+        monthlyPeriodEnd: Date | null;
+      }
     | undefined;
 
   // No balance row yet (e.g. an existing user before the gate lazy-inits one).
@@ -76,10 +81,21 @@ async function decrementAndSettle(
   // silently drop the charge and hide it from both backfill sweeps.
   if (!bal) return;
 
+  // Use-it-or-lose-it must hold at SETTLE too, not just at the gate. The gate
+  // excludes an expired monthly window from the spend decision (a paid user past
+  // their period can only spend top-up); settlement must match, or allocateSpend —
+  // which always draws monthly first — would silently consume that expired
+  // allowance. So treat an expired monthly bucket as 0 here: the call draws top-up
+  // only and the stale monthly is dropped (it was forfeit anyway; a renewal's
+  // invoice.paid overwrites it). A NULL period is treated as not-yet-expired; free
+  // users are rolled forward by the gate so their window is never expired at settle.
+  const monthlyExpired = bal.monthlyPeriodEnd != null && bal.monthlyPeriodEnd < new Date();
+  const spendableMonthly = monthlyExpired ? 0 : bal.monthlyRemainingCents;
+
   // Fold the sub-cent charge into the carried remainder, then spend the whole cents.
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);
   const spend = allocateSpend(
-    { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
+    { monthlyCents: spendableMonthly, topupCents: bal.topupRemainingCents },
     accrual.wholeCents,
   );
 

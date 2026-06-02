@@ -17,6 +17,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
@@ -104,6 +105,10 @@ export async function POST(request: Request) {
   let serverAssistantMessageId: string | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // True once the stream/error handler owns the hold's release. Any earlier
+  // return/throw must release the hold (a pre-generation exit doesn't invoke the
+  // model, so the reservation would otherwise sit until the reconcile cron sweeps it).
+  let holdHandedOff = false;
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
 
   try {
@@ -1101,7 +1106,9 @@ export async function POST(request: Request) {
     }
 
     loggers.ai.debug('AI Chat API: Returning visual-content-aware stream response');
-    
+
+    // The stream's onFinish now owns hold release (via AIMonitoring.trackUsage).
+    holdHandedOff = true;
     // Return the enhanced UI message stream response with visual content injection
     return result.toUIMessageStreamResponse();
 
@@ -1144,11 +1151,16 @@ export async function POST(request: Request) {
         cachedInputTokens: usage?.cachedInputTokens,
       }
     });
-    
+    // The error-path trackUsage above released the hold; don't double-release.
+    holdHandedOff = true;
+
     // Return a proper error response
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
+  } finally {
+    // Pre-generation early return: free the reservation the stream never took over.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }
 

@@ -5,6 +5,7 @@ import { isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
@@ -219,6 +220,11 @@ export async function POST(
   let activeStreamId: string | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // Becomes true once the stream owns the hold (its onFinish will release it via
+  // trackUsage). Until then, any early return/throw below must release the hold so a
+  // pre-generation exit (auth/permission/provider/save failure) doesn't strand the
+  // reservation against the user's balance + in-flight cap until the cron sweeps it.
+  let holdHandedOff = false;
   try {
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
@@ -1035,6 +1041,8 @@ MENTION PROCESSING:
 
     loggers.api.debug('Global Assistant Chat API: Returning stream response', {});
 
+    // The stream's onFinish now owns hold release (via AIMonitoring.trackUsage).
+    holdHandedOff = true;
     return createUIMessageStreamResponse({
       stream,
       headers: { [STREAM_ID_HEADER]: streamId },
@@ -1050,5 +1058,9 @@ MENTION PROCESSING:
     return NextResponse.json({
       error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
+  } finally {
+    // Pre-generation early return or throw: the stream never took ownership, so
+    // free the reservation now rather than waiting for the reconcile sweep.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }
