@@ -39,8 +39,8 @@ describe('mapPolicyToSandboxOptions', () => {
   });
 
   it('given an explicit region in the policy, should carry it through unchanged', () => {
-    const policy: ExecutionPolicy = { ...SAFE_MINIMUM_PROFILE, region: 'iad1' };
-    expect(mapPolicyToSandboxOptions({ policy }).region).toBe('iad1');
+    const policy: ExecutionPolicy = { ...SAFE_MINIMUM_PROFILE, region: 'iad' };
+    expect(mapPolicyToSandboxOptions({ policy }).region).toBe('iad');
   });
 
   it('given no policy, should fall back to the safe-minimum bounds (SDA default)', () => {

@@ -120,8 +120,8 @@ vi.mock('../../tools/member-tools', () => ({
 }));
 
 // Stub the sandbox tools so the builder can be exercised without loading the DB
-// module graph or the real Vercel client.
-vi.mock('../../tools/sandbox-tools', () => ({
+// module graph or the real Fly Sprites driver.
+vi.mock('../../tools/sandbox-tools-runtime', () => ({
   buildSandboxTools: () => ({
     bash: { name: 'bash', description: 'Run a shell command' },
     writeFile: { name: 'writeFile', description: 'Write a file' },

@@ -7,8 +7,9 @@ import {
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
-import type { ExecutableSandbox, SandboxRunResult } from '../vercel-sandbox-client';
+import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
+import { SANDBOX_ROOT } from '../sandbox-paths';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -267,7 +268,7 @@ describe('writeSandboxFile', () => {
     });
     const result = await writeSandboxFile({ path: 'a/b.txt', content: 'hi', ctx: makeCtx(), deps });
     expect(result).toEqual({ success: true, path: 'a/b.txt', bytesWritten: 2 });
-    expect(writtenPaths[0]).toBe('/vercel/sandbox/a/b.txt');
+    expect(writtenPaths[0]).toBe(`${SANDBOX_ROOT}/a/b.txt`);
     expect(slots.released).toBe(1);
   });
 });

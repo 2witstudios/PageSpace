@@ -46,7 +46,7 @@ describe('resolveExecutionPolicy', () => {
   });
 
   it('should set an explicit region rather than relying on a platform default', () => {
-    expect(resolveExecutionPolicy().region).toBe('iad1');
+    expect(resolveExecutionPolicy().region).toBe('iad');
   });
 
   it('should tag the resolved policy with the profile name it represents', () => {
