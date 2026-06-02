@@ -597,7 +597,10 @@ export const agentCommunicationTools = {
         // Bill the requesting user for the sub-agent run. Use totalUsage so all
         // tool-loop round-trips (up to stepCountIs(20)) are metered, not just the
         // final step. Tracked against the resolved model name so the cost is real.
-        AIMonitoring.trackUsage({
+        // Awaited (not fire-and-forget): trackAIUsage persists the usage log and
+        // debits the balance inside the returned promise, so awaiting here keeps the
+        // sub-agent charge durable if the tool returns into a serverless freeze.
+        await AIMonitoring.trackUsage({
           userId,
           provider: resolvedProvider,
           model: resolvedModelName,
