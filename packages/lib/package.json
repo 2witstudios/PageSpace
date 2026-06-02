@@ -62,6 +62,11 @@
       "import": "./dist/billing/credit-backfill.js",
       "require": "./dist/billing/credit-backfill.js"
     },
+    "./billing/credit-funding": {
+      "types": "./dist/billing/credit-funding.d.ts",
+      "import": "./dist/billing/credit-funding.js",
+      "require": "./dist/billing/credit-funding.js"
+    },
     "./billing/credit-core": {
       "types": "./dist/billing/credit-core.d.ts",
       "import": "./dist/billing/credit-core.js",
@@ -777,6 +782,9 @@
       ],
       "billing/credit-backfill": [
         "./dist/billing/credit-backfill.d.ts"
+      ],
+      "billing/credit-funding": [
+        "./dist/billing/credit-funding.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
