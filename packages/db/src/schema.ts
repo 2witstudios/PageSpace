@@ -39,6 +39,7 @@ export * from './schema/share-links';
 export * from './schema/zoom';
 export * from './schema/webhook-triggers';
 export * from './schema/drafts';
+export * from './schema/published-pages';
 export * from './schema/credits';
 
 import * as auth from './schema/auth';
@@ -82,6 +83,7 @@ import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
 import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
+import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
 
 export const schema = {
@@ -126,5 +128,6 @@ export const schema = {
   ...zoom,
   ...webhookTriggers,
   ...drafts,
+  ...publishedPages,
   ...credits,
 };

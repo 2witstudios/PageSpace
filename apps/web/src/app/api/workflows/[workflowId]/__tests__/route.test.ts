@@ -113,6 +113,7 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  publishSubdomain: null,
 });
 
 const mockWorkflow = {

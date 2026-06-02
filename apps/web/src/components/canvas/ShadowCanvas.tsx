@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import DOMPurify from 'dompurify';
-import { sanitizeCSS } from '@/lib/canvas/css-sanitizer';
+import { sanitizeCSS } from '@pagespace/lib/canvas/sanitize-css';
 import { remapDocumentSelectors } from '@/lib/canvas/remap-document-selectors';
 
 interface ShadowCanvasProps {

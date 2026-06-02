@@ -417,6 +417,16 @@
       "import": "./dist/validators/email.js",
       "require": "./dist/validators/email.js"
     },
+    "./validators/subdomain": {
+      "types": "./dist/validators/subdomain.d.ts",
+      "import": "./dist/validators/subdomain.js",
+      "require": "./dist/validators/subdomain.js"
+    },
+    "./canvas/sanitize-css": {
+      "types": "./dist/canvas/sanitize-css.d.ts",
+      "import": "./dist/canvas/sanitize-css.js",
+      "require": "./dist/canvas/sanitize-css.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -985,6 +995,12 @@
       ],
       "validators/email": [
         "./dist/validators/email.d.ts"
+      ],
+      "validators/subdomain": [
+        "./dist/validators/subdomain.d.ts"
+      ],
+      "canvas/sanitize-css": [
+        "./dist/canvas/sanitize-css.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

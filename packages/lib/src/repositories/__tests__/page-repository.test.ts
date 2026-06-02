@@ -406,3 +406,35 @@ describe('pageRepository.getChildIds', () => {
     expect(result).toHaveLength(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// getDirectChildren
+// ---------------------------------------------------------------------------
+describe('pageRepository.getDirectChildren', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns only direct live children with their revisions (non-recursive)', async () => {
+    const rows = [
+      { id: 'child-1', revision: 2 },
+      { id: 'child-2', revision: 5 },
+    ];
+    const whereFn = vi.fn().mockResolvedValue(rows);
+    const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
+
+    const result = await pageRepository.getDirectChildren('drive-1', 'page-1');
+
+    expect(result).toEqual(rows);
+    // Single query — does not recurse into grandchildren.
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns empty array when there are no children', async () => {
+    const whereFn = vi.fn().mockResolvedValue([]);
+    const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
+
+    const result = await pageRepository.getDirectChildren('drive-1', 'page-1');
+    expect(result).toEqual([]);
+  });
+});

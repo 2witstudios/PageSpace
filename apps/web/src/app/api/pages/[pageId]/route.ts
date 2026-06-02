@@ -251,7 +251,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       body = null;
     }
     const parsedBody = deleteSchema.parse(body);
-    const trashChildren = parsedBody?.trash_children ?? false;
+    const trashChildren = parsedBody?.trash_children ?? true;
 
     const isMCP = isMCPAuthResult(auth);
     const result = await pageService.trashPage(pageId, userId, {

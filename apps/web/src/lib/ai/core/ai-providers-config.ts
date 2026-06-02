@@ -4,6 +4,19 @@
  */
 
 /**
+ * OpenRouter response-cache TTL in seconds. Matches OpenRouter's default for the
+ * `X-OpenRouter-Cache` header, so we don't need to send an explicit TTL header.
+ */
+export const OPENROUTER_CACHE_TTL_SECONDS = 300;
+
+/**
+ * Granularity (ms) the AI system-prompt timestamp is floored to. Derived from the
+ * cache TTL so the two can never drift: a repeat request inside one cache window
+ * produces a byte-identical request body, which is what lets the cache HIT.
+ */
+export const TIMESTAMP_BUCKET_MS = OPENROUTER_CACHE_TTL_SECONDS * 1000;
+
+/**
  * PageSpace Model Aliases
  * Allows agents to use friendly names (standard/pro) instead of underlying model IDs.
  * This abstraction lets agents update their model without knowing the specific backend model.

@@ -76,6 +76,7 @@ const createDriveFixture = (overrides: {
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  publishSubdomain: null,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({

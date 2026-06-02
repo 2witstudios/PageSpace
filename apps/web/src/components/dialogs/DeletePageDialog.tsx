@@ -28,22 +28,27 @@ export function DeletePageDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
           <AlertDialogDescription>
-            This action will move the page to the trash. You can restore it later.
+            {hasChildren
+              ? "This will move the page and everything inside it to the trash. You can restore it later, or choose to keep the contents by moving the page only."
+              : "This action will move the page to the trash. You can restore it later."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           {hasChildren ? (
             <>
-              <AlertDialogAction onClick={() => onConfirm(false)}>
-                Move Folder Only
+              <AlertDialogAction
+                onClick={() => onConfirm(false)}
+                className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              >
+                Move Page Only
               </AlertDialogAction>
               <AlertDialogAction onClick={() => onConfirm(true)}>
-                Move Folder and All Contents
+                Move Page and All Contents
               </AlertDialogAction>
             </>
           ) : (
-            <AlertDialogAction onClick={() => onConfirm(false)}>
+            <AlertDialogAction onClick={() => onConfirm(true)}>
               Move to Trash
             </AlertDialogAction>
           )}

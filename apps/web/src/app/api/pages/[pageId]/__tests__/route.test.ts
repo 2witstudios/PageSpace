@@ -775,8 +775,18 @@ describe('DELETE /api/pages/[pageId]', () => {
       );
     });
 
-    it('defaults trashChildren to false', async () => {
+    it('defaults trashChildren to true (cascade)', async () => {
       await DELETE(createRequest({}), { params: mockParams });
+
+      expect(pageService.trashPage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        { trashChildren: true }
+      );
+    });
+
+    it('honors an explicit trash_children: false (move children up)', async () => {
+      await DELETE(createRequest({ trash_children: false }), { params: mockParams });
 
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
@@ -877,7 +887,7 @@ describe('DELETE /api/pages/[pageId]', () => {
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
         mockUserId,
-        expect.objectContaining({ trashChildren: false })
+        expect.objectContaining({ trashChildren: true })
       );
     });
   });
@@ -891,7 +901,7 @@ describe('DELETE /api/pages/[pageId]', () => {
         'trash',
         mockPageId,
         expect.objectContaining({
-          trashChildren: false,
+          trashChildren: true,
           pageTitle: 'Test Page',
           pageType: 'DOCUMENT',
         })
