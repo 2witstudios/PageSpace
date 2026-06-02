@@ -718,7 +718,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   get_calendar_event: ({ parsedOutput }) => {
     const event = pickData(parsedOutput).event;
     if (!event || typeof event !== 'object') return null;
-    return <CalendarEventRenderer event={event as CalendarEventData} />;
+    return <CalendarEventRenderer event={event as unknown as CalendarEventData} />;
   },
 
   check_calendar_availability: ({ parsedOutput }) => {
@@ -733,14 +733,14 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     if (parsedOutput.success === false) return null;
     const data = pickData(parsedOutput);
     if (!data.title) return null;
-    return <CalendarEventRenderer event={data as CalendarEventData} actionLabel="Created" />;
+    return <CalendarEventRenderer event={data as unknown as CalendarEventData} actionLabel="Created" />;
   },
 
   update_calendar_event: ({ parsedOutput }) => {
     if (parsedOutput.success === false) return null;
     const data = pickData(parsedOutput);
     if (!data.title) return null;
-    return <CalendarEventRenderer event={data as CalendarEventData} actionLabel="Updated" />;
+    return <CalendarEventRenderer event={data as unknown as CalendarEventData} actionLabel="Updated" />;
   },
 
   delete_calendar_event: ({ parsedOutput }) => {
@@ -806,7 +806,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     if (parsedOutput.success === false || !parsedOutput.workflowId) return null;
     const trigger = parsedInput?.agentTrigger as { agentPageId?: string } | undefined;
     const workflow: WorkflowData = {
-      ...(parsedOutput as WorkflowData),
+      ...(parsedOutput as unknown as WorkflowData),
       agentPageId: trigger?.agentPageId,
       driveId: parsedInput?.driveId as string | undefined,
     };
@@ -817,7 +817,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     if (parsedOutput.success === false || !parsedOutput.workflowId) return null;
     const trigger = parsedInput?.agentTrigger as { agentPageId?: string } | undefined;
     const workflow: WorkflowData = {
-      ...(parsedOutput as WorkflowData),
+      ...(parsedOutput as unknown as WorkflowData),
       agentPageId: trigger?.agentPageId,
     };
     return <WorkflowCard workflow={workflow} />;
