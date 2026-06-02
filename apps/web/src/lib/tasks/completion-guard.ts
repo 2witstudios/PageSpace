@@ -35,3 +35,53 @@ export async function assertSubTasksComplete(taskPageId: string): Promise<void> 
     throw new SubtasksIncompleteError(pending, subTasks.length);
   }
 }
+
+/** HTTP status returned when a completion is blocked by incomplete sub-tasks. */
+export const SUBTASKS_INCOMPLETE_STATUS = 422 as const;
+
+/**
+ * Canonical, transport-agnostic description of a completion blocked by
+ * incomplete sub-tasks. Every entry point (AI tools, REST/MCP) shapes its
+ * response from this single payload so the reason is identical everywhere.
+ */
+export interface SubtasksBlockedPayload {
+  code: 'SUBTASKS_INCOMPLETE';
+  error: string;
+  pending: number;
+  total: number;
+}
+
+/** Map a SubtasksIncompleteError into the canonical blocked payload. */
+export function toBlockedPayload(e: SubtasksIncompleteError): SubtasksBlockedPayload {
+  return { code: e.code, error: e.message, pending: e.pending, total: e.total };
+}
+
+/** Shape the canonical payload as an AI SDK tool failure result. */
+export function toToolFailure(
+  p: SubtasksBlockedPayload,
+): { success: false } & SubtasksBlockedPayload {
+  return { success: false, ...p };
+}
+
+/**
+ * Run the sub-task completion guard for a task page.
+ *
+ * Returns `null` when completion is allowed, or the canonical
+ * SubtasksBlockedPayload when the task still has incomplete sub-tasks.
+ * Unexpected errors are rethrown. This is the single entry point all
+ * completion paths should use instead of calling assertSubTasksComplete +
+ * catching SubtasksIncompleteError themselves.
+ */
+export async function checkSubTasksComplete(
+  taskPageId: string,
+): Promise<SubtasksBlockedPayload | null> {
+  try {
+    await assertSubTasksComplete(taskPageId);
+    return null;
+  } catch (error) {
+    if (error instanceof SubtasksIncompleteError) {
+      return toBlockedPayload(error);
+    }
+    throw error;
+  }
+}

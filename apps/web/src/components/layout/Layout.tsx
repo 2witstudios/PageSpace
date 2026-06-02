@@ -11,7 +11,6 @@ import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { TabBar } from "@/components/layout/tabs";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
-import { useResponsivePanels } from "@/hooks/useResponsivePanels";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";
@@ -62,7 +61,6 @@ function Layout({ children }: LayoutProps) {
   const rightSidebarOpen = useLayoutStore(state => state.rightSidebarOpen);
   const toggleLeftSidebar = useLayoutStore(state => state.toggleLeftSidebar);
   const toggleRightSidebar = useLayoutStore(state => state.toggleRightSidebar);
-  const setLeftSidebarOpen = useLayoutStore(state => state.setLeftSidebarOpen);
   const setRightSidebarOpen = useLayoutStore(state => state.setRightSidebarOpen);
 
   // Mobile sheet state from store (allows other components to control sheets)
@@ -70,6 +68,10 @@ function Layout({ children }: LayoutProps) {
   const rightSheetOpen = useLayoutStore(state => state.rightSheetOpen);
   const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
   const setRightSheetOpen = useLayoutStore(state => state.setRightSheetOpen);
+
+  // Desktop overlay state (1024-1279px) — transient, starts closed each load
+  const leftOverlayOpen = useLayoutStore(state => state.leftOverlayOpen);
+  const setLeftOverlayOpen = useLayoutStore(state => state.setLeftOverlayOpen);
 
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
@@ -121,8 +123,6 @@ function Layout({ children }: LayoutProps) {
     [leftPanelVisible, rightPanelVisible, setLeftSidebarSize, setRightSidebarSize]
   );
 
-  useResponsivePanels();
-
   // Initialize socket connection for real-time features
   useSocket();
 
@@ -160,6 +160,15 @@ function Layout({ children }: LayoutProps) {
     }
   }, [isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
+  // Reset the transient desktop overlay when the layout is no longer in left-overlay
+  // mode (persistent >=1280px, or sheet mode), so re-entering overlay width always
+  // starts closed — matching first-load behavior and the sheet reset above.
+  useEffect(() => {
+    if ((!shouldOverlayLeftSidebar || isSheetBreakpoint) && leftOverlayOpen) {
+      setLeftOverlayOpen(false);
+    }
+  }, [shouldOverlayLeftSidebar, isSheetBreakpoint, leftOverlayOpen, setLeftOverlayOpen]);
+
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -181,13 +190,13 @@ function Layout({ children }: LayoutProps) {
 
     // Left sidebar is in overlay mode (desktop 1024-1279px): exclusive toggle
     if (shouldOverlayLeftSidebar) {
-      if (leftSidebarOpen) {
-        setLeftSidebarOpen(false);
+      if (leftOverlayOpen) {
+        setLeftOverlayOpen(false);
       } else {
         if (shouldOverlayRightSidebar && rightSidebarOpen) {
           setRightSidebarOpen(false);
         }
-        setLeftSidebarOpen(true);
+        setLeftOverlayOpen(true);
       }
       return;
     }
@@ -200,11 +209,11 @@ function Layout({ children }: LayoutProps) {
     rightSheetOpen,
     shouldOverlayLeftSidebar,
     shouldOverlayRightSidebar,
-    leftSidebarOpen,
+    leftOverlayOpen,
     rightSidebarOpen,
     setLeftSheetOpen,
     setRightSheetOpen,
-    setLeftSidebarOpen,
+    setLeftOverlayOpen,
     setRightSidebarOpen,
     toggleLeftSidebar,
   ]);
@@ -226,8 +235,8 @@ function Layout({ children }: LayoutProps) {
         setRightSidebarOpen(false);
       } else {
         // Only close left sidebar if left is also in overlay mode
-        if (shouldOverlayLeftSidebar && leftSidebarOpen) {
-          setLeftSidebarOpen(false);
+        if (shouldOverlayLeftSidebar && leftOverlayOpen) {
+          setLeftOverlayOpen(false);
         }
         setRightSidebarOpen(true);
       }
@@ -242,11 +251,11 @@ function Layout({ children }: LayoutProps) {
     rightSheetOpen,
     shouldOverlayLeftSidebar,
     shouldOverlayRightSidebar,
-    leftSidebarOpen,
+    leftOverlayOpen,
     rightSidebarOpen,
     setLeftSheetOpen,
     setRightSheetOpen,
-    setLeftSidebarOpen,
+    setLeftOverlayOpen,
     setRightSidebarOpen,
     toggleRightSidebar,
   ]);
@@ -338,7 +347,7 @@ function Layout({ children }: LayoutProps) {
               <div className={panelContainerClassName}>
                 <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                   <AnimatePresence>
-                    {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
+                    {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftOverlayOpen && (
                       <motion.div
                         key="left-sidebar"
                         initial={{ x: -320, opacity: 0, scale: 0.98 }}
@@ -389,7 +398,7 @@ function Layout({ children }: LayoutProps) {
                   </AnimatePresence>
                   <AnimatePresence>
                     {!isSheetBreakpoint && (
-                      (shouldOverlayLeftSidebar && leftSidebarOpen) ||
+                      (shouldOverlayLeftSidebar && leftOverlayOpen) ||
                       (shouldOverlayRightSidebar && rightSidebarOpen)
                     ) && (
                       <motion.button
@@ -402,8 +411,8 @@ function Layout({ children }: LayoutProps) {
                         className="absolute inset-0 z-30 bg-black/50 backdrop-blur-sm"
                         aria-label="Close side panels"
                         onClick={() => {
-                          if (shouldOverlayLeftSidebar && leftSidebarOpen) {
-                            setLeftSidebarOpen(false);
+                          if (shouldOverlayLeftSidebar && leftOverlayOpen) {
+                            setLeftOverlayOpen(false);
                           }
                           if (shouldOverlayRightSidebar && rightSidebarOpen) {
                             setRightSidebarOpen(false);

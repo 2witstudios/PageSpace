@@ -90,21 +90,18 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 vi.mock('@/lib/tasks/completion-guard', () => ({
-  assertSubTasksComplete: vi.fn().mockResolvedValue(undefined),
-  SubtasksIncompleteError: class SubtasksIncompleteError extends Error {
-    readonly code = 'SUBTASKS_INCOMPLETE' as const;
-    constructor(public readonly pending: number, public readonly total: number) {
-      super(`Complete all sub-tasks first (${pending} of ${total} remaining)`);
-      this.name = 'SubtasksIncompleteError';
-    }
-  },
+  checkSubTasksComplete: vi.fn().mockResolvedValue(null),
+  toToolFailure: (p: { code: string; error: string; pending: number; total: number }) => ({
+    success: false,
+    ...p,
+  }),
 }));
 
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core';
-import { assertSubTasksComplete, SubtasksIncompleteError } from '@/lib/tasks/completion-guard';
+import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -286,9 +283,12 @@ describe('task-management-tools', () => {
         });
         mockCanUserEditPage.mockResolvedValue(true);
         mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
-        vi.mocked(assertSubTasksComplete).mockRejectedValueOnce(
-          new SubtasksIncompleteError(2, 3)
-        );
+        vi.mocked(checkSubTasksComplete).mockResolvedValueOnce({
+          code: 'SUBTASKS_INCOMPLETE',
+          error: 'Complete all sub-tasks first (2 of 3 remaining)',
+          pending: 2,
+          total: 3,
+        });
 
         const context = {
           toolCallId: '1', messages: [],

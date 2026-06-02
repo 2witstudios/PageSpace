@@ -11,6 +11,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifySignupRegistration: vi.fn(),
 }));
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+  markEmailVerified: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/auth/send-verification-email', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
@@ -93,6 +99,8 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 import { POST } from '../route';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -629,6 +637,80 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toContain('inviteError=TOKEN_NOT_FOUND');
+    });
+  });
+
+  describe('email verification', () => {
+    it('non-invited signup sends a verification email and does not mark verified', async () => {
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalledWith({
+        userId: 'new-user-1',
+        email: 'user@example.com',
+        userName: 'Test User',
+      });
+    });
+
+    it('signup via a successfully consumed invite marks verified and sends no verification email', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive_invited',
+        invitedPageId: null,
+        connectionId: null,
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('signup via a successfully consumed CONNECTION invite also marks verified (inbox ownership proven)', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_conn' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('failed invite acceptance falls back to sending a verification email', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalled();
+    });
+
+    it('a verification-email failure does not fail the signup', async () => {
+      vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('SMTP down'));
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Failed to send passkey-signup verification email',
+        expect.objectContaining({ userId: 'new-user-1' }),
+      );
     });
   });
 });

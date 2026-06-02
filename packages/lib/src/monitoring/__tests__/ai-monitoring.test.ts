@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Hoisted mocks ─────────────────────────────────────────────────────────────
 const mockWriteAiUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAiLogger = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -19,6 +20,10 @@ const mockDbSelectFn = vi.hoisted(() => vi.fn());
 // From this test file (src/monitoring/__tests__/) → ../../logging/logger-database
 vi.mock('../../logging/logger-database', () => ({
   writeAiUsage: mockWriteAiUsage,
+}));
+
+vi.mock('../../billing/credit-consume', () => ({
+  consumeCredits: mockConsumeCredits,
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -127,6 +132,24 @@ describe('calculateCost', () => {
     expect(calculateCost('completely-unknown-model', 1_000_000, 1_000_000)).toBe(0);
   });
 
+  // Regression guard: every PageSpace-tier backend model must be priced. These are
+  // the resolved model ids that createAIProvider returns for the pagespace provider
+  // (standard -> glm-4.7, pro -> glm-5) plus the agent/chat default glm-4.5-air. If
+  // any of these is missing from AI_PRICING it meters at $0 and the platform eats the
+  // spend (see PR #1475 — glm-4.5-air was previously unpriced).
+  it.each(['glm-4.5-air', 'glm-4.7', 'glm-5'])(
+    'prices PageSpace-tier model "%s" above $0',
+    (model) => {
+      expect(calculateCost(model, 1_000_000, 1_000_000)).toBeGreaterThan(0);
+    }
+  );
+
+  it('prices glm-4.5-air at its published rate (0.35 in / 1.55 out per 1M)', () => {
+    expect(calculateCost('glm-4.5-air', 1_000_000, 1_000_000)).toBe(
+      Number((1.90).toFixed(6))
+    );
+  });
+
   it('should handle zero tokens', () => {
     expect(calculateCost('gpt-4o', 0, 0)).toBe(0);
   });
@@ -188,6 +211,17 @@ describe('getContextWindow', () => {
   it('should return correct value for anthropic model', () => {
     expect(getContextWindow('claude-3-5-sonnet-20241022')).toBe(200_000);
   });
+
+  // Drift guard: every priced model must declare a context window, otherwise
+  // getContextWindow() silently falls back to the 200k default and can truncate
+  // or trip provider-side context limits. Keep AI_PRICING and
+  // MODEL_CONTEXT_WINDOWS in lockstep when adding/removing models.
+  it('should have a MODEL_CONTEXT_WINDOWS entry for every AI_PRICING model', () => {
+    const missing = Object.keys(AI_PRICING).filter(
+      (model) => model !== 'default' && !(model in MODEL_CONTEXT_WINDOWS)
+    );
+    expect(missing).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -197,6 +231,38 @@ describe('trackAIUsage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockWriteAiUsage.mockResolvedValue(undefined);
+    mockConsumeCredits.mockResolvedValue(undefined);
+  });
+
+  it('debits credits with the returned usage-log id on a successful call', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_42');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_42', userId: 'user-1' }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBeGreaterThan(0);
+  });
+
+  it('does not debit credits when the call failed (success=false)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_43');
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('does not debit credits when no usage-log id is returned (write failed/skipped)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce(null); // writeAiUsage resolves string | null
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 10 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
   });
 
   it('should call writeAiUsage with computed cost and totals', async () => {

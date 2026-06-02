@@ -11,7 +11,7 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { getProviderTier, ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, ONPREM_ALLOWED_PROVIDERS, isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -424,10 +424,23 @@ export async function POST(request: Request) {
       .catch(() => [] as { displayName: string | null }[]);
 
     // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
+
+    const isAdminUser = user?.role === 'admin';
+
+    // Admin-only providers (e.g. paid OpenRouter) are restricted to global admins, even if a
+    // stored selection survives a role downgrade.
+    if (isAdminOnlyProvider(currentProvider) && !isAdminUser) {
+      loggers.ai.warn('AI Chat API: admin-only provider blocked for non-admin', {
+        userId,
+        provider: currentProvider,
+        model: currentModel,
+      });
+      return createAdminRestrictedResponse();
+    }
 
     // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier)) {
+    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier, isAdminUser)) {
       loggers.ai.warn('AI Chat API: Pro subscription required', {
         userId,
         provider: currentProvider,
@@ -494,7 +507,10 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    const { model } = providerResult;
+    // Use the resolved model name for billing. currentModel may be a PageSpace
+    // tier alias ('standard'/'pro') or an unpriced default ('glm-4.5-air'), which
+    // would meter at $0; providerResult.modelName is the real backend model id.
+    const { model, modelName: resolvedModelName } = providerResult;
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
@@ -1082,7 +1098,7 @@ export async function POST(request: Request) {
               await AIMonitoring.trackUsage({
                 userId: userId!,
                 provider: currentProvider,
-                model: currentModel,
+                model: resolvedModelName,
                 inputTokens,
                 outputTokens,
                 totalTokens,
@@ -1108,7 +1124,7 @@ export async function POST(request: Request) {
                   await AIMonitoring.trackToolUsage({
                     userId: userId!,
                     provider: currentProvider,
-                    model: currentModel,
+                    model: resolvedModelName,
                     toolName: toolCall.toolName,
                     toolId: toolCall.toolCallId,
                     args: undefined,
@@ -1302,7 +1318,14 @@ async function validateProviderModel(
   // Check subscription requirements for pro models
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
-    if (requiresProSubscription(provider, model, user?.subscriptionTier)) {
+    const isAdminUser = user?.role === 'admin';
+    if (isAdminOnlyProvider(provider) && !isAdminUser) {
+      return {
+        valid: false,
+        reason: 'This provider is restricted to administrators'
+      };
+    }
+    if (requiresProSubscription(provider, model, user?.subscriptionTier, isAdminUser)) {
       return {
         valid: false,
         reason: 'Pro or Business subscription required for this model'

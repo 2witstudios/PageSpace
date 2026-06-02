@@ -189,10 +189,11 @@ export async function writeAiUsage(usage: {
   messageCount?: number;
   wasTruncated?: boolean;
   truncationStrategy?: string;
-}): Promise<void> {
+}): Promise<string | null> {
+  const id = createId();
   try {
     await db.insert(aiUsageLogs).values({
-      id: createId(),
+      id,
       timestamp: new Date(),
       userId: usage.userId,
       provider: usage.provider,
@@ -228,8 +229,10 @@ export async function writeAiUsage(usage: {
         })(),
       } : {}),
     });
+    return id;
   } catch (error) {
     console.error('[Logger] Failed to write AI usage:', error);
+    return null;
   }
 }
 

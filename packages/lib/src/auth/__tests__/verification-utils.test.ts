@@ -36,6 +36,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   },
   users: {
     id: 'id',
+    email: 'email',
     emailVerified: 'emailVerified',
   },
 }));
@@ -54,6 +55,7 @@ import {
   createVerificationToken,
   verifyToken,
   markEmailVerified,
+  markEmailVerifiedForAddress,
   isEmailVerified,
 } from '../verification-utils';
 import { db } from '@pagespace/db/db';
@@ -117,6 +119,34 @@ describe('verification-utils', () => {
       const expectedExpiry = Date.now() + 30 * 60 * 1000;
       expect(Math.abs(expiresAt.getTime() - expectedExpiry)).toBeLessThan(5000);
     });
+
+    it('binds the token to a normalized email in metadata when provided', async () => {
+      const mockDelete = vi.fn();
+      const mockInsertValues = vi.fn();
+      vi.mocked(db.delete).mockReturnValue({ where: mockDelete } as never);
+      vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
+
+      await createVerificationToken({
+        userId: 'user-1',
+        type: 'email_verification',
+        email: 'User@Example.COM',
+      });
+
+      const insertCall = mockInsertValues.mock.calls[0][0];
+      expect(insertCall.metadata).toBe(JSON.stringify({ email: 'user@example.com' }));
+    });
+
+    it('stores null metadata when no email is bound', async () => {
+      const mockDelete = vi.fn();
+      const mockInsertValues = vi.fn();
+      vi.mocked(db.delete).mockReturnValue({ where: mockDelete } as never);
+      vi.mocked(db.insert).mockReturnValue({ values: mockInsertValues } as never);
+
+      await createVerificationToken({ userId: 'user-1', type: 'email_verification' });
+
+      const insertCall = mockInsertValues.mock.calls[0][0];
+      expect(insertCall.metadata).toBeNull();
+    });
   });
 
   describe('verifyToken', () => {
@@ -168,7 +198,7 @@ describe('verification-utils', () => {
       expect(result).toBeNull();
     });
 
-    it('should return userId and mark token as used when valid', async () => {
+    it('should return userId + metadata and mark token as used when valid', async () => {
       vi.mocked(db.query.verificationTokens.findFirst).mockResolvedValue({
         usedAt: null,
         expiresAt: new Date(Date.now() + 60000),
@@ -176,14 +206,39 @@ describe('verification-utils', () => {
         userId: 'user-1',
         id: 'token-1',
         tokenHash: 'hash',
+        metadata: JSON.stringify({ email: 'user@example.com' }),
       } as never);
 
-      const mockSet = vi.fn(() => ({ where: vi.fn() }));
+      // Atomic claim: update().set().where().returning() -> [{ id }]
+      const mockReturning = vi.fn().mockResolvedValue([{ id: 'token-1' }]);
+      const mockWhere = vi.fn(() => ({ returning: mockReturning }));
+      const mockSet = vi.fn(() => ({ where: mockWhere }));
       vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       const result = await verifyToken('some-token', 'email_verification');
-      expect(result).toBe('user-1');
+      expect(result).toEqual({ userId: 'user-1', metadata: JSON.stringify({ email: 'user@example.com' }) });
       expect(db.update).toHaveBeenCalledWith(verificationTokens);
+    });
+
+    it('should return null when the atomic claim is lost (already consumed)', async () => {
+      vi.mocked(db.query.verificationTokens.findFirst).mockResolvedValue({
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60000),
+        type: 'email_verification',
+        userId: 'user-1',
+        id: 'token-1',
+        tokenHash: 'hash',
+        metadata: null,
+      } as never);
+
+      // returning() resolves empty -> another request won the race
+      const mockReturning = vi.fn().mockResolvedValue([]);
+      const mockWhere = vi.fn(() => ({ returning: mockReturning }));
+      const mockSet = vi.fn(() => ({ where: mockWhere }));
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+      const result = await verifyToken('some-token', 'email_verification');
+      expect(result).toBeNull();
     });
   });
 
@@ -198,6 +253,33 @@ describe('verification-utils', () => {
       const setArg = (mockSet.mock.calls as unknown[][])[0][0] as { emailVerified: unknown };
       expect(setArg.emailVerified).toBeInstanceOf(Date);
       expect(Object.keys(setArg)).toEqual(['emailVerified']);
+    });
+  });
+
+  describe('markEmailVerifiedForAddress', () => {
+    it('returns true and marks verified when the address still matches', async () => {
+      const mockReturning = vi.fn().mockResolvedValue([{ id: 'user-1' }]);
+      const mockWhere = vi.fn(() => ({ returning: mockReturning }));
+      const mockSet = vi.fn(() => ({ where: mockWhere }));
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+      const result = await markEmailVerifiedForAddress('user-1', 'User@Example.com');
+
+      expect(result).toBe(true);
+      expect(db.update).toHaveBeenCalledWith(users);
+      const setArg = (mockSet.mock.calls as unknown[][])[0][0] as { emailVerified: unknown };
+      expect(setArg.emailVerified).toBeInstanceOf(Date);
+    });
+
+    it('returns false when the address no longer matches (no row updated)', async () => {
+      const mockReturning = vi.fn().mockResolvedValue([]);
+      const mockWhere = vi.fn(() => ({ returning: mockReturning }));
+      const mockSet = vi.fn(() => ({ where: mockWhere }));
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+      const result = await markEmailVerifiedForAddress('user-1', 'changed@example.com');
+
+      expect(result).toBe(false);
     });
   });
 

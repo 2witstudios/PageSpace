@@ -69,12 +69,12 @@ const ENV_KEYS = [
 
 const mockUserId = 'user_123';
 
-const mockSession = (userId: string): SessionAuthResult => ({
+const mockSession = (userId: string, role: 'user' | 'admin' = 'user'): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  role: 'user',
+  role,
   adminRoleVersion: 0,
 });
 
@@ -158,6 +158,26 @@ describe('AI settings route', () => {
       expect(body.providers.openrouter.isAvailable).toBe(false);
       expect(body.providers.pagespace.isAvailable).toBe(true);
       expect(body.providers.openrouter_free.isAvailable).toBe(true);
+    });
+
+    it('exposes paid openrouter to admins in cloud mode when configured', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'e';
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      // Admins additionally see the paid OpenRouter provider (gated on role, not tier).
+      expect(body.providers.openrouter.isAvailable).toBe(true);
+    });
+
+    it('masks paid openrouter for non-admins even when configured', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'e';
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.providers.openrouter.isAvailable).toBe(false);
     });
 
     it('marks openrouter_free unavailable in cloud mode when OPENROUTER_DEFAULT_API_KEY is unset', async () => {
@@ -248,6 +268,58 @@ describe('AI settings route', () => {
         provider: 'pagespace',
         model: 'glm-4.5-air',
       });
+    });
+
+    it('allows an admin to select paid openrouter in cloud mode when configured', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openrouter',
+        model: 'anthropic/claude-opus-4.7',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'openrouter',
+        model: 'anthropic/claude-opus-4.7',
+      });
+    });
+
+    it('lets an admin select a pro paid-openrouter model without a pro subscription', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'pagespace',
+        currentAiModel: 'glm-4.7',
+        subscriptionTier: 'free',
+      });
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openrouter',
+        model: 'anthropic/claude-opus-4.7',
+      }));
+
+      expect(response.status).toBe(200);
+      // Admins bypass the subscription gate — it must be told the caller is an admin.
+      expect(requiresProSubscription).toHaveBeenCalledWith('openrouter', 'anthropic/claude-opus-4.7', 'free', true);
+    });
+
+    it('returns 503 when a non-admin tries to select paid openrouter', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openrouter',
+        model: 'anthropic/claude-opus-4.7',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body.error).toContain('not available on this instance');
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 
     it('returns 503 for non-user-visible providers in cloud mode', async () => {
