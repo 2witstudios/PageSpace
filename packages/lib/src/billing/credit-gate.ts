@@ -22,10 +22,21 @@ import { evaluateGate, computeMonthlyRefill, type GateResult } from './credit-co
 import { RESERVE_FLOOR_CENTS, TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
-/** One month after `from`, as a new Date (calendar month, UTC-safe). */
-function addOneMonth(from: Date): Date {
+/**
+ * One calendar month after `from`, clamped to the last valid day of the target
+ * month so a month-end start doesn't overflow. Naive `setUTCMonth(+1)` turns
+ * Jan 31 into Mar 3 (Feb has no 31st), which would make a "monthly" window longer
+ * than a month and delay the next allowance reset for users initialized near
+ * month end. Clamping maps Jan 31 -> Feb 28/29. Time-of-day is preserved.
+ * Exported for direct edge-case testing.
+ */
+export function addOneMonth(from: Date): Date {
   const d = new Date(from.getTime());
+  const day = d.getUTCDate();
+  d.setUTCDate(1); // avoid overflow while we shift the month
   d.setUTCMonth(d.getUTCMonth() + 1);
+  const lastDayOfTarget = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDayOfTarget));
   return d;
 }
 

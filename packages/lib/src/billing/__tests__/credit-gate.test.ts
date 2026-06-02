@@ -23,7 +23,30 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 
-import { canConsumeAI } from '../credit-gate';
+import { canConsumeAI, addOneMonth } from '../credit-gate';
+
+describe('addOneMonth', () => {
+  const at = (iso: string) => new Date(iso);
+
+  it('advances a mid-month date by one calendar month, preserving time-of-day', () => {
+    expect(addOneMonth(at('2026-01-15T08:30:00.000Z')).toISOString()).toBe('2026-02-15T08:30:00.000Z');
+  });
+
+  it('clamps a month-end start to the last valid day instead of overflowing', () => {
+    // Jan 31 -> Feb 28 (non-leap), NOT Mar 3.
+    expect(addOneMonth(at('2026-01-31T00:00:00.000Z')).toISOString()).toBe('2026-02-28T00:00:00.000Z');
+    // Mar 31 -> Apr 30.
+    expect(addOneMonth(at('2026-03-31T12:00:00.000Z')).toISOString()).toBe('2026-04-30T12:00:00.000Z');
+  });
+
+  it('clamps to Feb 29 in a leap year', () => {
+    expect(addOneMonth(at('2028-01-31T00:00:00.000Z')).toISOString()).toBe('2028-02-29T00:00:00.000Z');
+  });
+
+  it('rolls over the year for a December start', () => {
+    expect(addOneMonth(at('2026-12-31T00:00:00.000Z')).toISOString()).toBe('2027-01-31T00:00:00.000Z');
+  });
+});
 
 function selectReturning(rows: unknown[]) {
   return { from: () => ({ where: () => ({ limit: () => Promise.resolve(rows) }) }) };
