@@ -48,6 +48,13 @@ function getStore() {
   return storePromise;
 }
 
+// `@fly/sprites` declares `engines.node >= 24` and uses runtime APIs (global
+// WebSocket, …) not guaranteed on the Node 22 web runtime. Until the driver runs
+// on a Node >= 24 service (see TODO below) the web process must FAIL CLOSED before
+// loading the SDK rather than throw a cryptic ESM/engine error on the first real
+// sandbox call.
+const REQUIRED_NODE_MAJOR = 24;
+
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one:
 // `@fly/sprites` is ESM-only and declares `engines.node >= 24`, while the web
 // images run Node 22. A static import would pull the SDK into the module graph
@@ -55,10 +62,32 @@ function getStore() {
 // path — and evaluate an unsupported SDK. Deferring it here keeps `@fly/sprites`
 // out of the graph until a sandbox tool actually runs (only possible once the
 // kill-switch is on), so the off-path never touches it.
+//
+// TODO(agent-code-exec): relocate the Sprites driver to a Node >= 24 runtime
+// (the processor or a dedicated sandbox service) and call it over an internal
+// API, so the Node 22 web process never loads the SDK at all. Tracked separately;
+// until then the guard below keeps the enabled path fail-closed with a clear error.
+async function loadSandboxClient(): Promise<ExecSandboxClient> {
+  const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  if (Number.isFinite(nodeMajor) && nodeMajor < REQUIRED_NODE_MAJOR) {
+    throw new Error(
+      `Agent code execution requires Node >= ${REQUIRED_NODE_MAJOR} to load the @fly/sprites driver, but this ` +
+        `runtime is Node ${process.versions.node}. Run the sandbox driver on a Node ${REQUIRED_NODE_MAJOR}+ service ` +
+        `before enabling CODE_EXECUTION_ENABLED.`,
+    );
+  }
+  const m = await import('@pagespace/lib/services/sandbox/sandbox-client/sprites');
+  return m.createSpritesSandboxClient();
+}
+
 function getSandboxClient(): Promise<ExecSandboxClient> {
-  sandboxClientPromise ??= import(
-    '@pagespace/lib/services/sandbox/sandbox-client/sprites'
-  ).then((m) => m.createSpritesSandboxClient());
+  // Memoize the live client, but NEVER memoize a rejection: a one-off import or
+  // construction failure must not poison every later request until restart, so
+  // clear the cache in the failure path and let the next call retry.
+  sandboxClientPromise ??= loadSandboxClient().catch((error) => {
+    sandboxClientPromise = null;
+    throw error;
+  });
   return sandboxClientPromise;
 }
 
