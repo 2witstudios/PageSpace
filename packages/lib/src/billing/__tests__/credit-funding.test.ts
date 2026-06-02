@@ -65,6 +65,23 @@ function balanceUpsert(cap: Captured) {
   };
 }
 
+// Ensure-row insert in the top-up path: .values({userId}).onConflictDoNothing({target}).
+function ensureRowInsert() {
+  return { values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }) };
+}
+
+// Build the tx the top-up path drives: ledger insert -> ensure-row insert ->
+// SELECT ... FOR UPDATE (returns `existingTopup`) -> UPDATE (captured).
+function topupTx(cap: Captured, ledgerReturned: Array<{ id: string }>, existingTopup: number) {
+  return {
+    insert: vi.fn()
+      .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
+      .mockReturnValueOnce(ensureRowInsert()),
+    select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ topupRemainingCents: existingTopup }]) }) }) }),
+    update: () => ({ set: (v: Record<string, unknown>) => { cap.balanceSet = v; return { where: () => Promise.resolve(undefined) }; } }),
+  };
+}
+
 // resolveUser(): db.select({...}).from(users).where(...).limit(1) -> rows
 function userSelectReturning(rows: Array<{ id: string; subscriptionTier: string }>) {
   return { from: () => ({ where: () => ({ limit: () => Promise.resolve(rows) }) }) };
@@ -137,18 +154,12 @@ describe('applyStripeFunding', () => {
     });
   });
 
-  it('credit-pack checkout adds to the top-up bucket and writes a topup_purchase row', async () => {
+  it('credit-pack checkout adds to the existing top-up bucket and writes a topup_purchase row', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-      const tx = {
-        insert: vi.fn()
-          .mockReturnValueOnce(ledgerInsert([{ id: 'led_2' }], cap))
-          .mockReturnValueOnce(balanceUpsert(cap)),
-        // existing top-up balance of 1000 cents, locked for update
-        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ topupRemainingCents: 1000 }]) }) }) }),
-      };
-      await cb(tx);
+      // existing top-up balance of 1000 cents, locked for update
+      await cb(topupTx(cap, [{ id: 'led_2' }], 1000));
     });
 
     await applyStripeFunding(topupEvent);
@@ -160,8 +171,23 @@ describe('applyStripeFunding', () => {
       amountCents: 2500,
       stripeRef: 'cs_123',
     });
-    // applyTopup(1000, 2500) = 3500
+    // applyTopup(1000, 2500) = 3500 — the pack is ADDED, not reset.
     expect(cap.balanceSet).toEqual({ topupRemainingCents: 3500 });
+  });
+
+  it('credit-pack checkout for a first-time buyer (no balance row) credits the full pack, race-safe', async () => {
+    // Regression guard: the path ensures a balance row exists, then reads it under
+    // FOR UPDATE, so two concurrent first purchases can't both read 0 and clobber
+    // each other. Here the freshly-ensured row reads 0 -> applyTopup(0, 2500) = 2500.
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(topupTx(cap, [{ id: 'led_3' }], 0));
+    });
+
+    await applyStripeFunding(topupEvent);
+
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500 });
   });
 
   it('declares the partial-index predicate as the ON CONFLICT arbiter on the funding ledger insert', async () => {

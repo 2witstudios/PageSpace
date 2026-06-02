@@ -14,10 +14,13 @@
  *     onConflictDoNothing against the partial unique index (credit_ledger_stripe_ref_unique),
  *     and the balance mutation only runs when that insert actually inserted a row —
  *     so a redelivered Stripe event credits the balance exactly once.
- *   - Atomic: the ledger insert and the balance write share one transaction.
- *   - Safe: never throws into the webhook. A funding failure is logged; the
- *     subscription/payment record is unaffected and Stripe's retry (or the reconcile
- *     cron) will re-deliver.
+ *   - Atomic: the ledger insert and the balance write share one transaction, so a
+ *     failure rolls back both — funding is all-or-nothing, never half-applied.
+ *   - Safe: never throws into the webhook. A funding failure is logged and the
+ *     subscription/payment record is unaffected; the balance is simply not updated
+ *     for that event. (Recovery is not automatic — the webhook's coarse
+ *     stripeEvents guard means a swallowed failure won't be retried by Stripe — so
+ *     funding failures are surfaced via the logs above for operator follow-up.)
  */
 
 import { db } from '@pagespace/db/db';
@@ -212,21 +215,28 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
     // credited. Do not add it again.
     if (inserted.length === 0) return;
 
+    // Ensure a balance row exists FIRST, so the FOR UPDATE below always locks a real
+    // row. Without this, two concurrent first-time purchases (distinct session ids —
+    // their ledger inserts don't serialize each other) would both read 0 from a
+    // non-existent row, both compute applyTopup(0, pack), and the second write would
+    // overwrite the first: a lost top-up on a money path. The lock makes the
+    // read-add-write atomic so both increments apply.
+    await tx
+      .insert(creditBalances)
+      .values({ userId: user.id })
+      .onConflictDoNothing({ target: creditBalances.userId });
+
     const rows = await tx
       .select({ topupRemainingCents: creditBalances.topupRemainingCents })
       .from(creditBalances)
       .where(eq(creditBalances.userId, user.id))
       .for('update');
-    const current = rows[0]?.topupRemainingCents ?? 0;
-    const newTopup = applyTopup(current, packCents);
+    const newTopup = applyTopup(rows[0].topupRemainingCents, packCents);
 
     await tx
-      .insert(creditBalances)
-      .values({ userId: user.id, topupRemainingCents: newTopup })
-      .onConflictDoUpdate({
-        target: creditBalances.userId,
-        set: { topupRemainingCents: newTopup },
-      });
+      .update(creditBalances)
+      .set({ topupRemainingCents: newTopup })
+      .where(eq(creditBalances.userId, user.id));
   });
 
   loggers.api.info('credit funding: top-up applied', {
@@ -241,8 +251,8 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
  * classifier, then runs the matching funding path. A no-op when billing is
  * disabled (tenant/onprem), for tier_change events (the next invoice.paid refills
  * at the new allowance — tier persistence is handled by the subscription handler),
- * and for ignored events. Never throws: funding failures are logged and swallowed
- * so the webhook's subscription/payment handling is unaffected.
+ * and for ignored events. Never throws: a funding failure is logged and swallowed
+ * so the webhook's subscription/payment handling and 200 response are unaffected.
  */
 export async function applyStripeFunding(event: FundingEvent): Promise<void> {
   if (!isBillingEnabled()) return; // tenant/onprem credit via the control plane, not Stripe
