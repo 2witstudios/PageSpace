@@ -11,11 +11,13 @@
  *
  *  - **Resume re-authz.** A warm sandbox carries the prior turn's filesystem and
  *    process state. Resuming it for an unauthorized actor is a cross-actor
- *    data-bleed path, so an unauthorized actor is `deny`d EVEN WHEN a session
- *    already exists — the existing handle is never returned.
+ *    data-bleed path, so an unauthorized actor is `deny`d EVEN WHEN a (non-expired)
+ *    session already exists — the existing handle is never returned.
  *  - **Cleanup is unconditional.** On a session-end intent the plan is always
  *    `teardown`, regardless of authorization, so a revoked actor can never strand
- *    a warm sandbox. Authorization gates *use*, never *cleanup*.
+ *    a warm sandbox. An IDLE-expired session is likewise reclaimed before the authz
+ *    gate, so a stale warm sandbox never leaks just because the requesting actor is
+ *    now unauthorized. Authorization gates *use*, never *cleanup*.
  */
 
 import type { CanRunCodeResult, CodeExecutionDenialReason } from './can-run-code';
@@ -68,7 +70,19 @@ export function planSandboxLifecycle({
       : { action: 'noop' };
   }
 
-  // Resume re-authz gate: deny before considering any existing warm sandbox, so
+  // Reclaim an idle-expired session BEFORE the authz gate: a stale warm sandbox
+  // must never leak just because the requesting actor is now unauthorized. The
+  // teardown only reclaims the VM (stop + unlink); it never hands the handle back,
+  // and the effect layer re-checks authorization before re-provisioning, so this
+  // cannot leak another session's state to an unauthorized actor.
+  if (existingSession) {
+    const idleFor = now.getTime() - existingSession.lastActiveAt.getTime();
+    if (idleFor >= idleTimeoutMs) {
+      return { action: 'teardown', sandboxId: existingSession.sandboxId, reason: 'idle' };
+    }
+  }
+
+  // Resume re-authz gate: deny before returning any warm (non-expired) sandbox, so
   // an unauthorized actor is never handed back another session's state.
   if (!authorization.ok) {
     return { action: 'deny', reason: authorization.reason };
@@ -76,11 +90,6 @@ export function planSandboxLifecycle({
 
   if (!existingSession) {
     return { action: 'create' };
-  }
-
-  const idleFor = now.getTime() - existingSession.lastActiveAt.getTime();
-  if (idleFor >= idleTimeoutMs) {
-    return { action: 'teardown', sandboxId: existingSession.sandboxId, reason: 'idle' };
   }
 
   return { action: 'resume', sandboxId: existingSession.sandboxId };

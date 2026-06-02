@@ -40,6 +40,19 @@ describe('planSandboxLifecycle', () => {
     expect(plan).toEqual({ action: 'teardown', sandboxId: 'sbx-1', reason: 'idle' });
   });
 
+  it('given an UNAUTHORIZED actor with an idle-expired session, should still reclaim it BEFORE denying (no stale leak)', () => {
+    // The idle teardown must be reached even for an unauthorized actor, otherwise
+    // the stale warm sandbox leaks. The effect layer re-checks authz before any
+    // re-provision, so reclaiming here never hands back another session's state.
+    const plan = planSandboxLifecycle({
+      authorization: denied,
+      existingSession: stale,
+      now,
+      idleTimeoutMs: 5 * 60 * 1000,
+    });
+    expect(plan).toEqual({ action: 'teardown', sandboxId: 'sbx-1', reason: 'idle' });
+  });
+
   it('given a session-end intent with an existing session, should plan to tear it down', () => {
     const plan = planSandboxLifecycle({
       authorization: allowed,

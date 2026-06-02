@@ -200,9 +200,15 @@ export async function acquireConversationSandbox(
       }
 
       case 'teardown': {
-        // Idle-expired: reclaim the stale VM and its link, then start fresh.
+        // Idle-expired: reclaim the stale VM and its link. The planner reclaims an
+        // idle session BEFORE the authz gate so a stale sandbox never leaks, so we
+        // re-check authorization here and only re-provision for an authorized actor
+        // — an unauthorized actor's reclaim must never hand them a fresh sandbox.
         await safeStop(deps.client, plan.sandboxId);
         await deps.store.remove(key);
+        if (!authorization.ok) {
+          return { ok: false, reason: authorization.reason };
+        }
         return await provisionFresh({ key, input });
       }
 

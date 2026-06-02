@@ -150,6 +150,30 @@ describe('acquireConversationSandbox', () => {
     expect(storeCalls.save).toBe(1);
   });
 
+  it('given an UNAUTHORIZED actor whose session is idle-expired, should reclaim the stale VM but deny (no fresh provision)', async () => {
+    const stale = seedRecord({ lastActiveAt: new Date('2026-06-01T11:00:00.000Z') });
+    const { store, calls: storeCalls } = makeStore(stale);
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      idleTimeoutMs: 5 * 60 * 1000,
+      deps: {
+        store,
+        client,
+        authorize: async () => ({ ok: false, reason: 'insufficient_role' }),
+        now: () => NOW,
+        secret: SECRET,
+      },
+    });
+    // The stale VM and link are reclaimed (no leak)…
+    expect(calls.stop).toEqual(['sbx-existing']);
+    expect(storeCalls.remove).toBe(1);
+    // …but the unauthorized actor is denied, never handed a fresh sandbox.
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+    expect(calls.getOrCreate).toEqual([]);
+    expect(storeCalls.save).toBe(0);
+  });
+
   it('given a stored session whose VM has vanished on resume, should drop the stale link and create fresh', async () => {
     const { store, calls: storeCalls } = makeStore(seedRecord());
     const { client, calls } = makeClient({ get: async () => null });
