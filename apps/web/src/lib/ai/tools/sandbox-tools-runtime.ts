@@ -63,10 +63,10 @@ const REQUIRED_NODE_MAJOR = 24;
 // out of the graph until a sandbox tool actually runs (only possible once the
 // kill-switch is on), so the off-path never touches it.
 //
-// TODO(agent-code-exec): relocate the Sprites driver to a Node >= 24 runtime
-// (the processor or a dedicated sandbox service) and call it over an internal
-// API, so the Node 22 web process never loads the SDK at all. Tracked separately;
-// until then the guard below keeps the enabled path fail-closed with a clear error.
+// TODO(agent-code-exec, #1491): relocate the Sprites driver to a Node >= 24
+// runtime (the processor or a dedicated sandbox service) and call it over an
+// internal API, so the Node 22 web process never loads the SDK at all. Until then
+// the guard below keeps the enabled path fail-closed with a clear error.
 async function loadSandboxClient(): Promise<ExecSandboxClient> {
   const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
   if (Number.isFinite(nodeMajor) && nodeMajor < REQUIRED_NODE_MAJOR) {
