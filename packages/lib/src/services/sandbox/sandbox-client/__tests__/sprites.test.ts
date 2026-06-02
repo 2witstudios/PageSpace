@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
   buildSpriteConfig,
+  isSpriteNotFoundError,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
@@ -99,6 +100,21 @@ function makeSdk(over: Partial<SpritesSdk> = {}) {
   return { sdk, calls, sprite };
 }
 
+describe('isSpriteNotFoundError', () => {
+  it('should classify a 404 APIError and a "status 404" message as not-found', () => {
+    expect(isSpriteNotFoundError(Object.assign(new Error('x'), { statusCode: 404 }))).toBe(true);
+    expect(isSpriteNotFoundError(new Error('Failed to get sprite (status 404): missing'))).toBe(true);
+    expect(isSpriteNotFoundError(Object.assign(new Error('x'), { code: 'ENOENT' }))).toBe(true);
+  });
+
+  it('should NOT classify auth / rate-limit / transport errors as not-found', () => {
+    expect(isSpriteNotFoundError(Object.assign(new Error('x'), { statusCode: 401 }))).toBe(false);
+    expect(isSpriteNotFoundError(Object.assign(new Error('x'), { statusCode: 429 }))).toBe(false);
+    expect(isSpriteNotFoundError(new Error('websocket closed'))).toBe(false);
+    expect(isSpriteNotFoundError(null)).toBe(false);
+  });
+});
+
 describe('buildSpriteConfig', () => {
   it('given policy options, should map RAM, CPUs, storage, and region from the policy', () => {
     expect(buildSpriteConfig({ options })).toEqual({
@@ -119,6 +135,10 @@ describe('buildSpriteConfig', () => {
   });
 });
 
+// A Sprites "not found" surfaces as an APIError carrying statusCode 404 (or a
+// generic Error whose message embeds "status 404"); anything else must propagate.
+const notFound = () => Object.assign(new Error('Failed to get sprite (status 404): missing'), { statusCode: 404 });
+
 describe('createSpritesSandboxClient.getOrCreate', () => {
   it('given an existing Sprite, should resume it by name without creating', async () => {
     const { sdk, calls } = makeSdk();
@@ -128,19 +148,17 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(calls.created).toEqual([]);
   });
 
-  it('given no existing Sprite, should create fresh and apply the egress lockdown', async () => {
-    const { sdk, calls } = makeSdk({
-      getSprite: async () => {
-        throw new Error('not found');
-      },
-    });
+  it('given a resumed Sprite, should RE-APPLY the egress lockdown before handing it back', async () => {
+    // A process that died after createSprite but before the lockdown would
+    // otherwise resume an unlocked Sprite with open egress: re-affirm on resume.
+    const { sdk, calls } = makeSdk();
     const client = createSpritesSandboxClient({ sdk });
     await client.getOrCreate({ name: 'k', options });
-    expect(calls.created).toEqual(['k']);
+    expect(calls.created).toEqual([]);
     expect(calls.policies).toBe(1);
   });
 
-  it('given the egress lockdown fails, should destroy the Sprite and reject (never hand back open egress)', async () => {
+  it('given the resume lockdown fails, should destroy the Sprite and reject (never resume open egress)', async () => {
     let destroyed: string | null = null;
     const sprite = fakeSprite({
       name: 'k',
@@ -149,9 +167,44 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       },
     });
     const sdk: SpritesSdk = {
-      getSprite: async () => {
-        throw new Error('not found');
+      getSprite: async () => sprite,
+      createSprite: async () => sprite,
+      deleteSprite: async (name) => {
+        destroyed = name;
       },
+    };
+    const client = createSpritesSandboxClient({ sdk });
+    await expect(client.getOrCreate({ name: 'k', options })).rejects.toThrow('policy api down');
+    expect(destroyed).toBe('k');
+  });
+
+  it('given no existing Sprite, should create fresh and apply the egress lockdown', async () => {
+    const { sdk, calls } = makeSdk({ getSprite: async () => { throw notFound(); } });
+    const client = createSpritesSandboxClient({ sdk });
+    await client.getOrCreate({ name: 'k', options });
+    expect(calls.created).toEqual(['k']);
+    expect(calls.policies).toBe(1);
+  });
+
+  it('given a non-not-found error on lookup, should propagate it (never re-create over a live Sprite)', async () => {
+    const { sdk, calls } = makeSdk({
+      getSprite: async () => { throw Object.assign(new Error('unauthorized'), { statusCode: 401 }); },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    await expect(client.getOrCreate({ name: 'k', options })).rejects.toThrow('unauthorized');
+    expect(calls.created).toEqual([]);
+  });
+
+  it('given the egress lockdown fails on fresh create, should destroy the Sprite and reject (never hand back open egress)', async () => {
+    let destroyed: string | null = null;
+    const sprite = fakeSprite({
+      name: 'k',
+      updateNetworkPolicy: async () => {
+        throw new Error('policy api down');
+      },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => { throw notFound(); },
       createSprite: async () => sprite,
       deleteSprite: async (name) => {
         destroyed = name;
@@ -164,14 +217,18 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
 });
 
 describe('createSpritesSandboxClient.get / stop', () => {
-  it('given a vanished Sprite, should resolve get to null rather than throwing', async () => {
-    const { sdk } = makeSdk({
-      getSprite: async () => {
-        throw new Error('gone');
-      },
-    });
+  it('given a vanished (not-found) Sprite, should resolve get to null rather than throwing', async () => {
+    const { sdk } = makeSdk({ getSprite: async () => { throw notFound(); } });
     const client = createSpritesSandboxClient({ sdk });
     expect(await client.get({ sandboxId: 'gone' })).toBeNull();
+  });
+
+  it('given a non-not-found error, get should propagate it (a transient outage is not a gone Sprite)', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () => { throw Object.assign(new Error('rate limited'), { statusCode: 429 }); },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    await expect(client.get({ sandboxId: 'k' })).rejects.toThrow('rate limited');
   });
 
   it('stop should DESTROY the Sprite (no idle billing)', async () => {

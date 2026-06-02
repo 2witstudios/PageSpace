@@ -7,10 +7,12 @@
  * `getOrCreate` resumes an existing Sprite by name or creates a fresh one.
  *
  * Provisioning is locked down, never platform defaults:
- *  - **Egress** — immediately after a fresh create, the deny-by-default L3
- *    network policy is applied. If that application fails the just-created
- *    Sprite is destroyed and the create rejects: a Sprite is NEVER handed back
- *    without its egress lockdown in place.
+ *  - **Egress** — on EVERY acquire (a fresh create AND a resume of a pre-existing
+ *    Sprite) the deny-by-default L3 network policy is (re)applied before the
+ *    Sprite is handed back. If that application fails the Sprite is destroyed and
+ *    the acquire rejects: a Sprite is NEVER handed back without its egress
+ *    lockdown confirmed, so a crash between create and lockdown — or a resume
+ *    under a tightened egress profile — can never leak open/stale egress.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
  *    defaults.
@@ -285,10 +287,33 @@ const defaultSdk = (): SpritesSdk => {
   };
 };
 
+/**
+ * Classify a Sprites SDK error as a "the named Sprite does not exist" signal,
+ * the ONLY error we may swallow when resolving a Sprite by name. The SDK surfaces
+ * a not-found either as a structured `APIError` carrying `statusCode: 404` or, when
+ * the error body cannot be parsed, as a generic `Error("Failed to get sprite
+ * (status 404): …")`. Everything else — auth (401/403), rate limits (429),
+ * control-plane/transport failures — must propagate so the caller never mistakes a
+ * transient outage for a missing Sprite (and never silently re-creates over one).
+ */
+export function isSpriteNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { statusCode?: unknown; status?: unknown; code?: unknown; message?: unknown };
+  if (e.statusCode === 404 || e.status === 404) return true;
+  if (e.code === 'ENOENT' || e.code === 'not_found' || e.code === 'NOT_FOUND') return true;
+  const message = typeof e.message === 'string' ? e.message : '';
+  return /\b404\b/.test(message) || /not[\s_-]?found/i.test(message);
+}
+
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
-// If the egress lockdown cannot be applied the Sprite is destroyed and the
-// error propagates — a Sprite is never returned with open/unknown egress.
-async function lockdownFreshSprite(
+// Run on EVERY acquire — both a fresh create and a resume of a pre-existing
+// Sprite — because the deny-all network policy is the egress boundary and must
+// be (re)affirmed before any command runs: a process that died after
+// `createSprite()` but before this lockdown, or a Sprite resumed under a since-
+// tightened egress profile, would otherwise hand back open/stale egress. If the
+// lockdown cannot be applied the Sprite is destroyed and the error propagates —
+// a Sprite is NEVER returned without its egress lockdown confirmed (fail-closed).
+async function lockdownSprite(
   sdk: SpritesSdk,
   sprite: SpriteInstanceLike,
   options: SandboxCreateOptions,
@@ -311,24 +336,36 @@ export function createSpritesSandboxClient({
 }: { sdk?: SpritesSdk } = {}): ExecSandboxClient {
   return {
     async getOrCreate({ name, options }) {
-      // Resume by name when the Sprite already exists; otherwise create fresh and
-      // lock it down before returning.
+      // Resume by name when the Sprite already exists; otherwise create fresh.
+      // A not-found is the only swallowed error — any other failure (auth, rate
+      // limit, control-plane outage) propagates rather than masquerading as a
+      // missing Sprite that we would wrongly re-create over.
+      let sprite: SpriteInstanceLike;
       try {
-        return wrap(await sdk.getSprite(name));
-      } catch {
-        const sprite = await sdk.createSprite(name, buildSpriteConfig({ options }));
-        await lockdownFreshSprite(sdk, sprite, options);
-        return wrap(sprite);
+        sprite = await sdk.getSprite(name);
+      } catch (error) {
+        if (!isSpriteNotFoundError(error)) throw error;
+        sprite = await sdk.createSprite(name, buildSpriteConfig({ options }));
       }
+      // (Re)apply the egress lockdown before handing back ANY Sprite — fresh or
+      // resumed — so a crash window between create and lockdown, or a resume
+      // under a tightened egress profile, can never leak open/stale egress. Mutable
+      // network policy is re-enforced here; immutable caps (RAM/storage) are fixed
+      // for the warm Sprite's life and a profile change takes effect on the next
+      // cold provision (idle teardown / session end).
+      await lockdownSprite(sdk, sprite, options);
+      return wrap(sprite);
     },
 
     async get({ sandboxId }) {
-      // Reconnect by name; a vanished Sprite surfaces as an error → null so the
-      // lifecycle re-provisions under the same key rather than throwing.
+      // Reconnect by name; a vanished (not-found) Sprite surfaces as null so the
+      // lifecycle re-provisions under the same key. Any other error propagates so
+      // a transient outage is not mistaken for a gone Sprite.
       try {
         return wrap(await sdk.getSprite(sandboxId));
-      } catch {
-        return null;
+      } catch (error) {
+        if (isSpriteNotFoundError(error)) return null;
+        throw error;
       }
     },
 
