@@ -47,6 +47,13 @@ export function deriveSessionKey({
   conversationId,
   secret,
 }: SessionKeyInput): string {
+  // Fail closed on an empty secret: without a key the HMAC degenerates to a
+  // predictable digest of public ids, collapsing the unguessable-name boundary
+  // this function exists to provide. Reject here rather than trusting upstream
+  // env validation to have caught it.
+  if (secret.length === 0) {
+    throw new Error('Sandbox session secret must not be empty');
+  }
   const payload = [NAMESPACE_VERSION, tenantId, driveId, conversationId].join('\0');
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-sbx-${digest}`;

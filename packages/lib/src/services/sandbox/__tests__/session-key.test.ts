@@ -37,6 +37,12 @@ describe('deriveSessionKey', () => {
     );
   });
 
+  it('given an empty secret, should throw (fail closed — no predictable digest of public ids)', () => {
+    expect(() => deriveSessionKey({ ...base, secret: '' })).toThrow(
+      'Sandbox session secret must not be empty',
+    );
+  });
+
   it('given any inputs, should not embed the raw conversation id (opaque)', () => {
     const key = deriveSessionKey(base);
     expect(key).not.toContain(base.conversationId);
