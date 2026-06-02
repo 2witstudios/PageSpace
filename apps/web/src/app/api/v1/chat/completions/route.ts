@@ -36,7 +36,6 @@ import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
