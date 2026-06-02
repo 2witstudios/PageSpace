@@ -192,3 +192,6 @@ skills-lock.json
 
 # MCP server config (contains auth tokens)
 .mcp.json
+
+# Broadcast idempotency ledger (credits announcement email)
+.credits-change-sent.jsonl

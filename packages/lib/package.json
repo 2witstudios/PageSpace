@@ -327,6 +327,21 @@
       "import": "./dist/email-templates/FeedbackNotificationEmail.js",
       "require": "./dist/email-templates/FeedbackNotificationEmail.js"
     },
+    "./email-templates/CreditsChangeEmail": {
+      "types": "./dist/email-templates/CreditsChangeEmail.d.ts",
+      "import": "./dist/email-templates/CreditsChangeEmail.js",
+      "require": "./dist/email-templates/CreditsChangeEmail.js"
+    },
+    "./email-templates/credits-change-content": {
+      "types": "./dist/email-templates/credits-change-content.d.ts",
+      "import": "./dist/email-templates/credits-change-content.js",
+      "require": "./dist/email-templates/credits-change-content.js"
+    },
+    "./email-templates/render-email": {
+      "types": "./dist/email-templates/render-email.d.ts",
+      "import": "./dist/email-templates/render-email.js",
+      "require": "./dist/email-templates/render-email.js"
+    },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
       "import": "./dist/auth/secure-compare.js",
@@ -911,6 +926,15 @@
       ],
       "email-templates/FeedbackNotificationEmail": [
         "./dist/email-templates/FeedbackNotificationEmail.d.ts"
+      ],
+      "email-templates/CreditsChangeEmail": [
+        "./dist/email-templates/CreditsChangeEmail.d.ts"
+      ],
+      "email-templates/credits-change-content": [
+        "./dist/email-templates/credits-change-content.d.ts"
+      ],
+      "email-templates/render-email": [
+        "./dist/email-templates/render-email.d.ts"
       ],
       "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"
