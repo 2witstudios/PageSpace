@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
 import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
 import useSWR from 'swr';
@@ -62,11 +63,26 @@ const googleCalendarStatusFetcher = async (url: string): Promise<GoogleCalendarS
 export function CalendarView({ context, driveId, driveName: _driveName, className }: CalendarViewProps) {
   const { tier } = useDeviceTier();
   const shouldUseMobileCalendar = tier === 'mobile';
-  const [currentDate, setCurrentDate] = useState(new Date());
+
+  // Deep-link support: a tool-call card (or any link) can open a specific event
+  // via ?eventId=<id>&date=<ISO>. The date seeds the initial view window so the
+  // target event is actually loaded before we open its modal.
+  const searchParams = useSearchParams();
+  const deepLinkEventId = searchParams.get('eventId');
+  const deepLinkDate = searchParams.get('date');
+
+  const [currentDate, setCurrentDate] = useState(() => {
+    if (deepLinkDate) {
+      const d = new Date(deepLinkDate);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  });
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [showTasks, setShowTasks] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
+  const [deepLinkHandled, setDeepLinkHandled] = useState(false);
   const [newEventDefaults, setNewEventDefaults] = useState<{
     startAt: Date;
     endAt: Date;
@@ -94,6 +110,17 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     includePersonal: context === 'user',
     includeTasks: showTasks,
   });
+
+  // Open the deep-linked event once it appears in the loaded set (one-shot).
+  useEffect(() => {
+    if (!deepLinkEventId || deepLinkHandled) return;
+    const match = events.find((e) => e.id === deepLinkEventId);
+    if (match) {
+      setSelectedEvent(match);
+      setIsEventModalOpen(true);
+      setDeepLinkHandled(true);
+    }
+  }, [deepLinkEventId, deepLinkHandled, events]);
 
   // Drive filtering (root calendar only)
   const drives = useDriveStore((s) => s.drives);
