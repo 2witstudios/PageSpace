@@ -353,6 +353,10 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({ aiUsageLogs: H.schema.aiUsag
 vi.mock('@pagespace/db/operators', () => H.ops);
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: H.isBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { api: H.logger, ai: H.logger } }));
+// The live balance broadcast is fire-and-forget I/O (signed POST to the realtime
+// server); stub it so this end-to-end money-path test stays hermetic. Its own suite
+// (credit-emit.test.ts) covers the broadcast.
+vi.mock('../credit-emit', () => ({ emitCreditsUpdated: vi.fn().mockResolvedValue(undefined) }));
 
 import { applyStripeFunding } from '../credit-funding';
 import { canConsumeAI } from '../credit-gate';

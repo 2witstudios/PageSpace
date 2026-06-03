@@ -91,6 +91,7 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
 
 vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
 vi.mock('@/lib/ai/core/stream-abort-client', () => ({
+  abortActiveStream: vi.fn(),
   abortActiveStreamByMessageId: mockAbortByMessageId,
 }));
 vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
@@ -1031,13 +1032,14 @@ describe('AiChatView stop button for reconnected own streams', () => {
     });
   });
 
-  test('given useChat is actively streaming, calling ChatLayout.onStop calls the local useChat stop and not the remote abort', async () => {
+  test('given useChat is actively streaming, calling ChatLayout.onStop stops the local fetch AND aborts the server stream by the stable messageId', async () => {
     setupHappyInit();
     setStoreSelectors({
       own: [{ messageId: 'msg-own-2', pageId: PAGE_ID, isOwn: true }],
     });
     const { useChat } = await import('@ai-sdk/react');
     const useChatMock = useChat as unknown as Mock;
+    const streamingStop = vi.fn();
     const idleReturn = {
       messages: [],
       sendMessage: vi.fn(),
@@ -1047,7 +1049,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
       setMessages: mockSetMessages,
       stop: vi.fn(),
     };
-    useChatMock.mockReturnValue({ ...idleReturn, status: 'streaming' });
+    useChatMock.mockReturnValue({ ...idleReturn, status: 'streaming', stop: streamingStop });
 
     try {
       render(<AiChatView page={page} />);
@@ -1067,16 +1069,16 @@ describe('AiChatView stop button for reconnected own streams', () => {
 
       assert({
         given: 'isStreaming=true, onStop invoked',
-        should: 'call local stop exactly once',
-        actual: mockLocalStop.mock.calls.length,
+        should: 'call the local useChat stop exactly once',
+        actual: streamingStop.mock.calls.length,
         expected: 1,
       });
 
       assert({
-        given: 'isStreaming=true, onStop invoked',
-        should: 'NOT call abortActiveStreamByMessageId (avoid double-stop)',
-        actual: mockAbortByMessageId.mock.calls.length,
-        expected: 0,
+        given: 'isStreaming=true with a known assistant messageId, onStop invoked',
+        should: 'abort the server stream by the stable messageId (authoritative stop)',
+        actual: mockAbortByMessageId.mock.calls.map((args) => args[0]),
+        expected: [{ messageId: 'msg-own-2' }],
       });
     } finally {
       useChatMock.mockReturnValue(idleReturn);

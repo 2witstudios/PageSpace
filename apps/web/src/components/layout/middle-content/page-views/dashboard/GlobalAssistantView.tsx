@@ -348,6 +348,17 @@ const GlobalAssistantView: React.FC = () => {
   }, [globalLocalMessages]);
   const stop = useChatStop(currentConversationId, rawStop);
 
+  // The stable assistant messageId of the live stream (the rendered streaming
+  // bubble === serverAssistantMessageId). Used to abort authoritatively by
+  // messageId rather than the fragile chatId→streamId map.
+  const liveAssistantMessageId = useMemo(() => {
+    if (!isStreaming) return undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i].id;
+    }
+    return undefined;
+  }, [isStreaming, messages]);
+
   // After a refresh mid-stream, useChat starts at idle — but the
   // GlobalChatContext bootstrap may have detected an own in-flight stream
   // and registered a stop function. Surface either source so the UI shows
@@ -358,6 +369,7 @@ const GlobalAssistantView: React.FC = () => {
     selectedAgent,
     contextIsStreaming,
     contextStopStreaming,
+    activeMessageId: liveAssistantMessageId,
   });
 
   const remoteStreamingUser = !effectiveIsStreaming

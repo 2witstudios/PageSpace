@@ -77,6 +77,16 @@
       "import": "./dist/billing/credit-consume.js",
       "require": "./dist/billing/credit-consume.js"
     },
+    "./billing/credit-balance": {
+      "types": "./dist/billing/credit-balance.d.ts",
+      "import": "./dist/billing/credit-balance.js",
+      "require": "./dist/billing/credit-balance.js"
+    },
+    "./billing/credit-emit": {
+      "types": "./dist/billing/credit-emit.d.ts",
+      "import": "./dist/billing/credit-emit.js",
+      "require": "./dist/billing/credit-emit.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -96,6 +106,11 @@
       "types": "./dist/monitoring/ai-monitoring.d.ts",
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
+    },
+    "./monitoring/voice-pricing": {
+      "types": "./dist/monitoring/voice-pricing.d.ts",
+      "import": "./dist/monitoring/voice-pricing.js",
+      "require": "./dist/monitoring/voice-pricing.js"
     },
     "./monitoring/ai-context-calculator": {
       "types": "./dist/monitoring/ai-context-calculator.d.ts",
@@ -896,6 +911,12 @@
       ],
       "billing/credit-consume": [
         "./dist/billing/credit-consume.d.ts"
+      ],
+      "billing/credit-balance": [
+        "./dist/billing/credit-balance.d.ts"
+      ],
+      "billing/credit-emit": [
+        "./dist/billing/credit-emit.d.ts"
       ],
       "billing/credit-pricing": [
         "./dist/billing/credit-pricing.d.ts"

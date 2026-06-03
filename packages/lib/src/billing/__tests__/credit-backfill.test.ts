@@ -33,6 +33,8 @@ vi.mock('../credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
   settlePendingLedgerRow: mockSettlePending,
 }));
+const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
 import { backfillCredits } from '../credit-backfill';
 
@@ -114,10 +116,15 @@ describe('backfillCredits', () => {
     expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
   });
 
-  it('sweeps holds past their expiresAt and reports the count', async () => {
-    // Three stale holds (crashed/abandoned streams) reclaimed; no pending/orphan work.
+  it('sweeps holds past their expiresAt, reports the count, and pushes each affected user once', async () => {
+    // Three stale holds (crashed/abandoned streams) reclaimed; two belong to u1, one
+    // to u2 — reclaiming raises their spendable, so each distinct owner gets one push.
     mockDb.delete.mockReturnValue({
-      where: () => ({ returning: () => Promise.resolve([{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }]) }),
+      where: () => ({ returning: () => Promise.resolve([
+        { id: 'h1', userId: 'u1' },
+        { id: 'h2', userId: 'u1' },
+        { id: 'h3', userId: 'u2' },
+      ]) }),
     });
     mockSelects([], []);
 
@@ -125,6 +132,10 @@ describe('backfillCredits', () => {
 
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(result.expiredHolds).toBe(3);
+    // One push per distinct user (deduped), not one per hold.
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledTimes(2);
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u2');
   });
 
   it('drains a >BATCH backlog across multiple passes (does not stop at one batch)', async () => {

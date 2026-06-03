@@ -19,7 +19,6 @@ import { requiresProSubscription } from '@/lib/subscription/rate-limit-middlewar
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
@@ -1065,9 +1064,9 @@ export async function POST(request: Request) {
                 }
               });
 
-              // Push the user's new credit balance to their open tabs so the header
-              // widget updates live after the call settles. Best-effort; never blocks.
-              void emitCreditsUpdated(userId!, { conversationId, pageId: chatId });
+              // Credit balance is pushed live by consumeCredits itself (called from
+              // AIMonitoring.trackUsage above), which now broadcasts at every balance
+              // mutation — so the header widget updates without a route-level emit here.
 
               // Track tool usage separately for analytics
               if (extractedToolCalls.length > 0) {

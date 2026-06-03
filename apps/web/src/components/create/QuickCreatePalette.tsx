@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { uploadFileToS3 } from '@/lib/upload/orchestrator';
 import { useUIStore } from '@/stores/useUIStore';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
@@ -212,21 +213,14 @@ export default function QuickCreatePalette() {
       }
       setIsCreating(true);
       try {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        formData.append('driveId', driveId);
-        if (effectiveParentId) formData.append('parentId', effectiveParentId);
-        if (name.trim()) formData.append('title', name.trim());
-
-        const response = await fetchWithAuth('/api/upload', { method: 'POST', body: formData });
-        if (!response.ok) {
-          const err = (await response.json()) as { error?: string };
-          throw new Error(err.error ?? 'Failed to upload file');
-        }
-        const result = (await response.json()) as { page: Page };
+        const page = await uploadFileToS3(selectedFile, {
+          driveId,
+          parentId: effectiveParentId,
+          title: name.trim() || undefined,
+        });
         closeQuickCreate();
         await swrMutate(`/api/drives/${driveId}/pages`);
-        await navigateToPage(result.page.id, driveId);
+        await navigateToPage(page.id, driveId);
       } catch (error) {
         toast.error((error as Error).message);
       } finally {

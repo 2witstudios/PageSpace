@@ -375,6 +375,26 @@ describe('trackAIUsage', () => {
     expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 
+  it('honors an explicit costSource override (voice list_price) instead of the computed openrouter/estimate', async () => {
+    // A finite providerCostDollars would normally stamp costSource='openrouter'
+    // (mislabeling voice as a live provider-returned cost). The explicit override
+    // must win so the admin panel classifies voice coverage as 'list_price'.
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai_voice',
+      model: 'whisper-1',
+      providerCostDollars: 0.006,
+      costSource: 'list_price',
+      metadata: { type: 'voice_stt' },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ type: 'voice_stt', costSource: 'list_price' }),
+      }),
+    );
+  });
+
   it('should set success=false when explicitly set', async () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
     await new Promise(resolve => setTimeout(resolve, 0));

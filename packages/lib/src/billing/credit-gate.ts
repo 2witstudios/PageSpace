@@ -33,6 +33,7 @@ import {
   MAX_FREE_INFLIGHT,
   isCreditsEnforcementEnabled,
 } from './credit-pricing';
+import { emitCreditsUpdated } from './credit-emit';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 /**
@@ -59,9 +60,28 @@ interface BalanceRow {
   monthlyPeriodEnd: Date | null;
 }
 
+export interface GateOptions {
+  /**
+   * Override the per-call reservation (in whole cents) for this gate check. The
+   * chat path omits it and uses the CREDIT_HOLD_ESTIMATE_CENTS default; voice
+   * routes pass a per-call estimate so a sub-cent STT/TTS call doesn't reserve the
+   * full chat estimate. Only bounds the in-flight hold — the real cost still settles
+   * exactly via consumeCredits.
+   */
+  estCostCents?: number;
+  /**
+   * Cap on this user's concurrent in-flight calls, applied to ALL tiers (combined
+   * with the free-tier cap via min). Voice routes pass VOICE_MAX_INFLIGHT to bound
+   * concurrent paid voice spend, which the per-call hold alone can't (the real cost
+   * only lands at settle). Omitted by chat, which leaves paid tiers uncapped.
+   */
+  maxInFlight?: number;
+}
+
 export async function canConsumeAI(
   userId: string,
   tier: SubscriptionTier = 'free',
+  opts: GateOptions = {},
 ): Promise<GateResult> {
   if (!isBillingEnabled()) return { allowed: true, reason: 'unlimited' };
 
@@ -134,10 +154,15 @@ export async function canConsumeAI(
       .onConflictDoNothing({ target: creditBalances.userId });
   }
 
-  const estCost = reservationCents(CREDIT_HOLD_ESTIMATE_CENTS);
+  const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
   // Free users are capped on concurrent in-flight calls; paid tiers are bounded by
-  // credits alone (no cap).
-  const maxInFlight = tier === 'free' ? MAX_FREE_INFLIGHT : null;
+  // credits alone UNLESS the caller supplies its own cap (voice passes one to bound
+  // concurrent paid voice spend). When both apply, the tighter (min) cap wins.
+  const caps = [
+    tier === 'free' ? MAX_FREE_INFLIGHT : null,
+    opts.maxInFlight ?? null,
+  ].filter((c): c is number => c !== null);
+  const maxInFlight = caps.length > 0 ? Math.min(...caps) : null;
   const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
 
   // Authoritative decision + reservation, atomic under a balance row lock. The lock
@@ -206,6 +231,13 @@ export async function canConsumeAI(
 
     return { ...result, holdId: inserted[0]?.id };
   });
+
+  // A hold was placed: the reservation just shrank this user's spendable. Push the
+  // fresh balance now (scopeless — navbar only; no usage exists yet) so the widget
+  // drops the instant the call starts, not just when it settles. This is the
+  // always-fires update that keeps the navbar correct even if the stream is
+  // interrupted and onFinish/settlement never runs. Best-effort, never blocks.
+  if (result.holdId) void emitCreditsUpdated(userId);
 
   // Dark launch: the gate did all its bookkeeping above (lazy-init, reset, balance
   // read, and a hold on the allow path), but when enforcement is OFF we never hand
