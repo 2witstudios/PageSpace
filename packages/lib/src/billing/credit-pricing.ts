@@ -142,6 +142,35 @@ export const CREDIT_HOLD_TTL_SECONDS = envInt('CREDIT_HOLD_TTL_SECONDS', 900);
  */
 export const MAX_FREE_INFLIGHT = envInt('MAX_FREE_INFLIGHT', 2);
 
+/**
+ * Max concurrent in-flight CHAT calls per user, applied to ALL tiers. Mirrors
+ * {@link VOICE_MAX_INFLIGHT}: a hold reserves only an ESTIMATE, but the real cost
+ * lands at settle, so without a cap a user could open many simultaneous chats that
+ * each reserve little yet collectively settle past their balance. This matters now
+ * that the chat hold is a (smaller) model-aware estimate clamped to [floor, ceiling]
+ * rather than the old flat 25¢ reserve floor — the cap bounds worst-case concurrent
+ * overdraw to `MAX_CHAT_INFLIGHT × worst-case single chat call`. Generous enough for
+ * legitimate multi-tab / multi-agent use. Default 8.
+ */
+export const MAX_CHAT_INFLIGHT = envInt('MAX_CHAT_INFLIGHT', 8);
+
+/**
+ * Lower bound (whole cents) for a model-aware chat hold, so a sub-cent call still
+ * reserves something and the in-flight cap stays meaningful. Default 2¢.
+ */
+export const CHAT_HOLD_FLOOR_CENTS = envInt('CHAT_HOLD_FLOOR_CENTS', 2);
+
+/**
+ * Assumed per-call token budget used to size the model-aware chat hold BEFORE the call
+ * runs (the real token counts aren't known until the stream finishes; the real cost
+ * always settles exactly via consumeCredits regardless). Multiplied by the model's
+ * catalog rate to get a pre-markup dollar estimate, then marked up and clamped to
+ * [CHAT_HOLD_FLOOR_CENTS, RESERVE_FLOOR_CENTS]. Coarse on purpose — the clamp range,
+ * not this budget, is the safety bound. Defaults ~4k in / 1k out (a typical chat turn).
+ */
+export const CHAT_HOLD_ASSUMED_INPUT_TOKENS = envInt('CHAT_HOLD_ASSUMED_INPUT_TOKENS', 4000);
+export const CHAT_HOLD_ASSUMED_OUTPUT_TOKENS = envInt('CHAT_HOLD_ASSUMED_OUTPUT_TOKENS', 1000);
+
 export interface CreditPack {
   /** Stable SKU id, also stored in Stripe price metadata. */
   id: string;

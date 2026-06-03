@@ -73,6 +73,7 @@ vi.mock('ai', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { createAIProvider } from '@/lib/ai/core';
 import { generateText } from 'ai';
 
@@ -127,11 +128,14 @@ describe('POST /api/pulse/generate — prepaid credit gate', () => {
     expect(generateText).not.toHaveBeenCalled();
   });
 
-  it("consults the gate with the user's resolved subscription tier", async () => {
+  it("consults the gate with the user's resolved subscription tier and the chat concurrency cap", async () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
 
     await POST(makeRequest());
 
-    expect(canConsumeAI).toHaveBeenCalledWith('user-1', 'pro');
+    // The model isn't resolved at the gate, so Pulse passes no per-call estimate (the
+    // hold uses the default) but does apply the chat in-flight cap to bound concurrent
+    // overdraw.
+    expect(canConsumeAI).toHaveBeenCalledWith('user-1', 'pro', { maxInFlight: MAX_CHAT_INFLIGHT });
   });
 });

@@ -122,6 +122,11 @@
       "import": "./dist/monitoring/voice-pricing.js",
       "require": "./dist/monitoring/voice-pricing.js"
     },
+    "./monitoring/chat-pricing": {
+      "types": "./dist/monitoring/chat-pricing.d.ts",
+      "import": "./dist/monitoring/chat-pricing.js",
+      "require": "./dist/monitoring/chat-pricing.js"
+    },
     "./monitoring/ai-context-calculator": {
       "types": "./dist/monitoring/ai-context-calculator.d.ts",
       "import": "./dist/monitoring/ai-context-calculator.js",

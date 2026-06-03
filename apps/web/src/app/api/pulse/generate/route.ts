@@ -40,6 +40,7 @@ import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-id
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -93,7 +94,11 @@ export async function POST(req: Request) {
     // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
     // This is the on-demand (user-triggered) Pulse path; the cron path is intentionally
     // NOT gated so a failed bill can't 500 the batch.
-    const creditGate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier);
+    // Model isn't resolved until the generation step below, so we let the hold use the
+    // default flat estimate (estCostCents omitted) and just apply the chat concurrency cap.
+    const creditGate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+      maxInFlight: MAX_CHAT_INFLIGHT,
+    });
     if (!creditGate.allowed) {
       loggers.api.warn('Pulse generate: AI credit gate denied', { userId, reason: creditGate.reason });
       return creditGateErrorResponse(creditGate.reason);
