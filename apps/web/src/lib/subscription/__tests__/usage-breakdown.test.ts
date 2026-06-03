@@ -68,6 +68,17 @@ describe('aggregateUsageBreakdown', () => {
     expect(voice.sharePct).toBe(25);
   });
 
+  it('floors a tiny-but-nonzero spend share at 1% (never 0% next to real spend)', () => {
+    const rows = [
+      row({ source: 'chat', chargeMillicents: 999_000 }), // ~99.9%
+      row({ source: 'voice', chargeMillicents: 100 }), // ~0.01% — would round to 0
+    ];
+    const r = aggregateUsageBreakdown(rows, PERIOD);
+    const voice = r.byFeature.find((f) => f.source === 'voice')!;
+    expect(voice.spendCents).toBeGreaterThan(0);
+    expect(voice.sharePct).toBe(1);
+  });
+
   it('treats a zero-charge period as 0% shares, not NaN', () => {
     const r = aggregateUsageBreakdown([row({ chargeMillicents: 0, totalTokens: 0 })], PERIOD);
     expect(r.totalSpendCents).toBe(0);

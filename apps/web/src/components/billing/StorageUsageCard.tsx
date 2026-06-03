@@ -40,8 +40,10 @@ interface StorageInfo {
 
 const formatBytes = (bytes: number): string => {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  if (bytes === 0) return '0 B';
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  // Guard non-positive (reconcile drift can transiently report <= 0): Math.log would
+  // give NaN/negative index → "NaN undefined".
+  if (!Number.isFinite(bytes) || bytes < 1) return '0 B';
+  const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${Math.round((bytes / Math.pow(1024, i)) * 100) / 100} ${sizes[i]}`;
 };
 

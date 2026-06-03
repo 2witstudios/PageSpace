@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gte } from '@pagespace/db/operators';
+import { and, eq, gte, lte } from '@pagespace/db/operators';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { aggregateUsageBreakdown, type UsageBreakdown } from './usage-breakdown';
@@ -48,6 +48,10 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
         eq(creditLedger.userId, userId),
         eq(creditLedger.entryType, 'usage'),
         gte(creditLedger.createdAt, periodStart),
+        // Bound the window to the period end so a stale balance (period rolled but not
+        // yet reset) can't leak the next period's spend into "this period". When
+        // periodEnd is in the future (the normal current period) this excludes nothing.
+        ...(periodEnd ? [lte(creditLedger.createdAt, periodEnd)] : []),
       ),
     );
 

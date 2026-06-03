@@ -63,8 +63,12 @@ interface Bucket {
 const millicentsToCents = (millicents: number): number =>
   Math.round((millicents / 1000) * 100) / 100;
 
-const sharePct = (millicents: number, totalMillicents: number): number =>
-  totalMillicents > 0 ? Math.round((millicents / totalMillicents) * 100) : 0;
+// Share of total spend, 0–100. A row with real (nonzero) spend never rounds down to a
+// bare "0%" with an empty bar — it floors at 1% so the UI reflects that it cost something.
+const sharePct = (millicents: number, totalMillicents: number): number => {
+  if (totalMillicents <= 0 || millicents <= 0) return 0;
+  return Math.max(1, Math.round((millicents / totalMillicents) * 100));
+};
 
 export function aggregateUsageBreakdown(
   rows: UsageLedgerRow[],
