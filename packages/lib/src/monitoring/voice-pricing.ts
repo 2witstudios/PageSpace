@@ -23,6 +23,8 @@
  * a deploy. Defaults pinned to OpenAI's published audio pricing (see the unit test).
  */
 
+import { MARKUP_BPS } from '../billing/credit-pricing';
+
 /** Parse a non-negative float env override; fall back to `fallback` on absence/garbage. */
 function envFloat(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -71,4 +73,19 @@ export function calculateVoiceCostDollars(model: string, quantity: VoiceUsageQua
   }
 
   return 0;
+}
+
+/**
+ * Charged-credit reservation (whole cents, minimum 1) for a voice call whose
+ * billable quantity is already known — i.e. TTS, where the input character count is
+ * in hand before the provider call. Reserves exactly what the call will be charged
+ * (real cost × markup), so the gate's spendable-floor check is accurate per call
+ * instead of relying on a flat estimate that a long TTS request would blow past.
+ * STT can't use this (audio duration is unknown until the provider responds) and
+ * falls back to the flat VOICE_HOLD_ESTIMATE_CENTS.
+ */
+export function estimateVoiceHoldCents(model: string, quantity: VoiceUsageQuantity): number {
+  const charged = calculateVoiceCostDollars(model, quantity) * (MARKUP_BPS / 10_000) * 100;
+  if (!Number.isFinite(charged) || charged <= 0) return 1;
+  return Math.max(1, Math.ceil(charged));
 }

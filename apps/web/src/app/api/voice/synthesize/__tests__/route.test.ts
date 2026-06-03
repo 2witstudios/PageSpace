@@ -96,8 +96,9 @@ describe('POST /api/voice/synthesize — metering', () => {
     const res = await POST(ttsRequest({ text: 'a'.repeat(1000), model: 'tts-1', voice: 'nova' }));
 
     expect(res.status).toBe(200);
-    // Gated with the voice-sized reservation (VOICE_HOLD_ESTIMATE_CENTS = 2).
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 2 });
+    // Gated with the exact per-call reservation: 1000 chars × $15/1M × 1.5 = $0.0225
+    // → ceil to 3¢ (not a flat estimate).
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 3 });
     // Billed real cost: 1000 chars × $15/1M = $0.015, tagged as voice/list_price.
     expect(mockTrackUsage).toHaveBeenCalledTimes(1);
     const usage = mockTrackUsage.mock.calls[0][0];

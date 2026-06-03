@@ -19,9 +19,8 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import { VOICE_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { calculateVoiceCostDollars } from '@pagespace/lib/monitoring/voice-pricing';
+import { calculateVoiceCostDollars, estimateVoiceHoldCents } from '@pagespace/lib/monitoring/voice-pricing';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
@@ -45,6 +44,7 @@ export async function POST(request: Request) {
   // failed TTS call never strands a hold against the user's spendable balance.
   let holdId: string | undefined;
   let holdHandedOff = false;
+  const startTime = Date.now();
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -144,11 +144,15 @@ export async function POST(request: Request) {
     const clampedSpeed = Math.min(4.0, Math.max(0.25, speedNumber));
 
     // Reserve credits before billing the provider. Gated AFTER input validation so a
-    // malformed request never opens a hold. TTS fires once per streamed sentence
-    // chunk, so the small VOICE_HOLD_ESTIMATE_CENTS reservation avoids locking the
-    // chat-sized estimate behind each sub-cent chunk. Blocks out-of-credit paid users
-    // only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise still records spend.
-    const gate = await canConsumeAI(userId, tier, { estCostCents: VOICE_HOLD_ESTIMATE_CENTS });
+    // malformed request never opens a hold. The reservation is computed from the
+    // exact character count (cost × markup) so it accurately reflects this call —
+    // tiny for a sentence chunk, up to ~18¢ for a max-length tts-1-hd request —
+    // rather than a flat estimate a long request would blow past. Blocks
+    // out-of-credit paid users only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise
+    // still records spend.
+    const gate = await canConsumeAI(userId, tier, {
+      estCostCents: estimateVoiceHoldCents(model, { chars: text.length }),
+    });
     if (!gate.allowed) {
       return creditGateErrorResponse(gate.reason);
     }
@@ -205,6 +209,9 @@ export async function POST(request: Request) {
       provider: 'openai_voice',
       model,
       providerCostDollars: costDollars,
+      // Request latency (ms), matching the chat route. The billing quantity (chars)
+      // lives in metadata.
+      duration: Date.now() - startTime,
       success: true,
       holdId,
       // Deterministic list-price cost (chars × published rate), not a live

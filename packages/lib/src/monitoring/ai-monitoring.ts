@@ -708,8 +708,10 @@ export interface AIUsageData {
   // panel reads to classify coverage). Defaults to 'openrouter' when a finite
   // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
   // because their cost is deterministic (exact quantity × published OpenAI rate),
-  // neither a live provider-returned figure nor a token-guess fallback.
-  costSource?: string;
+  // neither a live provider-returned figure nor a token-guess fallback. Typed as the
+  // closed set the rollup recognizes so a typo can't silently fall through to the
+  // provider-name heuristic.
+  costSource?: 'openrouter' | 'estimate' | 'list_price';
 
   // Context tracking - track actual conversation context vs billing tokens
   contextMessages?: string[]; // Array of message IDs included in this call's context

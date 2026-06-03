@@ -46,6 +46,7 @@ export async function POST(request: Request) {
   // failed STT call never strands a hold against the user's spendable balance.
   let holdId: string | undefined;
   let holdHandedOff = false;
+  const startTime = Date.now();
 
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
@@ -177,6 +178,15 @@ export async function POST(request: Request) {
     // the user's prepaid credits, with the standard markup applied downstream. This
     // settles the hold and releases it; trackUsage now owns the reservation.
     const seconds = typeof result.duration === 'number' ? result.duration : undefined;
+    // verbose_json should always carry a duration; if it ever doesn't we'd bill $0
+    // (free transcription). Surface it so the gap is observable instead of silent —
+    // the usage row is also flagged (metadata.missingDuration) for the admin panel.
+    if (seconds === undefined) {
+      loggers.ai.warn('Whisper transcription returned no duration; billing $0 for this call', {
+        userId,
+        audioBytes: audioFile.size,
+      });
+    }
     const costDollars = calculateVoiceCostDollars('whisper-1', { seconds });
     holdHandedOff = true;
     await AIMonitoring.trackUsage({
@@ -184,13 +194,21 @@ export async function POST(request: Request) {
       provider: 'openai_voice',
       model: 'whisper-1',
       providerCostDollars: costDollars,
-      duration: seconds !== undefined ? Math.round(seconds * 1000) : undefined,
+      // Request latency (ms), matching the chat route — NOT the audio length, which
+      // would pollute response-time analytics. Audio seconds (the billing quantity)
+      // live in metadata.
+      duration: Date.now() - startTime,
       success: true,
       holdId,
       // Deterministic list-price cost (audio seconds × published rate), not a live
       // provider-returned figure — labels the admin-panel coverage honestly.
       costSource: 'list_price',
-      metadata: { type: 'voice_stt', audioBytes: audioFile.size },
+      metadata: {
+        type: 'voice_stt',
+        audioBytes: audioFile.size,
+        audioSeconds: seconds,
+        ...(seconds === undefined ? { missingDuration: true } : {}),
+      },
     });
     void emitCreditsUpdated(userId);
 

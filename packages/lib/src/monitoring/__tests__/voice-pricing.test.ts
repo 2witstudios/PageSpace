@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateVoiceCostDollars, VOICE_RATES } from '../voice-pricing';
+import { calculateVoiceCostDollars, estimateVoiceHoldCents, VOICE_RATES } from '../voice-pricing';
 
 describe('calculateVoiceCostDollars — Whisper STT', () => {
   it('bills 60s of audio at the published $0.006/min rate', () => {
@@ -43,6 +43,24 @@ describe('calculateVoiceCostDollars — TTS', () => {
 describe('calculateVoiceCostDollars — unknown model', () => {
   it('bills nothing (never corrupts the ledger) for an unrecognized model', () => {
     expect(calculateVoiceCostDollars('gpt-4o', { seconds: 100, chars: 100 })).toBe(0);
+  });
+});
+
+describe('estimateVoiceHoldCents — reserves the exact charged amount for TTS', () => {
+  // Default markup is 1.5× (MARKUP_BPS=15000).
+  it('reserves the full worst-case max-length tts-1-hd call (~18¢), not a flat 2¢', () => {
+    // 4096 chars × $30/1M = $0.12288 raw × 1.5 = $0.18432 → ceil to 19¢.
+    expect(estimateVoiceHoldCents('tts-1-hd', { chars: 4096 })).toBe(19);
+  });
+
+  it('reserves a realistic ~1¢ for a typical sentence chunk', () => {
+    // 200 chars × $15/1M = $0.003 raw × 1.5 = $0.0045 → ceil to 1¢.
+    expect(estimateVoiceHoldCents('tts-1', { chars: 200 })).toBe(1);
+  });
+
+  it('never reserves below 1¢ (zero/unknown quantity still counts as one in-flight call)', () => {
+    expect(estimateVoiceHoldCents('tts-1', { chars: 0 })).toBe(1);
+    expect(estimateVoiceHoldCents('whisper-1', {})).toBe(1);
   });
 });
 

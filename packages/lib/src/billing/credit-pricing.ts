@@ -84,15 +84,15 @@ export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
 export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', RESERVE_FLOOR_CENTS);
 
 /**
- * Per-call hold estimate for VOICE (STT/TTS), far below the chat default. Voice
- * calls cost a fraction of a cent (a Whisper clip or a TTS sentence), and TTS in
- * particular fires once PER streamed sentence chunk — so a single spoken reply can
- * open many gate→settle cycles in a row. Reserving the 25¢ chat default on each
- * would transiently lock dollars behind sub-cent work and could trip a paid user's
- * spendable floor mid-sentence. A ~2¢ reservation comfortably covers any single
- * voice call at the 1.5× markup while keeping the transient hold realistic. The
- * real cost still settles exactly via consumeCredits; this only bounds the
- * in-flight reservation. Tune via env per real usage data.
+ * Flat per-call hold estimate for voice STT (Whisper), where the audio duration —
+ * and therefore the real cost — isn't known until the provider responds, so the gate
+ * has nothing exact to reserve against. A short voice-mode clip costs a fraction of a
+ * cent ($0.006/min × 1.5), so 2¢ is a reasonable approximate reservation that keeps
+ * the spendable-floor check meaningful without over-reserving. It is an ESTIMATE, not
+ * a guaranteed cap (a very long upload could exceed it); the real cost always settles
+ * exactly via consumeCredits and the 1.5× markup — not this hold — is the solvency
+ * guarantee. TTS does NOT use this: its character count is known up front, so it
+ * reserves the exact charged amount via estimateVoiceHoldCents(). Tune via env.
  */
 export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
 

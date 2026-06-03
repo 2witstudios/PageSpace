@@ -59,10 +59,11 @@ function audioRequest() {
 }
 
 // Whisper verbose_json returns the exact audio `duration` in seconds plus `text`.
-function okWhisperFetch(duration: number) {
+// Pass `undefined` to simulate a (degenerate) response with no duration.
+function okWhisperFetch(duration: number | undefined) {
   return vi.fn().mockResolvedValue({
     ok: true,
-    json: () => Promise.resolve({ text: 'hello there', duration }),
+    json: () => Promise.resolve({ text: 'hello there', ...(duration !== undefined ? { duration } : {}) }),
   });
 }
 
@@ -118,6 +119,22 @@ describe('POST /api/voice/transcribe — metering', () => {
     expect(usage.metadata).toMatchObject({ type: 'voice_stt' });
     expect(mockReleaseHold).not.toHaveBeenCalled();
     expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
+  });
+
+  it('still bills $0 and hands off (not releases) the hold when Whisper returns no duration', async () => {
+    const fetchSpy = okWhisperFetch(undefined);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const res = await POST(audioRequest());
+
+    expect(res.status).toBe(200);
+    // A degenerate no-duration response must still settle the hold via trackUsage
+    // (billing $0), NOT leak/release it — the row is flagged for observability.
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    const usage = mockTrackUsage.mock.calls[0][0];
+    expect(usage.providerCostDollars).toBe(0);
+    expect(usage.metadata).toMatchObject({ type: 'voice_stt', missingDuration: true });
+    expect(mockReleaseHold).not.toHaveBeenCalled();
   });
 
   it('returns the gate denial (402) and never calls the provider or bills', async () => {
