@@ -501,4 +501,37 @@ describe('POST /api/v1/chat/completions', () => {
       expected: { count: 1, holdId: 'hold-xyz', success: false, aborted: true, status: 200 },
     });
   });
+
+  test('request already aborted before streaming trips the model abort signal', async () => {
+    let capturedSignalAborted: boolean | undefined;
+    vi.mocked(streamText).mockImplementationOnce(((options: { abortSignal?: AbortSignal }) => {
+      // Captured at call time: the route must hand streamText an already-aborted signal
+      // when the consumer disconnected during the pre-stream setup.
+      capturedSignalAborted = options.abortSignal?.aborted;
+      return {
+        totalUsage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+        steps: Promise.resolve([]),
+        toUIMessageStream: async function* () {
+          yield { type: 'start' };
+        },
+      };
+    }) as unknown as typeof streamText);
+
+    const preAborted = AbortSignal.abort();
+    const req = new Request('http://localhost/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer mcp_test123' },
+      body: JSON.stringify(validBody),
+      signal: preAborted,
+    });
+    const response = await POST(req);
+    await response.text().catch(() => undefined);
+
+    assert({
+      given: 'a request whose signal is already aborted before generation starts',
+      should: 'pass an already-aborted abortSignal to streamText so no tokens are burned',
+      actual: capturedSignalAborted,
+      expected: true,
+    });
+  });
 });

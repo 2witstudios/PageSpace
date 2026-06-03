@@ -191,7 +191,14 @@ export async function POST(request: Request): Promise<Response> {
   // Next.js fires request.signal on disconnect; the ReadableStream's cancel() (below) is a
   // belt-and-suspenders path for disconnects detected at the response-stream layer.
   const abortController = new AbortController();
-  request.signal.addEventListener('abort', () => abortController.abort(), { once: true });
+  if (request.signal.aborted) {
+    // The consumer already dropped the connection during the pre-stream setup above.
+    // addEventListener won't replay a past abort, so trip the controller now — otherwise
+    // streamText would receive a non-aborted signal and burn tokens for a gone client.
+    abortController.abort();
+  } else {
+    request.signal.addEventListener('abort', () => abortController.abort(), { once: true });
+  }
 
   // Settle billing exactly once. streamText.onFinish does NOT fire on abort (onAbort does),
   // so both callbacks funnel through here. Tokens burned before an abort are real provider
