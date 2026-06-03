@@ -13,13 +13,24 @@ export interface ReapResult {
   failedPhysicalDeletes: string[];
 }
 
+export interface ReapOptions {
+  /**
+   * Restrict the orphan scan to these file IDs. Pass the files a just-deleted
+   * subtree referenced so a user-facing delete reaps only its own files instead
+   * of sweeping the whole table inline. An empty array reaps nothing; omitting
+   * it scans every file (the weekly cron's global sweep).
+   */
+  fileIds?: string[];
+}
+
 /**
  * Detect orphaned file records and reclaim them: delete the physical blob,
  * hard-delete the DB row, and credit the uploader's storage quota.
  *
- * Shared by the weekly cron AND the synchronous delete paths (permanent
- * delete from trash, 30-day purge) so a user who deletes files frees their
- * cap immediately instead of waiting up to a week for the next cron tick.
+ * Shared by the weekly cron (global sweep) AND the synchronous delete paths
+ * (permanent delete from trash, 30-day purge) so a user who deletes files frees
+ * their cap immediately instead of waiting up to a week for the next cron tick.
+ * User-facing callers pass `fileIds` to bound the work to their own subtree.
  *
  * For each orphan:
  *   1. null storagePath (DB stub, no blob ever persisted) → hard-delete the
@@ -33,9 +44,10 @@ export interface ReapResult {
  *      it removed), so two concurrent reaps can't double-credit the same blob.
  *      On failure the row is left for the next run and the quota is unchanged.
  */
-export async function reapOrphanedFiles(database: Database): Promise<ReapResult> {
+export async function reapOrphanedFiles(database: Database, options?: ReapOptions): Promise<ReapResult> {
   const orphans = await findOrphanedFileRecords(
     database as Parameters<typeof findOrphanedFileRecords>[0],
+    options?.fileIds,
   );
 
   if (orphans.length === 0) {

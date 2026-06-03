@@ -74,6 +74,38 @@ describe('findOrphanedFileRecords', () => {
     await expect(findOrphanedFileRecords(db as never)).rejects.toThrow('connection refused');
   });
 
+  it('given_emptyRestrictToFileIds_returnsEmptyWithoutQueryingDB', async () => {
+    // A scoped reap with no candidate files must scan NOTHING — never fall
+    // through to a full-table sweep inside a user-facing request.
+    const db = { execute: vi.fn() };
+
+    const result = await findOrphanedFileRecords(db as never, []);
+
+    expect(result).toEqual([]);
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  it('given_restrictToFileIds_scopesQueryWithIdFilterAndReturnsRows', async () => {
+    const db = {
+      execute: vi.fn().mockResolvedValue({
+        rows: [{ id: 'f1', storagePath: '/p', driveId: 'd1', sizeBytes: 1024, createdBy: 'u1' }],
+      }),
+    };
+
+    const result = await findOrphanedFileRecords(db as never, ['f1', 'f2']);
+
+    expect(db.execute).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      { id: 'f1', storagePath: '/p', driveId: 'd1', sizeBytes: 1024, createdBy: 'u1' },
+    ]);
+    // The restriction fragment must be interpolated into the executed SQL.
+    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray; values: unknown[] };
+    const fullSql = sqlArg.values
+      .map(v => (v && typeof v === 'object' && 'strings' in v ? (v as { strings: TemplateStringsArray }).strings.join('') : ''))
+      .join('');
+    expect(fullSql).toContain('= ANY(');
+  });
+
   it('given_sharedStoragePathDedupRequired_queryIncludesStoragePathGuard', async () => {
     // Ensures the SQL excludes blobs shared with a live sibling file record (#905 gap).
     // Uses storagePath (the actual CAS key in the files schema) — no contentHash column exists.

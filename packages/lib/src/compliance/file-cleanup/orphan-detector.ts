@@ -28,8 +28,23 @@ type DB = NodePgDatabase<Record<string, unknown>>;
  * Content-addressed storage means one physical blob may back multiple file records
  * (same storagePath). We only treat a record as orphaned when every sibling sharing
  * that storagePath also has no live references.
+ *
+ * When `restrictToFileIds` is provided, only those file records are considered
+ * (all the same reference + content-addressed sibling checks still apply). This
+ * lets a user-facing delete reap just the files its subtree orphaned instead of
+ * sweeping the whole table inline. An empty array reaps nothing; `undefined`
+ * scans every file (the weekly cron's behaviour).
  */
-export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFile[]> {
+export async function findOrphanedFileRecords(
+  database: DB,
+  restrictToFileIds?: string[],
+): Promise<OrphanedFile[]> {
+  if (restrictToFileIds && restrictToFileIds.length === 0) return [];
+
+  const idFilter = restrictToFileIds
+    ? sql` AND f.id = ANY(${restrictToFileIds})`
+    : sql``;
+
   const result = await database.execute(sql`
     SELECT f.id, f."storagePath", f."driveId", f."sizeBytes", f."createdBy"
     FROM files f
@@ -42,7 +57,7 @@ export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFil
       AND cm."fileId" IS NULL
       AND p.id IS NULL
       AND fc."fileId" IS NULL
-      AND dm."fileId" IS NULL
+      AND dm."fileId" IS NULL${idFilter}
       AND (
         f."storagePath" IS NULL
         OR NOT EXISTS (
