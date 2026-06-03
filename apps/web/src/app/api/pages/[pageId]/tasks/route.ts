@@ -126,6 +126,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const childPageIds = childPages.map(p => p.id);
 
   if (childPageIds.length === 0) {
+    // A list can hold only linked references (no native children) — still surface them.
+    const linkedTasks = await getLinkedTasksForList(pageId);
+    const linkedRelations = await getTaskRelations(linkedTasks.map(t => t.id));
     return NextResponse.json({
       taskList: {
         id: taskList.id,
@@ -135,6 +138,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         updatedAt: taskList.updatedAt,
       },
       tasks: [],
+      linkedTasks: linkedTasks.map(lt => ({
+        ...lt,
+        isLinked: true as const,
+        blockedBy: linkedRelations.get(lt.id)?.blockedBy ?? [],
+        blocks: linkedRelations.get(lt.id)?.blocks ?? [],
+        isBlocked: linkedRelations.get(lt.id)?.isBlocked ?? false,
+      })),
       statusConfigs,
     });
   }

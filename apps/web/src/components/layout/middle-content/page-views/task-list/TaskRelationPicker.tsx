@@ -65,8 +65,11 @@ export function TaskRelationPicker({
   const isAnyActive = useEditingStore((s) => s.isAnyActive());
   const loadedRef = useRef(false);
 
+  // showAllAssignees=true so the picker finds ANY task in the drive (unassigned
+  // or assigned to teammates), not just the current user's — the backend accepts
+  // any task by id for links/dependencies.
   const searchKey = open && driveId
-    ? `/api/tasks?context=drive&driveId=${driveId}&statusGroup=all&limit=20${
+    ? `/api/tasks?context=drive&driveId=${driveId}&statusGroup=all&showAllAssignees=true&limit=20${
         debouncedQuery ? `&search=${encodeURIComponent(debouncedQuery)}` : ''
       }`
     : null;

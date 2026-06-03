@@ -708,6 +708,49 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // Cross-list task references + blocker dependencies return a simple
+  // { success, message, error } shape rather than the task-list shape, so they
+  // render as action results rather than via TaskRenderer.
+  link_task: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      title="Linked task"
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  unlink_task: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="remove"
+      success={parsedOutput.success !== false}
+      title="Linked task"
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  add_task_dependency: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      title="Dependency"
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  remove_task_dependency: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="remove"
+      success={parsedOutput.success !== false}
+      title="Dependency"
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === CALENDAR (READ) ===
   list_calendar_events: ({ parsedOutput }) => {
     const events = pickData(parsedOutput).events;
