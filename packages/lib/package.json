@@ -337,6 +337,11 @@
       "import": "./dist/services/attachment-upload.js",
       "require": "./dist/services/attachment-upload.js"
     },
+    "./services/attachment-upload-core": {
+      "types": "./dist/services/attachment-upload-core.d.ts",
+      "import": "./dist/services/attachment-upload-core.js",
+      "require": "./dist/services/attachment-upload-core.js"
+    },
     "./services/attachment-upload-repository": {
       "types": "./dist/services/attachment-upload-repository.d.ts",
       "import": "./dist/services/attachment-upload-repository.js",
@@ -1055,6 +1060,9 @@
       ],
       "services/attachment-upload": [
         "./dist/services/attachment-upload.d.ts"
+      ],
+      "services/attachment-upload-core": [
+        "./dist/services/attachment-upload-core.d.ts"
       ],
       "services/attachment-upload-repository": [
         "./dist/services/attachment-upload-repository.d.ts"

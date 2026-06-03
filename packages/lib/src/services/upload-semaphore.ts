@@ -1,16 +1,25 @@
 import { STORAGE_TIERS } from './storage-limits';
 import { loggers } from '../logging/logger-config';
+import type { AttachmentTarget } from './attachment-upload-core';
 
 /**
  * Server-trusted upload parameters captured at presign time. /complete reads
  * these from the slot instead of trusting the client request body, so a client
  * cannot presign for one drive/hash/size and complete with another.
+ *
+ * `driveId` is the drive a page-file (or channel-attachment) upload belongs to;
+ * conversation (DM) attachments have no drive and set it to '' while carrying the
+ * binding in `attachmentTarget`. `attachmentTarget` is set only by the
+ * channel/DM attachment flow — page-file uploads leave it undefined — and binds
+ * the slot to a specific page/conversation so /complete can't be replayed
+ * against a different target.
  */
 export interface UploadSlotMetadata {
   contentHash: string;
   driveId: string;
   fileSize: number;
   mimeType: string;
+  attachmentTarget?: AttachmentTarget;
 }
 
 interface UploadSlot {
