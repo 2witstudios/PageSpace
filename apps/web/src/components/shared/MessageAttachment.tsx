@@ -234,7 +234,9 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
         </button>
 
         <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent className="w-[92vw] max-w-[92vw] sm:max-w-[92vw] h-[90vh] max-h-[90vh] p-4 flex flex-col gap-0">
+          {/* sm:max-w-[92vw] overrides shadcn DialogContent's default sm:max-w-lg (~512px),
+              which would otherwise clamp the viewer to a tiny window on desktop. */}
+          <DialogContent className="w-[92vw] sm:max-w-[92vw] h-[90vh] p-4 flex flex-col gap-0">
             <DialogTitle className="sr-only">Image preview</DialogTitle>
             <ZoomableImage src={`/api/files/${fileId}/view`} alt={name} />
           </DialogContent>
