@@ -250,7 +250,8 @@ export default function BillingPage() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="flex items-center justify-between">
+        {/* Wraps instead of a fixed row so the card stays readable in the half-width md grid column. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-full ${plan.accentColor}`}>
               <plan.icon className={`h-5 w-5 ${plan.iconColor}`} />
