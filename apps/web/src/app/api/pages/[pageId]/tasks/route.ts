@@ -15,6 +15,18 @@ import { createTaskAssignedNotification } from '@pagespace/lib/notifications/not
 import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { getTaskRelations, getLinkedTasksForList } from '@/lib/tasks/task-relations';
+import type { LinkedTask, TaskRelations } from '@/lib/tasks/task-relations';
+
+/** Attach dependency relations (blockedBy/blocks/isBlocked) to linked tasks for the list response. */
+function attachLinkedRelations(linkedTasks: LinkedTask[], relations: Map<string, TaskRelations>) {
+  return linkedTasks.map((lt) => ({
+    ...lt,
+    isLinked: true as const,
+    blockedBy: relations.get(lt.id)?.blockedBy ?? [],
+    blocks: relations.get(lt.id)?.blocks ?? [],
+    isBlocked: relations.get(lt.id)?.isBlocked ?? false,
+  }));
+}
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -138,13 +150,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         updatedAt: taskList.updatedAt,
       },
       tasks: [],
-      linkedTasks: linkedTasks.map(lt => ({
-        ...lt,
-        isLinked: true as const,
-        blockedBy: linkedRelations.get(lt.id)?.blockedBy ?? [],
-        blocks: linkedRelations.get(lt.id)?.blocks ?? [],
-        isBlocked: linkedRelations.get(lt.id)?.isBlocked ?? false,
-      })),
+      linkedTasks: attachLinkedRelations(linkedTasks, linkedRelations),
       statusConfigs,
     });
   }
@@ -318,16 +324,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   });
 
   // Linked tasks render as read-only references in a separate "Linked" group.
-  const enrichedLinkedTasks = linkedTasks.map((lt) => {
-    const rel = relations.get(lt.id);
-    return {
-      ...lt,
-      isLinked: true as const,
-      blockedBy: rel?.blockedBy ?? [],
-      blocks: rel?.blocks ?? [],
-      isBlocked: rel?.isBlocked ?? false,
-    };
-  });
+  const enrichedLinkedTasks = attachLinkedRelations(linkedTasks, relations);
 
   return NextResponse.json({
     taskList: {
