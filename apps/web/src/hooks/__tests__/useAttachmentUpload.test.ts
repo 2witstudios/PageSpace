@@ -1,15 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
-const { mockFetchWithAuth, mockToast, startEditing, endEditing } = vi.hoisted(() => ({
-  mockFetchWithAuth: vi.fn(),
+const { mockUploadAttachment, mockToast, startEditing, endEditing } = vi.hoisted(() => ({
+  mockUploadAttachment: vi.fn(),
   mockToast: { error: vi.fn(), success: vi.fn() },
   startEditing: vi.fn(),
   endEditing: vi.fn(),
 }));
 
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+// The hook delegates the per-file presign -> PUT -> complete orchestration to
+// uploadAttachment (covered by attachment-client.test.ts). These tests cover the
+// hook's own job: state, editing brackets, toasts, and the in-flight guard.
+vi.mock('@/lib/upload/attachment-client', () => ({
+  uploadAttachment: (...args: unknown[]) => mockUploadAttachment(...args),
 }));
 
 vi.mock('sonner', () => ({ toast: mockToast }));
@@ -22,7 +25,7 @@ vi.mock('@/stores/useEditingStore', () => ({
 
 import { useAttachmentUpload } from '../useAttachmentUpload';
 
-const fileData = {
+const attachment = {
   id: 'file-1',
   originalName: 'photo.png',
   size: 1024,
@@ -30,47 +33,30 @@ const fileData = {
   contentHash: 'hash-1',
 };
 
-// Batch response shape used by processAttachmentUploads
-const batchResponse = (files: { success: boolean; file?: typeof fileData; error?: string; fileName?: string }[]) => ({
-  files,
-});
+const ok = (a = attachment) => ({ ok: true as const, attachment: a });
+const fail = (errorMessage: string) => ({ ok: false as const, errorMessage });
 
-const okResponse = (body: unknown) => ({
-  ok: true,
-  status: 200,
-  json: async () => body,
-}) as unknown as Response;
-
-const errorResponse = (status: number, body: unknown = {}) => ({
-  ok: false,
-  status,
-  json: async () => body,
-}) as unknown as Response;
-
-const makeFile = () => new File(['data'], 'photo.png', { type: 'image/png' });
+const makeFile = (name = 'photo.png', type = 'image/png') => new File(['data'], name, { type });
 
 describe('useAttachmentUpload', () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
 
-  it('uploads a file, stores the attachment, and brackets the upload in startEditing/endEditing', async () => {
-    mockFetchWithAuth.mockResolvedValueOnce(okResponse(batchResponse([{ success: true, file: fileData }])));
+  it('uploads a file via uploadAttachment, stores it, and brackets in startEditing/endEditing', async () => {
+    mockUploadAttachment.mockResolvedValueOnce(ok());
     const onUploaded = vi.fn();
 
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload', onUploaded })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload', onUploaded })
     );
 
     await act(async () => {
       await result.current.uploadFile(makeFile());
     });
 
-    expect(mockFetchWithAuth).toHaveBeenCalledWith(
-      '/api/x/upload',
-      expect.objectContaining({ method: 'POST' })
-    );
-    expect(result.current.attachment).toMatchObject(fileData);
+    expect(mockUploadAttachment).toHaveBeenCalledWith('/api/channels/x/upload', expect.any(File));
+    expect(result.current.attachment).toMatchObject(attachment);
     expect(typeof result.current.attachment?.instanceId).toBe('string');
     expect(result.current.attachments).toHaveLength(1);
     expect(result.current.isUploading).toBe(false);
@@ -87,19 +73,17 @@ describe('useAttachmentUpload', () => {
       await result.current.uploadFile(makeFile());
     });
 
-    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    expect(mockUploadAttachment).not.toHaveBeenCalled();
     expect(startEditing).not.toHaveBeenCalled();
     expect(result.current.attachment).toBeNull();
     expect(result.current.attachments).toHaveLength(0);
   });
 
-  it('shows the file-too-large toast on 413 and leaves attachment null', async () => {
-    mockFetchWithAuth.mockResolvedValueOnce(
-      errorResponse(413, { error: 'File too large' })
-    );
+  it('shows the failure toast and leaves attachment null when uploadAttachment fails', async () => {
+    mockUploadAttachment.mockResolvedValueOnce(fail('File too large'));
 
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
     );
 
     await act(async () => {
@@ -111,28 +95,26 @@ describe('useAttachmentUpload', () => {
     expect(endEditing).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the editing session when the request throws', async () => {
-    mockFetchWithAuth.mockRejectedValueOnce(new Error('network'));
+  it('releases the editing session when uploadAttachment throws', async () => {
+    mockUploadAttachment.mockRejectedValueOnce(new Error('network'));
 
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
     );
 
     await act(async () => {
       await result.current.uploadFile(makeFile());
     });
 
-    expect(mockToast.error).toHaveBeenCalledWith(
-      'Failed to upload file. Please try again.'
-    );
+    expect(mockToast.error).toHaveBeenCalledWith('Failed to upload file. Please try again.');
     await waitFor(() => expect(result.current.isUploading).toBe(false));
     expect(endEditing).toHaveBeenCalledTimes(1);
   });
 
   it('clearAttachment resets all stored attachments', async () => {
-    mockFetchWithAuth.mockResolvedValueOnce(okResponse(batchResponse([{ success: true, file: fileData }])));
+    mockUploadAttachment.mockResolvedValueOnce(ok());
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
     );
 
     await act(async () => {
@@ -145,76 +127,62 @@ describe('useAttachmentUpload', () => {
     expect(result.current.attachments).toHaveLength(0);
   });
 
-  it('removeAttachment removes a single attachment by id', async () => {
-    const file2 = { ...fileData, id: 'file-2', originalName: 'doc.pdf', contentHash: 'hash-2' };
-    mockFetchWithAuth.mockResolvedValueOnce(
-      okResponse(batchResponse([{ success: true, file: fileData }, { success: true, file: file2 }]))
-    );
+  it('removeAttachment removes a single attachment by instanceId', async () => {
+    const second = { ...attachment, id: 'file-2', originalName: 'doc.pdf', contentHash: 'hash-2' };
+    mockUploadAttachment.mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok(second));
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
     );
 
     await act(async () => {
-      await result.current.uploadFiles([makeFile(), new File(['data'], 'doc.pdf', { type: 'application/pdf' })]);
+      await result.current.uploadFiles([makeFile(), makeFile('doc.pdf', 'application/pdf')]);
     });
     expect(result.current.attachments).toHaveLength(2);
 
-    const instanceIdToRemove = result.current.attachments.find(a => a.id === 'file-1')!.instanceId;
-    act(() => result.current.removeAttachment(instanceIdToRemove));
+    const toRemove = result.current.attachments.find(a => a.id === 'file-1')!.instanceId;
+    act(() => result.current.removeAttachment(toRemove));
     expect(result.current.attachments).toHaveLength(1);
     expect(result.current.attachments[0].id).toBe('file-2');
   });
 
   it('drops a second uploadFile call while one is already in flight', async () => {
-    let resolveFirst: ((value: Response) => void) | null = null;
-    mockFetchWithAuth.mockImplementationOnce(
-      () =>
-        new Promise<Response>((resolve) => {
-          resolveFirst = resolve;
-        })
+    let resolveFirst: ((v: ReturnType<typeof ok>) => void) | null = null;
+    mockUploadAttachment.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveFirst = resolve; })
     );
-    mockFetchWithAuth.mockResolvedValueOnce(okResponse(batchResponse([{ success: true, file: fileData }])));
 
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
     );
 
-    let secondCall: Promise<void> | undefined;
     await act(async () => {
       void result.current.uploadFile(makeFile());
-      secondCall = result.current.uploadFile(makeFile());
-      await secondCall;
+      await result.current.uploadFile(makeFile());
     });
 
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockUploadAttachment).toHaveBeenCalledTimes(1);
     expect(startEditing).toHaveBeenCalledTimes(1);
     expect(endEditing).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveFirst?.(okResponse(batchResponse([{ success: true, file: fileData }])));
+      resolveFirst?.(ok());
       await Promise.resolve();
     });
 
     expect(endEditing).toHaveBeenCalledTimes(1);
   });
 
-  it('shows per-file error toast when a file in the batch fails', async () => {
-    const files = [
-      { success: true as const, file: fileData },
-      { success: false as const, error: 'File too large', fileName: 'big.mp4' },
-    ];
-    mockFetchWithAuth.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ files }),
-    } as unknown as Response);
+  it('stores successes and toasts per-file failures within one batch', async () => {
+    mockUploadAttachment
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValueOnce(fail('File too large'));
 
     const { result } = renderHook(() =>
-      useAttachmentUpload({ uploadUrl: '/api/x/upload' })
+      useAttachmentUpload({ uploadUrl: '/api/channels/x/upload' })
     );
 
     await act(async () => {
-      await result.current.uploadFiles([makeFile(), new File(['data'], 'big.mp4', { type: 'video/mp4' })]);
+      await result.current.uploadFiles([makeFile(), makeFile('big.mp4', 'video/mp4')]);
     });
 
     expect(result.current.attachments).toHaveLength(1);

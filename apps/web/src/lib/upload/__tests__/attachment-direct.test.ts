@@ -197,9 +197,30 @@ describe('completeAttachment', () => {
 
   it('charges storage with no driveId for a conversation target', async () => {
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 2048, mimeType: 'image/png', driveId: '', attachmentTarget: CONV_TARGET });
+    mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 2048 });
     await completeAttachment(completeArgs({ target: CONV_TARGET }));
     expect(mockSaveFileRecord).toHaveBeenCalledWith(expect.objectContaining({ driveId: null }));
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 2048, expect.objectContaining({ driveId: undefined }));
+  });
+
+  it('persists and charges the verifier-authoritative size, not the client presign size', async () => {
+    // Slot (client-declared) says 5000 bytes, but the processor read 1024 — e.g. a
+    // dedup hit against a smaller pre-existing object. The verified size must win.
+    mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 5000, mimeType: 'image/png', driveId: 'drive-1', attachmentTarget: PAGE_TARGET });
+    mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
+    const res = await completeAttachment(completeArgs());
+    expect(res.body).toMatchObject({ file: { size: 1024 } });
+    expect(mockSaveFileRecord).toHaveBeenCalledWith(expect.objectContaining({ sizeBytes: 1024 }));
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 1024, expect.anything());
+  });
+
+  it('releases the slot and returns a retryable 503 when the verify call throws', async () => {
+    mockVerifyAttachmentBytes.mockRejectedValue(new Error('processor unreachable'));
+    const res = await completeAttachment(completeArgs());
+    expect(res.status).toBe(503);
+    expect(mockSaveFileRecord).not.toHaveBeenCalled();
+    expect(mockRelease).toHaveBeenCalledWith('job-1');
+    expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
   });
 });
 

@@ -30,7 +30,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkObjectExists, issuePresignedPutUrl } from './s3-effects';
-import { verifyAttachmentBytes } from './attachment-verify-effect';
+import { verifyAttachmentBytes, type AttachmentVerifyResult } from './attachment-verify-effect';
 
 const PRESIGN_TTL = 900;
 
@@ -137,23 +137,41 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   if (!reserved || !reserved.attachmentTarget || !slotTargetMatches(reserved.attachmentTarget, target)) {
     return { status: 403, body: { error: 'Invalid or expired jobId' } };
   }
-  // The slot's mimeType is the client-declared type; we persist the verified
-  // (Magika-detected) MIME from the processor instead, so it isn't read here.
-  const { contentHash, fileSize } = reserved;
+  // Only the content hash is read from the slot: the MIME and byte length are
+  // taken from the processor's verification result (authoritative), not the
+  // client-declared presign values.
+  const { contentHash } = reserved;
 
   // Synchronous byte verification before any rows exist. The processor re-hashes
-  // the stored object (deleting it on mismatch) and returns the true MIME type.
-  const verify = await verifyAttachmentBytes({ userId, target, contentHash });
+  // the stored object (deleting it on mismatch) and returns the true MIME type and
+  // authoritative byte length. A *throw* here (network error / verify timeout) must
+  // still release the reserved slot + active-upload count, or they leak until the
+  // semaphore's stale-slot sweep and the user hits their concurrency cap meanwhile.
+  let verify: AttachmentVerifyResult;
+  try {
+    verify = await verifyAttachmentBytes({ userId, target, contentHash });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await updateActiveUploads(userId, -1).catch(() => undefined);
+    loggers.api.error('Attachment verify call failed', err as Error);
+    return { status: 503, body: { error: 'File verification is temporarily unavailable. Please try again.' } };
+  }
   if (!verify.ok) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await updateActiveUploads(userId, -1).catch(() => undefined);
     return { status: verify.status, body: { error: verify.error } };
   }
   const storedMime = verify.detectedMime;
+  // Persist and charge the authoritative size the processor actually read — not the
+  // client-declared presign size. The presigned PUT enforces ContentLength so they
+  // match for fresh uploads, but the dedup path (alreadyExists) skips the PUT, so a
+  // client could otherwise declare a smaller size against a pre-existing object and
+  // under-report storage / forge the file row.
+  const resolvedSize = verify.size;
 
   try {
     await attachmentUploadRepository.saveFileRecord(
-      buildAttachmentFileRecord({ contentHash, target, fileSize, mimeType: storedMime, userId }),
+      buildAttachmentFileRecord({ contentHash, target, fileSize: resolvedSize, mimeType: storedMime, userId }),
     );
     await attachmentUploadRepository.linkFileToTarget({ target, fileId: contentHash, userId });
   } catch (err) {
@@ -169,7 +187,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // retry and double-charge storage).
   try {
     await updateActiveUploads(userId, -1);
-    await updateStorageUsage(userId, fileSize, {
+    await updateStorageUsage(userId, resolvedSize, {
       driveId: attachmentFileDriveId(target) ?? undefined,
       eventType: 'upload',
     });
@@ -188,7 +206,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
         fileId: contentHash,
         fileName: filename,
         fileType: storedMime,
-        fileSize,
+        fileSize: resolvedSize,
         driveId: attachmentFileDriveId(target),
         pageId: target.type === 'page' ? target.pageId : undefined,
       },
@@ -202,7 +220,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
     contentHash,
     originalName: filename,
     sanitizedName: sanitizeFilenameForHeader(filename),
-    size: fileSize,
+    size: resolvedSize,
     mimeType: storedMime,
   });
 
