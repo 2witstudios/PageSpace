@@ -105,4 +105,12 @@ describe('emitCreditsUpdated', () => {
     await expect(emitCreditsUpdated('u1')).resolves.toBeUndefined();
     expect(mockAiLogger.debug).toHaveBeenCalled();
   });
+
+  it('records a dropped broadcast when the realtime server returns non-2xx', async () => {
+    // A 4xx/5xx must not look like success: it should hit the catch path and log,
+    // not silently pass (the only signal the navbar push was dropped).
+    fetchMock.mockResolvedValue({ ok: false, status: 503 });
+    await expect(emitCreditsUpdated('u1')).resolves.toBeUndefined();
+    expect(mockAiLogger.debug).toHaveBeenCalled();
+  });
 });

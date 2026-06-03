@@ -31,6 +31,24 @@ export interface BackfillResult {
   expiredHolds: number;
 }
 
+/** Max concurrent balance broadcasts when reclaiming swept holds (bounds the fan-out). */
+const EMIT_CONCURRENCY = 10;
+
+/**
+ * Push fresh balances to many users without blocking the caller. Runs in bounded
+ * batches so a large hold sweep doesn't open one socket per user simultaneously.
+ * `emitCreditsUpdated` swallows its own errors, so allSettled never rejects; this is
+ * launched fire-and-forget (the app server is long-running, so detached work runs to
+ * completion). Exported-free: internal to the backfill shell.
+ */
+async function emitBalancesBestEffort(userIds: string[]): Promise<void> {
+  for (let i = 0; i < userIds.length; i += EMIT_CONCURRENCY) {
+    await Promise.allSettled(
+      userIds.slice(i, i + EMIT_CONCURRENCY).map((uid) => emitCreditsUpdated(uid)),
+    );
+  }
+}
+
 export async function backfillCredits(): Promise<BackfillResult> {
   if (!isBillingEnabled()) return { retried: 0, orphans: 0, expiredHolds: 0 };
 
@@ -52,11 +70,12 @@ export async function backfillCredits(): Promise<BackfillResult> {
     // Reclaiming a stale hold raises that user's spendable back up — push the fresh
     // balance so the navbar recovers without a refresh. This is the backstop for a
     // call that was interrupted before settlement: its dangling reservation finally
-    // clears here. One emit per distinct user; best-effort, never blocks the cron.
+    // clears here. One emit per distinct user. Fire-and-forget (void) so a slow or
+    // unreachable realtime server (each emit self-times-out at 5s) never serializes
+    // its delay across users and stalls the pending/orphan reconciliation below;
+    // the fan-out is bounded so a large sweep doesn't open one socket per user at once.
     const affected = [...new Set(swept.map((h) => h.userId))];
-    for (const uid of affected) {
-      await emitCreditsUpdated(uid);
-    }
+    void emitBalancesBestEffort(affected);
   } catch (error) {
     loggers.ai.debug('credit hold expiry sweep failed', { error: (error as Error).message });
   }

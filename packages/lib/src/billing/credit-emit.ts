@@ -44,12 +44,18 @@ async function broadcastCreditsUpdated(
     payload: { userId, operation: 'updated', ...body },
   });
 
-  await fetch(`${realtimeUrl}/api/broadcast`, {
+  const response = await fetch(`${realtimeUrl}/api/broadcast`, {
     method: 'POST',
     headers: createSignedBroadcastHeaders(requestBody),
     body: requestBody,
     signal: AbortSignal.timeout(5000),
   });
+  // A 4xx/5xx means the broadcast was dropped (bad signature, realtime error). Throw
+  // so emitCreditsUpdated's catch records it — otherwise dropped pushes look silently
+  // successful and we lose the only signal that the navbar didn't get updated.
+  if (!response.ok) {
+    throw new Error(`realtime broadcast failed: ${response.status}`);
+  }
 }
 
 /**
