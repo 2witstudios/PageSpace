@@ -44,13 +44,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   try {
+    // Whether a publish attempt could actually succeed — used by the UI to hide the
+    // Publish control instead of offering a button that only ever returns 503. This
+    // must mirror EVERY 503 fast-path in POST below: the dedicated public bucket must
+    // be configured AND the operational kill-switch must not be engaged.
+    const available =
+      isPublishConfigured() && process.env.CANVAS_PUBLISHING_DISABLED !== 'true';
+
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
       columns: { driveId: true, path: true },
     });
 
     if (!row) {
-      return NextResponse.json({ published: false });
+      return NextResponse.json({ published: false, available });
     }
 
     const drive = await db.query.drives.findFirst({
@@ -62,6 +69,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
     return NextResponse.json({
       published: true,
+      available,
       url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
       subdomain,
       path: row.path,
