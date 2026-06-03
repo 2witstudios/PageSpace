@@ -65,4 +65,42 @@ describe('renderCanvasDocument', () => {
   it('escapeHtml escapes the five HTML-significant characters', () => {
     expect(escapeHtml(`<>&"'`)).toBe('&lt;&gt;&amp;&quot;&#39;');
   });
+
+  // Codex #2: a <style> block inside <script> source (e.g. a web-component
+  // template literal) must NOT be treated as a real stylesheet — the script
+  // must survive verbatim and the inline style text must NOT be hoisted/removed.
+  it('given a <style> inside a <script> string, should preserve the script verbatim', () => {
+    const script = `<script>const t = '<style>.x{color:red}</style>';document.body.innerHTML = t;</script>`;
+    const out = renderCanvasDocument({ html: `${script}<p>x</p>` });
+    expect(out).toContain(script);
+    // The inline style text stays inside the script; the hoisted <head> <style> is empty.
+    expect(out).toContain('</head><body>');
+    expect(out).toContain('<head><meta charset');
+    // No duplicated/hoisted .x rule outside the script.
+    const headPart = out.slice(0, out.indexOf('</head>'));
+    expect(headPart).not.toContain('.x{color:red}');
+  });
+
+  it('given a real <style> AND a <style> inside a <script>, should hoist only the real one', () => {
+    const out = renderCanvasDocument({
+      html: `<style>.real{color:blue}</style><script>const t='<style>.fake{color:red}</style>';</script>`,
+    });
+    const headPart = out.slice(0, out.indexOf('</head>'));
+    expect(headPart).toContain('.real{color:blue}');
+    expect(headPart).not.toContain('.fake');
+    expect(out).toContain(`<script>const t='<style>.fake{color:red}</style>';</script>`);
+  });
+
+  // Codex #1: in-app iframe links (ordinary <a href> with no target) would
+  // navigate the sandboxed frame itself; baseTarget injects <base target> so
+  // they open a new tab instead.
+  it('given baseTarget, should inject a <base target> so links open in a new context', () => {
+    const out = renderCanvasDocument({ html: '<a href="https://example.com">x</a>', baseTarget: '_blank' });
+    expect(out).toContain('<base target="_blank">');
+  });
+
+  it('given no baseTarget (published page), should NOT inject a <base> element', () => {
+    const out = renderCanvasDocument({ html: '<a href="https://example.com">x</a>' });
+    expect(out).not.toContain('<base');
+  });
 });

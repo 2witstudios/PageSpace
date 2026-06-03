@@ -38,7 +38,13 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
  * in-app view and the published artifact render identically.
  */
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
-  const srcDoc = useMemo(() => renderCanvasDocument({ html, title }), [html, title]);
+  // baseTarget '_blank': inside the sandboxed frame an ordinary <a href> (no
+  // target) would navigate the frame itself — and many sites refuse framing —
+  // so default links to a new tab (works with the iframe's allow-popups).
+  const srcDoc = useMemo(
+    () => renderCanvasDocument({ html, title, baseTarget: '_blank' }),
+    [html, title],
+  );
 
   return (
     <iframe
