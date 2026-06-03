@@ -17,6 +17,16 @@ import {
 } from "@pagespace/lib/billing/credit-pricing";
 import type { SubscriptionTier } from "@pagespace/lib/services/subscription-utils";
 
+/**
+ * TRANSITION: whether to show the "AI credits pricing is rolling out" disclaimer across
+ * the marketing site. The site advertises the new credit model, but production accounts
+ * may still be on the legacy daily-limit experience until the app's per-environment
+ * `CREDITS_ENFORCEMENT_ENABLED` flag is flipped on. Flip this to `false` (then delete the
+ * treatment) once AI credits are live for all accounts. Marketing is one global SSG site,
+ * so this is a deliberate constant — NOT the app's per-deploy flag.
+ */
+export const CREDITS_IN_TRANSITION = true;
+
 /** Format whole cents as a plain dollar string, dropping a trailing ".00". */
 function formatDollars(cents: number): string {
   const dollars = cents / 100;

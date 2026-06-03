@@ -26,6 +26,7 @@ import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
 import { BillingGuard } from '@/components/billing/BillingGuard';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
+import { useCreditsMode } from '@/hooks/useCreditsMode';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
 
@@ -54,6 +55,8 @@ interface UpcomingInvoiceData {
 export default function BillingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Per-environment switch: credit surfaces show only when credits mode is ON.
+  const creditsMode = useCreditsMode();
 
   // State
   const [loading, setLoading] = useState(true);
@@ -259,8 +262,8 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* Credit top-up result alerts */}
-      {creditsParam === 'success' && (
+      {/* Credit top-up result alerts (credits mode only) */}
+      {creditsMode && creditsParam === 'success' && (
         <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-green-800 dark:text-green-200">
@@ -268,7 +271,7 @@ export default function BillingPage() {
           </AlertDescription>
         </Alert>
       )}
-      {creditsParam === 'canceled' && (
+      {creditsMode && creditsParam === 'canceled' && (
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
@@ -285,8 +288,8 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* AI Credits */}
-      <CreditBalanceCard />
+      {/* AI Credits (credits mode only; legacy daily-quota build hides this) */}
+      {creditsMode && <CreditBalanceCard />}
 
       {/* Current Subscription */}
       <Card>

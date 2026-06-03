@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-import { MONTHLY_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { MONTHLY_CREDITS, creditPacksPhrase, CREDITS_IN_TRANSITION } from "@/lib/credits";
 import { FAQHashOpener } from "./hash-opener";
 
 export const metadata = pageMetadata.faq;
@@ -88,6 +88,18 @@ const faqs: FAQItem[] = [
     answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you either buy more credits (top-up packs come in ${creditPacksPhrase()}) or your monthly allowance resets at the start of the next billing period.`,
     category: "Pricing and plans",
   },
+  // TRANSITION: remove when AI credits are live for all accounts
+  ...(CREDITS_IN_TRANSITION
+    ? [
+        {
+          id: "existing-user-credits-transition",
+          question: "I'm an existing user — when do AI credits start?",
+          answer:
+            "We're transitioning from daily AI limits to monthly AI credits. The allowances on this page are what each plan includes once credits are active for your account; until then, existing accounts continue on the previous daily limits. Either way, your documents, tasks, channels, and collaboration are unaffected.",
+          category: "Pricing and plans",
+        },
+      ]
+    : []),
 
   // Getting started
   {
