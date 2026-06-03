@@ -44,20 +44,26 @@ export function useGlobalEffectiveStream({
     : localIsStreaming;
 
   const effectiveStop = useCallback(() => {
-    // Stop the local fetch immediately (rawStop also best-effort aborts by chatId).
-    rawStop();
     // Authoritative: abort by the stable assistant messageId when the live stream
-    // is known, regardless of mode.
+    // is known — reaches the server registry regardless of conversation-id drift
+    // and tears down any multicast SSE join. Also stop the local fetch.
     if (activeMessageId) {
+      rawStop();
       void abortActiveStreamByMessageId({ messageId: activeMessageId });
       return;
     }
-    // No live messageId (e.g. resumed via bootstrap after refresh): fall back to
-    // the context's messageId-based stop registered at bootstrap.
+    // Streaming but no messageId yet (submitted, before first chunk): stop the
+    // local fetch (rawStop also best-effort aborts by chatId).
+    if (localIsStreaming) {
+      rawStop();
+      return;
+    }
+    // Idle locally but resumed via bootstrap after refresh: use the context's
+    // messageId-based stop registered at bootstrap.
     if (inGlobalMode && contextStopStreaming) {
       contextStopStreaming();
     }
-  }, [rawStop, activeMessageId, inGlobalMode, contextStopStreaming]);
+  }, [activeMessageId, localIsStreaming, rawStop, inGlobalMode, contextStopStreaming]);
 
   return { effectiveIsStreaming, effectiveStop };
 }
