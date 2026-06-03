@@ -47,7 +47,13 @@ describe('renderCanvasDocument', () => {
   it('should emit a baseline reset that zeroes the body margin (no UA border/frame)', () => {
     const out = renderCanvasDocument({ html: '<div>x</div>' });
     expect(out).toContain('html,body{margin:0;padding:0;}');
-    expect(BASELINE_RESET).toContain('box-sizing:border-box');
+  });
+
+  it('baseline reset is scoped to html/body — no universal box-sizing or font override', () => {
+    // A wider reset would silently reflow/restyle arbitrary author content on republish.
+    expect(BASELINE_RESET).toBe('html,body{margin:0;padding:0;}');
+    expect(BASELINE_RESET).not.toContain('box-sizing');
+    expect(BASELINE_RESET).not.toContain('font-family');
   });
 
   it('should emit the baseline reset BEFORE the author CSS so author rules win', () => {
