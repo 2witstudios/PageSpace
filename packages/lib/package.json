@@ -938,6 +938,9 @@
       "billing/credit-emit": [
         "./dist/billing/credit-emit.d.ts"
       ],
+      "billing/automation-preferences": [
+        "./dist/billing/automation-preferences.d.ts"
+      ],
       "billing/credit-pricing": [
         "./dist/billing/credit-pricing.d.ts"
       ],
@@ -961,6 +964,9 @@
       ],
       "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
+      ],
+      "monitoring/usage-source": [
+        "./dist/monitoring/usage-source.d.ts"
       ],
       "monitoring/ai-context-calculator": [
         "./dist/monitoring/ai-context-calculator.d.ts"
