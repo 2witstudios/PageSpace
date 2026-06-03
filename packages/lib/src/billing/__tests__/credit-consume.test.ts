@@ -9,6 +9,7 @@ const mockDb = vi.hoisted(() => ({
   delete: vi.fn(),
 }));
 const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
+const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
@@ -22,6 +23,9 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
+// The live `credits:updated` broadcast is exercised by its own suite; here we only
+// assert that the billing primitives FIRE it at each balance/hold mutation.
+vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
 import { consumeCredits, settlePendingLedgerRow, releaseHold } from '../credit-consume';
 
@@ -71,6 +75,8 @@ describe('consumeCredits', () => {
     expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 950, pendingMillicents: 0 });
     // appliedCents records what truly left the balance (signed -): 100 monthly + 50 topup.
     expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150 });
+    // The debit committed -> push the user's fresh balance for the live navbar.
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1', expect.anything());
   });
 
   it('floors the balance at 0 and records the uncovered remainder as a debt adjustment row', async () => {
@@ -318,27 +324,45 @@ describe('consumeCredits', () => {
     // Ledger settled 'skipped' AND the hold released, both outside a transaction.
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
     expect(deleteWhere).toHaveBeenCalledTimes(1);
+    // Releasing the hold frees spendable -> push the user's fresh balance.
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1', expect.anything());
   });
 });
 
 describe('releaseHold', () => {
+  // delete().where().returning({ userId }) — returning() yields the freed hold's owner.
+  function deleteReturning(rows: Array<{ userId: string }>) {
+    const returning = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ returning });
+    mockDb.delete.mockReturnValue({ where });
+    return { where, returning };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsBillingEnabled.mockReturnValue(true);
   });
 
-  it('deletes the hold row by id', async () => {
-    const deleteWhere = vi.fn().mockResolvedValue(undefined);
-    mockDb.delete.mockReturnValue({ where: deleteWhere });
+  it('deletes the hold row by id and pushes the freed balance to its owner', async () => {
+    const { where } = deleteReturning([{ userId: 'u1' }]);
     await releaseHold('hold_99');
     expect(mockDb.delete).toHaveBeenCalledTimes(1);
-    expect(deleteWhere).toHaveBeenCalledTimes(1);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
+  });
+
+  it('does not emit when no hold row was deleted (already swept/expired)', async () => {
+    deleteReturning([]);
+    await releaseHold('hold_gone');
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 
   it('is a no-op when billing is disabled', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
     await releaseHold('hold_99');
     expect(mockDb.delete).not.toHaveBeenCalled();
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 
   it('never throws if the delete fails', async () => {
@@ -376,6 +400,8 @@ describe('settlePendingLedgerRow', () => {
     await settlePendingLedgerRow('led_1');
     expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 50, topupRemainingCents: 0, pendingMillicents: 0 });
     expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150 });
+    // A cron retry that settles still pushes the user's fresh balance.
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
   });
 
   it('is a no-op when the row is already applied', async () => {
@@ -390,5 +416,7 @@ describe('settlePendingLedgerRow', () => {
     });
     await settlePendingLedgerRow('led_1');
     expect(update).not.toHaveBeenCalled();
+    // Nothing settled -> nothing to push.
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 });

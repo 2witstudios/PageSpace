@@ -20,6 +20,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { chargeMillicents, accruePending, allocateSpend } from './credit-core';
 import { MARKUP_BPS } from './credit-pricing';
+import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 
 export interface ConsumeCreditsInput {
@@ -32,6 +33,14 @@ export interface ConsumeCreditsInput {
    * orphan/retry paths pass none (the hold, if any, is reclaimed by expiry).
    */
   holdId?: string;
+  /**
+   * Optional scope so the live `credits:updated` push can carry conversation/page
+   * hints (the per-conversation usage monitor filters on them). Live chat routes
+   * thread these through; background jobs and the reconcile cron leave them unset,
+   * so the navbar still updates while the per-conversation view is untouched.
+   */
+  conversationId?: string;
+  pageId?: string;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -223,6 +232,11 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
       // counting against the in-flight cap until it expires.
       if (input.holdId) {
         await db.delete(creditHolds).where(eq(creditHolds.id, input.holdId));
+        // Releasing the hold frees the user's spendable — push the fresh balance.
+        void emitCreditsUpdated(input.userId, {
+          conversationId: input.conversationId,
+          pageId: input.pageId,
+        });
       }
     } catch (error) {
       loggers.ai.debug('credit zero-charge settle failed', {
@@ -238,6 +252,12 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
     await db.transaction((tx) =>
       decrementAndSettle(tx, ledgerId, input.userId, chargeMc, input.aiUsageLogId, input.holdId ?? null),
     );
+    // The debit + hold release committed: push the user's fresh balance so the navbar
+    // reflects this call's spend live (no refresh). Best-effort, never blocks the call.
+    void emitCreditsUpdated(input.userId, {
+      conversationId: input.conversationId,
+      pageId: input.pageId,
+    });
   } catch (error) {
     // Leave the row 'pending' for the backfill cron to retry. Never throw.
     loggers.ai.debug('credit consume failed', {
@@ -257,7 +277,14 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
 export async function releaseHold(holdId: string): Promise<void> {
   if (!isBillingEnabled()) return;
   try {
-    await db.delete(creditHolds).where(eq(creditHolds.id, holdId));
+    // Return the hold's owner so we can push their freed balance. A missing/expired
+    // hold deletes zero rows and yields no userId — then there's nothing to emit.
+    const deleted = await db
+      .delete(creditHolds)
+      .where(eq(creditHolds.id, holdId))
+      .returning({ userId: creditHolds.userId });
+    const userId = deleted[0]?.userId;
+    if (userId) void emitCreditsUpdated(userId);
   } catch (error) {
     loggers.ai.debug('credit hold release failed', { error: (error as Error).message, holdId });
   }
@@ -269,6 +296,7 @@ export async function releaseHold(holdId: string): Promise<void> {
  * atomically. A no-op if the row is missing or already applied — safe to retry.
  */
 export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
+  let settledUserId: string | null = null;
   await db.transaction(async (tx) => {
     const rows = await tx
       .select()
@@ -290,5 +318,9 @@ export async function settlePendingLedgerRow(ledgerId: string): Promise<void> {
     // precision on those legacy rows only).
     const chargeMc = row.chargeMillicents ?? Math.abs(row.amountCents) * 1000;
     await decrementAndSettle(tx, ledgerId, row.userId, chargeMc, row.aiUsageLogId);
+    settledUserId = row.userId;
   });
+  // A pending row settled this run (cron retry): push the user's fresh balance so a
+  // call that never emitted at its own finish still reaches the navbar live.
+  if (settledUserId) void emitCreditsUpdated(settledUserId);
 }

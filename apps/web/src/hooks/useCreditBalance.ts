@@ -55,7 +55,12 @@ export function useCreditBalance() {
     connect();
   }, [connect]);
 
-  // Apply live balance pushes without a refetch.
+  // Apply live balance pushes. The payload is shown immediately for instant feedback,
+  // then we revalidate against `/api/credits` (the authoritative current balance) so an
+  // out-of-order or stale snapshot can't stick — e.g. a delayed turn-start "hold placed"
+  // push arriving AFTER its own settlement push would otherwise roll the navbar back to
+  // the reserved value. SWR dedupes concurrent revalidations, so bursty start+finish
+  // events coalesce into a single refetch.
   useEffect(() => {
     if (!socket) return;
 
@@ -68,7 +73,7 @@ export function useCreditBalance() {
           spendable: payload.spendable,
           reserved: payload.reserved,
         },
-        false,
+        { revalidate: true },
       );
     };
 

@@ -33,6 +33,7 @@ import {
   MAX_FREE_INFLIGHT,
   isCreditsEnforcementEnabled,
 } from './credit-pricing';
+import { emitCreditsUpdated } from './credit-emit';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 /**
@@ -206,6 +207,13 @@ export async function canConsumeAI(
 
     return { ...result, holdId: inserted[0]?.id };
   });
+
+  // A hold was placed: the reservation just shrank this user's spendable. Push the
+  // fresh balance now (scopeless — navbar only; no usage exists yet) so the widget
+  // drops the instant the call starts, not just when it settles. This is the
+  // always-fires update that keeps the navbar correct even if the stream is
+  // interrupted and onFinish/settlement never runs. Best-effort, never blocks.
+  if (result.holdId) void emitCreditsUpdated(userId);
 
   // Dark launch: the gate did all its bookkeeping above (lazy-init, reset, balance
   // read, and a hold on the allow path), but when enforcement is OFF we never hand
