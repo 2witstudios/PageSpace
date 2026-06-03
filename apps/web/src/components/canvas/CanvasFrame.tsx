@@ -9,6 +9,18 @@ interface CanvasFrameProps {
 }
 
 /**
+ * Sandbox tokens for the in-app canvas iframe.
+ *
+ * ⚠️ SECURITY-CRITICAL: NEVER add `allow-same-origin`. CanvasFrame renders author
+ * HTML/JS via `srcDoc`, which inherits the parent (app) origin — the only thing
+ * keeping it an opaque, isolated origin is the ABSENCE of `allow-same-origin`.
+ * `allow-same-origin` + `allow-scripts` would let author JS run AS the logged-in
+ * app (full session compromise). Likewise no `allow-top-navigation*`, so the
+ * frame can never navigate the app's own tab. Guarded by CanvasFrame.test.ts.
+ */
+export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
+
+/**
  * In-app renderer for canvas pages.
  *
  * Replaces the old Shadow-DOM approach (which could not isolate scripts and so
@@ -31,7 +43,7 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   return (
     <iframe
       srcDoc={srcDoc}
-      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+      sandbox={CANVAS_IFRAME_SANDBOX}
       referrerPolicy="no-referrer"
       className="w-full h-full border-0"
       title={title || 'Canvas'}
