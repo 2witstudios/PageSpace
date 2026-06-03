@@ -17,7 +17,7 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import { VOICE_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { VOICE_HOLD_ESTIMATE_CENTS, VOICE_MAX_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateVoiceCostDollars } from '@pagespace/lib/monitoring/voice-pricing';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -123,7 +123,10 @@ export async function POST(request: Request) {
     // VOICE_HOLD_ESTIMATE_CENTS; the real cost settles exactly afterwards. Blocks
     // out-of-credit paid users only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise
     // it still books the hold and records spend (dark launch, same as chat).
-    const gate = await canConsumeAI(userId, tier, { estCostCents: VOICE_HOLD_ESTIMATE_CENTS });
+    const gate = await canConsumeAI(userId, tier, {
+      estCostCents: VOICE_HOLD_ESTIMATE_CENTS,
+      maxInFlight: VOICE_MAX_INFLIGHT,
+    });
     if (!gate.allowed) {
       return creditGateErrorResponse(gate.reason);
     }

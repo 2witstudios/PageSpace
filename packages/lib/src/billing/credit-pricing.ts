@@ -91,10 +91,27 @@ export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', R
  * the spendable-floor check meaningful without over-reserving. It is an ESTIMATE, not
  * a guaranteed cap (a very long upload could exceed it); the real cost always settles
  * exactly via consumeCredits and the 1.5× markup — not this hold — is the solvency
- * guarantee. TTS does NOT use this: its character count is known up front, so it
- * reserves the exact charged amount via estimateVoiceHoldCents(). Tune via env.
+ * guarantee. Because a single STT call can settle above this estimate, concurrent
+ * paid-voice overdraw is bounded by VOICE_MAX_INFLIGHT (a per-user concurrency cap),
+ * not by this reservation. TTS does NOT use this: its character count is known up
+ * front, so it reserves the exact charged amount via estimateVoiceHoldCents(). Tune
+ * via env.
  */
 export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
+
+/**
+ * Max concurrent in-flight VOICE calls per user, applied to ALL tiers (paid voice
+ * is otherwise uncapped). Bounds worst-case concurrent overdraw: a hold reserves an
+ * ESTIMATE, but the real cost only lands at settle, so without a cap a paid user
+ * could open many simultaneous calls that each reserve little yet collectively
+ * settle past their balance. STT especially can't reserve exactly (audio duration
+ * is unknown until Whisper responds, and file size isn't a usable cost bound), so
+ * this concurrency cap — not the per-call hold — is what bounds that exposure to
+ * `VOICE_MAX_INFLIGHT × worst-case single call`. TTS already reserves its exact
+ * charged amount. Voice mode plays chunks sequentially (≤2 in flight), so 4 is
+ * comfortable for legitimate use. Default 4.
+ */
+export const VOICE_MAX_INFLIGHT = envInt('VOICE_MAX_INFLIGHT', 4);
 
 /**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the

@@ -97,8 +97,8 @@ describe('POST /api/voice/synthesize — metering', () => {
 
     expect(res.status).toBe(200);
     // Gated with the exact per-call reservation: 1000 chars × $15/1M × 1.5 = $0.0225
-    // → ceil to 3¢ (not a flat estimate).
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 3 });
+    // → ceil to 3¢ (not a flat estimate), plus the voice concurrency cap.
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 3, maxInFlight: 4 });
     // Billed real cost: 1000 chars × $15/1M = $0.015, tagged as voice/list_price.
     expect(mockTrackUsage).toHaveBeenCalledTimes(1);
     const usage = mockTrackUsage.mock.calls[0][0];

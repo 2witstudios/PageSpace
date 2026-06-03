@@ -104,7 +104,7 @@ describe('POST /api/voice/transcribe — metering', () => {
     const sentForm = fetchSpy.mock.calls[0][1].body as FormData;
     expect(sentForm.get('response_format')).toBe('verbose_json');
 
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 2 });
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 2, maxInFlight: 4 });
     expect(mockTrackUsage).toHaveBeenCalledTimes(1);
     const usage = mockTrackUsage.mock.calls[0][0];
     expect(usage).toMatchObject({
