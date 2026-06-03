@@ -119,22 +119,11 @@ export function useChannelStreamSocket(
   onConversationRenamedRef.current = options?.onConversationRenamed;
   onConversationDeletedRef.current = options?.onConversationDeleted;
 
-  // Tracks the channel we've already bootstrapped for this mount. `useSocket()`
-  // can hand back a new socket ref on reconnect, which re-runs this effect; on
-  // such a re-run we must NOT re-consume our OWN in-flight stream (useChat is
-  // still rendering it — re-joining would create a second renderer). Resets when
-  // the channel changes or the component unmounts.
-  const bootstrappedChannelRef = useRef<string | null>(null);
-
   useEffect(() => {
     if (!socket || !channelId) return;
 
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
-    // First bootstrap for this channel on this mount (e.g. a genuine refresh
-    // mid-stream) re-attaches own streams; a bare socket-reconnect re-run does not.
-    const isFirstBootstrapForChannel = bootstrappedChannelRef.current !== channelId;
-    bootstrappedChannelRef.current = channelId;
     const controllers = new Map<string, AbortController>();
     // Tracks which messageIds have had onStreamComplete called to prevent
     // double-firing when both the SSE done sentinel and chat:stream_complete
@@ -211,10 +200,6 @@ export function useChannelStreamSocket(
         for (const stream of data.streams ?? []) {
           if (shouldSkipBootstrappedStream(stream.messageId, processed, controllers)) continue;
           const isOwn = isOwnStream(stream.triggeredBy, localBrowserSessionId);
-          // On a socket-reconnect re-run (not the first mount for this channel),
-          // skip re-consuming our own in-flight stream — the live useChat instance
-          // is still driving it, so a second SSE join would double-render.
-          if (isOwn && !isFirstBootstrapForChannel) continue;
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
