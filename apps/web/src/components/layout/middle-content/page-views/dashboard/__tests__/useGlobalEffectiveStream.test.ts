@@ -1,9 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
+
+const { mockAbortByMessageId } = vi.hoisted(() => ({ mockAbortByMessageId: vi.fn() }));
+vi.mock('@/lib/ai/core/stream-abort-client', () => ({
+  abortActiveStreamByMessageId: mockAbortByMessageId,
+}));
 
 import { useGlobalEffectiveStream } from '../useGlobalEffectiveStream';
 
 describe('useGlobalEffectiveStream', () => {
+  beforeEach(() => {
+    mockAbortByMessageId.mockClear();
+  });
+
   // AC9
   it('given global mode with local idle and context isStreaming=true, should report effectiveIsStreaming=true', () => {
     const { result } = renderHook(() =>
@@ -132,5 +141,48 @@ describe('useGlobalEffectiveStream', () => {
     result.current.effectiveStop();
 
     expect(rawStop).not.toHaveBeenCalled();
+  });
+
+  it('given a live activeMessageId, should abort by messageId and stop the local fetch (not the context stop)', () => {
+    const rawStop = vi.fn();
+    const contextStopStreaming = vi.fn();
+
+    const { result } = renderHook(() =>
+      useGlobalEffectiveStream({
+        localIsStreaming: true,
+        rawStop,
+        selectedAgent: null,
+        contextIsStreaming: true,
+        contextStopStreaming,
+        activeMessageId: 'msg-live-1',
+      }),
+    );
+
+    result.current.effectiveStop();
+
+    expect(mockAbortByMessageId).toHaveBeenCalledTimes(1);
+    expect(mockAbortByMessageId).toHaveBeenCalledWith({ messageId: 'msg-live-1' });
+    expect(rawStop).toHaveBeenCalledTimes(1);
+    expect(contextStopStreaming).not.toHaveBeenCalled();
+  });
+
+  it('given an activeMessageId in agent mode, should abort by messageId regardless of mode', () => {
+    const rawStop = vi.fn();
+
+    const { result } = renderHook(() =>
+      useGlobalEffectiveStream({
+        localIsStreaming: true,
+        rawStop,
+        selectedAgent: { id: 'agent-1' },
+        contextIsStreaming: false,
+        contextStopStreaming: null,
+        activeMessageId: 'msg-agent-live',
+      }),
+    );
+
+    result.current.effectiveStop();
+
+    expect(mockAbortByMessageId).toHaveBeenCalledWith({ messageId: 'msg-agent-live' });
+    expect(rawStop).toHaveBeenCalledTimes(1);
   });
 });

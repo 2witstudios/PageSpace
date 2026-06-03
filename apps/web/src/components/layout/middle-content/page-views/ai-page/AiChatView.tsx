@@ -27,7 +27,8 @@ import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
-import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import { abortActiveStream, abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
@@ -50,7 +51,6 @@ import {
   useConversations,
   useChatTransport,
   useStreamingRegistration,
-  useChatStop,
   useSendHandoff,
   AgentConfig,
 } from '@/lib/ai/shared';
@@ -263,7 +263,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
   const currentFindMsgId = findMatchIds[findIndex] ?? null;
   const { wrapSend } = useSendHandoff(currentConversationId, status);
-  const stop = useChatStop(streamTrackingId, chatStop);
 
   const streamingAssistantText = useMemo(() => {
     if (!isStreaming) return null;
@@ -401,14 +400,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     : null;
 
   const effectiveStop = useCallback(() => {
-    if (isStreaming) {
-      stop();
+    // Stop the local fetch immediately for instant UI feedback.
+    chatStop();
+    // Abort by the stable assistant messageId — reaches the server registry even
+    // when the conversation id shifted mid-stream, and tears down any multicast
+    // SSE join via the resulting chat:stream_complete broadcast.
+    const messageId = resolveActiveAssistantMessageId({
+      ownStreamMessageId,
+      isStreaming,
+      lastAssistantMessageId,
+    });
+    if (messageId) {
+      void abortActiveStreamByMessageId({ messageId });
       return;
     }
-    if (ownStreamMessageId) {
-      abortActiveStreamByMessageId({ messageId: ownStreamMessageId });
-    }
-  }, [isStreaming, stop, ownStreamMessageId]);
+    // No assistant id yet (submitted, before first chunk): fall back to the chatId map.
+    if (streamTrackingId) void abortActiveStream({ chatId: streamTrackingId });
+  }, [chatStop, ownStreamMessageId, isStreaming, lastAssistantMessageId, streamTrackingId]);
 
   usePageSocketRoom(page.id);
   useChannelStreamSocket(page.id, {
@@ -448,7 +456,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
 
       if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationId) {
-        setMessages((prev) => [...prev, synthesizeAssistantMessage(messageId, stream.parts)]);
+        // Guard against a duplicate: useChat may already hold this message when the
+        // stream was consumed by both the POST stream and the multicast SSE join.
+        setMessages((prev) =>
+          prev.some((m) => m.id === messageId)
+            ? prev
+            : [...prev, synthesizeAssistantMessage(messageId, stream.parts)],
+        );
         return;
       }
 
@@ -469,7 +483,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             const persisted = data.conversations?.[0];
             if (!persisted || persisted.id !== streamConvId) return;
             setCurrentConversationId(persisted.id);
-            setMessages((prev) => [...prev, synthesizeAssistantMessage(messageId, parts)]);
+            setMessages((prev) =>
+              prev.some((m) => m.id === messageId)
+                ? prev
+                : [...prev, synthesizeAssistantMessage(messageId, parts)],
+            );
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));
       }
