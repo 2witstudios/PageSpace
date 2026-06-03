@@ -474,6 +474,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@aws-sdk/client-s3": "^3.1045.0",
+        "@fly/sprites": "0.0.1-rc37",
         "@iarna/toml": "^2.2.5",
         "@pagespace/db": "workspace:*",
         "@paralleldrive/cuid2": "^2.2.2",
@@ -889,6 +890,8 @@
     "@floating-ui/react-dom": ["@floating-ui/react-dom@2.1.8", "", { "dependencies": { "@floating-ui/dom": "^1.7.6" }, "peerDependencies": { "react": ">=16.8.0", "react-dom": ">=16.8.0" } }, "sha512-cC52bHwM/n/CxS87FH0yWdngEZrjdtLW/qVruo68qg+prK7ZQ4YGdut2GyDVpoGeAYe/h899rVeOVm6Oi40k2A=="],
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
+
+    "@fly/sprites": ["@fly/sprites@0.0.1-rc37", "", {}, "sha512-yzjJ8bsBl1XoECSols0iFvvmlqiog22ODO8F3Z+8mao44ZaMYiOVjRTuSd2g+rE0OFuj0u/ctlpPTHfVdpgWKA=="],
 
     "@fontsource/ibm-plex-mono": ["@fontsource/ibm-plex-mono@5.2.7", "", {}, "sha512-MKAb8qV+CaiMQn2B0dIi1OV3565NYzp3WN5b4oT6LTkk+F0jR6j0ZN+5BKJiIhffDC3rtBULsYZE65+0018z9w=="],
 

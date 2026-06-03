@@ -197,6 +197,96 @@
       "import": "./dist/services/upload-semaphore.js",
       "require": "./dist/services/upload-semaphore.js"
     },
+    "./services/sandbox/can-run-code": {
+      "types": "./dist/services/sandbox/can-run-code.d.ts",
+      "import": "./dist/services/sandbox/can-run-code.js",
+      "require": "./dist/services/sandbox/can-run-code.js"
+    },
+    "./services/sandbox/execution-policy": {
+      "types": "./dist/services/sandbox/execution-policy.d.ts",
+      "import": "./dist/services/sandbox/execution-policy.js",
+      "require": "./dist/services/sandbox/execution-policy.js"
+    },
+    "./services/sandbox/sandbox-env": {
+      "types": "./dist/services/sandbox/sandbox-env.d.ts",
+      "import": "./dist/services/sandbox/sandbox-env.js",
+      "require": "./dist/services/sandbox/sandbox-env.js"
+    },
+    "./services/sandbox/quota": {
+      "types": "./dist/services/sandbox/quota.d.ts",
+      "import": "./dist/services/sandbox/quota.js",
+      "require": "./dist/services/sandbox/quota.js"
+    },
+    "./services/sandbox/audit": {
+      "types": "./dist/services/sandbox/audit.d.ts",
+      "import": "./dist/services/sandbox/audit.js",
+      "require": "./dist/services/sandbox/audit.js"
+    },
+    "./services/sandbox/session-key": {
+      "types": "./dist/services/sandbox/session-key.d.ts",
+      "import": "./dist/services/sandbox/session-key.js",
+      "require": "./dist/services/sandbox/session-key.js"
+    },
+    "./services/sandbox/lifecycle": {
+      "types": "./dist/services/sandbox/lifecycle.d.ts",
+      "import": "./dist/services/sandbox/lifecycle.js",
+      "require": "./dist/services/sandbox/lifecycle.js"
+    },
+    "./services/sandbox/sandbox-options": {
+      "types": "./dist/services/sandbox/sandbox-options.d.ts",
+      "import": "./dist/services/sandbox/sandbox-options.js",
+      "require": "./dist/services/sandbox/sandbox-options.js"
+    },
+    "./services/sandbox/session-store": {
+      "types": "./dist/services/sandbox/session-store.d.ts",
+      "import": "./dist/services/sandbox/session-store.js",
+      "require": "./dist/services/sandbox/session-store.js"
+    },
+    "./services/sandbox/session-manager": {
+      "types": "./dist/services/sandbox/session-manager.d.ts",
+      "import": "./dist/services/sandbox/session-manager.js",
+      "require": "./dist/services/sandbox/session-manager.js"
+    },
+    "./services/sandbox/command-policy": {
+      "types": "./dist/services/sandbox/command-policy.d.ts",
+      "import": "./dist/services/sandbox/command-policy.js",
+      "require": "./dist/services/sandbox/command-policy.js"
+    },
+    "./services/sandbox/output-limit": {
+      "types": "./dist/services/sandbox/output-limit.d.ts",
+      "import": "./dist/services/sandbox/output-limit.js",
+      "require": "./dist/services/sandbox/output-limit.js"
+    },
+    "./services/sandbox/egress": {
+      "types": "./dist/services/sandbox/egress.d.ts",
+      "import": "./dist/services/sandbox/egress.js",
+      "require": "./dist/services/sandbox/egress.js"
+    },
+    "./services/sandbox/sandbox-paths": {
+      "types": "./dist/services/sandbox/sandbox-paths.d.ts",
+      "import": "./dist/services/sandbox/sandbox-paths.js",
+      "require": "./dist/services/sandbox/sandbox-paths.js"
+    },
+    "./services/sandbox/sandbox-client/types": {
+      "types": "./dist/services/sandbox/sandbox-client/types.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/types.js",
+      "require": "./dist/services/sandbox/sandbox-client/types.js"
+    },
+    "./services/sandbox/sandbox-client/sprites": {
+      "types": "./dist/services/sandbox/sandbox-client/sprites.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprites.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprites.js"
+    },
+    "./services/sandbox/tool-runners": {
+      "types": "./dist/services/sandbox/tool-runners.d.ts",
+      "import": "./dist/services/sandbox/tool-runners.js",
+      "require": "./dist/services/sandbox/tool-runners.js"
+    },
+    "./services/sandbox/tool-gate": {
+      "types": "./dist/services/sandbox/tool-gate.d.ts",
+      "import": "./dist/services/sandbox/tool-gate.js",
+      "require": "./dist/services/sandbox/tool-gate.js"
+    },
     "./services/upload-validation": {
       "types": "./dist/services/upload-validation.d.ts",
       "import": "./dist/services/upload-validation.js",
@@ -873,6 +963,60 @@
       "services/upload-semaphore": [
         "./dist/services/upload-semaphore.d.ts"
       ],
+      "services/sandbox/can-run-code": [
+        "./dist/services/sandbox/can-run-code.d.ts"
+      ],
+      "services/sandbox/execution-policy": [
+        "./dist/services/sandbox/execution-policy.d.ts"
+      ],
+      "services/sandbox/sandbox-env": [
+        "./dist/services/sandbox/sandbox-env.d.ts"
+      ],
+      "services/sandbox/quota": [
+        "./dist/services/sandbox/quota.d.ts"
+      ],
+      "services/sandbox/audit": [
+        "./dist/services/sandbox/audit.d.ts"
+      ],
+      "services/sandbox/session-key": [
+        "./dist/services/sandbox/session-key.d.ts"
+      ],
+      "services/sandbox/lifecycle": [
+        "./dist/services/sandbox/lifecycle.d.ts"
+      ],
+      "services/sandbox/sandbox-options": [
+        "./dist/services/sandbox/sandbox-options.d.ts"
+      ],
+      "services/sandbox/session-store": [
+        "./dist/services/sandbox/session-store.d.ts"
+      ],
+      "services/sandbox/session-manager": [
+        "./dist/services/sandbox/session-manager.d.ts"
+      ],
+      "services/sandbox/command-policy": [
+        "./dist/services/sandbox/command-policy.d.ts"
+      ],
+      "services/sandbox/egress": [
+        "./dist/services/sandbox/egress.d.ts"
+      ],
+      "services/sandbox/output-limit": [
+        "./dist/services/sandbox/output-limit.d.ts"
+      ],
+      "services/sandbox/sandbox-paths": [
+        "./dist/services/sandbox/sandbox-paths.d.ts"
+      ],
+      "services/sandbox/tool-gate": [
+        "./dist/services/sandbox/tool-gate.d.ts"
+      ],
+      "services/sandbox/tool-runners": [
+        "./dist/services/sandbox/tool-runners.d.ts"
+      ],
+      "services/sandbox/sandbox-client/types": [
+        "./dist/services/sandbox/sandbox-client/types.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sprites": [
+        "./dist/services/sandbox/sandbox-client/sprites.d.ts"
+      ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
       ],
@@ -1216,6 +1360,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
+    "@fly/sprites": "0.0.1-rc37",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",

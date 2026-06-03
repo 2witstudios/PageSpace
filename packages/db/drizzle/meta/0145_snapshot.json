@@ -1,5 +1,5 @@
 {
-  "id": "3cac2e96-cd3a-4c35-831a-b6be387193d8",
+  "id": "fb79f403-04ec-4c0a-9c0a-818b54eff809",
   "prevId": "7bd7f849-3157-4353-9369-d98220f35ce9",
   "version": "7",
   "dialect": "postgresql",
@@ -15303,6 +15303,157 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
+    "public.sandbox_sessions": {
+      "name": "sandbox_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "sessionKey": {
+          "name": "sessionKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversationId": {
+          "name": "conversationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tenantId": {
+          "name": "tenantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sandboxId": {
+          "name": "sandboxId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastActiveAt": {
+          "name": "lastActiveAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "sandbox_sessions_conversation_id_idx": {
+          "name": "sandbox_sessions_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversationId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sandbox_sessions_last_active_at_idx": {
+          "name": "sandbox_sessions_last_active_at_idx",
+          "columns": [
+            {
+              "expression": "lastActiveAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sandbox_sessions_conversationId_conversations_id_fk": {
+          "name": "sandbox_sessions_conversationId_conversations_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "conversations",
+          "columnsFrom": [
+            "conversationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sandbox_sessions_driveId_drives_id_fk": {
+          "name": "sandbox_sessions_driveId_drives_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sandbox_sessions_userId_users_id_fk": {
+          "name": "sandbox_sessions_userId_users_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sandbox_sessions_sessionKey_unique": {
+          "name": "sandbox_sessions_sessionKey_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "sessionKey"
+          ]
+        }
+      }
+    },
     "public.published_pages": {
       "name": "published_pages",
       "schema": "",
@@ -15480,13 +15631,6 @@
           "notNull": true,
           "default": 0
         },
-        "pendingMillicents": {
-          "name": "pendingMillicents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "monthlyPeriodStart": {
           "name": "monthlyPeriodStart",
           "type": "timestamp with time zone",
@@ -15512,98 +15656,6 @@
         "credit_balances_userId_users_id_fk": {
           "name": "credit_balances_userId_users_id_fk",
           "tableFrom": "credit_balances",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
-    },
-    "public.credit_holds": {
-      "name": "credit_holds",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "estCents": {
-          "name": "estCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "aiUsageLogId": {
-          "name": "aiUsageLogId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "credit_holds_user_idx": {
-          "name": "credit_holds_user_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "credit_holds_expires_idx": {
-          "name": "credit_holds_expires_idx",
-          "columns": [
-            {
-              "expression": "expiresAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "credit_holds_userId_users_id_fk": {
-          "name": "credit_holds_userId_users_id_fk",
-          "tableFrom": "credit_holds",
           "tableTo": "users",
           "columnsFrom": [
             "userId"
@@ -15651,18 +15703,6 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true
-        },
-        "appliedCents": {
-          "name": "appliedCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "chargeMillicents": {
-          "name": "chargeMillicents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         },
         "aiUsageLogId": {
           "name": "aiUsageLogId",
@@ -15743,7 +15783,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"credit_ledger\".\"aiUsageLogId\" IS NOT NULL AND \"credit_ledger\".\"entryType\" = 'usage'",
+          "where": "\"credit_ledger\".\"aiUsageLogId\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
