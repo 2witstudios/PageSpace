@@ -1,13 +1,6 @@
-import type { SubscriptionTier } from './subscription-utils';
-
-// Max file sizes per tier — mirrors STORAGE_TIERS in storage-limits.ts
-// Kept here so this module stays pure (no DB imports transitively)
-const TIER_MAX_FILE_SIZE: Record<SubscriptionTier, number> = {
-  free:     50  * 1024 * 1024,
-  pro:      250 * 1024 * 1024,
-  founder:  500 * 1024 * 1024,
-  business: 1024 * 1024 * 1024,
-};
+import { STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
+// Per-file size limits come from the canonical STORAGE_TIERS table in
+// subscription-utils (no DB imports transitively, so this module stays pure).
 
 export interface ValidationError {
   message: string;
@@ -60,7 +53,7 @@ export function validateFileSize(size: number, tier: SubscriptionTier): Validati
   if (size <= 0) {
     return { ok: false, error: { message: 'File must not be empty' } };
   }
-  const limit = TIER_MAX_FILE_SIZE[tier];
+  const limit = STORAGE_TIERS[tier].maxFileSize;
   if (size > limit) {
     const limitMB = limit / (1024 * 1024);
     const label = limitMB >= 1024 ? `${limitMB / 1024}GB` : `${limitMB}MB`;

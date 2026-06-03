@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getMaxFileSizeBytes } from '../upload-multer-config';
 
 const MB = 1024 * 1024;
-const BUSINESS_TIER_MAX_MB = 100;
+const BUSINESS_TIER_MAX_MB = 1024;
 
 describe('getMaxFileSizeBytes', () => {
   const original = process.env.STORAGE_MAX_FILE_SIZE_MB;
@@ -15,7 +15,7 @@ describe('getMaxFileSizeBytes', () => {
     }
   });
 
-  it('given no STORAGE_MAX_FILE_SIZE_MB env var, should default to 100MB (max business tier)', () => {
+  it('given no STORAGE_MAX_FILE_SIZE_MB env var, should default to 1GB (max business tier)', () => {
     delete process.env.STORAGE_MAX_FILE_SIZE_MB;
     expect(getMaxFileSizeBytes()).toBe(BUSINESS_TIER_MAX_MB * MB);
   });
@@ -30,12 +30,12 @@ describe('getMaxFileSizeBytes', () => {
     expect(getMaxFileSizeBytes()).toBe(200 * MB);
   });
 
-  it('given STORAGE_MAX_FILE_SIZE_MB is non-numeric, should fall back to 100MB default', () => {
+  it('given STORAGE_MAX_FILE_SIZE_MB is non-numeric, should fall back to 1GB default', () => {
     process.env.STORAGE_MAX_FILE_SIZE_MB = 'invalid';
     expect(getMaxFileSizeBytes()).toBe(BUSINESS_TIER_MAX_MB * MB);
   });
 
-  it('given STORAGE_MAX_FILE_SIZE_MB=0, should fall back to 100MB default', () => {
+  it('given STORAGE_MAX_FILE_SIZE_MB=0, should fall back to 1GB default', () => {
     process.env.STORAGE_MAX_FILE_SIZE_MB = '0';
     expect(getMaxFileSizeBytes()).toBe(BUSINESS_TIER_MAX_MB * MB);
   });

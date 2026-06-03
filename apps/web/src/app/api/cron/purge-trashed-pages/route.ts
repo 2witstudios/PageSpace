@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { db } from '@pagespace/db/db';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
+import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
 
 /**
  * Cron endpoint to hard-delete pages that have been in the trash for 30+ days.
@@ -23,18 +25,31 @@ export async function GET(request: Request) {
 
     const pagesPurged = await pageRepository.purgeExpiredTrashedPages(thirtyDaysAgo);
 
-    console.log(`[Cron] Purged trashed pages: ${pagesPurged}`);
+    // Purging the page rows orphans the files they backed. Reap inline so the
+    // 30-day purge frees the uploader's storage cap immediately instead of
+    // deferring to the weekly orphan cron. Best-effort: a reap failure must not
+    // fail the purge — the weekly cron backstops it.
+    let filesReaped = 0;
+    try {
+      const reaped = await reapOrphanedFiles(db);
+      filesReaped = reaped.dbRecordsDeleted;
+    } catch (error) {
+      console.warn('[Cron] Inline orphan reap after purge failed; weekly cron will retry:', error);
+    }
+
+    console.log(`[Cron] Purged trashed pages: ${pagesPurged}, reaped orphaned files: ${filesReaped}`);
 
     audit({
       eventType: 'data.delete',
       resourceType: 'cron_job',
       resourceId: 'purge_trashed_pages',
-      details: { pagesPurged },
+      details: { pagesPurged, filesReaped },
     });
 
     return NextResponse.json({
       success: true,
       pagesPurged,
+      filesReaped,
       timestamp: now.toISOString(),
     });
   } catch (error) {

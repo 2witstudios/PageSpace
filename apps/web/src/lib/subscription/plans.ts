@@ -62,6 +62,10 @@ const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
 const STRIPE_PRICE_ID_FOUNDER = stripeConfig.priceIds.founder;
 const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
 
+// NOTE: storage + maxFileSize numbers below are marketing copy that MUST mirror
+// the canonical enforcement table STORAGE_TIERS in
+// packages/lib/src/services/subscription-utils.ts. Kept as literals here so this
+// client-imported module stays free of server-only (@pagespace/lib DB) imports.
 export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   free: {
     id: 'free',
@@ -84,8 +88,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '500MB',
       },
       maxFileSize: {
-        bytes: 20 * 1024 * 1024, // 20MB
-        formatted: '20MB',
+        bytes: 50 * 1024 * 1024, // 50MB
+        formatted: '50MB',
       },
     },
     features: [
@@ -93,7 +97,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard AI models', included: true },
       { name: '500MB storage', included: true },
-      { name: '20MB max file size', included: true },
+      { name: '50MB max file size', included: true },
       { name: 'Basic processing', included: true },
       { name: 'Community support', included: true },
       { name: 'Pro AI models', included: false },
@@ -130,8 +134,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '2GB',
       },
       maxFileSize: {
-        bytes: 50 * 1024 * 1024, // 50MB
-        formatted: '50MB',
+        bytes: 250 * 1024 * 1024, // 250MB
+        formatted: '250MB',
       },
     },
     features: [
@@ -139,7 +143,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: '2GB storage', included: true, description: '4x more than Free' },
-      { name: '50MB max file size', included: true, description: '2.5x larger files' },
+      { name: '250MB max file size', included: true, description: '5x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Community support', included: true },
@@ -173,8 +177,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '10GB',
       },
       maxFileSize: {
-        bytes: 50 * 1024 * 1024, // 50MB
-        formatted: '50MB',
+        bytes: 500 * 1024 * 1024, // 500MB
+        formatted: '500MB',
       },
     },
     features: [
@@ -182,7 +186,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: '10GB storage', included: true, description: '20x more than Free' },
-      { name: '50MB max file size', included: true, description: '2.5x larger files' },
+      { name: '500MB max file size', included: true, description: '10x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Community support', included: true },
@@ -211,8 +215,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '50GB',
       },
       maxFileSize: {
-        bytes: 100 * 1024 * 1024, // 100MB
-        formatted: '100MB',
+        bytes: 1024 * 1024 * 1024, // 1GB
+        formatted: '1GB',
       },
     },
     features: [
@@ -220,7 +224,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
       { name: '50GB storage', included: true, description: '100x more than Free' },
-      { name: '100MB max file size', included: true, description: '5x larger files' },
+      { name: '1GB max file size', included: true, description: '20x larger files' },
       { name: 'Enterprise processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Enterprise features', included: true },

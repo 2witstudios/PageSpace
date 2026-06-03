@@ -76,7 +76,7 @@ describe('subscription-utils', () => {
     it('should return business config', () => {
       const config = getStorageConfigFromSubscription('business');
       expect(config.tier).toBe('business');
-      expect(config.maxFileSize).toBe(100 * 1024 * 1024);
+      expect(config.maxFileSize).toBe(1024 * 1024 * 1024);
       expect(config.maxFileCount).toBe(5000);
     });
 
@@ -95,7 +95,7 @@ describe('subscription-utils', () => {
     it('should return free config', () => {
       const config = getStorageConfigFromSubscription('free');
       expect(config.tier).toBe('free');
-      expect(config.maxFileSize).toBe(20 * 1024 * 1024);
+      expect(config.maxFileSize).toBe(50 * 1024 * 1024);
       expect(config.maxFileCount).toBe(100);
     });
   });

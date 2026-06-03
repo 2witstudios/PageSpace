@@ -100,14 +100,17 @@ export async function isFileOrphaned(database: DB, fileId: string): Promise<bool
 
 /**
  * Hard-delete file records from the database by ID.
- * Returns the number of records deleted.
+ * Returns the IDs of the records actually deleted. Because the DELETE is
+ * atomic, only the single invocation that removes a given row gets its ID
+ * back — callers can credit storage off this set without double-counting
+ * when two reaps race on the same orphan.
  */
-export async function deleteFileRecords(database: DB, fileIds: string[]): Promise<number> {
-  if (fileIds.length === 0) return 0;
+export async function deleteFileRecords(database: DB, fileIds: string[]): Promise<string[]> {
+  if (fileIds.length === 0) return [];
 
   const result = await database
     .delete(files)
     .where(inArray(files.id, fileIds))
     .returning({ id: files.id });
-  return result.length;
+  return result.map(row => row.id);
 }

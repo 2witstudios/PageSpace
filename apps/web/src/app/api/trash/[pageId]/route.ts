@@ -9,6 +9,7 @@ import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -54,6 +55,19 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     await db.transaction(async (tx) => {
       await recursivelyDelete(pageId, tx);
     });
+
+    // Deleting the page rows cascades away their file_pages links, so any file
+    // backing only these pages is now orphaned. Reap it inline so the user's
+    // storage cap frees immediately rather than waiting for the weekly cron.
+    // Best-effort: never fail the delete if reaping hiccups — the cron backstops it.
+    try {
+      const reaped = await reapOrphanedFiles(db);
+      if (reaped.dbRecordsDeleted > 0) {
+        loggers.api.info(`Permanent delete reaped ${reaped.dbRecordsDeleted} orphaned file(s)`, { pageId });
+      }
+    } catch (error) {
+      loggers.api.warn('Inline orphan reap after permanent delete failed; weekly cron will retry', { pageId, error: error as Error });
+    }
 
     // Log permanent deletion for compliance (fire-and-forget)
     const actorInfo = await getActorInfo(userId);

@@ -208,7 +208,7 @@ describe('isFileOrphaned', () => {
 });
 
 describe('deleteFileRecords', () => {
-  it('given_fileIds_deletesFromFilesTableAndReturnsCount', async () => {
+  it('given_fileIds_deletesFromFilesTableAndReturnsDeletedIds', async () => {
     const mockDeleteFn = vi.fn();
     const db = {
       delete: (table: unknown) => {
@@ -223,18 +223,18 @@ describe('deleteFileRecords', () => {
 
     const result = await deleteFileRecords(db as never, ['f1', 'f2']);
 
-    expect(result).toBe(2);
+    expect(result).toEqual(['f1', 'f2']);
     expect(mockDeleteFn).toHaveBeenCalledWith(files);
   });
 
-  it('given_emptyArray_returnsZeroWithoutCallingDB', async () => {
+  it('given_emptyArray_returnsEmptyWithoutCallingDB', async () => {
     const db = {
       delete: vi.fn(),
     };
 
     const result = await deleteFileRecords(db as never, []);
 
-    expect(result).toBe(0);
+    expect(result).toEqual([]);
     expect(db.delete).not.toHaveBeenCalled();
   });
 
