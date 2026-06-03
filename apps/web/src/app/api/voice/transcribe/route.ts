@@ -118,8 +118,9 @@ export async function POST(request: Request) {
     }
 
     // Reserve credits before billing the provider. Gated AFTER input validation so a
-    // malformed request never opens a hold. Voice uses a small per-call reservation
-    // (VOICE_HOLD_ESTIMATE_CENTS) since STT/TTS cost a fraction of a cent. Blocks
+    // malformed request never opens a hold. STT can't know the audio duration (and
+    // thus the real cost) until Whisper responds, so it reserves the small flat
+    // VOICE_HOLD_ESTIMATE_CENTS; the real cost settles exactly afterwards. Blocks
     // out-of-credit paid users only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise
     // it still books the hold and records spend (dark launch, same as chat).
     const gate = await canConsumeAI(userId, tier, { estCostCents: VOICE_HOLD_ESTIMATE_CENTS });
