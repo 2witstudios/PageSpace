@@ -97,13 +97,15 @@ export async function POST(req: Request) {
     loggers.api.info(`Pulse cron: Generating summaries for ${usersNeedingSummary.length} users`);
 
     let generated = 0;
+    let skipped = 0;
     const errors: string[] = [];
 
     // Generate summaries for each user (with rate limiting)
     for (const userId of usersNeedingSummary) {
       try {
-        await generatePulseForUser(userId, now);
-        generated++;
+        const didGenerate = await generatePulseForUser(userId, now);
+        if (didGenerate) generated++;
+        else skipped++;
 
         // Add a small delay between users to avoid overwhelming the AI provider
         if (usersNeedingSummary.length > 1) {
@@ -116,11 +118,14 @@ export async function POST(req: Request) {
       }
     }
 
-    loggers.api.info(`Pulse cron: Complete. Generated ${generated}/${usersNeedingSummary.length} summaries`);
+    loggers.api.info(
+      `Pulse cron: Complete. Generated ${generated}/${usersNeedingSummary.length} summaries (${skipped} skipped by credit gate)`,
+    );
 
     return NextResponse.json({
       message: 'Pulse generation complete',
       generated,
+      skipped,
       total: usersNeedingSummary.length,
       errors: errors.length > 0 ? errors : undefined,
     });
@@ -131,7 +136,12 @@ export async function POST(req: Request) {
   }
 }
 
-async function generatePulseForUser(userId: string, now: Date): Promise<void> {
+/**
+ * Generate and persist one user's pulse summary. Returns true if a summary was
+ * generated, false if the user was skipped by the credit gate (out of credits / over
+ * the in-flight cap). Throws on real failures so the caller records them.
+ */
+async function generatePulseForUser(userId: string, now: Date): Promise<boolean> {
   // Get user info
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) throw new Error('User not found');
@@ -148,7 +158,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       userId,
       reason: gate.reason,
     });
-    return;
+    return false;
   }
   const holdId = gate.holdId;
 
@@ -903,6 +913,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     diffCount: contentDiffs.length,
     contextSize: JSON.stringify(contextData).length,
   });
+
+  return true;
 }
 
 // Also support GET for easy cron setup (some cron services only support GET)
