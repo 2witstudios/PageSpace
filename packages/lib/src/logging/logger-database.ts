@@ -178,6 +178,7 @@ export async function writeAiUsage(usage: {
   driveId?: string;
   success?: boolean;
   error?: string;
+  source?: string;
   metadata?: LogInput;
 
   // Context tracking
@@ -209,6 +210,7 @@ export async function writeAiUsage(usage: {
       driveId: usage.driveId,
       success: usage.success,
       error: usage.error,
+      source: usage.source,
       metadata: usage.metadata,
 
       // Context tracking

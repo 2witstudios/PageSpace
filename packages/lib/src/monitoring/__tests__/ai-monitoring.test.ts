@@ -411,6 +411,18 @@ describe('trackAIUsage', () => {
     );
   });
 
+  it('should pass a known feature source through to writeAiUsage', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', source: 'pulse' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'pulse' }));
+  });
+
+  it('should default a missing source to "other" via normalizeUsageSource', async () => {
+    await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'other' }));
+  });
+
   it('should not throw and should log debug when writeAiUsage rejects', async () => {
     mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
@@ -630,6 +642,7 @@ describe('trackAIToolUsage', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(mockWriteAiUsage).toHaveBeenCalledWith(
       expect.objectContaining({
+        source: 'tool',
         metadata: expect.objectContaining({ type: 'tool_call', toolName: 'searchPages', toolId: 'tool-123' }),
       })
     );

@@ -87,6 +87,11 @@
       "import": "./dist/billing/credit-emit.js",
       "require": "./dist/billing/credit-emit.js"
     },
+    "./billing/automation-preferences": {
+      "types": "./dist/billing/automation-preferences.d.ts",
+      "import": "./dist/billing/automation-preferences.js",
+      "require": "./dist/billing/automation-preferences.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -106,6 +111,11 @@
       "types": "./dist/monitoring/ai-monitoring.d.ts",
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
+    },
+    "./monitoring/usage-source": {
+      "types": "./dist/monitoring/usage-source.d.ts",
+      "import": "./dist/monitoring/usage-source.js",
+      "require": "./dist/monitoring/usage-source.js"
     },
     "./monitoring/voice-pricing": {
       "types": "./dist/monitoring/voice-pricing.d.ts",

@@ -672,6 +672,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'pulse',
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,

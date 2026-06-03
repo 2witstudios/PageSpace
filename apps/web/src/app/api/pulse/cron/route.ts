@@ -19,6 +19,8 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { filterPulseEligible } from '@pagespace/lib/billing/automation-preferences';
 import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,
@@ -84,7 +86,17 @@ export async function POST(req: Request) {
       .groupBy(pulseSummaries.userId);
 
     const usersWithRecentSummaryIds = new Set(usersWithRecentSummaries.map(u => u.userId));
-    const usersNeedingSummary = activeUserIds.filter(id => !usersWithRecentSummaryIds.has(id));
+    const candidateUserIds = activeUserIds.filter(id => !usersWithRecentSummaryIds.has(id));
+
+    // Respect each user's Pulse on/off toggle (opt-out: no row ⇒ enabled). Drop users
+    // who switched off automatic Pulse so we never spend their credits on it.
+    const pulsePrefs = candidateUserIds.length > 0
+      ? await db
+          .select({ userId: userAutomationPreferences.userId, pulseEnabled: userAutomationPreferences.pulseEnabled })
+          .from(userAutomationPreferences)
+          .where(inArray(userAutomationPreferences.userId, candidateUserIds))
+      : [];
+    const usersNeedingSummary = filterPulseEligible(candidateUserIds, pulsePrefs);
 
     if (usersNeedingSummary.length === 0) {
       loggers.api.info('Pulse cron: All active users have recent summaries');
@@ -786,6 +798,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     userId,
     provider: providerResult.provider,
     model: providerResult.modelName,
+    source: 'pulse',
     inputTokens: usage?.inputTokens,
     outputTokens: usage?.outputTokens,
     totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,

@@ -119,6 +119,7 @@ Reorganize this into a more concise version (target: under ${targetLength} chara
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'memory',
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage

@@ -494,6 +494,7 @@ export async function POST(request: Request) {
         userId,
         provider: resolvedProvider,
         model: resolvedModelName,
+        source: 'page_agent',
         inputTokens: usage?.inputTokens,
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens ?? (usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined),

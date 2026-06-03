@@ -26,6 +26,9 @@ import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
 import { BillingGuard } from '@/components/billing/BillingGuard';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
+import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
+import { AutomationsCard } from '@/components/billing/AutomationsCard';
+import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
 import { useCreditsMode } from '@/hooks/useCreditsMode';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
@@ -288,8 +291,15 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* AI Credits (credits mode only; legacy daily-quota build hides this) */}
+      {/* AI Credits + usage breakdown (credits mode only; legacy daily-quota build hides these) */}
       {creditsMode && <CreditBalanceCard />}
+      {creditsMode && <UsageBreakdownCard />}
+
+      {/* Automations — background AI that spends credits (Pulse, Memory) */}
+      <AutomationsCard />
+
+      {/* Storage usage (moved from the standalone /dashboard/storage page) */}
+      <StorageUsageCard />
 
       {/* Current Subscription */}
       <Card>

@@ -210,6 +210,7 @@ export async function POST(request: Request) {
       userId,
       provider: 'openai_voice',
       model,
+      source: 'voice',
       providerCostDollars: costDollars,
       // Request latency (ms), matching the chat route. The billing quantity (chars)
       // lives in metadata.
