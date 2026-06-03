@@ -64,6 +64,10 @@ import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
+
+// Hard cap on agent tool-loop steps per attempt. Must match the stepCountIs() in
+// stopWhen and the maxSteps passed to runAgentWithRetry.
+const AGENT_MAX_STEPS = 100;
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -85,7 +89,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { runAgentWithRetry } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -906,75 +910,80 @@ export async function POST(request: Request) {
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
-          const aiResult = streamText({
-            model,
-            system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
-            messages: modelMessages,
-            tools: filteredTools,
-            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
-            // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+          // Resolve once outside the per-attempt factory (the factory is synchronous).
+          const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+          // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
+          // disconnect) or ends mid-tool without the finish tool, transparently
+          // re-drive the loop under one message envelope. The loop lives inside
+          // execute(), so onFinish still fires exactly once below.
+          const runResult = await runAgentWithRetry({
+            writer,
             abortSignal,
-            experimental_context: {
-              userId,
-              timezone: userTimezone,
-              aiProvider: currentProvider,
-              aiModel: currentModel,
-              conversationId,
-              locationContext: pageContext ? {
-                currentPage: {
-                  id: pageContext.pageId,
-                  title: pageContext.pageTitle,
-                  type: pageContext.pageType,
-                  path: pageContext.pagePath,
-                },
-                currentDrive: pageContext.driveId ? {
-                  id: pageContext.driveId,
-                  name: pageContext.driveName,
-                  slug: pageContext.driveSlug,
+            baseMessages: modelMessages,
+            finishToolName: FINISH_TOOL_NAME,
+            maxSteps: AGENT_MAX_STEPS,
+            startTimeMs: startTime,
+            logger: loggers.ai,
+            buildStreamText: (messages) => streamText({
+              model,
+              system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+              messages,
+              tools: filteredTools,
+              stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+              // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+              abortSignal,
+              experimental_context: {
+                userId,
+                timezone: userTimezone,
+                aiProvider: currentProvider,
+                aiModel: currentModel,
+                conversationId,
+                locationContext: pageContext ? {
+                  currentPage: {
+                    id: pageContext.pageId,
+                    title: pageContext.pageTitle,
+                    type: pageContext.pageType,
+                    path: pageContext.pagePath,
+                  },
+                  currentDrive: pageContext.driveId ? {
+                    id: pageContext.driveId,
+                    name: pageContext.driveName,
+                    slug: pageContext.driveSlug,
+                  } : undefined,
+                  breadcrumbs: pageContext.breadcrumbs,
                 } : undefined,
-                breadcrumbs: pageContext.breadcrumbs,
-              } : undefined,
-              modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
-              chatSource: {
-                type: 'page' as const,
-                agentPageId: chatId,
-                agentTitle: page.title,
+                modelCapabilities: modelCapabilitiesForTools,
+                chatSource: {
+                  type: 'page' as const,
+                  agentPageId: chatId,
+                  agentTitle: page.title,
+                },
+                enabledTools: agentEnabledTools ?? null,
+              }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
+              maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+              onChunk: ({ chunk }) => {
+                const part = chunkToPart(chunk as never);
+                if (part) lifecycle!.pushPart(part);
               },
-              enabledTools: agentEnabledTools ?? null,
-            }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
-            maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-            onChunk: ({ chunk }) => {
-              const part = chunkToPart(chunk as never);
-              if (part) lifecycle!.pushPart(part);
-            },
-            onAbort: () => {
-              loggers.ai.info('AI Chat API: Stream aborted by user', {
-                userId: maskIdentifier(userId!),
-                pageId: chatId,
-                streamId,
-                model: currentModel,
-                provider: currentProvider,
-              });
-              lifecycle!.finish(true);
-            },
+              onAbort: () => {
+                loggers.ai.info('AI Chat API: Stream aborted by user', {
+                  userId: maskIdentifier(userId!),
+                  pageId: chatId,
+                  streamId,
+                  model: currentModel,
+                  provider: currentProvider,
+                });
+                lifecycle!.finish(true);
+              },
+            }),
           });
 
-          usagePromise = aiResult.totalUsage
-            .then((usage) => usage)
-            .catch((error) => {
-              loggers.ai.debug('AI Chat API: Failed to retrieve token usage from stream', {
-                error: error instanceof Error ? error.message : 'Unknown error',
-              });
-              return undefined;
-            });
-
-          // Steps carry OpenRouter's per-request cost metadata (one request per
-          // tool-loop step); summed in trackUsage to bill on real cost.
-          stepsPromise = aiResult.steps
-            .then((steps) => steps as ProviderMetadataCarrier[])
-            .catch(() => undefined);
-
-          await pipeUIMessageStreamStrippingStart(aiResult, writer);
+          // Billing reads the SUMMED usage / OpenRouter cost across every attempt
+          // (steps carry per-request cost metadata). Single onFinish → single
+          // consumeCredits → one hold settle: no double-charge, but failed/partial
+          // attempts ARE billed because the provider charged us for those tokens.
+          usagePromise = Promise.resolve(runResult.accumulatedUsage);
+          stepsPromise = Promise.resolve(runResult.accumulatedSteps);
         },
         onFinish: async ({ responseMessage }) => {
           // Clean up abort controller from registry

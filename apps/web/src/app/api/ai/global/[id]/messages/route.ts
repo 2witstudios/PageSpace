@@ -71,13 +71,17 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { runAgentWithRetry } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
+
+// Hard cap on agent tool-loop steps per attempt. Must match the stepCountIs() in
+// stopWhen and the maxSteps passed to runAgentWithRetry.
+const AGENT_MAX_STEPS = 100;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -919,56 +923,60 @@ MENTION PROCESSING:
       originalMessages: processedMessages,
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
-        const aiResult = streamText({
-          model,
-          system: finalSystemPrompt,
-          messages: modelMessages,
-          tools: finalTools,
-          stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
-          // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+        // Resolve once outside the per-attempt factory (the factory is synchronous).
+        const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+        // Server-side, in-request retry: transparently re-drive the loop under one
+        // message envelope when an attempt drops mid-loop or ends without finishing.
+        // The loop lives inside execute(), so onFinish still fires exactly once below.
+        const runResult = await runAgentWithRetry({
+          writer,
           abortSignal,
-          experimental_context: {
-            userId,
-            timezone: userTimezone,
-            aiProvider: currentProvider,
-            aiModel: currentModel,
-            conversationId,
-            locationContext,
-            modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
-            chatSource: { type: 'global' as const },
-          },
-          maxRetries: 20,
-          onChunk: ({ chunk }) => {
-            const part = chunkToPart(chunk as never);
-            if (part) lifecycle!.pushPart(part);
-          },
-          onAbort: () => {
-            loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
-              userId: maskIdentifier(userId),
+          baseMessages: modelMessages,
+          finishToolName: FINISH_TOOL_NAME,
+          maxSteps: AGENT_MAX_STEPS,
+          startTimeMs: startTime,
+          logger: loggers.api,
+          buildStreamText: (messages) => streamText({
+            model,
+            system: finalSystemPrompt,
+            messages,
+            tools: finalTools,
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+            // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+            abortSignal,
+            experimental_context: {
+              userId,
+              timezone: userTimezone,
+              aiProvider: currentProvider,
+              aiModel: currentModel,
               conversationId,
-              streamId,
-              model: currentModel,
-              provider: currentProvider,
-            });
-            lifecycle!.finish(true);
-          },
+              locationContext,
+              modelCapabilities: modelCapabilitiesForTools,
+              chatSource: { type: 'global' as const },
+            },
+            maxRetries: 20,
+            onChunk: ({ chunk }) => {
+              const part = chunkToPart(chunk as never);
+              if (part) lifecycle!.pushPart(part);
+            },
+            onAbort: () => {
+              loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
+                userId: maskIdentifier(userId),
+                conversationId,
+                streamId,
+                model: currentModel,
+                provider: currentProvider,
+              });
+              lifecycle!.finish(true);
+            },
+          }),
         });
 
-        usagePromise = aiResult.totalUsage
-          .catch((error) => {
-            loggers.api.debug('Global Assistant: Failed to retrieve token usage from stream', {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            });
-            return undefined;
-          });
-
-        // Steps carry OpenRouter's per-request cost metadata (one request per
-        // tool-loop step); summed in trackUsage to bill on real cost.
-        stepsPromise = aiResult.steps
-          .then((steps) => steps as ProviderMetadataCarrier[])
-          .catch(() => undefined);
-
-        await pipeUIMessageStreamStrippingStart(aiResult, writer);
+        // Billing reads the SUMMED usage / OpenRouter cost across every attempt.
+        // Single onFinish → single consumeCredits → one hold settle: no double-charge,
+        // but failed/partial attempts ARE billed (the provider charged us for them).
+        usagePromise = Promise.resolve(runResult.accumulatedUsage);
+        stepsPromise = Promise.resolve(runResult.accumulatedSteps);
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry

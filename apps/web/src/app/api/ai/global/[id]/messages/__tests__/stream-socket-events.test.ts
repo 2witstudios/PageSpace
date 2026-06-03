@@ -201,6 +201,8 @@ vi.mock('ai', () => ({
       toUIMessageStream: () => (async function* () {})(),
       totalUsage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
       steps: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+      response: Promise.resolve({ messages: [] }),
     };
   }),
   convertToModelMessages: vi.fn().mockReturnValue([]),

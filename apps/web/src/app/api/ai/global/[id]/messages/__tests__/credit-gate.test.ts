@@ -172,6 +172,8 @@ vi.mock('ai', () => ({
       toUIMessageStream: () => (async function* () {})(),
       get totalUsage() { return Promise.resolve(captured.totalUsage); },
       get steps() { return Promise.resolve(captured.steps); },
+      finishReason: Promise.resolve('stop'),
+      response: Promise.resolve({ messages: [] }),
     };
   }),
   convertToModelMessages: vi.fn().mockReturnValue([]),

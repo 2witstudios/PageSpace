@@ -120,7 +120,24 @@ export async function createAIProvider(
       // response carries the authoritative per-request cost under
       // providerMetadata.openrouter.usage.cost — the basis we bill on (see
       // extractOpenRouterCostDollars / trackAIUsage). Without it, cost is undefined.
-      model = openrouter.chat(currentModel, { usage: { include: true } });
+      //
+      // extraBody.provider is OpenRouter request-body provider routing (merged into
+      // the request body by the SDK):
+      //   require_parameters: true — only route to upstream providers that actually
+      //     honor every param we send (notably `tools`). A provider that silently
+      //     ignores tools can never call the `finish` tool, which is a root cause of
+      //     "agent runs tools then never finishes". This forces tool-capable routing.
+      //   allow_fallbacks: true — keep OpenRouter's automatic failover to the next
+      //     healthy provider when one errors, reducing mid-stream disconnects.
+      model = openrouter.chat(currentModel, {
+        usage: { include: true },
+        extraBody: {
+          provider: {
+            require_parameters: true,
+            allow_fallbacks: true,
+          },
+        },
+      });
     } else if (currentProvider === 'google') {
       const managed = getManagedProviderKey('google');
       if (!managed?.apiKey) return notConfigured('Google AI');
