@@ -214,6 +214,16 @@ describe('getProviderCostRollup', () => {
     expect(rows[1].coverage).toBe('estimate');
   });
 
+  it('labels voice rows list_price (deterministic quantity × published rate), distinct from real and estimate', async () => {
+    resetQueue([
+      { provider: 'openai_voice', model: 'whisper-1', costSource: 'list_price', realCostCents: 6, chargedCents: 9, requestCount: 5 },
+      { provider: 'openai_voice', model: 'tts-1', costSource: 'list_price', realCostCents: 15, chargedCents: 23, requestCount: 8 },
+    ]);
+    const rows = await getProviderCostRollup();
+    expect(rows[0]).toMatchObject({ provider: 'openai_voice', model: 'whisper-1', coverage: 'list_price' });
+    expect(rows[1]).toMatchObject({ provider: 'openai_voice', model: 'tts-1', coverage: 'list_price' });
+  });
+
   it('falls back to the provider-name heuristic when metadata (costSource) was purged', async () => {
     resetQueue([
       { provider: 'openrouter_free', model: 'm:free', costSource: null, realCostCents: 0, chargedCents: 0, requestCount: 1 },

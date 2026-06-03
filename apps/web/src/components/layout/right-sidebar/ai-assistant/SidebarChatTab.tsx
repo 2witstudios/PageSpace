@@ -32,7 +32,8 @@ import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
-import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
+import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -758,17 +759,34 @@ const SidebarChatTab: React.FC = () => {
       // Agent mode: use dashboard store stop function (already calls abort endpoint)
       dashboardStopStreaming();
     } else {
-      // Fallback: call abort endpoint directly + local useChat stop
-      // Use try/finally to guarantee client-side stop runs even if server abort fails
-      try {
-        if (currentConversationId) {
-          await abortActiveStream({ chatId: currentConversationId });
-        }
-      } finally {
-        stop();
+      // Fallback (live stream, no bootstrap-registered stop): stop the local fetch
+      // first, then abort authoritatively by the stable assistant messageId — this
+      // reaches the server registry even if the conversation id shifted mid-stream
+      // and tears down any multicast SSE join. Fall back to the chatId map only when
+      // no assistant id exists yet (submitted, before the first chunk).
+      stop();
+      const messageId = resolveActiveAssistantMessageId({
+        ownStreamMessageId: undefined,
+        isStreaming,
+        lastAssistantMessageId,
+      });
+      if (messageId) {
+        void abortActiveStreamByMessageId({ messageId });
+        return;
+      }
+      if (currentConversationId) {
+        await abortActiveStream({ chatId: currentConversationId });
       }
     }
-  }, [selectedAgent, contextStopStreaming, dashboardStopStreaming, currentConversationId, stop]);
+  }, [
+    selectedAgent,
+    contextStopStreaming,
+    dashboardStopStreaming,
+    currentConversationId,
+    stop,
+    isStreaming,
+    lastAssistantMessageId,
+  ]);
 
   const handleUndoFromHere = useCallback((messageId: string) => {
     setUndoDialogMessageId(messageId);

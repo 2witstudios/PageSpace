@@ -142,6 +142,32 @@ describe('canConsumeAI', () => {
     expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
   });
 
+  it('caps a PAID user via opts.maxInFlight (voice concurrency bound) even with ample credit', async () => {
+    // Paid tiers are normally uncapped on concurrency; the voice routes pass a cap to
+    // bound concurrent paid voice spend. 4 holds already in flight == the cap → deny.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction({ monthlyRemainingCents: 100000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 8, inFlight: 4 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { estCostCents: 2, maxInFlight: 4 });
+
+    expect(r).toMatchObject({ allowed: false, reason: 'too_many_in_flight' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('reserves the estCostCents override (voice) instead of the chat default', async () => {
+    // Voice routes pass a small per-call estimate so a sub-cent STT/TTS call doesn't
+    // reserve the full 25¢ chat hold. The hold must reflect the override.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { estCostCents: 2 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: 2 });
+  });
+
   it('denies with out_of_credits when both buckets are empty (no hold inserted)', async () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { insertCalled?: boolean } = {};
