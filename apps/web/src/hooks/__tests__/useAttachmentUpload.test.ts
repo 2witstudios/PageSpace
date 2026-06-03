@@ -33,7 +33,8 @@ const attachment = {
   contentHash: 'hash-1',
 };
 
-const ok = (a = attachment) => ({ ok: true as const, attachment: a });
+// Return a fresh clone each call so tests/uploads never share an attachment reference.
+const ok = (a = attachment) => ({ ok: true as const, attachment: { ...a } });
 const fail = (errorMessage: string) => ({ ok: false as const, errorMessage });
 
 const makeFile = (name = 'photo.png', type = 'image/png') => new File(['data'], name, { type });
