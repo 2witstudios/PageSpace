@@ -8,7 +8,12 @@ interface FakeAttempt {
   responseMessages?: ModelMessage[];
   steps?: unknown[];
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+  /** Throw immediately, before any content chunk (pre-content provider failure). */
   throwOnPipe?: boolean;
+  /** Emit a content chunk, THEN throw (mid-stream drop after content). */
+  throwAfterContent?: boolean;
+  /** Emit no content at all (e.g. a clean-but-empty finish). */
+  noContent?: boolean;
 }
 
 const fakeResult = (a: FakeAttempt): AgentStreamResult =>
@@ -16,14 +21,16 @@ const fakeResult = (a: FakeAttempt): AgentStreamResult =>
     toUIMessageStream: () =>
       (async function* () {
         if (a.throwOnPipe) throw new Error('provider disconnected');
-        yield { type: 'text-delta', id: 't', delta: 'hello' } as unknown as UIMessageChunk;
+        if (!a.noContent) {
+          yield { type: 'text-delta', id: 't', delta: 'hello' } as unknown as UIMessageChunk;
+        }
+        if (a.throwAfterContent) throw new Error('provider disconnected mid-stream');
       })(),
     finishReason: Promise.resolve(a.finishReason),
     response: Promise.resolve({ messages: a.responseMessages ?? [] }),
     steps: Promise.resolve(a.steps ?? [{}]),
     totalUsage: Promise.resolve(a.usage ?? { inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  }) as any;
+  }) as unknown as AgentStreamResult;
 
 const makeWriter = () => {
   const chunks: UIMessageChunk[] = [];
@@ -80,6 +87,24 @@ describe('runAgentWithRetry', () => {
         errorChunks: chunks.filter((c) => c.type === 'error').length,
       },
       expected: { attempts: 3, finalOutcome: 'exhausted', errorChunks: 1 },
+    });
+  });
+
+  it('does NOT retry a provider error that occurred after content was streamed', async () => {
+    const { result, chunks } = await run([
+      { finishReason: 'error', throwAfterContent: true },
+      { finishReason: 'stop' },
+    ]);
+    assert({
+      given: 'attempt 1 streams content then drops mid-stream',
+      should: 'stop after one attempt (no duplication) and surface a terminal error',
+      actual: {
+        attempts: result.attempts,
+        finalOutcome: result.finalOutcome,
+        reason: result.terminalReason,
+        errorChunks: chunks.filter((c) => c.type === 'error').length,
+      },
+      expected: { attempts: 1, finalOutcome: 'terminal', reason: 'provider-error', errorChunks: 1 },
     });
   });
 

@@ -12,7 +12,13 @@ import type { FinishReason, ModelMessage } from 'ai';
  */
 
 export type RetryReason = 'provider-error' | 'tool-calls-no-finish' | 'ambiguous';
-export type TerminalReason = 'length' | 'content-filter' | 'step-budget' | 'aborted';
+export type TerminalReason =
+  | 'length'
+  | 'content-filter'
+  | 'step-budget'
+  | 'aborted'
+  | 'provider-error'
+  | 'ambiguous';
 
 export type AttemptOutcome =
   | { kind: 'clean' }
@@ -34,6 +40,13 @@ export interface ClassifyAttemptArgs {
   finishToolName: string;
   /** Whether the user explicitly aborted (abortSignal fired). Never retry an abort. */
   aborted: boolean;
+  /**
+   * Whether this attempt already streamed visible content (text/tool/reasoning parts) to
+   * the client. The UI message stream is append-only: a from-scratch retry would duplicate
+   * whatever is already on the wire (and re-run any tool whose side effect already ran). So
+   * a hard error AFTER content is terminal — we cannot transparently recover it.
+   */
+  emittedContent: boolean;
 }
 
 /**
@@ -70,9 +83,14 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
     return { kind: 'terminal', reason: 'aborted' };
   }
 
-  // The stream threw while we were consuming it (typical OpenRouter mid-stream drop).
-  if (args.caughtError !== undefined) {
-    return { kind: 'retry', reason: 'provider-error' };
+  // Hard failure: the stream threw, or the provider reported an error finish. A
+  // from-scratch retry is only safe if NOTHING was streamed yet — otherwise the
+  // partial/garbled output is already committed to the (append-only) message and
+  // any executed tool side effect already happened, so we must give up and surface it.
+  if (args.caughtError !== undefined || args.finishReason === 'error') {
+    return args.emittedContent
+      ? { kind: 'terminal', reason: 'provider-error' }
+      : { kind: 'retry', reason: 'provider-error' };
   }
 
   switch (args.finishReason) {
@@ -88,7 +106,9 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
         // Ran out of step budget mid-tool-loop — retrying just burns more steps.
         return { kind: 'terminal', reason: 'step-budget' };
       }
-      // Ended on a tool-call step without finish and with budget left ⇒ cut short.
+      // Ended cleanly on a tool-call step without finish (budget left). The emitted
+      // parts are complete/valid, so we re-feed them and CONTINUE — the next attempt
+      // appends only new content and won't re-run completed tools (no duplication).
       return { kind: 'retry', reason: 'tool-calls-no-finish' };
     }
 
@@ -100,14 +120,14 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
       // Deterministic — a retry filters identically.
       return { kind: 'terminal', reason: 'content-filter' };
 
-    case 'error':
-      return { kind: 'retry', reason: 'provider-error' };
-
     case 'other':
     case 'unknown':
     case undefined:
     default:
-      // Ambiguous provider state — retry conservatively (the shell caps this).
-      return { kind: 'retry', reason: 'ambiguous' };
+      // Ambiguous provider state. Only retry-from-scratch when nothing was streamed;
+      // once content is on the wire, restarting would duplicate it, so stop here.
+      return args.emittedContent
+        ? { kind: 'terminal', reason: 'ambiguous' }
+        : { kind: 'retry', reason: 'ambiguous' };
   }
 }

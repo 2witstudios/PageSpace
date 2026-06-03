@@ -132,27 +132,38 @@ export async function runAgentWithRetry(
     const aiResult = buildStreamText(messages);
 
     let caughtError: unknown;
+    let emittedContent = false;
     try {
       await pipeUIMessageStreamStrippingStart(aiResult, writer, {
         suppressStart: true,
         suppressFinish: true,
         suppressError: true,
+        // Fires even if the stream then throws, so a mid-stream drop AFTER content is
+        // correctly classified as unrecoverable (no from-scratch retry → no duplication).
+        onContent: () => {
+          emittedContent = true;
+        },
       });
     } catch (error) {
       caughtError = error;
     }
 
+    // The stream may have errored mid-flight; default each field defensively so a
+    // failed attempt is classified, not thrown.
     const finishReason: FinishReason | undefined = await aiResult.finishReason.catch(
       () => undefined,
     );
-    const response = await aiResult.response.catch(() => ({ messages: [] as ModelMessage[] }));
-    const steps = await aiResult.steps.catch(() => [] as unknown[]);
+    const responseMessages: ModelMessage[] = await aiResult.response
+      .then((r) => r.messages)
+      .catch(() => []);
+    const steps: ProviderMetadataCarrier[] = await aiResult.steps
+      .then((s) => s as ProviderMetadataCarrier[])
+      .catch(() => []);
     const usage = await aiResult.totalUsage.catch(() => undefined);
 
-    accumulatedSteps.push(...(steps as unknown as ProviderMetadataCarrier[]));
+    accumulatedSteps.push(...steps);
     accumulatedUsage = mergeUsage(accumulatedUsage, usage);
 
-    const responseMessages = response.messages as ModelMessage[];
     const outcome = classifyAttempt({
       finishReason,
       caughtError,
@@ -161,6 +172,7 @@ export async function runAgentWithRetry(
       maxSteps,
       finishToolName,
       aborted: abortSignal.aborted,
+      emittedContent,
     });
 
     if (outcome.kind === 'clean') {
@@ -210,13 +222,14 @@ export async function runAgentWithRetry(
     }
   }
 
-  // Surface a TERMINAL, non-network error on provider-error give-up. Phrasing avoids the
+  // Surface a non-network error whenever we give up on a provider error — whether that's
+  // an after-content terminal (can't retry) or retry exhaustion. Phrasing avoids the
   // client's isNetworkError patterns so useStreamRecovery does not re-run on top of us.
-  if (finalOutcome === 'exhausted' && terminalReason === 'provider-error') {
+  if (terminalReason === 'provider-error') {
     safeWrite({
       type: 'error',
       errorText:
-        'The assistant could not complete its response after several attempts. Please try again.',
+        'The assistant could not complete its response. Please try again.',
     });
   }
 

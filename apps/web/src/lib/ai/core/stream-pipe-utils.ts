@@ -10,7 +10,26 @@ export interface PipeOptions {
    * provider error must NOT reach the client mid-stream when we still intend to retry.
    */
   suppressError?: boolean;
+  /**
+   * Invoked the first time a non-framing CONTENT chunk is forwarded. Fires even if the
+   * stream later throws, so the retry shell can refuse a from-scratch retry once content
+   * is already on the wire (the append-only stream cannot retract it).
+   */
+  onContent?: () => void;
 }
+
+// Envelope/framing chunk types that carry no assistant content. Everything else
+// (text-*, tool-*, reasoning-*, file, source-*, data-*) is "content" — once any of it
+// reaches the client it cannot be retracted, so the retry shell must not re-stream it.
+const FRAMING_CHUNK_TYPES = new Set<string>([
+  'start',
+  'finish',
+  'start-step',
+  'finish-step',
+  'error',
+  'message-metadata',
+  'abort',
+]);
 
 /**
  * Pipes an AI result's UI message stream to a writer, stripping the inner
@@ -24,13 +43,23 @@ export interface PipeOptions {
  * everything else). The retry shell passes suppress* flags so it can run several
  * attempts under a single message envelope without emitting duplicate start/finish
  * chunks or leaking a per-attempt error that is about to be retried.
+ *
+ * Reports the first content chunk via `options.onContent` — the retry shell uses this to
+ * refuse a from-scratch retry once content is already on the wire (which would otherwise
+ * duplicate it, since the UI message stream is append-only). The callback fires even if
+ * the stream subsequently throws.
  */
 export async function pipeUIMessageStreamStrippingStart(
   aiResult: { toUIMessageStream(): AsyncIterable<UIMessageChunk> },
   writer: UIMessageStreamWriter,
   options: PipeOptions = {},
 ): Promise<void> {
+  let contentReported = false;
   for await (const chunk of aiResult.toUIMessageStream()) {
+    if (!contentReported && !FRAMING_CHUNK_TYPES.has(chunk.type)) {
+      contentReported = true;
+      options.onContent?.();
+    }
     try {
       if (chunk.type === 'start') {
         if (!options.suppressStart) writer.write({ type: 'start' });

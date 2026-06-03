@@ -89,7 +89,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -108,6 +108,9 @@ export async function POST(request: Request) {
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
   let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
+  // Outcome of the retry shell, shared from execute() to onFinish() (success flag,
+  // abort detection during inter-attempt backoff, retry observability).
+  let agentRun: RunAgentWithRetryResult | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
@@ -984,6 +987,7 @@ export async function POST(request: Request) {
           // attempts ARE billed because the provider charged us for those tokens.
           usagePromise = Promise.resolve(runResult.accumulatedUsage);
           stepsPromise = Promise.resolve(runResult.accumulatedSteps);
+          agentRun = runResult;
         },
         onFinish: async ({ responseMessage }) => {
           // Clean up abort controller from registry
@@ -1094,7 +1098,9 @@ export async function POST(request: Request) {
                 messageId,
                 pageId: chatId,
                 driveId: pageContext?.driveId,
-                success: true,
+                // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
+                // completion. Cost still settles regardless (the provider charged us).
+                success: agentRun?.finalOutcome !== 'exhausted',
                 holdId,
                 metadata: {
                   pageName: page.title,
@@ -1103,6 +1109,9 @@ export async function POST(request: Request) {
                   hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
                   reasoningTokens: usage?.reasoningTokens,
                   cachedInputTokens: usage?.cachedInputTokens,
+                  retryAttempts: agentRun?.attempts,
+                  retryOutcome: agentRun?.finalOutcome,
+                  retryTerminalReason: agentRun?.terminalReason,
                 }
               });
 
@@ -1141,7 +1150,10 @@ export async function POST(request: Request) {
             loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
           }
 
-          lifecycle!.finish(false);
+          // Reflect a user stop that landed during inter-attempt backoff (onAbort, which
+          // also calls finish(true), only fires while a streamText is live). finish() is
+          // idempotent, so this is a no-op if onAbort already ran.
+          lifecycle!.finish(agentRun?.terminalReason === 'aborted');
         },
       });
 

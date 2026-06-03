@@ -27,6 +27,7 @@ const base = (over: Partial<ClassifyAttemptArgs>): ClassifyAttemptArgs => ({
   maxSteps: 100,
   finishToolName: FINISH,
   aborted: false,
+  emittedContent: false,
   ...over,
 });
 
@@ -71,11 +72,33 @@ describe('classifyAttempt', () => {
     });
   });
 
-  it('a thrown stream error is retryable', () => {
+  it('a thrown stream error with NO content streamed is retryable', () => {
     assert({
-      given: 'an exception caught while consuming the stream',
+      given: 'an exception caught before any content reached the client',
+      should: 'retry as provider-error (safe — nothing to duplicate)',
+      actual: classifyAttempt(
+        base({ caughtError: new Error('disconnected'), finishReason: undefined, emittedContent: false }),
+      ),
+      expected: { kind: 'retry', reason: 'provider-error' },
+    });
+  });
+
+  it('a thrown stream error AFTER content was streamed is terminal (no duplication)', () => {
+    assert({
+      given: 'a mid-stream drop after partial content already reached the client',
+      should: 'be terminal:provider-error (a from-scratch retry would duplicate / re-run tools)',
+      actual: classifyAttempt(
+        base({ caughtError: new Error('disconnected'), finishReason: undefined, emittedContent: true }),
+      ),
+      expected: { kind: 'terminal', reason: 'provider-error' },
+    });
+  });
+
+  it('finishReason error with no content streamed is retryable', () => {
+    assert({
+      given: 'a provider error finish before any content',
       should: 'retry as provider-error',
-      actual: classifyAttempt(base({ caughtError: new Error('disconnected'), finishReason: undefined })),
+      actual: classifyAttempt(base({ finishReason: 'error', emittedContent: false })),
       expected: { kind: 'retry', reason: 'provider-error' },
     });
   });
@@ -150,21 +173,21 @@ describe('classifyAttempt', () => {
     });
   });
 
-  it('finishReason error is retryable', () => {
+  it('unknown/other finish reasons with no content are ambiguous retries', () => {
     assert({
-      given: 'a finishReason of error',
-      should: 'retry as provider-error',
-      actual: classifyAttempt(base({ finishReason: 'error' })),
-      expected: { kind: 'retry', reason: 'provider-error' },
+      given: 'an unknown finishReason before any content',
+      should: 'retry as ambiguous',
+      actual: classifyAttempt(base({ finishReason: 'unknown', emittedContent: false })),
+      expected: { kind: 'retry', reason: 'ambiguous' },
     });
   });
 
-  it('unknown/other finish reasons are ambiguous retries', () => {
+  it('unknown/other finish reasons AFTER content are terminal', () => {
     assert({
-      given: 'an unknown finishReason',
-      should: 'retry as ambiguous',
-      actual: classifyAttempt(base({ finishReason: 'unknown' })),
-      expected: { kind: 'retry', reason: 'ambiguous' },
+      given: 'an unknown finishReason after content was streamed',
+      should: 'be terminal:ambiguous (restarting would duplicate)',
+      actual: classifyAttempt(base({ finishReason: 'unknown', emittedContent: true })),
+      expected: { kind: 'terminal', reason: 'ambiguous' },
     });
   });
 });

@@ -71,7 +71,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
@@ -918,6 +918,9 @@ MENTION PROCESSING:
 
     let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
     let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
+    // Outcome of the retry shell, shared from execute() to onFinish() (success flag,
+    // abort detection during inter-attempt backoff, retry observability).
+    let agentRun: RunAgentWithRetryResult | undefined;
 
     const stream = createUIMessageStream({
       originalMessages: processedMessages,
@@ -977,6 +980,7 @@ MENTION PROCESSING:
         // but failed/partial attempts ARE billed (the provider charged us for them).
         usagePromise = Promise.resolve(runResult.accumulatedUsage);
         stepsPromise = Promise.resolve(runResult.accumulatedSteps);
+        agentRun = runResult;
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry
@@ -1053,7 +1057,9 @@ MENTION PROCESSING:
                 duration,
                 conversationId,
                 messageId,
-                success: true,
+                // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
+                // completion. Cost still settles regardless (the provider charged us).
+                success: agentRun?.finalOutcome !== 'exhausted',
                 holdId,
                 contextMessages: contextCalculation.messageIds,
                 contextSize: contextCalculation.totalTokens,
@@ -1067,6 +1073,9 @@ MENTION PROCESSING:
                   toolCallsCount: extractedToolCalls.length,
                   toolResultsCount: extractedToolResults.length,
                   isReadOnly: readOnlyMode,
+                  retryAttempts: agentRun?.attempts,
+                  retryOutcome: agentRun?.finalOutcome,
+                  retryTerminalReason: agentRun?.terminalReason,
                 }
               });
             } catch (trackingError) {
@@ -1087,7 +1096,10 @@ MENTION PROCESSING:
           }
         }
 
-        lifecycle!.finish(false);
+        // Reflect a user stop that landed during inter-attempt backoff (onAbort, which
+        // also calls finish(true), only fires while a streamText is live). finish() is
+        // idempotent, so this is a no-op if onAbort already ran.
+        lifecycle!.finish(agentRun?.terminalReason === 'aborted');
       },
     });
 
