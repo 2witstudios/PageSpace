@@ -149,8 +149,11 @@ export const MAX_FREE_INFLIGHT = envInt('MAX_FREE_INFLIGHT', 2);
  * each reserve little yet collectively settle past their balance. This matters now
  * that the chat hold is a (smaller) model-aware estimate clamped to [floor, ceiling]
  * rather than the old flat 25¢ reserve floor — the cap bounds worst-case concurrent
- * overdraw to `MAX_CHAT_INFLIGHT × worst-case single chat call`. Generous enough for
- * legitimate multi-tab / multi-agent use. Default 8.
+ * overdraw to `MAX_CHAT_INFLIGHT × the real settled cost of a single chat call` (the
+ * hold only bounds the up-front reservation, not the final settle, so the cap — not the
+ * hold — is what limits how far simultaneous calls can collectively run past the
+ * balance before any settles). Generous enough for legitimate multi-tab / multi-agent
+ * use. Default 8.
  */
 export const MAX_CHAT_INFLIGHT = envInt('MAX_CHAT_INFLIGHT', 8);
 
