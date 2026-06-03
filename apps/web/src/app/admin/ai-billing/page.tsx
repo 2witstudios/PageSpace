@@ -21,7 +21,7 @@ import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
 type Range = "24h" | "7d" | "30d" | "all";
 type Granularity = "day" | "month";
-type Coverage = "real" | "estimate";
+type Coverage = "real" | "estimate" | "list_price";
 type Tier = "free" | "pro" | "founder" | "business";
 
 interface TokenTotals {
@@ -349,7 +349,9 @@ export default function AdminAiBillingPage() {
           <CardDescription>
             What we pay providers per model, split by billing basis. <Badge variant="outline">real</Badge> =
             OpenRouter&apos;s returned cost; <Badge variant="secondary">estimate</Badge> = static fallback
-            (direct providers, or an OpenRouter call whose cost metadata was missing).
+            (direct providers, or an OpenRouter call whose cost metadata was missing);{" "}
+            <Badge variant="default">list_price</Badge> = voice (STT/TTS) billed at exact
+            quantity × OpenAI&apos;s published rate.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -377,7 +379,15 @@ export default function AdminAiBillingPage() {
                     <TableCell>{row.provider}</TableCell>
                     <TableCell className="font-mono text-xs">{row.model}</TableCell>
                     <TableCell>
-                      <Badge variant={row.coverage === "real" ? "outline" : "secondary"}>
+                      <Badge
+                        variant={
+                          row.coverage === "real"
+                            ? "outline"
+                            : row.coverage === "list_price"
+                              ? "default"
+                              : "secondary"
+                        }
+                      >
                         {row.coverage}
                       </Badge>
                     </TableCell>

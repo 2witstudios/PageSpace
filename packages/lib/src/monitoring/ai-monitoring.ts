@@ -704,6 +704,15 @@ export interface AIUsageData {
   // route → here → consumeCredits. Absent for un-gated calls (e.g. cron paths).
   holdId?: string;
 
+  // Override the cost provenance stamped into metadata.costSource (which the admin
+  // panel reads to classify coverage). Defaults to 'openrouter' when a finite
+  // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
+  // because their cost is deterministic (exact quantity × published OpenAI rate),
+  // neither a live provider-returned figure nor a token-guess fallback. Typed as the
+  // closed set the rollup recognizes so a typo can't silently fall through to the
+  // provider-name heuristic.
+  costSource?: 'openrouter' | 'estimate' | 'list_price';
+
   // Context tracking - track actual conversation context vs billing tokens
   contextMessages?: string[]; // Array of message IDs included in this call's context
   contextSize?: number; // Actual tokens in context (input + system prompt + tools)
@@ -792,8 +801,11 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
           streamingDuration: data.streamingDuration,
           // Provenance of the billed `cost`: 'openrouter' = real returned cost,
           // 'estimate' = static AI_PRICING fallback. Lets the admin panel be
-          // honest about real vs estimated coverage.
-          costSource,
+          // honest about real vs estimated coverage. Callers that compute their own
+          // authoritative cost (voice: 'list_price' = exact quantity × published
+          // rate) override this, since they pass a finite providerCostDollars that
+          // would otherwise be mislabeled 'openrouter'.
+          costSource: data.costSource ?? costSource,
         },
       });
       // Bill when real tokens were consumed, regardless of success. A token-less

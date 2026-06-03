@@ -107,6 +107,11 @@
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
     },
+    "./monitoring/voice-pricing": {
+      "types": "./dist/monitoring/voice-pricing.d.ts",
+      "import": "./dist/monitoring/voice-pricing.js",
+      "require": "./dist/monitoring/voice-pricing.js"
+    },
     "./monitoring/ai-context-calculator": {
       "types": "./dist/monitoring/ai-context-calculator.d.ts",
       "import": "./dist/monitoring/ai-context-calculator.js",
