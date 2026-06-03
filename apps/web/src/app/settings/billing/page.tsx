@@ -239,6 +239,94 @@ export default function BillingPage() {
   const scheduledPlan = scheduledPriceId ? getPlanFromPriceId(scheduledPriceId) : null;
   const scheduledChangeDate = subscriptionData?.subscription?.scheduledChangeDate;
 
+  // Current Subscription card — lifted into the headline row so the plan reads first,
+  // alongside AI Credits, instead of sitting below usage/automations/storage.
+  const subscriptionCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="h-5 w-5" />
+          Current Subscription
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-full ${plan.accentColor}`}>
+              <plan.icon className={`h-5 w-5 ${plan.iconColor}`} />
+            </div>
+            <div>
+              <div className="font-semibold flex items-center gap-2">
+                {plan.displayName}
+                {isPaid && (
+                  <Badge variant={isCanceling ? 'secondary' : 'default'}>
+                    {isCanceling ? 'Canceling' : subscriptionData?.subscription?.status}
+                  </Badge>
+                )}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {plan.price.formatted}{plan.price.monthly > 0 && '/month'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {isPaid && subscriptionData?.subscription && (
+              <div className="text-sm text-muted-foreground flex items-center gap-1 mr-4">
+                <Clock className="h-4 w-4" />
+                {isCanceling ? 'Ends' : 'Renews'}{' '}
+                {new Date(subscriptionData.subscription.currentPeriodEnd).toLocaleDateString()}
+              </div>
+            )}
+            <Link href="/settings/plan">
+              <Button variant="outline">
+                {isPaid ? 'Change Plan' : 'Upgrade'}
+              </Button>
+            </Link>
+          </div>
+        </div>
+
+        {isCanceling && (
+          <Alert className="mt-4">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              Your subscription will end on{' '}
+              {new Date(subscriptionData!.subscription!.currentPeriodEnd).toLocaleDateString()}.
+              You can reactivate anytime before then.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {scheduledPlan && !isCanceling && (
+          <Alert className="mt-4 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20">
+            <Clock className="h-4 w-4 text-blue-600" />
+            <AlertDescription className="text-blue-800 dark:text-blue-200 flex items-center justify-between">
+              <span>
+                Changing to {scheduledPlan.displayName} on{' '}
+                {scheduledChangeDate ? new Date(scheduledChangeDate).toLocaleDateString() : 'next billing period'}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCancelSchedule}
+                disabled={cancellingSchedule}
+                className="ml-4"
+              >
+                {cancellingSchedule ? (
+                  <>
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    Cancelling...
+                  </>
+                ) : (
+                  'Keep Current Plan'
+                )}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
+
   return (
     <div className="container mx-auto p-6 space-y-8 max-w-4xl">
       {/* Header */}
@@ -296,8 +384,15 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* AI Credits + usage breakdown (credits mode only; legacy daily-quota build hides these) */}
-      {creditsMode && <CreditBalanceCard />}
+      {/* Headline row: Current Subscription + AI Credits side by side (each gated independently) */}
+      {(showBillingSections || creditsMode) && (
+        <div className={creditsMode && showBillingSections ? 'grid gap-8 md:grid-cols-2' : undefined}>
+          {showBillingSections && subscriptionCard}
+          {creditsMode && <CreditBalanceCard />}
+        </div>
+      )}
+
+      {/* AI usage breakdown (credits mode only; legacy daily-quota build hides this) */}
       {creditsMode && <UsageBreakdownCard />}
 
       {/* Automations — background AI that spends credits (Pulse, Memory) */}
@@ -309,91 +404,6 @@ export default function BillingPage() {
       {/* Payment & subscription sections — Stripe-backed, hidden on iOS (App Store). */}
       {showBillingSections && (
       <>
-      {/* Current Subscription */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5" />
-            Current Subscription
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-full ${plan.accentColor}`}>
-                <plan.icon className={`h-5 w-5 ${plan.iconColor}`} />
-              </div>
-              <div>
-                <div className="font-semibold flex items-center gap-2">
-                  {plan.displayName}
-                  {isPaid && (
-                    <Badge variant={isCanceling ? 'secondary' : 'default'}>
-                      {isCanceling ? 'Canceling' : subscriptionData?.subscription?.status}
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  {plan.price.formatted}{plan.price.monthly > 0 && '/month'}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {isPaid && subscriptionData?.subscription && (
-                <div className="text-sm text-muted-foreground flex items-center gap-1 mr-4">
-                  <Clock className="h-4 w-4" />
-                  {isCanceling ? 'Ends' : 'Renews'}{' '}
-                  {new Date(subscriptionData.subscription.currentPeriodEnd).toLocaleDateString()}
-                </div>
-              )}
-              <Link href="/settings/plan">
-                <Button variant="outline">
-                  {isPaid ? 'Change Plan' : 'Upgrade'}
-                </Button>
-              </Link>
-            </div>
-          </div>
-
-          {isCanceling && (
-            <Alert className="mt-4">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription>
-                Your subscription will end on{' '}
-                {new Date(subscriptionData!.subscription!.currentPeriodEnd).toLocaleDateString()}.
-                You can reactivate anytime before then.
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {scheduledPlan && !isCanceling && (
-            <Alert className="mt-4 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20">
-              <Clock className="h-4 w-4 text-blue-600" />
-              <AlertDescription className="text-blue-800 dark:text-blue-200 flex items-center justify-between">
-                <span>
-                  Changing to {scheduledPlan.displayName} on{' '}
-                  {scheduledChangeDate ? new Date(scheduledChangeDate).toLocaleDateString() : 'next billing period'}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCancelSchedule}
-                  disabled={cancellingSchedule}
-                  className="ml-4"
-                >
-                  {cancellingSchedule ? (
-                    <>
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      Cancelling...
-                    </>
-                  ) : (
-                    'Keep Current Plan'
-                  )}
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
-
       {/* Payment Methods */}
       <Card>
         <CardHeader>
