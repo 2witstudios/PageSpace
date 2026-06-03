@@ -160,8 +160,36 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
     });
     return false;
   }
-  const holdId = gate.holdId;
 
+  // The gate's reservation is owned here until trackUsage settles it (handoff). The
+  // finally releases it on ANY pre-settle exit — including a throw from the context
+  // gathering below — so a transient failure can't leave the hold sitting until TTL,
+  // mirroring the on-demand /api/pulse/generate route.
+  const holdId = gate.holdId;
+  let holdHandedOff = false;
+  try {
+    await buildAndPersistPulse(user, now, holdId, () => {
+      holdHandedOff = true;
+    });
+    return true;
+  } finally {
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
+  }
+}
+
+/**
+ * Build the workspace context, generate the summary, bill it, and persist it. The
+ * reservation `holdId` is handed to trackUsage on success (call `markHandedOff` so the
+ * caller's finally won't double-release); any throw before that leaves the caller to
+ * release the hold.
+ */
+async function buildAndPersistPulse(
+  user: typeof users.$inferSelect,
+  now: Date,
+  holdId: string | undefined,
+  markHandedOff: () => void,
+): Promise<void> {
+  const userId = user.id;
   const userName = user.name || user.email?.split('@')[0] || 'there';
   // Use stored timezone or default to UTC
   const userTimezone = normalizeTimezone(user.timezone);
@@ -795,27 +823,19 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   });
 
   if (isProviderError(providerResult)) {
-    // Never reached a model call — free the reservation so it doesn't sit until expiry.
-    if (holdId) void releaseHold(holdId).catch(() => {});
+    // Throws before any model call — the caller's finally releases the reservation.
     throw new Error(providerResult.error);
   }
 
-  // Generate summary
-  let result;
-  try {
-    result = await generateText({
-      model: providerResult.model,
-      system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
-      messages: [{ role: 'user', content: userPrompt }],
-      temperature: 0.7,
-      maxRetries: 3,
-    });
-  } catch (err) {
-    // Generation failed before any billable usage — release the hold and rethrow so
-    // the per-user loop records the error.
-    if (holdId) void releaseHold(holdId).catch(() => {});
-    throw err;
-  }
+  // Generate summary. A throw here propagates to the caller, whose finally releases
+  // the still-unsettled hold.
+  const result = await generateText({
+    model: providerResult.model,
+    system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
+    messages: [{ role: 'user', content: userPrompt }],
+    temperature: 0.7,
+    maxRetries: 3,
+  });
 
   const summary = result.text.trim();
 
@@ -833,6 +853,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     holdId,
     success: true,
   });
+  // The hold is now owned by trackUsage — keep the caller's finally from releasing it.
+  markHandedOff();
 
   // Extract greeting
   let greeting: string | null = null;
@@ -913,8 +935,6 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     diffCount: contentDiffs.length,
     contextSize: JSON.stringify(contextData).length,
   });
-
-  return true;
 }
 
 // Also support GET for easy cron setup (some cron services only support GET)

@@ -21,7 +21,7 @@ re-run here because the flag is read in the app process and is fixed at app laun
 
 1. Start the **web app** with this env (the mock server is started for you by Playwright on :4998):
 
-   ```
+   ```bash
    DATABASE_URL=postgres://…@localhost:5432/…   # local DB only — seeders refuse non-local hosts
    CREDITS_ENFORCEMENT_ENABLED=true             # enforcement is OFF by default — turn it ON for this run
    OPENROUTER_DEFAULT_API_KEY=sk-e2e            # any non-empty value; enables the openrouter branch
@@ -37,7 +37,7 @@ re-run here because the flag is read in the app process and is fixed at app laun
 
 2. Run the suite:
 
-   ```
+   ```bash
    bun run --filter '@pagespace/e2e' test:e2e -- tests/09-metering-no-bypass.spec.ts \
      tests/10-metering-billing.spec.ts tests/11-metering-limits.spec.ts tests/12-token-packs.spec.ts
    ```

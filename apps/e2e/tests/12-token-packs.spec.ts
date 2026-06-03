@@ -62,9 +62,14 @@ test.describe('credit-pack webhook funding', () => {
     const res2 = await post();
     expect(res2.status()).toBe(200);
 
-    // Give any (incorrect) second funding a chance to land, then assert it did not.
-    await new Promise((r) => setTimeout(r, 500));
-    expect((await getBalance(user.userId))?.topupRemainingCents).toBe(before + pack.cents);
-    expect(await getLedger(user.userId, 'topup_purchase')).toHaveLength(1);
+    // A late duplicate could land any time during the redelivery-processing window, so
+    // assert the invariants HOLD for the whole window — fail the instant either changes,
+    // rather than sampling once after a fixed sleep.
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      expect((await getBalance(user.userId))?.topupRemainingCents).toBe(before + pack.cents);
+      expect(await getLedger(user.userId, 'topup_purchase')).toHaveLength(1);
+      await new Promise((r) => setTimeout(r, 100));
+    }
   });
 });
