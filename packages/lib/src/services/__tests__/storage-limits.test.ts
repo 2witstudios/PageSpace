@@ -15,14 +15,20 @@ vi.mock('../storage-repository', () => ({
   },
 }));
 
-vi.mock('../subscription-utils', () => ({
-  getStorageConfigFromSubscription: vi.fn((tier: string) => {
-    if (tier === 'free') return { tier: 'free', quotaBytes: 500 * 1024 * 1024, maxFileSize: 20 * 1024 * 1024, maxConcurrentUploads: 2, maxFileCount: 100, features: [] };
-    if (tier === 'pro') return { tier: 'pro', quotaBytes: 2 * 1024 * 1024 * 1024, maxFileSize: 50 * 1024 * 1024, maxConcurrentUploads: 3, maxFileCount: 500, features: [] };
-    return { tier: 'business', quotaBytes: 50 * 1024 * 1024 * 1024, maxFileSize: 100 * 1024 * 1024, maxConcurrentUploads: 10, maxFileCount: 5000, features: [] };
-  }),
-  getStorageTierFromSubscription: vi.fn((tier: string) => tier),
-}));
+vi.mock('../subscription-utils', async (importOriginal) => {
+  // Spread the real module so the canonical STORAGE_TIERS table (now the single
+  // source of truth) is preserved; override only the tier-config resolvers.
+  const actual = await importOriginal<typeof import('../subscription-utils')>();
+  return {
+    ...actual,
+    getStorageConfigFromSubscription: vi.fn((tier: string) => {
+      if (tier === 'free') return { name: 'Free', tier: 'free', quotaBytes: 500 * 1024 * 1024, maxFileSize: 50 * 1024 * 1024, maxConcurrentUploads: 3, maxFileCount: 100, features: [] };
+      if (tier === 'pro') return { name: 'Pro', tier: 'pro', quotaBytes: 2 * 1024 * 1024 * 1024, maxFileSize: 250 * 1024 * 1024, maxConcurrentUploads: 5, maxFileCount: 500, features: [] };
+      return { name: 'Business', tier: 'business', quotaBytes: 50 * 1024 * 1024 * 1024, maxFileSize: 1024 * 1024 * 1024, maxConcurrentUploads: 10, maxFileCount: 5000, features: [] };
+    }),
+    getStorageTierFromSubscription: vi.fn((tier: string) => tier),
+  };
+});
 
 import {
   getUserStorageQuota,

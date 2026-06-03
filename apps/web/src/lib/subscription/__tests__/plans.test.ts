@@ -51,10 +51,10 @@ describe('Subscription Plans', () => {
     });
 
     it('should have correct max file size limits for each tier', () => {
-      expect(PLANS.free.limits.maxFileSize.bytes).toBe(20 * 1024 * 1024); // 20MB
-      expect(PLANS.pro.limits.maxFileSize.bytes).toBe(50 * 1024 * 1024); // 50MB
-      expect(PLANS.founder.limits.maxFileSize.bytes).toBe(50 * 1024 * 1024); // 50MB
-      expect(PLANS.business.limits.maxFileSize.bytes).toBe(100 * 1024 * 1024); // 100MB
+      expect(PLANS.free.limits.maxFileSize.bytes).toBe(50 * 1024 * 1024); // 50MB
+      expect(PLANS.pro.limits.maxFileSize.bytes).toBe(250 * 1024 * 1024); // 250MB
+      expect(PLANS.founder.limits.maxFileSize.bytes).toBe(500 * 1024 * 1024); // 500MB
+      expect(PLANS.business.limits.maxFileSize.bytes).toBe(1024 * 1024 * 1024); // 1GB
     });
 
     it('should have Stripe price IDs for paid tiers only', () => {
