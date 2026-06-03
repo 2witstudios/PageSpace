@@ -125,6 +125,7 @@ vi.mock('ai', async (importOriginal) => {
 
 // --- imports after mocks ---
 import { NextResponse } from 'next/server';
+import { streamText } from 'ai';
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
@@ -440,6 +441,71 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'not call getMessagesForPage',
       actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
       expected: 0,
+    });
+  });
+
+  test('successful finish settles billing exactly once with success=true', async () => {
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+    const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+    assert({
+      given: 'a stream that finishes normally',
+      should: 'call AIMonitoring.trackUsage exactly once with success=true and no aborted flag',
+      actual: {
+        count: calls.length,
+        success: calls[0]?.[0]?.success,
+        aborted: (calls[0]?.[0]?.metadata as Record<string, unknown> | undefined)?.aborted,
+      },
+      expected: { count: 1, success: true, aborted: undefined },
+    });
+  });
+
+  test('consumer disconnect settles billing once as aborted and releases the hold', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-xyz' });
+
+    const ac = new AbortController();
+    vi.mocked(streamText).mockImplementationOnce(((options: {
+      abortSignal?: AbortSignal;
+      onAbort?: () => void;
+    }) => ({
+      totalUsage: Promise.resolve({ inputTokens: 7, outputTokens: 3 }),
+      steps: Promise.resolve([]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', delta: 'Partial' };
+        // Simulate the consumer dropping the connection mid-stream: this trips the route's
+        // abortController via request.signal, then streamText fires onAbort and tears down.
+        ac.abort();
+        options.onAbort?.();
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      },
+    })) as unknown as typeof streamText);
+
+    const req = new Request('http://localhost/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer mcp_test123' },
+      body: JSON.stringify(validBody),
+      signal: ac.signal,
+    });
+    const response = await POST(req);
+    await response.text();
+    // onAbort settles via a fire-and-forget IIFE; let its microtasks flush.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+    assert({
+      given: 'a consumer that disconnects mid-stream',
+      should: 'settle billing once with holdId, success=false, and metadata.aborted=true',
+      actual: {
+        count: calls.length,
+        holdId: calls[0]?.[0]?.holdId,
+        success: calls[0]?.[0]?.success,
+        aborted: (calls[0]?.[0]?.metadata as Record<string, unknown> | undefined)?.aborted,
+        status: response.status,
+      },
+      expected: { count: 1, holdId: 'hold-xyz', success: false, aborted: true, status: 200 },
     });
   });
 });
