@@ -5,16 +5,24 @@ import { users } from './auth';
 
 /**
  * creditBalances — denormalized, one row per user. The fast pre-request gate and
- * the dashboard read this. Two buckets:
+ * the dashboard read this. Two buckets plus a debt counter:
  *   - monthly: subscription allowance, RESET each period (use-it-or-lose-it)
  *   - topup:   purchased packs, NEVER expire
- * Spendable = monthlyRemainingCents + topupRemainingCents.
+ *   - debt:    overage owed (a NON-NEGATIVE magnitude). Accrues when a call's real
+ *              cost can't be covered; paid down by a purchase; FORGIVEN (zeroed) at
+ *              the next renewal so it never reduces next period's allowance.
+ * Net spendable = monthlyRemainingCents + topupRemainingCents − debtCents (may be < 0).
  */
 export const creditBalances = pgTable('credit_balances', {
   userId: text('userId').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
   monthlyRemainingCents: integer('monthlyRemainingCents').default(0).notNull(),
   monthlyAllowanceCents: integer('monthlyAllowanceCents').default(0).notNull(),
   topupRemainingCents: integer('topupRemainingCents').default(0).notNull(),
+  // Outstanding overage owed, as a non-negative magnitude (the net goes negative via
+  // subtraction, not by storing a negative bucket). Raised at settle when a call's
+  // cost exceeds the buckets, lowered by a purchase (debt paid first), reset to 0 at
+  // each renewal (overage is forgiven, never carried into the next period).
+  debtCents: integer('debtCents').default(0).notNull(),
   // Sub-cent carry: a single AI call can cost a fraction of a cent (high-volume
   // cheap models). We charge in millicents (1/1000 cent) and bank the leftover
   // fraction here so those calls don't silently round to $0. Always in [0, 1000):
@@ -31,6 +39,7 @@ export const creditBalances = pgTable('credit_balances', {
   monthlyNonNeg: check('credit_balances_monthly_remaining_nonneg', sql`${table.monthlyRemainingCents} >= 0`),
   allowanceNonNeg: check('credit_balances_monthly_allowance_nonneg', sql`${table.monthlyAllowanceCents} >= 0`),
   topupNonNeg: check('credit_balances_topup_remaining_nonneg', sql`${table.topupRemainingCents} >= 0`),
+  debtNonNeg: check('credit_balances_debt_cents_nonneg', sql`${table.debtCents} >= 0`),
   // The carry is a sub-cent fraction by construction; bound it so a bad write
   // can't park whole cents of unbilled value here, out of sight of the balance.
   pendingRange: check('credit_balances_pending_millicents_range', sql`${table.pendingMillicents} >= 0 AND ${table.pendingMillicents} < 1000`),

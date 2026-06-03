@@ -26,6 +26,7 @@ const SUMMARY = {
   billingEnabled: true,
   monthly: { remaining: 300, allowance: 500, periodEnd: '2026-07-01T00:00:00.000Z' },
   topup: { remaining: 1200 },
+  debt: 0,
   spendable: 1500,
   reserved: 25,
 };
@@ -79,6 +80,7 @@ describe('emitCreditsUpdated', () => {
       billingEnabled: true,
       spendable: 1500,
       reserved: 25,
+      debt: 0,
       monthly: SUMMARY.monthly,
       topup: SUMMARY.topup,
     });

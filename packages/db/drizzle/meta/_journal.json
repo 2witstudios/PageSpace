@@ -1030,6 +1030,20 @@
       "when": 1780453557070,
       "tag": "0146_furry_abomination",
       "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1780528975427,
+      "tag": "0147_late_prowler",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1780530723055,
+      "tag": "0148_credit_balances_nonneg_checks",
+      "breakpoints": true
     }
   ]
 }

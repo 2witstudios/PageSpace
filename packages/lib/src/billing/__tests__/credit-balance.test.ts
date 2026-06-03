@@ -123,6 +123,29 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(250); // only top-up survives
   });
 
+  it('surfaces a NEGATIVE spendable and the debt when the user is in the red', async () => {
+    // Debt accrues only after both buckets are exhausted, so monthly/topup are 0.
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 1500,
+        topupRemainingCents: 0,
+        debtCents: 250,
+        monthlyPeriodEnd: future,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'pro');
+    expect(b.debt).toBe(250);
+    // Not clamped: the user owes $2.50, shown as a negative balance.
+    expect(b.spendable).toBe(-250);
+  });
+
+  it('reports debt: 0 when no balance row exists', async () => {
+    balanceRows = [];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.debt).toBe(0);
+  });
+
   it('clamps spendable at zero when holds exceed the balance', async () => {
     balanceRows = [
       {

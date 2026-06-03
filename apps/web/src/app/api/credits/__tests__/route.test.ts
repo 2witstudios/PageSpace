@@ -31,6 +31,7 @@ const summary = {
   billingEnabled: true,
   monthly: { remaining: 350, allowance: 500, periodEnd: null },
   topup: { remaining: 1000 },
+  debt: 0,
   spendable: 1350,
   reserved: 0,
 };

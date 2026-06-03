@@ -19,6 +19,12 @@ import type { SubscriptionTier } from '../services/subscription-utils';
 export interface Balance {
   monthlyCents: number;
   topupCents: number;
+  /**
+   * Outstanding overage owed, stored as a NON-NEGATIVE magnitude. Net spendable is
+   * `monthly + topup − debt`, so debt drags the net below zero (and the gate denies)
+   * until it's paid down by a purchase or forgiven at the next renewal. Defaults to 0.
+   */
+  debtCents?: number;
 }
 
 /**
@@ -171,7 +177,11 @@ export function evaluateGate(input: GateInput): GateResult {
 
   const reserved = Math.max(0, input.reservedCents ?? 0);
   const estCost = Math.max(0, input.estCostCents ?? 0);
-  const spendable = input.balance.monthlyCents + input.balance.topupCents - reserved - estCost;
+  // Outstanding debt drags net spendable down: a user in the red must get back to
+  // net-positive (above the floor) before they can spend again. Clamp to >= 0 so a
+  // missing/negative debtCents is treated as no debt.
+  const debt = Math.max(0, input.balance.debtCents ?? 0);
+  const spendable = input.balance.monthlyCents + input.balance.topupCents - debt - reserved - estCost;
   if (spendable > input.reserveFloorCents) return { allowed: true, reason: 'ok' };
   return { allowed: false, reason: 'out_of_credits' };
 }
@@ -200,19 +210,77 @@ export function holdExpiresAt(nowMs: number, ttlMs: number): number {
 export interface MonthlyRefill {
   monthlyRemainingCents: number;
   monthlyAllowanceCents: number;
+  /**
+   * Always 0: a renewal FORGIVES any outstanding overage. The fresh allowance is the
+   * full tier amount, never reduced by last period's debt, and the debt itself is
+   * wiped. Encoding it here keeps "renewal forgives debt" a pure, tested invariant the
+   * funding/gate shells simply persist, rather than a magic 0 buried in each shell.
+   */
+  debtCents: 0;
 }
 
 /**
  * Compute the reset state for a new billing period: remaining is reset to the
- * full tier allowance (unspent prior credits are dropped — use-it-or-lose-it).
- * Unknown tiers fall back to the free allowance.
+ * full tier allowance (unspent prior credits are dropped — use-it-or-lose-it) and
+ * any outstanding debt is forgiven (debtCents: 0). Unknown tiers fall back to the
+ * free allowance.
  */
 export function computeMonthlyRefill(
   tier: SubscriptionTier,
   allowanceTable: Record<SubscriptionTier, number>,
 ): MonthlyRefill {
   const allowance = allowanceTable[tier] ?? allowanceTable.free;
-  return { monthlyRemainingCents: allowance, monthlyAllowanceCents: allowance };
+  return { monthlyRemainingCents: allowance, monthlyAllowanceCents: allowance, debtCents: 0 };
+}
+
+export interface PaymentToDebtResult {
+  /** Remaining debt after the payment (>= 0). */
+  debtCents: number;
+  /** New top-up balance after crediting the post-debt remainder. */
+  topupCents: number;
+  /** How much of the payment went to clearing debt. */
+  paidDebt: number;
+}
+
+/**
+ * Apply a purchase to a user in (or out of) debt: pay outstanding debt FIRST, then
+ * credit whatever's left to the never-expiring top-up bucket. This is the within-period
+ * recovery path — a negative user buys credits to get back to net-positive, and only
+ * the surplus beyond what they owed becomes spendable top-up. With no debt this is just
+ * {@link applyTopup}. A negative/non-finite payment is a programming error and throws.
+ */
+export function applyPaymentToDebt(
+  debtCents: number,
+  topupCents: number,
+  paymentCents: number,
+): PaymentToDebtResult {
+  if (!Number.isFinite(paymentCents) || paymentCents < 0) {
+    throw new Error(`applyPaymentToDebt: paymentCents must be a non-negative number, got ${paymentCents}`);
+  }
+  const payment = Math.round(paymentCents);
+  const debt = Math.max(0, Math.round(debtCents));
+  const paidDebt = Math.min(debt, payment);
+  return {
+    debtCents: debt - paidDebt,
+    topupCents: topupCents + (payment - paidDebt),
+    paidDebt,
+  };
+}
+
+/**
+ * Normalize and bound a user-supplied custom top-up amount (whole cents). Returns the
+ * normalized integer cents, or null if it isn't a finite integer within [min, max].
+ * Pure so the API route and the client validate against the SAME rule. The min keeps
+ * dust purchases above Stripe's per-transaction fee; the max caps single-charge risk.
+ */
+export function validateTopupAmountCents(
+  cents: number,
+  minCents: number,
+  maxCents: number,
+): number | null {
+  if (!Number.isInteger(cents)) return null;
+  if (cents < minCents || cents > maxCents) return null;
+  return cents;
 }
 
 /**

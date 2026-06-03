@@ -9,8 +9,9 @@
  *     will reset it on the next call) rather than a stale, pessimistic remainder;
  *   - paid tier whose window has lapsed is shown 0 monthly (use-it-or-lose-it — the
  *     gate excludes the expired allowance until the renewal invoice refills it);
- *   - spendable nets out the sum of the user's still-active holds (reservations on
- *     calls currently in flight), clamped at 0.
+ *   - spendable nets out the user's outstanding debt and still-active holds
+ *     (reservations on in-flight calls). It is NOT clamped: outstanding overage can
+ *     pull it negative, and that negative is surfaced so the widget shows the red.
  *
  * Money is always whole cents of customer-facing credit value, matching credit-core.
  *
@@ -39,7 +40,13 @@ export interface CreditBalanceSummary {
   topup: {
     remaining: number;
   };
-  /** monthly + topup remaining, minus active holds, clamped to >= 0. */
+  /**
+   * Outstanding overage owed (a non-negative magnitude). Accrues when a call's cost
+   * exceeds the buckets; paid down by a purchase; forgiven at the next renewal. When
+   * > 0 the net `spendable` is dragged down (and can be negative).
+   */
+  debt: number;
+  /** monthly + topup remaining − debt, minus active holds. MAY be negative (debt). */
   spendable: number;
   /** Sum of this user's non-expired holds (estimated spend on in-flight calls). */
   reserved: number;
@@ -55,6 +62,7 @@ function disabledSummary(): CreditBalanceSummary {
     billingEnabled: false,
     monthly: { remaining: 0, allowance: 0, periodEnd: null },
     topup: { remaining: 0 },
+    debt: 0,
     spendable: 0,
     reserved: 0,
   };
@@ -79,6 +87,7 @@ export async function getCreditBalance(
         monthlyRemainingCents: creditBalances.monthlyRemainingCents,
         monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
         topupRemainingCents: creditBalances.topupRemainingCents,
+        debtCents: creditBalances.debtCents,
         monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
       })
       .from(creditBalances)
@@ -102,6 +111,7 @@ export async function getCreditBalance(
       billingEnabled: true,
       monthly: { remaining: allowance, allowance, periodEnd: null },
       topup: { remaining: 0 },
+      debt: 0,
       spendable,
       reserved,
     };
@@ -122,7 +132,16 @@ export async function getCreditBalance(
   }
 
   const topupRemaining = row.topupRemainingCents;
-  const spendable = Math.max(0, monthlyRemaining + topupRemaining - reserved);
+  const debt = row.debtCents ?? 0;
+  // Debt is allowed to pull spendable negative (surface the red); in-flight holds are
+  // not — a transient reservation shouldn't read as "you owe". So: when in debt, show
+  // the true net (negative); otherwise keep the old hold-aware clamp at 0. Debt only
+  // ever accrues after both buckets are exhausted, so in the debt branch
+  // monthly+topup is 0 and this is effectively −debt (minus any lingering hold).
+  const spendable =
+    debt > 0
+      ? monthlyRemaining + topupRemaining - debt - reserved
+      : Math.max(0, monthlyRemaining + topupRemaining - reserved);
 
   return {
     billingEnabled: true,
@@ -132,6 +151,7 @@ export async function getCreditBalance(
       periodEnd: periodEnd ? periodEnd.toISOString() : null,
     },
     topup: { remaining: topupRemaining },
+    debt,
     spendable,
     reserved,
   };

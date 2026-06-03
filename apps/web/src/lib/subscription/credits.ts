@@ -17,6 +17,8 @@
 import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
   CREDIT_PACKS,
+  CREDIT_TOPUP_MIN_CENTS,
+  CREDIT_TOPUP_MAX_CENTS,
   type CreditPack,
 } from '@pagespace/lib/billing/credit-pricing';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -26,6 +28,19 @@ export function formatCreditDollars(cents: number): string {
   const dollars = cents / 100;
   return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
 }
+
+/**
+ * Like {@link formatCreditDollars} but signs negatives as `-$X` (not `$-X`), for the
+ * credit balance which goes negative when the user owes overage. Zero/positive render
+ * identically.
+ */
+export function formatCreditDollarsSigned(cents: number): string {
+  return cents < 0 ? `-${formatCreditDollars(-cents)}` : formatCreditDollars(cents);
+}
+
+/** Bounds (whole cents) for a custom top-up amount, from the canonical billing config. */
+export const TOPUP_MIN_CENTS = CREDIT_TOPUP_MIN_CENTS;
+export const TOPUP_MAX_CENTS = CREDIT_TOPUP_MAX_CENTS;
 
 /** Monthly included AI-credit allowance per tier, in whole cents. */
 export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = {

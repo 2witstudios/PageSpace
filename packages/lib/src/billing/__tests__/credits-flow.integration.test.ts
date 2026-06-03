@@ -32,7 +32,7 @@ type Pred =
   | { kind: 'isNull'; col: Col }
   | { kind: 'and'; parts: Pred[] }
   | { kind: 'or'; parts: Pred[] }
-  | { kind: 'sql' };
+  | { kind: 'sql'; values?: unknown[] };
 
 // ── Hoisted shared state: one store + one fake db, shared by all four real shells ─
 const H = vi.hoisted(() => {
@@ -47,7 +47,7 @@ const H = vi.hoisted(() => {
 
   const creditBalances = cols('creditBalances', [
     'userId', 'monthlyRemainingCents', 'monthlyAllowanceCents', 'topupRemainingCents',
-    'pendingMillicents', 'monthlyPeriodStart', 'monthlyPeriodEnd', 'updatedAt',
+    'pendingMillicents', 'debtCents', 'monthlyPeriodStart', 'monthlyPeriodEnd', 'updatedAt',
   ]);
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
@@ -64,7 +64,10 @@ const H = vi.hoisted(() => {
   const isNull = (col: Col): Pred => ({ kind: 'isNull', col });
   const and = (...parts: Pred[]): Pred => ({ kind: 'and', parts });
   const or = (...parts: Pred[]): Pred => ({ kind: 'or', parts });
-  const sqlTag = (): Pred => ({ kind: 'sql' });
+  // Capture interpolated operands so an `update().set()` value like
+  // sql`${creditBalances.debtCents} + ${shortfall}` can be evaluated per-row. Used as
+  // a predicate (where) it still just passes (kind 'sql' -> true in evalPred).
+  const sqlTag = (_strings?: TemplateStringsArray, ...values: unknown[]): Pred => ({ kind: 'sql', values });
 
   // ── predicate evaluation against a join context {tableKey: row | null} ────────
   type Ctx = Partial<Record<TableKey, Row | null>>;
@@ -89,6 +92,17 @@ const H = vi.hoisted(() => {
     }
   };
 
+  // Evaluate an `update().set()` SQL expression against the row being updated. The only
+  // shape the shells use is additive — sql`${col} + ${n}` (the debt increment) — so we
+  // resolve each operand (Col -> row value, else literal) and sum them.
+  const isSqlExpr = (v: unknown): v is { kind: 'sql'; values?: unknown[] } =>
+    typeof v === 'object' && v !== null && (v as { kind?: string }).kind === 'sql';
+  const evalSqlExpr = (expr: { values?: unknown[] }, row: Row): number =>
+    (expr.values ?? []).reduce<number>((sum, v) => {
+      const operand = isCol(v) ? resolve(v, { [v.table]: row } as Ctx) : v;
+      return sum + Number(operand ?? 0);
+    }, 0);
+
   // ── id generator (deterministic; not Date/random) ─────────────────────────────
   let seq = 0;
   const nextId = (prefix: string): string => `${prefix}_${++seq}`;
@@ -105,7 +119,7 @@ const H = vi.hoisted(() => {
     if (table === 'creditBalances') {
       return {
         monthlyRemainingCents: 0, monthlyAllowanceCents: 0, topupRemainingCents: 0,
-        pendingMillicents: 0, monthlyPeriodStart: null, monthlyPeriodEnd: null,
+        pendingMillicents: 0, debtCents: 0, monthlyPeriodStart: null, monthlyPeriodEnd: null,
         updatedAt: new Date(),
         ...v,
       };
@@ -136,7 +150,7 @@ const H = vi.hoisted(() => {
   };
 
   const enforceBalanceInvariants = (r: Row): void => {
-    for (const f of ['monthlyRemainingCents', 'monthlyAllowanceCents', 'topupRemainingCents']) {
+    for (const f of ['monthlyRemainingCents', 'monthlyAllowanceCents', 'topupRemainingCents', 'debtCents']) {
       if ((r[f] as number) < 0) throw new Error(`CHECK violation: ${f} < 0 (${r[f]})`);
     }
     const pm = r.pendingMillicents as number;
@@ -317,7 +331,13 @@ const H = vi.hoisted(() => {
           where(p: Pred) {
             for (const r of store[table]) {
               if (evalPred(p, { [table]: r } as Ctx)) {
-                Object.assign(r, v);
+                // Resolve any SQL-expression set values (e.g. debtCents + shortfall)
+                // against this row before applying.
+                const resolved: Row = {};
+                for (const [k, val] of Object.entries(v)) {
+                  resolved[k] = isSqlExpr(val) ? evalSqlExpr(val, r) : val;
+                }
+                Object.assign(r, resolved);
                 if (table === 'creditBalances') enforceBalanceInvariants(r);
               }
             }
@@ -385,7 +405,7 @@ function seedUser(id: string, customer: string, tier: string) {
 
 function balanceOf(userId: string) {
   return store.creditBalances.find((r) => r.userId === userId) as
-    | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number; monthlyPeriodEnd: Date | null }
+    | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number; debtCents: number; monthlyPeriodEnd: Date | null }
     | undefined;
 }
 
@@ -493,6 +513,70 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     expect(ledgerOf('u1').filter((r) => r.entryType === 'adjustment')).toHaveLength(0);
     // All holds released — no reservation leaked across the whole sequence.
     expect(store.creditHolds).toHaveLength(0);
+  });
+});
+
+describe('credits flow — negative balance (overage → debt → recover)', () => {
+  it('overshoots into debt, blocks while net-negative, then a top-up pays the debt and unblocks', async () => {
+    seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+
+    // ── OVERSHOOT: gate allows (1500 spendable), but the call costs $12 -> 1800¢.
+    // The 300¢ it can't cover becomes debt; the monthly bucket floors at 0. ─────────
+    const g1 = await canConsumeAI('u1', 'pro');
+    expect(g1.allowed).toBe(true);
+    await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g1.holdId });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
+    expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
+    expect(balanceOf('u1')!.debtCents).toBe(300); // the uncovered overage, now owed
+    // Both the live debt counter AND an incurrence adjustment row are recorded.
+    const debtRows = ledgerOf('u1').filter((r) => r.entryType === 'adjustment');
+    expect(debtRows).toHaveLength(1);
+    expect(debtRows[0]).toMatchObject({ amountCents: -300, aiUsageLogId: 'log_over' });
+
+    // ── BLOCKED: net = 0 − 300 = −300 < floor → out_of_credits (must get positive) ─
+    expect((await canConsumeAI('u1', 'pro'))).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+
+    // ── RECOVER: a $25 pack pays the 300¢ debt FIRST, banking the 2200¢ remainder. ─
+    await applyStripeFunding(creditPackCheckout('cs_1', 'cus_1', 2500));
+    expect(balanceOf('u1')!.debtCents).toBe(0);
+    expect(balanceOf('u1')!.topupRemainingCents).toBe(2200);
+
+    // ── UNBLOCKED: net positive again. ──────────────────────────────────────────
+    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(true);
+  });
+
+  it('forgives outstanding debt at the next renewal — full allowance, debt wiped', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+
+    const g = await canConsumeAI('u1', 'pro');
+    await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g.holdId });
+    expect(balanceOf('u1')!.debtCents).toBe(300);
+    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false); // blocked while in the red
+
+    // ── RENEWAL: invoice.paid restores the FULL allowance and forgives the debt. ──
+    await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END));
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500); // full, NOT reduced by the 300 debt
+    expect(balanceOf('u1')!.debtCents).toBe(0); // forgiven
+    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(true);
+  });
+
+  it('a partial top-up (smaller than the debt) reduces debt but stays blocked until net-positive', async () => {
+    seedUser('u1', 'cus_1', 'pro');
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+
+    const g = await canConsumeAI('u1', 'pro');
+    // $20 call -> 3000¢; covers 1500 monthly, leaves 1500¢ debt.
+    await consumeCredits({ aiUsageLogId: 'log_big', userId: 'u1', costDollars: 20, holdId: g.holdId });
+    expect(balanceOf('u1')!.debtCents).toBe(1500);
+
+    // A $5 pack (500¢) only chips the debt down to 1000; top-up stays 0; still blocked.
+    await applyStripeFunding(creditPackCheckout('cs_partial', 'cus_1', 500));
+    expect(balanceOf('u1')!.debtCents).toBe(1000);
+    expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
+    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false);
   });
 });
 
