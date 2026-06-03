@@ -12,6 +12,7 @@ import {
   createSecureResponse,
   createSecureErrorResponse,
   isPublicPageRoute,
+  isPublishedSiteHost,
   shouldDisableCOEP,
   NONCE_HEADER,
 } from '../security-headers';
@@ -439,6 +440,23 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/dashboard')).toBe(false);
       expect(shouldDisableCOEP('/authentication')).toBe(false);
       expect(shouldDisableCOEP('/auth-callback')).toBe(false);
+    });
+
+    it('isPublishedSiteHost identifies *.pagespace.site published hosts', () => {
+      // Published-page hosts: must be treated as public (caller returns 404, never auth)
+      expect(isPublishedSiteHost('getting-started.pagespace.site')).toBe(true);
+      expect(isPublishedSiteHost('pagespace.site')).toBe(true);
+      expect(isPublishedSiteHost('getting-started.pagespace.site:443')).toBe(true);
+      expect(isPublishedSiteHost('GETTING-STARTED.PAGESPACE.SITE')).toBe(true);
+      // App / unrelated hosts: not published
+      expect(isPublishedSiteHost('pagespace.ai')).toBe(false);
+      expect(isPublishedSiteHost('admin.pagespace.ai')).toBe(false);
+      // Suffix-spoofing must not match
+      expect(isPublishedSiteHost('evil-pagespace.site.attacker.com')).toBe(false);
+      expect(isPublishedSiteHost('notpagespace.site')).toBe(false);
+      expect(isPublishedSiteHost(null)).toBe(false);
+      expect(isPublishedSiteHost(undefined)).toBe(false);
+      expect(isPublishedSiteHost('')).toBe(false);
     });
 
     it('auth routes receive CSP headers with valid nonce', () => {
