@@ -34,6 +34,15 @@ const TIER_LABELS: Record<SubscriptionTier, string> = {
   business: 'Business',
 };
 
+/**
+ * Custom top-up amount bounds, in cents. Mirrors the in-app custom top-up
+ * limits ($5–$500) so the announcement copy can't promise a range the
+ * checkout won't accept. Kept here so the email, marketing copy, and tests
+ * read one source.
+ */
+export const TOPUP_MIN_CENTS = 500;
+export const TOPUP_MAX_CENTS = 50_000;
+
 export interface TopupPackSummary {
   /** Stable pack SKU id (matches `CreditPack.id`). */
   id: string;
@@ -53,6 +62,12 @@ export interface TierCreditSummary {
   monthlyAllowanceLabel: string;
   /** Buy-more top-up packs available to every tier. */
   topupPacks: TopupPackSummary[];
+  /** Whether this tier unlocks frontier model choice (paid tiers do). */
+  unlocksPremiumModels: boolean;
+  /** Lower bound of a custom top-up, e.g. "$5". */
+  topupMinLabel: string;
+  /** Upper bound of a custom top-up, e.g. "$500". */
+  topupMaxLabel: string;
 }
 
 /**
@@ -83,5 +98,8 @@ export function getTierCreditSummary(tier: SubscriptionTier): TierCreditSummary 
     monthlyAllowanceCents,
     monthlyAllowanceLabel: formatCents(monthlyAllowanceCents),
     topupPacks,
+    unlocksPremiumModels: tier !== 'free',
+    topupMinLabel: formatCents(TOPUP_MIN_CENTS),
+    topupMaxLabel: formatCents(TOPUP_MAX_CENTS),
   };
 }

@@ -210,6 +210,11 @@ async function main(): Promise<void> {
   const manageUrl = `${baseUrl}/settings/plan`;
   const localhostBase = isLocalhostUrl(baseUrl);
 
+  // Public marketing blog post backing the announcement. Lives on the marketing
+  // site (not the app), so it resolves independently of the app base URL.
+  const marketingBase = (process.env.MARKETING_BASE_URL || 'https://pagespace.ai').replace(/\/+$/, '');
+  const blogUrl = `${marketingBase}/blog/usage-based-pricing-and-built-for-scale`;
+
   console.log('📢 Metered AI-credits announcement broadcast');
   console.log(`  Mode:          ${opts.dryRun ? 'DRY RUN (no sends)' : 'LIVE SEND'}`);
   console.log(`  Audience:      ${opts.verifiedOnly ? 'verified emails only' : 'all users with a valid email'}`);
@@ -289,6 +294,7 @@ async function main(): Promise<void> {
       userName: user.name?.trim() || 'there',
       summary,
       manageUrl,
+      blogUrl,
     });
 
     if (opts.dryRun) {
