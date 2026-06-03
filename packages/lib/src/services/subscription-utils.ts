@@ -82,10 +82,12 @@ export function getStorageTierFromSubscription(subscriptionTier: SubscriptionTie
 }
 
 /**
- * Get storage quota in bytes from subscription tier
+ * Get storage quota in bytes from subscription tier.
+ * Delegates to getStorageConfigFromSubscription so the on-prem/tenant override
+ * is honored consistently (otherwise these two could disagree for on-prem).
  */
 export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTier): number {
-  return STORAGE_TIERS[getStorageTierFromSubscription(subscriptionTier)].quotaBytes;
+  return getStorageConfigFromSubscription(subscriptionTier).quotaBytes;
 }
 
 /**

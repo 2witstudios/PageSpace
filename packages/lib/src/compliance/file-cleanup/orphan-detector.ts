@@ -1,4 +1,4 @@
-import { eq, sql, inArray } from 'drizzle-orm';
+import { sql, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { files } from '@pagespace/db/schema/storage';
 
@@ -42,7 +42,7 @@ export async function findOrphanedFileRecords(
   if (restrictToFileIds && restrictToFileIds.length === 0) return [];
 
   const idFilter = restrictToFileIds
-    ? sql` AND f.id = ANY(${restrictToFileIds})`
+    ? sql` AND f.id = ANY(${restrictToFileIds}::text[])`
     : sql``;
 
   const result = await database.execute(sql`
