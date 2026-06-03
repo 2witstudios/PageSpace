@@ -179,9 +179,9 @@ vi.mock('../workers/queue-manager', () => ({
 }));
 
 vi.mock('../api/optimize', () => ({ imageRouter: 'mock-image-router' }));
-vi.mock('../api/upload', () => ({ uploadRouter: 'mock-upload-router' }));
 vi.mock('../api/serve', () => ({ cacheRouter: 'mock-cache-router' }));
 vi.mock('../api/ingest', () => ({ ingestRouter: 'mock-ingest-router' }));
+vi.mock('../api/verify', () => ({ verifyRouter: 'mock-verify-router' }));
 vi.mock('../api/avatar', () => ({ default: 'mock-avatar-router' }));
 vi.mock('../api/delete-file', () => ({ deleteFileRouter: 'mock-delete-file-router' }));
 
@@ -637,10 +637,10 @@ describe('Express middleware registration', () => {
     expect(jsonArgs).toBeDefined();
   });
 
-  it('should mount upload router at /api/upload', () => {
-    const mount = capturedUse.find((args) => args[0] === '/api/upload');
+  it('should mount verify router at /api/verify', () => {
+    const mount = capturedUse.find((args) => args[0] === '/api/verify');
     expect(mount).toBeDefined();
-    expect(mount).toContain('mock-upload-router');
+    expect(mount).toContain('mock-verify-router');
   });
 
   it('should mount optimize router at /api/optimize', () => {

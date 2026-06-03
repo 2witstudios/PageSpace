@@ -5,10 +5,10 @@ import path from 'path';
 import { ContentStore } from './cache/content-store';
 import { createS3Client, getS3Bucket } from './s3-client';
 import { imageRouter } from './api/optimize';
-import { uploadRouter } from './api/upload';
 import { cacheRouter } from './api/serve';
 import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
+import { verifyRouter } from './api/verify';
 import avatarRouter from './api/avatar';
 import { deleteFileRouter } from './api/delete-file';
 import dotenv from 'dotenv';
@@ -166,9 +166,12 @@ app.get('/health', async (req, res) => {
 });
 
 // API Routes
-app.use('/api/upload', authenticateService, requireScope('files:write'), uploadRouter);
 app.use('/api/optimize', authenticateService, requireScope('files:optimize'), requireResourceBinding('body'), imageRouter);
 app.use('/api/ingest', authenticateService, requireScope('files:ingest'), requirePageBinding(), ingestRouter);
+// Attachment byte-verify (channel/DM direct-to-S3). NOT page-bound — accepts a
+// conversation- or page-bound files:write token; the handler validates the binding
+// and re-hashes the stored object supplied by the trusted web service.
+app.use('/api/verify', authenticateService, requireScope('files:write'), verifyRouter);
 app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
 // Public avatar reads — no auth required; avatars are public images.
 // Web app proxies GET /api/avatar/:userId/:filename here when it doesn't have
