@@ -15,6 +15,14 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { VOICE_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { calculateVoiceCostDollars } from '@pagespace/lib/monitoring/voice-pricing';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -33,14 +41,23 @@ const SUPPORTED_FORMATS = [
 ];
 
 export async function POST(request: Request) {
+  // Reservation placed by the credit gate; released here on any path that doesn't
+  // hand it off to trackUsage (validation error, provider failure, or throw), so a
+  // failed STT call never strands a hold against the user's spendable balance.
+  let holdId: string | undefined;
+  let holdHandedOff = false;
+
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
+    // Free users can't use voice at all; paid users meter against their own credits.
+    let tier: SubscriptionTier = 'free';
     if (isBillingEnabled()) {
       const user = await aiSettingsRepository.getUserSettings(userId);
-      if (!PAID_TIERS.has(user?.subscriptionTier ?? 'free')) {
+      tier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+      if (!PAID_TIERS.has(tier)) {
         return NextResponse.json(
           {
             error: 'Pro plan required',
@@ -99,11 +116,24 @@ export async function POST(request: Request) {
       );
     }
 
+    // Reserve credits before billing the provider. Gated AFTER input validation so a
+    // malformed request never opens a hold. Voice uses a small per-call reservation
+    // (VOICE_HOLD_ESTIMATE_CENTS) since STT/TTS cost a fraction of a cent. Blocks
+    // out-of-credit paid users only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise
+    // it still books the hold and records spend (dark launch, same as chat).
+    const gate = await canConsumeAI(userId, tier, { estCostCents: VOICE_HOLD_ESTIMATE_CENTS });
+    if (!gate.allowed) {
+      return creditGateErrorResponse(gate.reason);
+    }
+    holdId = gate.holdId;
+
     // Create form data for OpenAI API
     const openAIFormData = new FormData();
     openAIFormData.append('file', audioFile);
     openAIFormData.append('model', 'whisper-1');
-    openAIFormData.append('response_format', 'json');
+    // verbose_json returns the exact audio `duration` (seconds) OpenAI bills on, so
+    // we charge real cost (duration × rate), not an approximation. Still has `.text`.
+    openAIFormData.append('response_format', 'verbose_json');
 
     // Optionally set language for better accuracy
     if (language) {
@@ -143,6 +173,27 @@ export async function POST(request: Request) {
 
     const result = await response.json();
 
+    // Bill the real provider cost (audio seconds × published Whisper rate) against
+    // the user's prepaid credits, with the standard markup applied downstream. This
+    // settles the hold and releases it; trackUsage now owns the reservation.
+    const seconds = typeof result.duration === 'number' ? result.duration : undefined;
+    const costDollars = calculateVoiceCostDollars('whisper-1', { seconds });
+    holdHandedOff = true;
+    await AIMonitoring.trackUsage({
+      userId,
+      provider: 'openai_voice',
+      model: 'whisper-1',
+      providerCostDollars: costDollars,
+      duration: seconds !== undefined ? Math.round(seconds * 1000) : undefined,
+      success: true,
+      holdId,
+      // Deterministic list-price cost (audio seconds × published rate), not a live
+      // provider-returned figure — labels the admin-panel coverage honestly.
+      costSource: 'list_price',
+      metadata: { type: 'voice_stt', audioBytes: audioFile.size },
+    });
+    void emitCreditsUpdated(userId);
+
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'voice', resourceId: 'self', details: { operation: 'transcribe', audioSize: audioFile.size } });
 
     return NextResponse.json({
@@ -155,5 +206,7 @@ export async function POST(request: Request) {
       { error: 'Failed to transcribe audio' },
       { status: 500 }
     );
+  } finally {
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

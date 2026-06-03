@@ -805,7 +805,7 @@ export interface TokenUsageByUserRow extends TokenUsageTotals {
   userEmail: string | null;
 }
 
-export type CostCoverage = 'real' | 'estimate';
+export type CostCoverage = 'real' | 'estimate' | 'list_price';
 
 export interface ProviderCostRow {
   provider: string;
@@ -1002,6 +1002,9 @@ export async function getProviderCostRollup(
     let coverage: CostCoverage;
     if (r.costSource === 'openrouter') coverage = 'real';
     else if (r.costSource === 'estimate') coverage = 'estimate';
+    // Voice (STT/TTS): cost is deterministic exact-quantity × published OpenAI rate,
+    // not a live provider-returned figure (real) nor a token-guess fallback (estimate).
+    else if (r.costSource === 'list_price') coverage = 'list_price';
     // metadata purged: fall back to the provider-name heuristic.
     else coverage = provider === 'openrouter' || provider === 'openrouter_free' ? 'real' : 'estimate';
     return {

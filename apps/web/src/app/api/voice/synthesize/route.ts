@@ -17,6 +17,14 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { PAID_TIERS } from '@/lib/subscription/rate-limit-middleware';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { VOICE_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { calculateVoiceCostDollars } from '@pagespace/lib/monitoring/voice-pricing';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -32,14 +40,23 @@ type TTSModel = (typeof VALID_MODELS)[number];
 const MAX_TEXT_LENGTH = 4096;
 
 export async function POST(request: Request) {
+  // Reservation placed by the credit gate; released here on any path that doesn't
+  // hand it off to trackUsage (validation error, provider failure, or throw), so a
+  // failed TTS call never strands a hold against the user's spendable balance.
+  let holdId: string | undefined;
+  let holdHandedOff = false;
+
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
+    // Free users can't use voice at all; paid users meter against their own credits.
+    let tier: SubscriptionTier = 'free';
     if (isBillingEnabled()) {
       const user = await aiSettingsRepository.getUserSettings(userId);
-      if (!PAID_TIERS.has(user?.subscriptionTier ?? 'free')) {
+      tier = (user?.subscriptionTier ?? 'free') as SubscriptionTier;
+      if (!PAID_TIERS.has(tier)) {
         return NextResponse.json(
           {
             error: 'Pro plan required',
@@ -126,6 +143,17 @@ export async function POST(request: Request) {
     }
     const clampedSpeed = Math.min(4.0, Math.max(0.25, speedNumber));
 
+    // Reserve credits before billing the provider. Gated AFTER input validation so a
+    // malformed request never opens a hold. TTS fires once per streamed sentence
+    // chunk, so the small VOICE_HOLD_ESTIMATE_CENTS reservation avoids locking the
+    // chat-sized estimate behind each sub-cent chunk. Blocks out-of-credit paid users
+    // only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise still records spend.
+    const gate = await canConsumeAI(userId, tier, { estCostCents: VOICE_HOLD_ESTIMATE_CENTS });
+    if (!gate.allowed) {
+      return creditGateErrorResponse(gate.reason);
+    }
+    holdId = gate.holdId;
+
     // Call OpenAI TTS API
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
@@ -167,6 +195,25 @@ export async function POST(request: Request) {
     // Stream the audio response
     const audioData = await response.arrayBuffer();
 
+    // Bill the real provider cost (input characters × published TTS rate) against the
+    // user's prepaid credits, with the standard markup applied downstream. This
+    // settles the hold and releases it; trackUsage now owns the reservation.
+    const costDollars = calculateVoiceCostDollars(model, { chars: text.length });
+    holdHandedOff = true;
+    await AIMonitoring.trackUsage({
+      userId,
+      provider: 'openai_voice',
+      model,
+      providerCostDollars: costDollars,
+      success: true,
+      holdId,
+      // Deterministic list-price cost (chars × published rate), not a live
+      // provider-returned figure — labels the admin-panel coverage honestly.
+      costSource: 'list_price',
+      metadata: { type: 'voice_tts', voice, chars: text.length },
+    });
+    void emitCreditsUpdated(userId);
+
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'voice', resourceId: 'self', details: { operation: 'synthesize', voice, model, textLength: text.length } });
 
     return new Response(audioData, {
@@ -183,5 +230,7 @@ export async function POST(request: Request) {
       { error: 'Failed to synthesize speech' },
       { status: 500 }
     );
+  } finally {
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

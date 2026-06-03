@@ -84,6 +84,19 @@ export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
 export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', RESERVE_FLOOR_CENTS);
 
 /**
+ * Per-call hold estimate for VOICE (STT/TTS), far below the chat default. Voice
+ * calls cost a fraction of a cent (a Whisper clip or a TTS sentence), and TTS in
+ * particular fires once PER streamed sentence chunk — so a single spoken reply can
+ * open many gate→settle cycles in a row. Reserving the 25¢ chat default on each
+ * would transiently lock dollars behind sub-cent work and could trip a paid user's
+ * spendable floor mid-sentence. A ~2¢ reservation comfortably covers any single
+ * voice call at the 1.5× markup while keeping the transient hold realistic. The
+ * real cost still settles exactly via consumeCredits; this only bounds the
+ * in-flight reservation. Tune via env per real usage data.
+ */
+export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
+
+/**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the
  * longest possible stream plus its settle window (AI routes cap streams at 300s),
  * so a still-running call's reservation is never reclaimed out from under it.

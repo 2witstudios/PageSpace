@@ -59,9 +59,21 @@ interface BalanceRow {
   monthlyPeriodEnd: Date | null;
 }
 
+export interface GateOptions {
+  /**
+   * Override the per-call reservation (in whole cents) for this gate check. The
+   * chat path omits it and uses the CREDIT_HOLD_ESTIMATE_CENTS default; voice
+   * routes pass the much smaller VOICE_HOLD_ESTIMATE_CENTS so a sub-cent STT/TTS
+   * call doesn't reserve the full chat estimate. Only bounds the in-flight hold —
+   * the real cost still settles exactly via consumeCredits.
+   */
+  estCostCents?: number;
+}
+
 export async function canConsumeAI(
   userId: string,
   tier: SubscriptionTier = 'free',
+  opts: GateOptions = {},
 ): Promise<GateResult> {
   if (!isBillingEnabled()) return { allowed: true, reason: 'unlimited' };
 
@@ -134,7 +146,7 @@ export async function canConsumeAI(
       .onConflictDoNothing({ target: creditBalances.userId });
   }
 
-  const estCost = reservationCents(CREDIT_HOLD_ESTIMATE_CENTS);
+  const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
   // Free users are capped on concurrent in-flight calls; paid tiers are bounded by
   // credits alone (no cap).
   const maxInFlight = tier === 'free' ? MAX_FREE_INFLIGHT : null;

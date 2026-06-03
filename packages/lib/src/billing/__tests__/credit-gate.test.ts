@@ -137,6 +137,19 @@ describe('canConsumeAI', () => {
     expect(sink.holdValues?.expiresAt).toBeInstanceOf(Date);
   });
 
+  it('reserves the estCostCents override (voice) instead of the chat default', async () => {
+    // Voice routes pass a small per-call estimate so a sub-cent STT/TTS call doesn't
+    // reserve the full 25¢ chat hold. The hold must reflect the override.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { estCostCents: 2 });
+
+    expect(r.allowed).toBe(true);
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: 2 });
+  });
+
   it('denies with out_of_credits when both buckets are empty (no hold inserted)', async () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { insertCalled?: boolean } = {};
