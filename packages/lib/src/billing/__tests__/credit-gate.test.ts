@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockDb = vi.hoisted(() => ({ select: vi.fn(), insert: vi.fn(), update: vi.fn(), transaction: vi.fn() }));
@@ -104,6 +104,14 @@ describe('canConsumeAI', () => {
     vi.clearAllMocks();
     mockIsBillingEnabled.mockReturnValue(true);
     mockDb.insert.mockReturnValue(insertChain());
+    // These assertions exercise ENFORCEMENT (the 402/429 blocking). The flag
+    // defaults OFF (dark launch), so turn it on for the enforcement suite; the
+    // dark-launch behavior is covered in its own describe block below.
+    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    delete process.env.CREDITS_ENFORCEMENT_ENABLED;
   });
 
   it('allows unconditionally when billing is disabled (tenant/onprem)', async () => {
@@ -266,5 +274,47 @@ describe('canConsumeAI', () => {
     const r = await canConsumeAI('u1', 'free');
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(r.allowed).toBe(true);
+  });
+});
+
+describe('canConsumeAI — dark launch (CREDITS_ENFORCEMENT_ENABLED off, the default)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(insertChain());
+    delete process.env.CREDITS_ENFORCEMENT_ENABLED; // default OFF — meter, don't block
+  });
+
+  it('does NOT block an out-of-credits user — overrides the denial to allowed:enforcement_disabled', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro');
+
+    // The gate still did its bookkeeping (the locked transaction ran) — dark launch
+    // is NOT a short-circuit — but the would-be out_of_credits denial is suppressed.
+    expect(mockDb.transaction).toHaveBeenCalled();
+    expect(r).toEqual({ allowed: true, reason: 'enforcement_disabled' });
+  });
+
+  it('does NOT enforce the free in-flight cap — overrides too_many_in_flight to allowed', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    // 2 holds in flight == MAX_FREE_INFLIGHT -> would be too_many_in_flight when enforced.
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 2 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    expect(r).toEqual({ allowed: true, reason: 'enforcement_disabled' });
+  });
+
+  it('leaves a credit-having user UNCHANGED — normal allow + hold, not the dark-launch override', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok'); // not 'enforcement_disabled' — the override only flips denials
+    expect(r.holdId).toBe('hold_1');
   });
 });

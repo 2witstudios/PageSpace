@@ -31,6 +31,7 @@ import {
   CREDIT_HOLD_ESTIMATE_CENTS,
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
+  isCreditsEnforcementEnabled,
 } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -143,7 +144,7 @@ export async function canConsumeAI(
   // serializes this user's concurrent requests so they observe each other's holds —
   // two simultaneous calls can't both pass a check that only one call's worth of
   // credit can cover, and the free-tier in-flight count can't be undercounted.
-  return db.transaction(async (tx): Promise<GateResult> => {
+  const result = await db.transaction(async (tx): Promise<GateResult> => {
     const balRows = await tx
       .select({
         monthlyRemainingCents: creditBalances.monthlyRemainingCents,
@@ -205,4 +206,14 @@ export async function canConsumeAI(
 
     return { ...result, holdId: inserted[0]?.id };
   });
+
+  // Dark launch: the gate did all its bookkeeping above (lazy-init, reset, balance
+  // read, and a hold on the allow path), but when enforcement is OFF we never hand
+  // the caller a denial — the request proceeds and is still metered by consumeCredits
+  // (which records real cost + charged credits, accruing debt rows for would-be
+  // overages). Flip CREDITS_ENFORCEMENT_ENABLED=true to start blocking.
+  if (!result.allowed && !isCreditsEnforcementEnabled()) {
+    return { allowed: true, reason: 'enforcement_disabled' };
+  }
+  return result;
 }

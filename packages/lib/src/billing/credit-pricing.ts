@@ -19,6 +19,29 @@ function envInt(name: string, fallback: number): number {
   return Number.parseInt(raw, 10);
 }
 
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === '') return fallback;
+  if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+  if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+  return fallback; // unrecognized value -> safe default
+}
+
+/**
+ * Whether the prepaid credit gate actually BLOCKS out-of-credits / over-in-flight-cap
+ * requests. Default OFF — the gate is dark-launched: it still does all its bookkeeping
+ * and `consumeCredits` still records real cost + charged credits for unit-economics
+ * observability, but the gate never returns a 402/429. This lets the cutover SHIP
+ * (meter + observe) without surprising users, then flip enforcement on deliberately
+ * once the placeholder allowances are validated against real spend:
+ *   CREDITS_ENFORCEMENT_ENABLED=true
+ * Read at CALL TIME (not module load) so it toggles via an env change + redeploy with
+ * no code change, and so tests can set it per-case.
+ */
+export function isCreditsEnforcementEnabled(): boolean {
+  return envBool('CREDITS_ENFORCEMENT_ENABLED', false);
+}
+
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 

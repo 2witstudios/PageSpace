@@ -112,7 +112,11 @@ export type GateReason =
   | 'ok'
   | 'out_of_credits'
   | 'needs_init'
-  | 'too_many_in_flight';
+  | 'too_many_in_flight'
+  // Allowed reason: the gate computed a denial but enforcement is dark-launched
+  // (CREDITS_ENFORCEMENT_ENABLED=false), so the request proceeds and is still
+  // metered. The shell — not evaluateGate — produces this reason.
+  | 'enforcement_disabled';
 
 export interface GateInput {
   billingEnabled: boolean;
