@@ -21,7 +21,7 @@ import { useBillingVisibility } from '@/hooks/useBillingVisibility';
  */
 
 interface UsageData {
-  subscriptionTier: 'free' | 'pro' | 'business';
+  subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
   standard: {
     current: number;
     limit: number;
@@ -51,9 +51,10 @@ export function UsageCounter() {
     revalidateOnFocus: true,
   });
 
-  const isPro = usage?.subscriptionTier === 'pro';
   const isBusiness = usage?.subscriptionTier === 'business';
-  const isPaid = isPro || isBusiness;
+  // All non-free tiers are paid and carry a Pro-call allowance (Pro, Founder, Business),
+  // so they get the "Billing" button + Pro quota display rather than the upgrade CTA.
+  const isPaid = usage?.subscriptionTier != null && usage.subscriptionTier !== 'free';
 
   const isNearStandardLimit = usage && usage.standard.limit > 0 && usage.standard.remaining <= 10;
   const isNearProLimit = usage && usage.pro.limit > 0 && usage.pro.remaining <= 10;
