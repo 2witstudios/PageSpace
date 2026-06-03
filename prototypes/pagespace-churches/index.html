@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PageSpace — The AI-Native Workspace for Churches</title>
+<meta name="description" content="Run your whole week of ministry in one place. PageSpace agents research the passage and draft your sermon, build the order of service, fill the volunteer roster, schedule the calendar, and keep your team connected — so you can spend Saturday with your people, not your tabs." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #faf5ec;
+    --s1: #ffffff;
+    --s2: #fbf6ed;
+    --s3: #f3e9d6;
+    --border: #ebdfca;
+    --border2: #ddccac;
+    --gold: #bf8a2c;
+    --clay: #c1683d;
+    --sage: #5b8a6e;
+    --teal: #2c7a6f;
+    --plum: #7c5076;
+    --text: #2c241b;
+    --mid: #6e6253;
+    --dim: #9b8c78;
+    --serif: "Fraunces", Georgia, serif;
+    --sans: "Inter", system-ui, sans-serif;
+    --mono: "JetBrains Mono", monospace;
+    --maxw: 1140px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(191,138,44,0.24); }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- NAV ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    background: rgba(250,245,236,0.82);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 66px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; letter-spacing: -0.3px; font-family: var(--serif); }
+  .logo .mark {
+    width: 28px; height: 28px; border-radius: 9px;
+    background: linear-gradient(140deg, var(--gold), var(--clay));
+    display: grid; place-items: center; font-size: 15px; font-weight: 700; color: #fff;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.4), 0 4px 14px rgba(193,104,61,0.35);
+  }
+  .nav-links { display: flex; align-items: center; gap: 30px; }
+  .nav-links a { font-size: 13.5px; color: var(--mid); transition: color .15s; font-weight: 500; }
+  .nav-links a:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--sans); font-weight: 600; font-size: 13.5px;
+    padding: 10px 18px; border-radius: 10px; cursor: pointer; border: none;
+    transition: transform .12s, box-shadow .2s, background .2s;
+  }
+  .btn-primary {
+    background: linear-gradient(140deg, var(--gold), var(--clay));
+    color: #fff; box-shadow: 0 6px 20px rgba(193,104,61,0.32);
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(193,104,61,0.45); }
+  .btn-ghost { background: var(--s1); color: var(--text); border: 1px solid var(--border2); }
+  .btn-ghost:hover { background: var(--s2); border-color: var(--gold); }
+  .btn-lg { padding: 14px 26px; font-size: 15px; border-radius: 12px; }
+  @media (max-width: 760px) { .nav-links a:not(.btn) { display: none; } }
+
+  /* ---------- HERO ---------- */
+  .hero { position: relative; padding: 104px 0 70px; text-align: center; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(680px 400px at 50% -10%, rgba(191,138,44,0.18), transparent 70%),
+      radial-gradient(560px 380px at 84% 12%, rgba(193,104,61,0.14), transparent 70%),
+      radial-gradient(520px 360px at 12% 28%, rgba(91,138,110,0.12), transparent 70%);
+  }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.4px;
+    color: var(--clay); background: rgba(193,104,61,0.09);
+    border: 1px solid rgba(193,104,61,0.28); padding: 6px 14px; border-radius: 999px;
+    margin-bottom: 28px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); box-shadow: 0 0 8px var(--sage); }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(38px, 6.1vw, 66px); font-weight: 600;
+    letter-spacing: -1.4px; line-height: 1.05; margin-bottom: 24px;
+  }
+  h1 .grad {
+    background: linear-gradient(110deg, var(--gold) 8%, var(--clay) 60%, var(--plum) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub {
+    font-size: clamp(16px, 2vw, 19px); color: var(--mid); line-height: 1.65;
+    max-width: 668px; margin: 0 auto 38px;
+  }
+  .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
+  .micro { font-size: 12.5px; color: var(--dim); }
+  .micro strong { color: var(--mid); font-weight: 600; }
+
+  /* ---------- HERO MOCK ---------- */
+  .mock {
+    max-width: 1000px; margin: 64px auto 0; text-align: left;
+    border: 1px solid var(--border2); border-radius: 16px; overflow: hidden;
+    background: var(--s1);
+    box-shadow: 0 40px 110px -34px rgba(120,80,40,0.42), 0 0 0 1px rgba(255,255,255,0.5);
+  }
+  .mock-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    background: var(--s2);
+  }
+  .mock-bar .d { width: 11px; height: 11px; border-radius: 50%; }
+  .mock-bar .d:nth-child(1){ background:#e8896f; } .mock-bar .d:nth-child(2){ background:#e9bd5c; } .mock-bar .d:nth-child(3){ background:#7fb98c; }
+  .mock-bar .tab { margin-left: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .mock-body { display: grid; grid-template-columns: 196px 1fr 234px; min-height: 432px; }
+  .mock-side { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--s2); }
+  .mock-side .grp { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin: 14px 8px 8px; font-weight: 600; }
+  .tree-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--mid); }
+  .tree-item.active { background: rgba(191,138,44,0.14); color: var(--text); font-weight: 500; }
+  .tree-item .ic { font-size: 13px; }
+  .mock-main { padding: 24px 26px; border-right: 1px solid var(--border); background: var(--s1); }
+  .doc-h { font-family: var(--serif); font-size: 21px; font-weight: 600; letter-spacing: -0.4px; margin-bottom: 4px; }
+  .doc-meta { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-bottom: 18px; }
+  .doc-line { height: 9px; border-radius: 5px; background: var(--s3); margin-bottom: 11px; }
+  .doc-line.w1 { width: 96%; } .doc-line.w2 { width: 82%; } .doc-line.w3 { width: 90%; } .doc-line.w4 { width: 68%; }
+  .doc-cite {
+    font-size: 11.5px; font-family: var(--mono); color: var(--teal);
+    background: rgba(44,122,111,0.08); border: 1px solid rgba(44,122,111,0.22);
+    border-radius: 6px; padding: 4px 8px; display: inline-block; margin: 6px 6px 0 0;
+  }
+  .doc-block {
+    margin-top: 18px; border-left: 2px solid var(--plum); padding: 10px 14px;
+    background: rgba(124,80,118,0.07); border-radius: 0 8px 8px 0;
+  }
+  .doc-block .lbl { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--plum); font-weight: 600; margin-bottom: 6px; }
+  .doc-block p { font-size: 12.5px; line-height: 1.6; color: var(--mid); }
+  .mock-ai { padding: 16px 16px; background: var(--s2); display: flex; flex-direction: column; gap: 12px; }
+  .ai-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text); }
+  .ai-head .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--sage); box-shadow: 0 0 8px var(--sage); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{ opacity: 1; } 50%{ opacity: .35; } }
+  .ai-msg { font-size: 12px; line-height: 1.55; border-radius: 10px; padding: 10px 12px; }
+  .ai-msg.bot { background: var(--s1); color: var(--mid); border: 1px solid var(--border); }
+  .ai-msg.bot b { color: var(--text); }
+  .ai-tool {
+    font-family: var(--mono); font-size: 10.5px; color: var(--teal);
+    background: rgba(44,122,111,0.08); border: 1px solid rgba(44,122,111,0.22);
+    border-radius: 7px; padding: 7px 10px; display: flex; align-items: center; gap: 7px;
+  }
+  .ai-tool .sp { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); animation: pulse 1s infinite; flex-shrink: 0; }
+  @media (max-width: 880px){ .mock-body { grid-template-columns: 1fr; } .mock-side, .mock-ai { display: none; } .mock-main { border-right: none; } }
+
+  /* ---------- STRIP ---------- */
+  .strip { padding: 44px 0 10px; text-align: center; }
+  .strip p { font-size: 11.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 22px; font-weight: 600; }
+  .strip-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px 38px; opacity: .85; }
+  .strip-row span { font-size: 15px; font-weight: 500; color: var(--mid); letter-spacing: -0.2px; font-family: var(--serif); }
+
+  /* ---------- SECTION SHELL ---------- */
+  section { padding: 90px 0; }
+  .sec-head { text-align: center; max-width: 690px; margin: 0 auto 56px; }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--clay); margin-bottom: 16px; }
+  h2 { font-family: var(--serif); font-size: clamp(28px, 4vw, 42px); font-weight: 600; letter-spacing: -0.8px; line-height: 1.14; margin-bottom: 18px; }
+  h2 .hl { background: linear-gradient(110deg, var(--gold), var(--clay)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sec-head p { font-size: 16.5px; color: var(--mid); line-height: 1.65; }
+
+  /* ---------- PROBLEM ---------- */
+  .prob-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .prob-card { background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; box-shadow: 0 1px 2px rgba(120,80,40,0.04); }
+  .prob-card .x { color: var(--clay); font-size: 22px; margin-bottom: 14px; }
+  .prob-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; font-family: var(--serif); }
+  .prob-card p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .prob-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- WORKFLOW ---------- */
+  .flow { display: flex; flex-direction: column; gap: 0; max-width: 920px; margin: 0 auto; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 24px; position: relative; padding-bottom: 44px; }
+  .step:last-child { padding-bottom: 0; }
+  .step::before { content: ""; position: absolute; left: 27px; top: 56px; bottom: 0; width: 2px; background: linear-gradient(var(--border2), transparent); }
+  .step:last-child::before { display: none; }
+  .step-num {
+    width: 56px; height: 56px; border-radius: 15px; display: grid; place-items: center;
+    font-weight: 700; font-size: 20px; color: #fff; font-family: var(--serif);
+    background: linear-gradient(140deg, var(--gold), var(--clay));
+    box-shadow: 0 8px 22px rgba(193,104,61,0.3); z-index: 1;
+  }
+  .step-body { padding-top: 4px; }
+  .step-body h3 { font-size: 19px; font-weight: 600; margin-bottom: 8px; letter-spacing: -0.3px; font-family: var(--serif); }
+  .step-body p { font-size: 14.5px; color: var(--mid); line-height: 1.65; max-width: 624px; }
+  .step-body .tags { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-family: var(--mono); font-size: 11px; color: var(--teal);
+    background: rgba(44,122,111,0.08); border: 1px solid rgba(44,122,111,0.22);
+    border-radius: 999px; padding: 4px 11px;
+  }
+
+  /* ---------- FEATURES ---------- */
+  .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .feat {
+    background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px;
+    transition: transform .15s, border-color .2s, box-shadow .2s;
+    box-shadow: 0 1px 2px rgba(120,80,40,0.04);
+  }
+  .feat:hover { transform: translateY(-3px); border-color: var(--border2); box-shadow: 0 14px 30px -16px rgba(120,80,40,0.28); }
+  .feat .ic {
+    width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+    font-size: 22px; margin-bottom: 16px; background: var(--s3); border: 1px solid var(--border2);
+  }
+  .feat h3 { font-size: 16.5px; font-weight: 600; margin-bottom: 8px; font-family: var(--serif); }
+  .feat p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  .ttag { font-family: var(--mono); font-size: 0.86em; color: var(--teal); }
+  @media (max-width: 880px){ .feat-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- SPLIT / ROSTER ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .split h2 { text-align: left; }
+  .split .lead { font-size: 16px; color: var(--mid); line-height: 1.7; margin-bottom: 24px; }
+  .check-list { display: flex; flex-direction: column; gap: 16px; }
+  .check { display: grid; grid-template-columns: 26px 1fr; gap: 12px; }
+  .check .c { width: 22px; height: 22px; border-radius: 7px; background: rgba(91,138,110,0.14); border: 1px solid rgba(91,138,110,0.4); color: var(--sage); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .check h4 { font-size: 14.5px; font-weight: 600; margin-bottom: 3px; }
+  .check p { font-size: 13px; color: var(--mid); line-height: 1.55; }
+  .sheet-card {
+    background: var(--s1); border: 1px solid var(--border2); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 30px 70px -34px rgba(120,80,40,0.4);
+  }
+  .sheet-card .bh { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--s2); display: flex; align-items: center; justify-content: space-between; }
+  .sheet-card .bh .t { font-weight: 600; font-size: 14px; font-family: var(--serif); }
+  .sheet-card .bh .m { font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+  .grid-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .grid-tbl th { text-align: left; font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); font-weight: 600; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--s2); }
+  .grid-tbl td { padding: 11px 14px; border-bottom: 1px solid var(--border); color: var(--mid); }
+  .grid-tbl td b { color: var(--text); font-weight: 600; }
+  .grid-tbl tr:last-child td { border-bottom: none; }
+  .pill { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .pill.ok { color: var(--sage); background: rgba(91,138,110,0.14); }
+  .pill.gap { color: var(--clay); background: rgba(193,104,61,0.12); }
+  @media (max-width: 880px){ .split { grid-template-columns: 1fr; gap: 36px; } }
+
+  /* ---------- STATS ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .stat { text-align: center; padding: 30px 18px; background: var(--s1); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 2px rgba(120,80,40,0.04); }
+  .stat .n { font-family: var(--serif); font-size: 40px; font-weight: 600; letter-spacing: -1.5px; background: linear-gradient(120deg, var(--gold), var(--clay)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .l { font-size: 13px; color: var(--mid); margin-top: 6px; line-height: 1.4; }
+  @media (max-width: 820px){ .stats { grid-template-columns: 1fr 1fr; } }
+
+  /* ---------- USE CASES ---------- */
+  .uc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .uc { background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; box-shadow: 0 1px 2px rgba(120,80,40,0.04); }
+  .uc .ic { font-size: 24px; margin-bottom: 14px; }
+  .uc h3 { font-size: 16.5px; font-weight: 600; margin-bottom: 8px; font-family: var(--serif); }
+  .uc p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .uc-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- QUOTE ---------- */
+  .quote-wrap { text-align: center; max-width: 800px; margin: 0 auto; }
+  .quote-wrap .q { font-family: var(--serif); font-size: clamp(22px, 3.2vw, 31px); font-weight: 500; line-height: 1.4; letter-spacing: -0.5px; margin-bottom: 24px; }
+  .quote-wrap .q .hl { color: var(--clay); }
+  .quote-wrap .by { font-size: 14px; color: var(--mid); }
+  .quote-wrap .by b { color: var(--text); }
+
+  /* ---------- CTA ---------- */
+  .cta {
+    position: relative; text-align: center; border-radius: 24px; overflow: hidden;
+    padding: 76px 32px; border: 1px solid var(--border2); background: var(--s1);
+  }
+  .cta::before {
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background: radial-gradient(620px 320px at 50% -20%, rgba(191,138,44,0.22), transparent 70%),
+                radial-gradient(520px 320px at 82% 120%, rgba(193,104,61,0.18), transparent 70%);
+  }
+  .cta > * { position: relative; z-index: 1; }
+  .cta h2 { font-size: clamp(28px, 4vw, 44px); }
+  .cta p { font-size: 17px; color: var(--mid); max-width: 560px; margin: 0 auto 32px; line-height: 1.6; }
+
+  /* ---------- FOOTER ---------- */
+  footer { border-top: 1px solid var(--border); padding: 48px 0 40px; background: var(--s2); }
+  .foot-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 32px; }
+  .foot-brand { max-width: 290px; }
+  .foot-brand p { font-size: 13px; color: var(--dim); line-height: 1.6; margin-top: 14px; }
+  .foot-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+  .foot-col h5 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mid); margin-bottom: 14px; font-weight: 700; }
+  .foot-col a { display: block; font-size: 13px; color: var(--dim); margin-bottom: 10px; transition: color .15s; }
+  .foot-col a:hover { color: var(--text); }
+  .foot-bottom { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+
+  .fade { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+  .fade.in { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo"><span class="mark">P</span> PageSpace</div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#roster">Sunday plan</a>
+      <a href="#usecases">For your church</a>
+      <a href="#cta" class="btn btn-primary">Start free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow"><span class="dot"></span> The AI-native workspace for churches</div>
+    <h1>Get Sunday off your shoulders<br>and back into <span class="grad">your ministry.</span></h1>
+    <p class="sub">PageSpace agents research the passage and draft your sermon outline, build the order of service, fill the volunteer roster, put events on the calendar, and keep your team in the loop — all in one shared workspace your staff and volunteers actually work inside.</p>
+    <div class="hero-cta">
+      <a href="#cta" class="btn btn-primary btn-lg">Plan this Sunday free</a>
+      <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+    </div>
+    <p class="micro">No credit card · <strong>33+ real AI tools</strong> · 100+ models · Self-host or cloud</p>
+
+    <!-- HERO MOCK -->
+    <div class="mock fade">
+      <div class="mock-bar">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+        <span class="tab">pagespace.ai / drives / grace-community / "Sunday · The Father Who Runs (Luke 15)"</span>
+      </div>
+      <div class="mock-body">
+        <aside class="mock-side">
+          <div class="grp">This Sunday</div>
+          <div class="tree-item active"><span class="ic">📖</span> Sermon — Luke 15</div>
+          <div class="tree-item"><span class="ic">🎵</span> Order of service</div>
+          <div class="tree-item"><span class="ic">🙋</span> Volunteer roster</div>
+          <div class="tree-item"><span class="ic">📰</span> Bulletin</div>
+          <div class="grp">The church</div>
+          <div class="tree-item"><span class="ic">📅</span> Calendar &amp; events</div>
+          <div class="tree-item"><span class="ic">✅</span> Staff tasks</div>
+          <div class="tree-item"><span class="ic">💬</span> Team channel</div>
+          <div class="tree-item"><span class="ic">🕊️</span> Care &amp; follow-up</div>
+        </aside>
+        <main class="mock-main">
+          <div class="doc-h">The Father Who Runs — Luke 15:11–32</div>
+          <div class="doc-meta">sermon outline · drafted from 6 sources · edited 4m ago</div>
+          <div class="doc-line w1"></div>
+          <div class="doc-line w3"></div>
+          <div class="doc-line w2"></div>
+          <span class="doc-cite">Luke 15:20</span>
+          <span class="doc-cite">[1] Keller, Prodigal God</span>
+          <span class="doc-cite">[2] 1st-c. context</span>
+          <div class="doc-block">
+            <div class="lbl">✦ Illustration · point 2</div>
+            <p>The father runs — scandalous for a dignified elder in that culture. Land the grace here, not just the wandering. Tie to the welcome-home meal as a picture of the table this week.</p>
+          </div>
+        </main>
+        <aside class="mock-ai">
+          <div class="ai-head"><span class="pulse"></span> Ministry Assistant</div>
+          <div class="ai-tool"><span class="sp"></span> web_search · "Luke 15 1st-century context"</div>
+          <div class="ai-tool"><span class="sp"></span> web_fetch · commentary source</div>
+          <div class="ai-tool"><span class="sp"></span> create_page · Order of service</div>
+          <div class="ai-tool"><span class="sp"></span> edit_sheet_cells · Volunteer roster</div>
+          <div class="ai-msg bot">Drafted a <b>3-point outline</b> with historical context and an illustration into your sermon doc, built the <b>order of service</b>, and filled the roster — <b>2 spots still open</b> (nursery, sound). Want me to message the team channel to fill them?</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- STRIP -->
+<div class="strip wrap">
+  <p>Built for the people who run the church</p>
+  <div class="strip-row">
+    <span>Lead pastors</span>
+    <span>Worship leaders</span>
+    <span>Church admins</span>
+    <span>Kids &amp; students</span>
+    <span>Small groups</span>
+    <span>Volunteer teams</span>
+  </div>
+</div>
+
+<!-- PROBLEM -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">The Saturday-night scramble</div>
+      <h2>The whole week lives in <span class="hl">ten places and three group texts.</span></h2>
+      <p>The sermon's in a doc. The roster's in a spreadsheet someone forgot to share. The calendar's in your head. Announcements go out by text. And it all has to come together before the doors open at nine.</p>
+    </div>
+    <div class="prob-grid">
+      <div class="prob-card fade">
+        <div class="x">✕</div>
+        <h3>Prep eats your week</h3>
+        <p>Hours of commentary-reading, formatting, and chasing down an illustration — time you'd rather spend with people, not with tabs.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">✕</div>
+        <h3>Volunteers fall through</h3>
+        <p>The nursery spot is empty, two greeters double-booked, and nobody noticed until Sunday because the roster lived in one person's inbox.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">✕</div>
+        <h3>Nothing is connected</h3>
+        <p>Sermon, service plan, calendar, care notes, and the team chat don't talk to each other — so the same thing gets re-typed five times.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how" style="background: var(--s2); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">How it works</div>
+      <h2>From a passage to a <span class="hl">Sunday that's ready</span></h2>
+      <p>PageSpace isn't a chatbot you copy answers out of. It's a workspace where AI agents do the research, drafting, and logistics <em>inside</em> your pages — using real tools. You stay the shepherd; it handles the legwork.</p>
+    </div>
+    <div class="flow">
+      <div class="step fade">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Bring the church into one drive</h3>
+          <p>Sermons, service plans, rosters, the calendar, and care notes all live in a single drive your team shares. Ask your agent anything and it reads what's already there for context — last week's series, who served when, what's coming up.</p>
+          <div class="tags"><span class="tag">create_page</span><span class="tag">read_page</span><span class="tag">multi_drive_search</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Draft the sermon and service</h3>
+          <p>Point the agent at the passage. It researches historical context and illustrations on the live web, drafts a structured outline straight into a Document page with references inline, then builds the order of service. You edit live — refresh protection means it never overwrites the line you're working on.</p>
+          <div class="tags"><span class="tag">web_search</span><span class="tag">web_fetch</span><span class="tag">replace_lines</span><span class="tag">create_page</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Staff the Sunday and set the calendar</h3>
+          <p>The agent fills the volunteer roster in a Sheet, flags the open spots, turns loose ends into assigned tasks, and puts events and meetings on the church calendar with invites — rehearsal, the elders' meeting, the baptism.</p>
+          <div class="tags"><span class="tag">edit_sheet_cells</span><span class="tag">create_task</span><span class="tag">create_calendar_event</span><span class="tag">invite_calendar_attendees</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Keep the team connected</h3>
+          <p>Announcements and reminders post to a team channel; your staff and volunteers co-edit in real time. Brief a dedicated Care assistant — its own AI Chat agent with the right context — and consult it with <span style="font-family:var(--mono);font-size:0.85em;color:var(--teal)">ask_agent</span> for this week's follow-ups.</p>
+          <div class="tags"><span class="tag">send_channel_message</span><span class="tag">update_agent_config</span><span class="tag">ask_agent</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Everything in one place</div>
+      <h2>The whole week of ministry, <span class="hl">in one workspace</span></h2>
+      <p>Nine page types, 33+ AI tools, and 100+ models — composed for how a church staff and its volunteers actually work.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat fade">
+        <div class="ic">📖</div>
+        <h3>Sermon &amp; study prep</h3>
+        <p>Agents research context and illustrations with <span class="ttag">web_search</span> and <span class="ttag">web_fetch</span>, draft into a Document, and make precise edits with <span class="ttag">replace_lines</span>. You shape the message; it does the digging.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🎵</div>
+        <h3>Service planning</h3>
+        <p>Build the order of service in a Document or Sheet — songs, scripture, transitions, who's doing what — and keep every week's plan together and searchable.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🙋</div>
+        <h3>Volunteer rosters</h3>
+        <p>Sheet pages the AI reads and writes via <span class="ttag">edit_sheet_cells</span> — greeters, nursery, sound, worship — with open spots flagged before Sunday.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">📅</div>
+        <h3>Church calendar</h3>
+        <p>Schedule services, rehearsals, and events with <span class="ttag">create_calendar_event</span>, check who's free with <span class="ttag">check_calendar_availability</span>, and send invites with <span class="ttag">invite_calendar_attendees</span>.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">✅</div>
+        <h3>Tasks &amp; follow-through</h3>
+        <p>Turn loose ends into a Task List — <span class="ttag">create_task</span> and <span class="ttag">get_assigned_tasks</span> so the bulletin, the supplies run, and the hospital visit don't slip.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🕊️</div>
+        <h3>Ministry assistants</h3>
+        <p>Every AI Chat page is a configurable agent. Brief one for worship, kids, or pastoral care with <span class="ttag">update_agent_config</span> and consult it with <span class="ttag">ask_agent</span>.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">👥</div>
+        <h3>Team &amp; volunteers, together</h3>
+        <p>Staff and volunteers work in the same drive in real time, with channels for the back-and-forth — no more re-typing the plan into five places.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔒</div>
+        <h3>Your flock's data, protected</h3>
+        <p>Care notes and member info are sensitive. Self-host on-prem so the data stays under your roof — passwordless passkey sign-in keeps it simple for volunteers.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔌</div>
+        <h3>Models &amp; integrations</h3>
+        <p>Route across 100+ models from six providers — including a local Ollama model on a budget — and connect Google Calendar, Drive, and any MCP tool.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ROSTER SPLIT -->
+<section id="roster" style="background: var(--s2); border-block: 1px solid var(--border);">
+  <div class="wrap split">
+    <div class="fade">
+      <div class="kicker">Sunday plan</div>
+      <h2>Every seat filled, <span class="hl">before the doors open.</span></h2>
+      <p class="lead">The agent builds the volunteer roster as a Sheet, checks it against last week so nobody's serving four Sundays in a row, and flags the gaps. The open spots become assigned tasks and a message to the team channel — so the nursery is never empty at 8:55.</p>
+      <div class="check-list">
+        <div class="check"><span class="c">✓</span><div><h4>A living roster, not a stale doc</h4><p>The AI fills and updates a Sheet with <span class="ttag">edit_sheet_cells</span> — everyone sees the same version in real time.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>Gaps turn into action</h4><p>Open spots become tasks with <span class="ttag">create_task</span> and a nudge to the team with <span class="ttag">send_channel_message</span>.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>Rehearsal on the calendar</h4><p>The agent books the run-through and invites the team with <span class="ttag">create_calendar_event</span> and <span class="ttag">invite_calendar_attendees</span>.</p></div></div>
+      </div>
+    </div>
+    <div class="sheet-card fade">
+      <div class="bh">
+        <span class="t">Volunteer Roster · Sun May 31</span>
+        <span class="m">Sheet page · 8 positions</span>
+      </div>
+      <table class="grid-tbl">
+        <thead><tr><th>Position</th><th>Serving</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td><b>Worship lead</b></td><td>Dana Whitfield</td><td><span class="pill ok">Confirmed</span></td></tr>
+          <tr><td><b>Greeters (2)</b></td><td>Marcus &amp; Priya</td><td><span class="pill ok">Confirmed</span></td></tr>
+          <tr><td><b>Nursery</b></td><td>—</td><td><span class="pill gap">Open</span></td></tr>
+          <tr><td><b>Sound / tech</b></td><td>—</td><td><span class="pill gap">Open</span></td></tr>
+          <tr><td><b>Kids teacher</b></td><td>Ruth Alvarez</td><td><span class="pill ok">Confirmed</span></td></tr>
+          <tr><td><b>Communion prep</b></td><td>The Hales</td><td><span class="pill ok">Confirmed</span></td></tr>
+          <tr><td><b>Coffee team</b></td><td>Sam Okoro</td><td><span class="pill ok">Confirmed</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section>
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat fade"><div class="n">9</div><div class="l">Page types — docs, sheets, calendar, chat &amp; more</div></div>
+      <div class="stat fade"><div class="n">33+</div><div class="l">Real AI tools, not just chat</div></div>
+      <div class="stat fade"><div class="n">100+</div><div class="l">Models across 6 providers</div></div>
+      <div class="stat fade"><div class="n">4</div><div class="l">Ways to run it — cloud, self-host, desktop, mobile</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section id="usecases" style="background: var(--s2); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">For your church</div>
+      <h2>One workspace, <span class="hl">every kind of ministry</span></h2>
+      <p>Whether you're a solo pastor or a multi-site team, the week runs in the same place.</p>
+    </div>
+    <div class="uc-grid">
+      <div class="uc fade"><div class="ic">⛪</div><h3>Solo &amp; bivocational pastors</h3><p>Get the research, the service plan, and the logistics off your plate in an evening — so the hours you have go to people, not paperwork.</p></div>
+      <div class="uc fade"><div class="ic">🎶</div><h3>Worship &amp; creative teams</h3><p>Plan sets, build the run sheet, roster the band and tech, and schedule rehearsals — everyone editing the same plan in real time.</p></div>
+      <div class="uc fade"><div class="ic">🧒</div><h3>Kids &amp; student ministry</h3><p>Brief a kids-ministry assistant with your curriculum, draft lesson outlines, and keep the volunteer roster and check-in plan in order.</p></div>
+      <div class="uc fade"><div class="ic">🏛️</div><h3>Multi-site &amp; church plants</h3><p>Give each location its own drive, search across all of them, and keep agents and members scoped to the right campus.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section>
+  <div class="wrap quote-wrap fade">
+    <div class="q">"Saturday night used to be commentaries and a spreadsheet until midnight. Now the legwork's done by dinner — and I spend the evening <span class="hl">praying over the message, not formatting it.</span>"</div>
+    <div class="by"><b>Pastor Daniel R.</b> · Lead pastor, 220-member church <span style="color:var(--dim)">· illustrative</span></div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="wrap">
+    <div class="cta fade">
+      <h2>Plan this Sunday tonight.</h2>
+      <p>Drop in the passage and watch PageSpace research it, draft the outline, build the service, and fill the roster — free, no card required.</p>
+      <div class="hero-cta" style="margin-bottom: 14px;">
+        <a href="#" class="btn btn-primary btn-lg">Start free</a>
+        <a href="#" class="btn btn-ghost btn-lg">Book a walkthrough</a>
+      </div>
+      <p class="micro">Cloud · self-hosted · desktop · mobile — your church's data, under your roof.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <div class="foot-brand">
+        <div class="logo"><span class="mark">P</span> PageSpace</div>
+        <p>The AI-native knowledge workspace where your team and AI agents plan, write, and run the week — together.</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>Product</h5>
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#roster">Sunday plan</a>
+          <a href="#usecases">For your church</a>
+        </div>
+        <div class="foot-col">
+          <h5>Workspace</h5>
+          <a href="#">Documents &amp; sheets</a>
+          <a href="#">Calendar &amp; tasks</a>
+          <a href="#">AI agents</a>
+          <a href="#">MCP integrations</a>
+        </div>
+        <div class="foot-col">
+          <h5>Deploy</h5>
+          <a href="#">Cloud</a>
+          <a href="#">Self-hosted</a>
+          <a href="#">Desktop</a>
+          <a href="#">Mobile</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 PageSpace · pagespace.ai</span>
+      <span>Prototype · churches landing</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.fade').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>
