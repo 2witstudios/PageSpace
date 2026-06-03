@@ -528,7 +528,19 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 // $0 and report a bogus margin — so we SUM the precise fields and round ONCE at
 // the end. `appliedCents` is exempt: it is the whole-cent amount actually debited
 // (the sub-cent remainder is banked in pendingMillicents), so its sum is exact.
-const realCostSum = sql<number>`ROUND(COALESCE(SUM(${aiUsageLogs.cost}::numeric), 0) * 100)::int`;
+//
+// PURGE FALLBACK: `aiUsageLogs` is reaped on retention while its ledger row
+// survives. For those rows `aiUsageLogs.cost` is NULL, so we fall back per-row to
+// the ledger's preserved `realCostCents` audit value (already whole-cent). Without
+// this, an `?range=all` window would silently count purged traffic as $0 real cost
+// and overstate margin. `SUM(cost)*100 === SUM(cost*100)`, so live rows are
+// unchanged; only purged rows newly contribute their retained cost.
+const realCostSum = sql<number>`ROUND(COALESCE(SUM(
+  CASE
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * 100
+    ELSE ${creditLedger.realCostCents}
+  END
+), 0))::int`;
 const chargedSum = sql<number>`ROUND(COALESCE(SUM(COALESCE(${creditLedger.chargeMillicents}, ABS(${creditLedger.amountCents}) * 1000)), 0) / 1000.0)::int`;
 const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 0)::int`;
 // Debt comes from 'adjustment' rows, which carry only the whole-cent shortfall in

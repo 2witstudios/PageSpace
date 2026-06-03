@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -139,8 +139,14 @@ export default function AdminAiBillingPage() {
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState<Range>("30d");
   const [granularity, setGranularity] = useState<Granularity>("day");
+  // Monotonic request token: when the user flips range/granularity quickly, an
+  // older in-flight fetch can resolve after a newer one. We only commit a
+  // response if it's still the latest request, so stale data can't clobber the
+  // current selection.
+  const latestRequest = useRef(0);
 
   const fetchData = useCallback(async (r: Range, g: Granularity) => {
+    const reqId = ++latestRequest.current;
     try {
       setLoading(true);
       const params = new URLSearchParams({ range: r, granularity: g });
@@ -149,12 +155,14 @@ export default function AdminAiBillingPage() {
         throw new Error("Failed to fetch AI billing data");
       }
       const json = (await response.json()) as AiBillingResponse;
+      if (reqId !== latestRequest.current) return; // superseded by a newer request
       setData(json);
       setError(null);
     } catch (err) {
+      if (reqId !== latestRequest.current) return;
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
-      setLoading(false);
+      if (reqId === latestRequest.current) setLoading(false);
     }
   }, []);
 
@@ -363,7 +371,9 @@ export default function AdminAiBillingPage() {
               </TableHeader>
               <TableBody>
                 {data.providerCost.map((row) => (
-                  <TableRow key={`${row.provider}/${row.model}`}>
+                  // coverage is part of the key: a provider/model can now appear
+                  // as both a 'real' and an 'estimate' row.
+                  <TableRow key={`${row.provider}/${row.model}/${row.coverage}`}>
                     <TableCell>{row.provider}</TableCell>
                     <TableCell className="font-mono text-xs">{row.model}</TableCell>
                     <TableCell>
