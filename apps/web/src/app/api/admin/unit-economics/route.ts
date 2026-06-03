@@ -27,10 +27,13 @@ function centsToDollars(cents: number): string {
 
 /**
  * Neutralize spreadsheet formula injection: a cell starting with =, +, -, or @
- * is evaluated as a formula by Excel/Sheets. Prefix attacker-controlled values
- * (names/emails) with a single quote so they render as literal text.
+ * is evaluated as a formula by Excel/Sheets. Prefix attacker-controlled text
+ * (names/emails) with a single quote so it renders literally — but EXEMPT plain
+ * numbers, so legitimate negative exports (e.g. marginUSD "-0.37", marginPct
+ * "-12.50") stay numeric instead of being quoted into text.
  */
 function sanitizeSpreadsheetCell(value: string): string {
+  if (/^-?\d+(\.\d+)?$/.test(value)) return value; // plain (possibly negative) number — safe
   return /^[=+\-@]/.test(value) ? `'${value}` : value;
 }
 
