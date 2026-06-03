@@ -105,23 +105,29 @@ describe('deletePublishedArtifact', () => {
 describe('publish bucket configuration', () => {
   it('isPublishConfigured reflects PUBLISH_BUCKET presence', () => {
     const prev = process.env.PUBLISH_BUCKET;
-    delete process.env.PUBLISH_BUCKET;
-    expect(isPublishConfigured()).toBe(false);
-    process.env.PUBLISH_BUCKET = 'pagespace-published';
-    expect(isPublishConfigured()).toBe(true);
-    if (prev === undefined) delete process.env.PUBLISH_BUCKET;
-    else process.env.PUBLISH_BUCKET = prev;
+    try {
+      delete process.env.PUBLISH_BUCKET;
+      expect(isPublishConfigured()).toBe(false);
+      process.env.PUBLISH_BUCKET = 'pagespace-published';
+      expect(isPublishConfigured()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PUBLISH_BUCKET;
+      else process.env.PUBLISH_BUCKET = prev;
+    }
   });
 
   it('putPublishedArtifact throws when PUBLISH_BUCKET is unset', async () => {
     const prev = process.env.PUBLISH_BUCKET;
-    send.mockReset();
-    delete process.env.PUBLISH_BUCKET;
-    await expect(
-      putPublishedArtifact({ subdomain: 'acme', path: '', html: '<html></html>' }),
-    ).rejects.toThrow(/PUBLISH_BUCKET/);
-    expect(send).not.toHaveBeenCalled();
-    if (prev === undefined) delete process.env.PUBLISH_BUCKET;
-    else process.env.PUBLISH_BUCKET = prev;
+    try {
+      send.mockReset();
+      delete process.env.PUBLISH_BUCKET;
+      await expect(
+        putPublishedArtifact({ subdomain: 'acme', path: '', html: '<html></html>' }),
+      ).rejects.toThrow(/PUBLISH_BUCKET/);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.PUBLISH_BUCKET;
+      else process.env.PUBLISH_BUCKET = prev;
+    }
   });
 });
