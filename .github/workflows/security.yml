@@ -2,9 +2,15 @@ name: Security Tests
 
 on:
   push:
-    branches: [master, develop]
+    branches: [master, develop, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
+      - 'packages/lib/src/services/sandbox/**'
+      - 'packages/db/src/schema/sandbox-sessions.ts'
+      - 'packages/db/drizzle/**'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools.ts'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts'
+      - 'apps/web/src/lib/ai/core/ai-tools.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
@@ -25,9 +31,15 @@ on:
       - 'apps/web/src/app/api/**/route.ts'
       - 'apps/web/src/app/api/__tests__/security-audit-coverage.test.ts'
   pull_request:
-    branches: [master]
+    branches: [master, pu/flash-sandbox]
     paths:
       - 'packages/lib/src/security/**'
+      - 'packages/lib/src/services/sandbox/**'
+      - 'packages/db/src/schema/sandbox-sessions.ts'
+      - 'packages/db/drizzle/**'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools.ts'
+      - 'apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts'
+      - 'apps/web/src/lib/ai/core/ai-tools.ts'
       - 'packages/lib/src/auth/**'
       - 'packages/lib/src/permissions/**'
       - 'packages/lib/src/repositories/**'
@@ -93,6 +105,12 @@ jobs:
 
       - name: Run core security tests
         run: bun run --filter '@pagespace/lib' test -- src/security/
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      - name: Run sandbox (code-execution) tests
+        run: bun run --filter '@pagespace/lib' test -- src/services/sandbox/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test

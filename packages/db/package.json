@@ -23,6 +23,10 @@
       "types": "./dist/schema/drafts.d.ts",
       "default": "./dist/schema/drafts.js"
     },
+    "./schema/sandbox-sessions": {
+      "types": "./dist/schema/sandbox-sessions.d.ts",
+      "default": "./dist/schema/sandbox-sessions.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"

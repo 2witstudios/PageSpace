@@ -272,7 +272,9 @@ export type ActivityOperation =
   | 'rollback'
   // AI conversation undo operations
   | 'conversation_undo'
-  | 'conversation_undo_with_changes';
+  | 'conversation_undo_with_changes'
+  // Agent code execution (sandbox runs)
+  | 'code_execution';
 
 export type ActivityResourceType =
   | 'page'
