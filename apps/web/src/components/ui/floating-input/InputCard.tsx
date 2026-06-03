@@ -1,7 +1,6 @@
 'use client';
 
 import React from 'react';
-import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils';
 
 export interface InputCardProps {
@@ -9,10 +8,8 @@ export interface InputCardProps {
   children: React.ReactNode;
   /** Additional class names */
   className?: string;
-  /** Error message to display above the input */
-  error?: string | null;
-  /** Callback when error is dismissed */
-  onClearError?: () => void;
+  /** Optional slot rendered above the card (e.g. an error banner). */
+  errorSlot?: React.ReactNode;
 }
 
 /**
@@ -24,36 +21,12 @@ export interface InputCardProps {
 export function InputCard({
   children,
   className,
-  error,
-  onClearError,
+  errorSlot,
 }: InputCardProps) {
-  const shouldReduceMotion = useReducedMotion();
-
   return (
     <div className="relative">
-      {/* Error banner */}
-      <AnimatePresence>
-        {error && (
-          <motion.div
-            initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
-            transition={{ duration: 0.2 }}
-            className="mb-3 p-3 rounded-xl bg-destructive/10 border border-destructive/20 flex items-center justify-between"
-          >
-            <p className="text-sm text-destructive flex-1">{error}</p>
-            {onClearError && (
-              <button
-                type="button"
-                onClick={onClearError}
-                className="text-sm text-destructive/70 hover:text-destructive underline underline-offset-2 ml-3 shrink-0"
-              >
-                Dismiss
-              </button>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Slot above the card — used for the chat error banner. */}
+      {errorSlot}
 
       {/* Main card */}
       <div
