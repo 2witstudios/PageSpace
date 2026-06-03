@@ -187,6 +187,30 @@ export function reservationCents(estimateCents: number): number {
 }
 
 /**
+ * Per-call chat hold estimate, in whole cents, clamped to [floorCents, ceilingCents].
+ *
+ * Takes a PRE-markup real-cost estimate for the call (dollars — the shell derives it
+ * from the model catalog and a token estimate), applies the markup, and clamps. The
+ * model-awareness lives in the dollar estimate the shell passes; this stays pure (no
+ * catalog, env, or clock). The floor keeps a sub-cent call from reserving nothing; the
+ * ceiling caps the reservation at the legacy flat hold so a pricey model can't lock up
+ * an unbounded slice of spendable. A misconfigured ceiling below the floor coerces up
+ * to the floor so the range is never inverted. Sits alongside {@link reservationCents}
+ * (the flat-estimate path); this is the cost-derived path.
+ */
+export function estimateChatHoldCents(
+  estimatedRealCostDollars: number,
+  markupBps: number,
+  floorCents: number,
+  ceilingCents: number,
+): number {
+  const floor = Math.max(0, Math.round(floorCents));
+  const ceiling = Math.max(floor, Math.round(ceilingCents));
+  const charged = markupCents(estimatedRealCostDollars, markupBps);
+  return Math.min(ceiling, Math.max(floor, charged));
+}
+
+/**
  * The instant a hold placed at `nowMs` should expire, in epoch ms. Pure (operates
  * on numbers only — the shell converts to/from Date). A hold lives long enough to
  * cover the longest stream plus its post-call settle; after that the reconcile

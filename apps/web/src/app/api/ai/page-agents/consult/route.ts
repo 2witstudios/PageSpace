@@ -23,6 +23,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -219,7 +221,10 @@ export async function POST(request: Request) {
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
       .where(eq(users.id, userId));
-    const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+    const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
+      maxInFlight: MAX_CHAT_INFLIGHT,
+    });
     if (!creditGate.allowed) {
       loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
       return creditGateErrorResponse(creditGate.reason);
