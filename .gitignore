@@ -195,3 +195,6 @@ skills-lock.json
 
 # Broadcast idempotency ledger (credits announcement email)
 .credits-change-sent.jsonl
+
+# Vercel CLI local project-link metadata
+.vercel/
