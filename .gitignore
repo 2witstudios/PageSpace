@@ -182,12 +182,10 @@ playground.xcworkspace
 # Parallel Universe worktrees
 .pu/
 
-# Claude Code skills & agents (local plugin data)
+# Claude Code config & local plugin data (local only — not tracked)
 .agents/
-.claude/skills/
-.claude/*.local.md
+.claude/
 **/.claude/*.local.md
-.claude/scheduled_tasks.lock
 skills-lock.json
 
 # MCP server config (contains auth tokens)
