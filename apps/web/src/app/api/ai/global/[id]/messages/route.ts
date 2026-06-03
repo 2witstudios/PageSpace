@@ -1038,6 +1038,7 @@ MENTION PROCESSING:
                 userId: userId!,
                 provider: currentProvider,
                 model: currentModel,
+                source: 'chat',
                 inputTokens: usage?.inputTokens,
                 outputTokens: usage?.outputTokens,
                 totalTokens: usage?.totalTokens,

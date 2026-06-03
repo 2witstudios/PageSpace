@@ -178,6 +178,12 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   success: boolean('success').default(true),
   error: text('error'),
   
+  // Feature attribution — which product surface spent the credits (chat, pulse,
+  // memory, voice, page_agent, workflow, integration, tool, other). Drives the
+  // user-facing usage breakdown. Nullable for rows written before this column
+  // existed; the breakdown query folds null/unknown into 'other'.
+  source: text('source'),
+
   // Metadata
   metadata: jsonb('metadata'),
 
@@ -196,6 +202,7 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
 }, (table) => ({
   timestampIdx: index('idx_ai_usage_timestamp').on(table.timestamp),
   userIdIdx: index('idx_ai_usage_user_id').on(table.userId, table.timestamp),
+  userSourceIdx: index('idx_ai_usage_user_source').on(table.userId, table.source, table.timestamp),
   providerIdx: index('idx_ai_usage_provider').on(table.provider, table.model, table.timestamp),
   costIdx: index('idx_ai_usage_cost').on(table.cost),
   conversationIdx: index('idx_ai_usage_conversation').on(table.conversationId),

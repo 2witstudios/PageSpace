@@ -232,6 +232,7 @@ async function runDiscoveryPass(
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'memory',
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage

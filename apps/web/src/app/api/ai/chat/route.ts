@@ -1076,6 +1076,7 @@ export async function POST(request: Request) {
                 userId: userId!,
                 provider: currentProvider,
                 model: resolvedModelName,
+                source: 'chat',
                 inputTokens,
                 outputTokens,
                 totalTokens,
@@ -1181,6 +1182,7 @@ export async function POST(request: Request) {
       userId: userId || 'unknown',
       provider: selectedProvider || 'unknown',
       model: selectedModel || 'unknown',
+      source: 'chat',
       inputTokens: usage?.inputTokens ?? undefined,
       outputTokens: usage?.outputTokens ?? undefined,
       totalTokens:

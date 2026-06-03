@@ -20,19 +20,35 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const pulseUser = { id: 'user-1', name: 'Tester', email: 'tester@example.com', timezone: 'UTC', subscriptionTier: 'pro' };
 
+// Sentinel for the user_automation_preferences table + the row the toggle lookup
+// returns, shared with the hoisted db mock factory via vi.hoisted. Default rows = []
+// (no preference row ⇒ Pulse enabled); the disabled test sets pulseEnabled: false.
+const h = vi.hoisted(() => ({
+  automationSentinel: { userId: 'userId', pulseEnabled: 'pulseEnabled' } as Record<string, string>,
+  automationRows: [] as unknown[],
+}));
+
 vi.mock('@pagespace/db/db', () => {
-  const builder: any = {
-    from: vi.fn(() => builder),
-    where: vi.fn(() => builder),
-    then: (resolve: (v: unknown[]) => unknown) => resolve([pulseUser]),
+  // Fresh, table-aware builder per select(): the automation-prefs query resolves to
+  // `h.automationRows`; every other query resolves to [pulseUser].
+  const makeBuilder = () => {
+    let table: unknown;
+    const b: any = {
+      from: vi.fn((t: unknown) => { table = t; return b; }),
+      where: vi.fn(() => b),
+      then: (resolve: (v: unknown[]) => unknown) =>
+        resolve(table === h.automationSentinel ? h.automationRows : [pulseUser]),
+    };
+    return b;
   };
-  return { db: { select: vi.fn(() => builder), update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })) } };
+  return { db: { select: vi.fn(() => makeBuilder()), update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })) } };
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(), and: vi.fn(), or: vi.fn(), lt: vi.fn(), gte: vi.fn(), ne: vi.fn(),
   desc: vi.fn(), inArray: vi.fn(), isNotNull: vi.fn(), isNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
+vi.mock('@pagespace/db/schema/automation-preferences', () => ({ userAutomationPreferences: h.automationSentinel }));
 
 // The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
@@ -79,8 +95,24 @@ const makeRequest = () =>
 describe('POST /api/pulse/generate — prepaid credit gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.automationRows = []; // default: no preference row ⇒ Pulse enabled
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+  });
+
+  it('no-ops (no gate, no model call) when the user disabled Pulse', async () => {
+    h.automationRows = [{ pulseEnabled: false }];
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({ skipped: true, reason: 'pulse_disabled' });
+    // The opt-out must short-circuit BEFORE the credit gate and any model invocation,
+    // so a disabled user can never spend credits on Pulse.
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
   });
 
   it('returns 402 out_of_credits before any context gathering or model call', async () => {

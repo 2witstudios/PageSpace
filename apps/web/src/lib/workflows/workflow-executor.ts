@@ -382,6 +382,7 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
       userId: input.createdBy,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'workflow',
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,

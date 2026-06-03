@@ -240,6 +240,7 @@ export async function POST(request: Request): Promise<Response> {
       userId: authResult.userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'chat',
       inputTokens: totalUsage?.inputTokens,
       outputTokens: totalUsage?.outputTokens,
       providerCostDollars: extractOpenRouterCostDollars(steps as Parameters<typeof extractOpenRouterCostDollars>[0]),

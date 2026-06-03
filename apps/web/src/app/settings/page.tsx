@@ -62,7 +62,7 @@ export default function SettingsPage() {
         },
         {
           title: "Billing & Subscription",
-          description: "Manage your subscription and billing",
+          description: "Subscription, AI credits, usage & storage",
           icon: CreditCard,
           href: "/settings/billing",
           available: true,

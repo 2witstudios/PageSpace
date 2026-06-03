@@ -108,7 +108,7 @@ export default function UserDropdown() {
             <Sparkles className="mr-2 h-4 w-4" />
             <span>Personalization</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/dashboard/storage')}>
+          <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
             <HardDrive className="mr-2 h-4 w-4" />
             <div className="flex-1">
               <div className="flex items-center justify-between">

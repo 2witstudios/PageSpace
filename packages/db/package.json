@@ -127,6 +127,10 @@
       "types": "./dist/schema/personalization.d.ts",
       "default": "./dist/schema/personalization.js"
     },
+    "./schema/automation-preferences": {
+      "types": "./dist/schema/automation-preferences.d.ts",
+      "default": "./dist/schema/automation-preferences.js"
+    },
     "./schema/push-notifications": {
       "types": "./dist/schema/push-notifications.d.ts",
       "default": "./dist/schema/push-notifications.js"

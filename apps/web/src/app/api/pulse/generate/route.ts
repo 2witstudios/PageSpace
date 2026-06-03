@@ -20,6 +20,8 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
 import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,
@@ -74,6 +76,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
     const userName = user.name || user.email?.split('@')[0] || 'there';
+
+    // Honor the user's Pulse on/off toggle (opt-out: no row ⇒ enabled). This is the
+    // authoritative enforcement point: the cron filters disabled users and GET /api/pulse
+    // suppresses shouldRefresh, but a disabled user must NEVER be able to spend credits on
+    // Pulse via a direct/stale POST here. No-op (no model call, no charge) when off.
+    const [pulsePref] = await db
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId));
+    if (!resolvePulseEnabled(pulsePref)) {
+      return NextResponse.json({ skipped: true, reason: 'pulse_disabled' });
+    }
 
     // Prepaid credit gate: block out-of-credits users before any model invocation.
     // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
@@ -672,6 +686,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'pulse',
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,

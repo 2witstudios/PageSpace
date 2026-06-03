@@ -9,6 +9,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { writeAiUsage } from '../logging/logger-database';
 import { consumeCredits, releaseHold } from '../billing/credit-consume';
 import { loggers } from '../logging/logger-config';
+import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 
 /**
  * AI Provider Pricing (per 1M tokens, USD)
@@ -692,6 +693,11 @@ export interface AIUsageData {
   error?: string;
   metadata?: Record<string, unknown>;
 
+  // Which product surface spent the credits (chat, pulse, memory, voice, …). Stamped
+  // at each call site and grouped by the user-facing usage breakdown. Unknown/missing
+  // folds to 'other' via normalizeUsageSource.
+  source?: AIUsageSource;
+
   // Authoritative provider cost (USD) for this call, captured from OpenRouter's
   // returned usage accounting (providerMetadata.openrouter.usage.cost, summed
   // across tool-loop steps). When finite & >= 0 this is billed instead of the
@@ -785,6 +791,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         driveId: data.driveId,
         success,
         error: data.error,
+        source: normalizeUsageSource(data.source),
 
         // Context tracking
         contextMessages: data.contextMessages,
@@ -877,6 +884,7 @@ export function trackAIToolUsage(data: AIToolUsage): Promise<void> {
     pageId: data.pageId,
     success: data.success,
     error: data.error,
+    source: 'tool',
     metadata: {
       type: 'tool_call',
       toolName: data.toolName,
