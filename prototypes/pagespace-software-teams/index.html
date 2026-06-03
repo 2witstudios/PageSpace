@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PageSpace — The AI-Native Workspace for Software Teams</title>
+<meta name="description" content="Specs, code, sprint boards, and runbooks in one AI-native workspace. PageSpace agents research with live web search, draft RFCs in the editor, break work into a sprint board, and review against a second agent — using 33+ real tools, not just chat." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #060a0a;
+    --s1: #0b1212;
+    --s2: #101a1a;
+    --s3: #162424;
+    --border: #1d2e2c;
+    --border2: #294240;
+    --emerald: #34e0a1;
+    --cyan: #2dd4d4;
+    --lime: #9be15d;
+    --coral: #ff6b5e;
+    --amber: #ffc24b;
+    --sky: #5cc7ff;
+    --text: #e4f0ec;
+    --mid: #8ca59d;
+    --dim: #56716a;
+    --sans: "Inter", system-ui, sans-serif;
+    --disp: "Space Grotesk", system-ui, sans-serif;
+    --mono: "JetBrains Mono", monospace;
+    --maxw: 1140px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(52,224,161,0.26); }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- NAV ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    background: rgba(6,10,10,0.74);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-family: var(--disp); font-weight: 700; font-size: 16px; letter-spacing: -0.3px; }
+  .logo .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(140deg, var(--emerald), var(--cyan));
+    display: grid; place-items: center; font-size: 13px; font-weight: 700; color: #042018;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 4px 16px rgba(52,224,161,0.32);
+  }
+  .nav-links { display: flex; align-items: center; gap: 30px; }
+  .nav-links a { font-size: 13.5px; color: var(--mid); transition: color .15s; }
+  .nav-links a:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--sans); font-weight: 600; font-size: 13.5px;
+    padding: 10px 18px; border-radius: 9px; cursor: pointer; border: none;
+    transition: transform .12s, box-shadow .2s, background .2s;
+  }
+  .btn-primary {
+    background: linear-gradient(140deg, var(--emerald), var(--cyan));
+    color: #042018; box-shadow: 0 6px 22px rgba(52,224,161,0.30);
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(52,224,161,0.45); }
+  .btn-ghost { background: var(--s2); color: var(--text); border: 1px solid var(--border2); }
+  .btn-ghost:hover { background: var(--s3); border-color: var(--emerald); }
+  .btn-lg { padding: 14px 26px; font-size: 15px; border-radius: 11px; }
+  @media (max-width: 760px) { .nav-links a:not(.btn) { display: none; } }
+
+  /* ---------- HERO ---------- */
+  .hero { position: relative; padding: 100px 0 70px; text-align: center; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(640px 380px at 50% -8%, rgba(52,224,161,0.18), transparent 70%),
+      radial-gradient(540px 360px at 82% 14%, rgba(45,212,212,0.14), transparent 70%),
+      radial-gradient(520px 340px at 14% 26%, rgba(155,225,93,0.08), transparent 70%);
+  }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px; font-weight: 500; letter-spacing: 0.2px;
+    color: var(--emerald); background: rgba(52,224,161,0.09);
+    border: 1px solid rgba(52,224,161,0.28); padding: 6px 14px; border-radius: 999px;
+    margin-bottom: 28px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 8px var(--emerald); }
+  h1 {
+    font-family: var(--disp);
+    font-size: clamp(38px, 6.2vw, 67px); font-weight: 700;
+    letter-spacing: -1.8px; line-height: 1.05; margin-bottom: 24px;
+  }
+  h1 .grad {
+    background: linear-gradient(110deg, var(--emerald) 10%, var(--cyan) 55%, var(--sky) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub {
+    font-size: clamp(16px, 2vw, 19px); color: var(--mid); line-height: 1.65;
+    max-width: 668px; margin: 0 auto 38px;
+  }
+  .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
+  .micro { font-size: 12.5px; color: var(--dim); }
+  .micro strong { color: var(--mid); font-weight: 600; }
+
+  /* ---------- HERO MOCK ---------- */
+  .mock {
+    max-width: 1000px; margin: 64px auto 0; text-align: left;
+    border: 1px solid var(--border2); border-radius: 16px; overflow: hidden;
+    background: var(--s1);
+    box-shadow: 0 40px 120px -30px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.03);
+  }
+  .mock-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    background: var(--s2);
+  }
+  .mock-bar .d { width: 11px; height: 11px; border-radius: 50%; }
+  .mock-bar .d:nth-child(1){ background:#ff5f57; } .mock-bar .d:nth-child(2){ background:#febc2e; } .mock-bar .d:nth-child(3){ background:#28c840; }
+  .mock-bar .tab { margin-left: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .mock-body { display: grid; grid-template-columns: 196px 1fr 234px; min-height: 432px; }
+  .mock-side { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--s1); }
+  .mock-side .grp { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin: 14px 8px 8px; }
+  .tree-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--mid); }
+  .tree-item.active { background: rgba(52,224,161,0.12); color: var(--text); }
+  .tree-item .ic { font-size: 13px; }
+  .mock-main { padding: 22px 24px; border-right: 1px solid var(--border); }
+  .doc-h { font-family: var(--disp); font-size: 19px; font-weight: 600; letter-spacing: -0.4px; margin-bottom: 4px; }
+  .doc-meta { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-bottom: 18px; }
+  .doc-line { height: 9px; border-radius: 5px; background: var(--s3); margin-bottom: 11px; }
+  .doc-line.w1 { width: 96%; } .doc-line.w2 { width: 82%; } .doc-line.w3 { width: 90%; } .doc-line.w4 { width: 68%; }
+  .code-blk {
+    margin: 16px 0 10px; border: 1px solid var(--border); border-radius: 9px;
+    background: #07100f; padding: 12px 14px; font-family: var(--mono); font-size: 11px; line-height: 1.7;
+    overflow-x: auto;
+  }
+  .code-blk .ln { color: var(--dim); }
+  .code-blk .kw { color: var(--sky); } .code-blk .fn { color: var(--emerald); } .code-blk .st { color: var(--amber); } .code-blk .cm { color: var(--dim); }
+  .doc-block {
+    margin-top: 16px; border-left: 2px solid var(--cyan); padding: 10px 14px;
+    background: rgba(45,212,212,0.06); border-radius: 0 8px 8px 0;
+  }
+  .doc-block .lbl { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--cyan); font-weight: 600; margin-bottom: 6px; }
+  .doc-block p { font-size: 12.5px; line-height: 1.6; color: var(--mid); }
+  .mock-ai { padding: 16px 16px; background: var(--s1); display: flex; flex-direction: column; gap: 12px; }
+  .ai-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text); }
+  .ai-head .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 8px var(--emerald); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{ opacity: 1; } 50%{ opacity: .35; } }
+  .ai-msg { font-size: 12px; line-height: 1.55; border-radius: 10px; padding: 10px 12px; }
+  .ai-msg.bot { background: var(--s2); color: var(--mid); border: 1px solid var(--border); }
+  .ai-msg.bot b { color: var(--text); }
+  .ai-tool {
+    font-family: var(--mono); font-size: 10.5px; color: var(--emerald);
+    background: rgba(52,224,161,0.07); border: 1px solid rgba(52,224,161,0.22);
+    border-radius: 7px; padding: 7px 10px; display: flex; align-items: center; gap: 7px;
+  }
+  .ai-tool .sp { width: 6px; height: 6px; border-radius: 50%; background: var(--emerald); animation: pulse 1s infinite; }
+  @media (max-width: 880px){ .mock-body { grid-template-columns: 1fr; } .mock-side, .mock-ai { display: none; } .mock-main { border-right: none; } }
+
+  /* ---------- LOGO STRIP ---------- */
+  .strip { padding: 40px 0 10px; text-align: center; }
+  .strip p { font-size: 11.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 22px; }
+  .strip-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px 40px; opacity: .75; }
+  .strip-row span { font-family: var(--mono); font-size: 13.5px; font-weight: 500; color: var(--mid); letter-spacing: -0.2px; }
+
+  /* ---------- SECTION SHELL ---------- */
+  section { padding: 90px 0; }
+  .sec-head { text-align: center; max-width: 690px; margin: 0 auto 56px; }
+  .kicker { font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; color: var(--emerald); margin-bottom: 16px; }
+  h2 { font-family: var(--disp); font-size: clamp(28px, 4vw, 42px); font-weight: 700; letter-spacing: -1px; line-height: 1.12; margin-bottom: 18px; }
+  h2 .hl { background: linear-gradient(110deg, var(--emerald), var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sec-head p { font-size: 16.5px; color: var(--mid); line-height: 1.65; }
+
+  /* ---------- PROBLEM ---------- */
+  .prob-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .prob-card { background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; }
+  .prob-card .x { color: var(--coral); font-size: 20px; margin-bottom: 14px; font-family: var(--mono); }
+  .prob-card h3 { font-family: var(--disp); font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .prob-card p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .prob-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- WORKFLOW ---------- */
+  .flow { display: flex; flex-direction: column; gap: 0; max-width: 920px; margin: 0 auto; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 24px; position: relative; padding-bottom: 44px; }
+  .step:last-child { padding-bottom: 0; }
+  .step::before { content: ""; position: absolute; left: 27px; top: 56px; bottom: 0; width: 2px; background: linear-gradient(var(--border2), transparent); }
+  .step:last-child::before { display: none; }
+  .step-num {
+    width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center;
+    font-family: var(--mono); font-weight: 600; font-size: 18px; color: #042018;
+    background: linear-gradient(140deg, var(--emerald), var(--cyan));
+    box-shadow: 0 8px 24px rgba(52,224,161,0.28); z-index: 1;
+  }
+  .step-body { padding-top: 4px; }
+  .step-body h3 { font-family: var(--disp); font-size: 19px; font-weight: 600; margin-bottom: 8px; letter-spacing: -0.3px; }
+  .step-body p { font-size: 14.5px; color: var(--mid); line-height: 1.65; max-width: 620px; }
+  .step-body .tags { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-family: var(--mono); font-size: 11px; color: var(--cyan);
+    background: rgba(45,212,212,0.07); border: 1px solid rgba(45,212,212,0.2);
+    border-radius: 999px; padding: 4px 11px;
+  }
+
+  /* ---------- FEATURES ---------- */
+  .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .feat {
+    background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px;
+    transition: transform .15s, border-color .2s, background .2s;
+  }
+  .feat:hover { transform: translateY(-3px); border-color: var(--border2); background: var(--s2); }
+  .feat .ic {
+    width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center;
+    font-size: 21px; margin-bottom: 16px; background: var(--s3); border: 1px solid var(--border2);
+  }
+  .feat h3 { font-family: var(--disp); font-size: 16.5px; font-weight: 600; margin-bottom: 8px; }
+  .feat p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  .ttag { font-family: var(--mono); font-size: 0.86em; color: var(--emerald); }
+  @media (max-width: 880px){ .feat-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- SPLIT / SPRINT ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .split h2 { text-align: left; }
+  .split .lead { font-size: 16px; color: var(--mid); line-height: 1.7; margin-bottom: 24px; }
+  .check-list { display: flex; flex-direction: column; gap: 16px; }
+  .check { display: grid; grid-template-columns: 26px 1fr; gap: 12px; }
+  .check .c { width: 22px; height: 22px; border-radius: 7px; background: rgba(52,224,161,0.12); border: 1px solid rgba(52,224,161,0.35); color: var(--emerald); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .check h4 { font-size: 14.5px; font-weight: 600; margin-bottom: 3px; }
+  .check p { font-size: 13px; color: var(--mid); line-height: 1.55; }
+  .brief-card {
+    background: var(--s1); border: 1px solid var(--border2); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 30px 80px -30px rgba(0,0,0,0.8);
+  }
+  .brief-card .bh { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--s2); display: flex; align-items: center; justify-content: space-between; }
+  .brief-card .bh .t { font-family: var(--disp); font-weight: 600; font-size: 14px; }
+  .brief-card .bh .m { font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+  .brief-card .bb { padding: 16px; }
+  .board { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .board-col h5 { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+  .board-col h5 .cnt { color: var(--dim); }
+  .board-col.todo h5 { color: var(--mid); } .board-col.prog h5 { color: var(--amber); } .board-col.done h5 { color: var(--emerald); }
+  .card-t { font-size: 11.5px; color: var(--text); line-height: 1.4; padding: 9px 10px; border-radius: 8px; background: var(--s2); border: 1px solid var(--border); margin-bottom: 9px; }
+  .card-t .tk { display: block; margin-top: 6px; font-family: var(--mono); font-size: 9.5px; color: var(--dim); }
+  .card-t.d { opacity: .62; text-decoration: line-through; text-decoration-color: var(--dim); }
+  @media (max-width: 880px){ .split { grid-template-columns: 1fr; gap: 36px; } .board { grid-template-columns: 1fr; } }
+
+  /* ---------- STATS ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .stat { text-align: center; padding: 28px 18px; background: var(--s1); border: 1px solid var(--border); border-radius: 14px; }
+  .stat .n { font-family: var(--disp); font-size: 38px; font-weight: 700; letter-spacing: -1.5px; background: linear-gradient(120deg, var(--emerald), var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .l { font-size: 13px; color: var(--mid); margin-top: 6px; }
+  @media (max-width: 820px){ .stats { grid-template-columns: 1fr 1fr; } }
+
+  /* ---------- USE CASES ---------- */
+  .uc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .uc { background: var(--s1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; }
+  .uc .ic { font-size: 24px; margin-bottom: 14px; }
+  .uc h3 { font-family: var(--disp); font-size: 16.5px; font-weight: 600; margin-bottom: 8px; }
+  .uc p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .uc-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- QUOTE ---------- */
+  .quote-wrap { text-align: center; max-width: 800px; margin: 0 auto; }
+  .quote-wrap .q { font-family: var(--disp); font-size: clamp(22px, 3.2vw, 30px); font-weight: 500; line-height: 1.4; letter-spacing: -0.6px; margin-bottom: 24px; }
+  .quote-wrap .q .hl { color: var(--cyan); }
+  .quote-wrap .by { font-size: 14px; color: var(--mid); }
+  .quote-wrap .by b { color: var(--text); }
+
+  /* ---------- CTA ---------- */
+  .cta {
+    position: relative; text-align: center; border-radius: 24px; overflow: hidden;
+    padding: 72px 32px; border: 1px solid var(--border2); background: var(--s1);
+  }
+  .cta::before {
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background: radial-gradient(600px 300px at 50% -20%, rgba(52,224,161,0.26), transparent 70%),
+                radial-gradient(500px 300px at 80% 120%, rgba(45,212,212,0.20), transparent 70%);
+  }
+  .cta > * { position: relative; z-index: 1; }
+  .cta h2 { font-size: clamp(28px, 4vw, 44px); }
+  .cta p { font-size: 17px; color: var(--mid); max-width: 560px; margin: 0 auto 32px; line-height: 1.6; }
+
+  /* ---------- FOOTER ---------- */
+  footer { border-top: 1px solid var(--border); padding: 48px 0 40px; }
+  .foot-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 32px; }
+  .foot-brand { max-width: 290px; }
+  .foot-brand p { font-size: 13px; color: var(--dim); line-height: 1.6; margin-top: 14px; }
+  .foot-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+  .foot-col h5 { font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mid); margin-bottom: 14px; }
+  .foot-col a { display: block; font-size: 13px; color: var(--dim); margin-bottom: 10px; transition: color .15s; }
+  .foot-col a:hover { color: var(--text); }
+  .foot-bottom { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .foot-bottom .mono { font-family: var(--mono); }
+
+  .fade { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+  .fade.in { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo"><span class="mark">P</span> PageSpace</div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#sprint">Sprint board</a>
+      <a href="#usecases">Use cases</a>
+      <a href="#cta" class="btn btn-primary">Start building free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow"><span class="dot"></span> The AI-native workspace for software teams</div>
+    <h1>Spec it, build it, ship it —<br><span class="grad">with agents that do the work.</span></h1>
+    <p class="sub">PageSpace is one drive for your specs, code, sprint board, and runbooks — where AI agents research with live web search, draft RFCs in the editor, break work into a task board, and review against a second agent. Real tools doing real work, not a chatbot you copy-paste out of.</p>
+    <div class="hero-cta">
+      <a href="#cta" class="btn btn-primary btn-lg">Start building free</a>
+      <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+    </div>
+    <p class="micro">No credit card · <strong>33+ real AI tools</strong> · 100+ models · Self-host or cloud</p>
+
+    <!-- HERO MOCK -->
+    <div class="mock fade">
+      <div class="mock-bar">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+        <span class="tab">pagespace.ai / drives / payments-service / RFC: idempotent refunds</span>
+      </div>
+      <div class="mock-body">
+        <aside class="mock-side">
+          <div class="grp">payments-service</div>
+          <div class="tree-item active"><span class="ic">📄</span> RFC: idempotent refunds</div>
+          <div class="tree-item"><span class="ic">💻</span> refund_handler.ts</div>
+          <div class="tree-item"><span class="ic">✅</span> Sprint 24 board</div>
+          <div class="tree-item"><span class="ic">💬</span> #eng-payments</div>
+          <div class="grp">Agents</div>
+          <div class="tree-item"><span class="ic">🤖</span> Reviewer agent</div>
+          <div class="tree-item"><span class="ic">🚨</span> On-call agent</div>
+          <div class="grp">Knowledge</div>
+          <div class="tree-item"><span class="ic">📚</span> Architecture docs</div>
+          <div class="tree-item"><span class="ic">🗂️</span> Runbooks</div>
+        </aside>
+        <main class="mock-main">
+          <div class="doc-h">RFC: Idempotent Refunds</div>
+          <div class="doc-meta">Document · drafted by agent · 9 sources · edited 3m ago</div>
+          <div class="doc-line w1"></div>
+          <div class="doc-line w3"></div>
+          <div class="doc-line w2"></div>
+          <div class="code-blk">
+<span class="cm">// dedupe on provider idempotency key</span>
+<span class="kw">async function</span> <span class="fn">refund</span>(req) {
+  <span class="kw">const</span> key = req.headers[<span class="st">"idempotency-key"</span>];
+  <span class="kw">if</span> (<span class="kw">await</span> <span class="fn">seen</span>(key)) <span class="kw">return</span> <span class="fn">cached</span>(key);
+  ...
+}
+          </div>
+          <div class="doc-block">
+            <div class="lbl">⚠ Reviewer agent flagged</div>
+            <p>Race on concurrent retries: two requests with the same key can both pass <code>seen()</code> before either writes. Wrap in a unique constraint on <code>(key)</code> and catch the conflict — covered in source [4], Stripe idempotency docs.</p>
+          </div>
+        </main>
+        <aside class="mock-ai">
+          <div class="ai-head"><span class="pulse"></span> Build Agent</div>
+          <div class="ai-tool"><span class="sp"></span> web_search · "idempotency key retries"</div>
+          <div class="ai-tool"><span class="sp"></span> web_fetch · stripe.com/docs/idempotency</div>
+          <div class="ai-tool"><span class="sp"></span> regex_search · "refund(" in drive</div>
+          <div class="ai-tool"><span class="sp"></span> create_task · Sprint 24 board</div>
+          <div class="ai-msg bot">Drafted the RFC with <b>9 sources</b>, scaffolded <code>refund_handler.ts</code> as a Code page, and broke it into <b>5 tasks</b> on the Sprint 24 board. Want me to <b>ask the Reviewer agent</b> to red-team the retry path?</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- STRIP -->
+<div class="strip wrap">
+  <p>Built for the way engineering teams actually work</p>
+  <div class="strip-row">
+    <span>Backend</span>
+    <span>Frontend</span>
+    <span>Platform</span>
+    <span>DevOps / SRE</span>
+    <span>Open source</span>
+    <span>Startups</span>
+  </div>
+</div>
+
+<!-- PROBLEM -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">The old way is fragmented</div>
+      <h2>The spec, the code, and the board <span class="hl">never live in the same place.</span></h2>
+      <p>The RFC is in one doc tool. The ticket is in another. The runbook is a wiki page nobody updated. And your AI assistant can't touch any of it — it just answers questions in a side panel.</p>
+    </div>
+    <div class="prob-grid">
+      <div class="prob-card fade">
+        <div class="x">// context lost</div>
+        <h3>Context is scattered</h3>
+        <p>The design doc, the tickets, the code samples, and the incident notes live in four tools that don't know each other exist. Onboarding means a tab tour.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">// copy → paste</div>
+        <h3>Your AI just chats</h3>
+        <p>It writes you a snippet you paste somewhere else by hand. It can't create the page, fill the board, or search your own docs — so you're still the integration layer.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">// who owns this?</div>
+        <h3>Specs rot, boards drift</h3>
+        <p>The RFC says one thing, the board says another, and the runbook is six months stale. Nothing keeps planning and execution in sync.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how" style="background: var(--s1); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">How it works</div>
+      <h2>From a one-line ticket to a <span class="hl">spec, a scaffold, and a sprint</span></h2>
+      <p>PageSpace isn't a chatbot in a side panel. It's a workspace where AI agents do the research, drafting, and planning <em>inside</em> your pages, using real tools.</p>
+    </div>
+    <div class="flow">
+      <div class="step fade">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Drop the ticket into a drive</h3>
+          <p>Paste the feature request, the bug, or the design question into a page. The agent reads the architecture docs and existing code pages already in the drive for context, then drafts an RFC straight into a Document.</p>
+          <div class="tags"><span class="tag">create_page</span><span class="tag">read_page</span><span class="tag">multi_drive_search</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>The agent researches the unknowns</h3>
+          <p>It runs live web searches for the library, the API, or the failure mode, fetches the docs as clean markdown, and searches your own drives by glob or regex to find every call site — then writes the findings into the RFC with links.</p>
+          <div class="tags"><span class="tag">web_search</span><span class="tag">web_fetch</span><span class="tag">glob_search</span><span class="tag">regex_search</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Scaffold and break down the work</h3>
+          <p>The agent writes a starter implementation into a Code page (Monaco editor), makes precise line-level edits with <span style="font-family:var(--mono);font-size:0.85em;color:var(--cyan)">replace_lines</span>, and breaks the RFC into ordered tasks on a Task List board — with your team's own statuses.</p>
+          <div class="tags"><span class="tag">replace_lines</span><span class="tag">create_task</span><span class="tag">create_task_status</span><span class="tag">reorder_task</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Review against a second agent</h3>
+          <p>Spin up an AI Chat agent, brief it as your reviewer, and consult it with <span style="font-family:var(--mono);font-size:0.85em;color:var(--cyan)">ask_agent</span>. It red-teams the design and the code; the team hashes it out in a Channel — all in the same drive.</p>
+          <div class="tags"><span class="tag">update_agent_config</span><span class="tag">ask_agent</span><span class="tag">send_channel_message</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">The toolkit</div>
+      <h2>Everything a team needs, <span class="hl">in one drive</span></h2>
+      <p>Nine page types, 33+ real AI tools, and 100+ models — composed for how engineers plan, build, and ship.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat fade">
+        <div class="ic">💻</div>
+        <h3>Code pages, real editor</h3>
+        <p>A full Code page type on the Monaco editor. Agents scaffold implementations and make precise edits with <span class="ttag">replace_lines</span> — your snippets and configs live in the drive, not a gist.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">📄</div>
+        <h3>RFCs in the editor</h3>
+        <p>Agents draft design docs and runbooks straight into Document pages on the TipTap editor, with source links inline and clean line-level edits as the plan changes.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">✅</div>
+        <h3>Task boards agents fill</h3>
+        <p>Task List pages with custom statuses. Agents create, reorder, and update tasks via <span class="ttag">create_task</span> and <span class="ttag">reorder_task</span>, so the board reflects the spec.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔎</div>
+        <h3>Search across everything</h3>
+        <p>Find any call site or doc with <span class="ttag">glob_search</span>, <span class="ttag">regex_search</span>, and <span class="ttag">multi_drive_search</span> — plus live web research with <span class="ttag">web_search</span> and <span class="ttag">web_fetch</span>.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🤖</div>
+        <h3>Reviewer agents</h3>
+        <p>Every AI Chat page is a configurable agent. Brief one as a reviewer or an on-call responder, then consult it with <span class="ttag">ask_agent</span> — a second opinion that lives in the drive.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">💬</div>
+        <h3>Channels + real-time</h3>
+        <p>Channel pages for team back-and-forth, with agents posting via <span class="ttag">send_channel_message</span> — and real-time collaboration so people and agents work the same page at once.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔌</div>
+        <h3>MCP & integrations</h3>
+        <p>PageSpace speaks the Model Context Protocol to connect your own tools and servers, and integrates GitHub, Google Calendar, and Drive into the workspace.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🧠</div>
+        <h3>100+ models, your pick</h3>
+        <p>Route to Anthropic, OpenAI, Google, xAI, OpenRouter, or a local Ollama model per task — a frontier model to design, a local one to keep code in-house.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔒</div>
+        <h3>Self-host your source</h3>
+        <p>Run on-prem with password auth and local AI, or in the cloud with passwordless passkeys. Desktop and mobile too — your code stays on your infrastructure.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SPRINT SPLIT -->
+<section id="sprint" style="background: var(--s1); border-block: 1px solid var(--border);">
+  <div class="wrap split">
+    <div class="fade">
+      <div class="kicker">Plan ↔ execution</div>
+      <h2>The spec and the board <span class="hl">stay in sync.</span></h2>
+      <p class="lead">When the agent drafts an RFC, it breaks the work into tasks on the same drive's board — with the statuses your team actually uses. Change the plan and the agent updates the board. No more spec that says one thing while the tickets say another.</p>
+      <div class="check-list">
+        <div class="check"><span class="c">✓</span><div><h4>Tasks created from the spec</h4><p>The agent turns each RFC section into an ordered task with <span class="ttag">create_task</span> and <span class="ttag">reorder_task</span> — traceable back to the doc.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>Your statuses, not ours</h4><p>Define <span class="ttag">create_task_status</span> columns that match your flow — Backlog, In review, Blocked, Done.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>You stay in control</h4><p>Edit any task or doc live — refresh protection means the agent never clobbers the line you're working on.</p></div></div>
+      </div>
+    </div>
+    <div class="brief-card fade">
+      <div class="bh">
+        <span class="t">Sprint 24 board</span>
+        <span class="m">Task List · 5 tasks · idempotent refunds</span>
+      </div>
+      <div class="bb">
+        <div class="board">
+          <div class="board-col todo">
+            <h5>Backlog <span class="cnt">2</span></h5>
+            <div class="card-t">Add unique constraint on idempotency key<span class="tk">PAY-412 · from RFC §3</span></div>
+            <div class="card-t">Backfill keys for in-flight refunds<span class="tk">PAY-415 · from RFC §5</span></div>
+          </div>
+          <div class="board-col prog">
+            <h5>In review <span class="cnt">1</span></h5>
+            <div class="card-t">Dedupe handler + conflict catch<span class="tk">PAY-410 · reviewer flagged race</span></div>
+          </div>
+          <div class="board-col done">
+            <h5>Done <span class="cnt">2</span></h5>
+            <div class="card-t d">Scaffold refund_handler.ts<span class="tk">PAY-408</span></div>
+            <div class="card-t d">Research provider idempotency<span class="tk">PAY-409</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section>
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat fade"><div class="n">9</div><div class="l">Page types — code, docs, tasks &amp; more</div></div>
+      <div class="stat fade"><div class="n">33+</div><div class="l">Real AI tools, not just chat</div></div>
+      <div class="stat fade"><div class="n">100+</div><div class="l">Models across 6 providers</div></div>
+      <div class="stat fade"><div class="n">1</div><div class="l">Drive from spec to ship</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section id="usecases" style="background: var(--s1); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Who it's for</div>
+      <h2>One workspace, <span class="hl">every kind of team</span></h2>
+      <p>If your work is turning an idea into shipped, maintained software, PageSpace was built for you.</p>
+    </div>
+    <div class="uc-grid">
+      <div class="uc fade"><div class="ic">⚙️</div><h3>Backend &amp; platform</h3><p>Draft RFCs, scaffold services in Code pages, search every call site by regex, and keep the design doc and the board in one drive.</p></div>
+      <div class="uc fade"><div class="ic">🚨</div><h3>DevOps &amp; SRE</h3><p>Keep runbooks live in Document pages, brief an on-call agent on the system, and let it pull incident research from the web mid-page.</p></div>
+      <div class="uc fade"><div class="ic">🧩</div><h3>Open-source maintainers</h3><p>Triage issues into a Task List, draft contributor docs, and connect your own tooling over MCP — self-hosted, your data.</p></div>
+      <div class="uc fade"><div class="ic">🚀</div><h3>Startup engineering</h3><p>A small team and a lot of context — keep specs, code, sprint board, and the team channel in one searchable drive the AI works inside.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section>
+  <div class="wrap quote-wrap fade">
+    <div class="q">"Our RFC, the scaffold, and the sprint tickets used to live in three tools. Now they live in one drive — and the agent <span class="hl">keeps them in sync</span> while it red-teams my design."</div>
+    <div class="by"><b>Devon K.</b> · Staff engineer, payments <span style="color:var(--dim)">· illustrative</span></div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="wrap">
+    <div class="cta fade">
+      <h2>Ship your next feature here.</h2>
+      <p>Drop in a ticket and watch PageSpace research it, draft the RFC, scaffold the code, and fill the board — free, no card required.</p>
+      <div class="hero-cta" style="margin-bottom: 14px;">
+        <a href="#" class="btn btn-primary btn-lg">Start building free</a>
+        <a href="#" class="btn btn-ghost btn-lg">Book a walkthrough</a>
+      </div>
+      <p class="micro">Cloud · self-hosted · desktop · mobile — your code, your infrastructure.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <div class="foot-brand">
+        <div class="logo"><span class="mark">P</span> PageSpace</div>
+        <p>The AI-native knowledge workspace where humans and agents plan, build, and ship software — together, in one drive.</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>Product</h5>
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#sprint">Sprint board</a>
+          <a href="#usecases">Use cases</a>
+        </div>
+        <div class="foot-col">
+          <h5>Workspace</h5>
+          <a href="#">Code &amp; documents</a>
+          <a href="#">Task boards</a>
+          <a href="#">AI agents</a>
+          <a href="#">MCP integrations</a>
+        </div>
+        <div class="foot-col">
+          <h5>Deploy</h5>
+          <a href="#">Cloud</a>
+          <a href="#">Self-hosted</a>
+          <a href="#">Desktop</a>
+          <a href="#">Mobile</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 PageSpace · pagespace.ai</span>
+      <span class="mono">Prototype · software-teams landing</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.fade').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>
