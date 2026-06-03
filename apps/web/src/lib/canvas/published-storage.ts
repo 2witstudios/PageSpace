@@ -47,6 +47,15 @@ function getPublishBucket(): string {
 }
 
 /**
+ * Whether publish storage is configured. Callers should check this BEFORE any
+ * DB reservation so a missing bucket can't leave a `published_pages` row that
+ * points at a non-existent object.
+ */
+export function isPublishConfigured(): boolean {
+  return Boolean(process.env.PUBLISH_BUCKET);
+}
+
+/**
  * Sanitize a request path into a clean, traversal-safe path segment list.
  * Lowercases, splits on `/`, and drops empty, `.`, and `..` segments so the
  * resulting key can never escape the `published/<subdomain>/` prefix.

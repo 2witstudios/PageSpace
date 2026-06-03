@@ -41,10 +41,12 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 const buildPublishedKey = vi.fn();
 const putPublishedArtifact = vi.fn();
 const deletePublishedArtifact = vi.fn();
+const isPublishConfigured = vi.fn();
 vi.mock('@/lib/canvas/published-storage', () => ({
   buildPublishedKey: (...args: unknown[]) => buildPublishedKey(...args),
   putPublishedArtifact: (...args: unknown[]) => putPublishedArtifact(...args),
   deletePublishedArtifact: (...args: unknown[]) => deletePublishedArtifact(...args),
+  isPublishConfigured: (...args: unknown[]) => isPublishConfigured(...args),
 }));
 
 const renderPublishedPage = vi.fn();
@@ -106,6 +108,7 @@ beforeEach(() => {
   authenticateRequestWithOptions.mockResolvedValue({ userId: 'user-1' });
   canUserEditPage.mockResolvedValue(true);
   validatePublishSubdomain.mockReturnValue({ valid: true });
+  isPublishConfigured.mockReturnValue(true);
   buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
   putPublishedArtifact.mockResolvedValue({ key: 'published/acme/welcome/index.html' });
   renderPublishedPage.mockReturnValue('<html>rendered</html>');
@@ -134,6 +137,17 @@ describe('POST /api/pages/[pageId]/publish', () => {
       if (prev === undefined) delete process.env.CANVAS_PUBLISHING_DISABLED;
       else process.env.CANVAS_PUBLISHING_DISABLED = prev;
     }
+  });
+
+  it('returns 503 and touches nothing when the publish bucket is not configured', async () => {
+    isPublishConfigured.mockReturnValue(false);
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(503);
+    const json = await res.json();
+    expect(json.error).toMatch(/not configured/i);
+    // fails fast BEFORE any DB reservation or upload
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
   });
 
   it('returns 400 when the page is not a canvas page', async () => {
