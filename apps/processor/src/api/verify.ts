@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Router as ExpressRouter, Response } from 'express';
 import { contentStore } from '../server';
 import { isValidContentHash } from '../cache/content-store';
-import { verifyContentHash, detectContentType } from '../services/processing-pipeline';
+import { verifyContentHash, detectContentType, isAllowedContentType } from '../services/processing-pipeline';
 import { classifyObjectSize, verifyResponse } from './verify-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -33,6 +33,7 @@ const router = Router();
  * Response contract — see {@link verifyResponse}:
  *   200 { ok:true,  detectedMime, detectedLabel, size }  verified; store detectedMime
  *   200 { ok:false, reason:'hash_mismatch' }             definitive; object deleted; do NOT retry
+ *   200 { ok:false, reason:'blocked_type', label }       definitive; disallowed type, object deleted; do NOT retry
  *   200 { ok:false, reason:'object_not_found' }          definitive; object absent; do NOT retry
  *   413 { ok:false, reason:'object_too_large' }          rejected before download; do NOT retry
  *   503 { ok:false, reason:'storage_error' }             transient infra failure; caller MAY retry
@@ -97,6 +98,23 @@ router.post('/', async (req, res) => {
     // Magika on the actual bytes — the true MIME type the web layer stores in
     // attachmentMeta, overriding the client-declared type.
     const detected = await detectContentType(bytes);
+
+    // Zero-trust content-type denylist (parity with the page-file ingest path,
+    // s3-pull-adapter.ts): reject + delete browser-executable markup, scripts, and
+    // native executables based on the ACTUAL bytes, regardless of the declared MIME.
+    // presign's validateMimeTypeDeclaration blocks these when *declared*; this closes
+    // the spoof where a client declares image/png but uploads SVG/HTML/EXE bytes
+    // (which would otherwise be stored with the detected type and served inline).
+    if (!isAllowedContentType(detected)) {
+      loggers.security.warn('Attachment verify: disallowed content type — deleting object', { contentHash, label: detected.label });
+      try {
+        await contentStore.deleteOriginal(contentHash);
+      } catch (err) {
+        loggers.processor.error('Failed to delete disallowed attachment object', err as Error, { contentHash });
+      }
+      return send(res, verifyResponse({ kind: 'blocked_type', label: detected.label }));
+    }
+
     return send(
       res,
       verifyResponse({ kind: 'match', detectedMime: detected.mimeType, detectedLabel: detected.label, size: bytes.length }),

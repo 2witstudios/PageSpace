@@ -32,6 +32,7 @@ export function classifyObjectSize(size: number | null): ObjectSizeClass {
 export type VerifyOutcome =
   | { kind: 'match'; detectedMime: string; detectedLabel: string; size: number }
   | { kind: 'mismatch' }
+  | { kind: 'blocked_type'; label: string }
   | { kind: 'absent' }
   | { kind: 'too_large'; size: number }
   | { kind: 'storage_error' };
@@ -47,6 +48,7 @@ export interface VerifyResponse {
  *
  *   200 { ok: true,  detectedMime, detectedLabel, size }  verified — store detectedMime
  *   200 { ok: false, reason: 'hash_mismatch' }            definitive — object deleted, do NOT retry
+ *   200 { ok: false, reason: 'blocked_type', label }      definitive — disallowed content type, object deleted, do NOT retry
  *   200 { ok: false, reason: 'object_not_found' }         definitive — object absent, do NOT retry
  *   413 { ok: false, reason: 'object_too_large' }         rejected before download, do NOT retry
  *   503 { ok: false, reason: 'storage_error' }            transient infra failure, caller MAY retry
@@ -64,6 +66,8 @@ export function verifyResponse(outcome: VerifyOutcome): VerifyResponse {
       };
     case 'mismatch':
       return { status: 200, body: { ok: false, reason: 'hash_mismatch' } };
+    case 'blocked_type':
+      return { status: 200, body: { ok: false, reason: 'blocked_type', label: outcome.label } };
     case 'absent':
       return { status: 200, body: { ok: false, reason: 'object_not_found' } };
     case 'too_large':

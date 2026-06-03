@@ -92,4 +92,29 @@ describe('uploadAttachment', () => {
     expect(result).toEqual({ ok: false, errorMessage: 'integrity failed' });
     expect(mockFetchWithAuth).toHaveBeenNthCalledWith(3, `${BASE}/cancel`, expect.any(Object));
   });
+
+  it('never throws when hashing the file fails — returns a result so a batch is not aborted', async () => {
+    mockComputeContentHash.mockRejectedValueOnce(new Error('crypto unavailable'));
+    const result = await uploadAttachment(BASE, FILE);
+    expect(result.ok).toBe(false);
+    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+  });
+
+  it('never throws on a malformed presign body — returns a result', async () => {
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => { throw new Error('bad json'); } } as unknown as Response);
+    const result = await uploadAttachment(BASE, FILE);
+    expect(result.ok).toBe(false);
+    expect(mockUploadToTigris).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the real PUT error message and cancels the slot', async () => {
+    mockFetchWithAuth
+      .mockResolvedValueOnce(jsonRes(200, { url: 'https://tigris/put', jobId: 'job-1', key: 'k' }))
+      .mockResolvedValueOnce(jsonRes(200, { success: true })); // cancel
+    mockUploadToTigris.mockRejectedValue(new Error('Upload failed with status 403'));
+
+    const result = await uploadAttachment(BASE, FILE);
+    expect(result).toEqual({ ok: false, errorMessage: 'Upload failed with status 403' });
+    expect(mockFetchWithAuth).toHaveBeenNthCalledWith(2, `${BASE}/cancel`, expect.any(Object));
+  });
 });

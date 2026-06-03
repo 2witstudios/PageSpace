@@ -21,6 +21,7 @@ interface ProcessorVerifyBody {
   detectedMime?: string;
   size?: number;
   reason?: string;
+  label?: string;
 }
 
 /**
@@ -33,7 +34,10 @@ export function interpretVerifyResponse(status: number, body: ProcessorVerifyBod
     if (body.ok && typeof body.detectedMime === 'string' && typeof body.size === 'number') {
       return { ok: true, detectedMime: body.detectedMime, size: body.size };
     }
-    // Definitive negative verdict (hash_mismatch | object_not_found) — do not retry.
+    // Definitive negative verdict — do not retry.
+    if (body.reason === 'blocked_type') {
+      return { ok: false, status: 415, error: 'This file type is not allowed' };
+    }
     const error =
       body.reason === 'hash_mismatch'
         ? 'Uploaded file failed integrity verification'

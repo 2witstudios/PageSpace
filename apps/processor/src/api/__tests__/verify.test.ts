@@ -11,6 +11,7 @@ const mockGetOriginal = vi.fn();
 const mockDeleteOriginal = vi.fn();
 const mockVerifyContentHash = vi.fn();
 const mockDetectContentType = vi.fn();
+const mockIsAllowedContentType = vi.fn();
 const mockIsValidContentHash = vi.fn();
 
 vi.mock('../../server', () => ({
@@ -28,6 +29,7 @@ vi.mock('../../cache/content-store', () => ({
 vi.mock('../../services/processing-pipeline', () => ({
   verifyContentHash: (...args: unknown[]) => mockVerifyContentHash(...args),
   detectContentType: (...args: unknown[]) => mockDetectContentType(...args),
+  isAllowedContentType: (...args: unknown[]) => mockIsAllowedContentType(...args),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -67,6 +69,7 @@ describe('POST /verify', () => {
     mockGetOriginal.mockResolvedValue(Buffer.from('hello world'));
     mockVerifyContentHash.mockReturnValue(true);
     mockDetectContentType.mockResolvedValue({ label: 'png', mimeType: 'image/png', score: 0.99, source: 'magika' });
+    mockIsAllowedContentType.mockReturnValue(true);
     mockDeleteOriginal.mockResolvedValue(true);
   });
 
@@ -114,6 +117,15 @@ describe('POST /verify', () => {
     expect(response.body).toEqual({ ok: false, reason: 'hash_mismatch' });
     expect(mockDeleteOriginal).toHaveBeenCalledWith(VALID_HASH);
     expect(mockDetectContentType).not.toHaveBeenCalled();
+  });
+
+  it('deletes the object and returns blocked_type when the detected type is disallowed', async () => {
+    mockDetectContentType.mockResolvedValue({ label: 'svg', mimeType: 'image/svg+xml', score: 0.98, source: 'magika' });
+    mockIsAllowedContentType.mockReturnValue(false);
+    const response = await request(createApp(CONV_AUTH)).post('/verify').send({ contentHash: VALID_HASH });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: false, reason: 'blocked_type', label: 'svg' });
+    expect(mockDeleteOriginal).toHaveBeenCalledWith(VALID_HASH);
   });
 
   it('returns a definitive 200 object_not_found when the object is absent', async () => {

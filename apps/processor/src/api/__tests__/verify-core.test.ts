@@ -42,6 +42,13 @@ describe('verifyResponse', () => {
     });
   });
 
+  it('maps a blocked content type to a definitive 200 ok:false with the label', () => {
+    expect(verifyResponse({ kind: 'blocked_type', label: 'svg' })).toEqual({
+      status: 200,
+      body: { ok: false, reason: 'blocked_type', label: 'svg' },
+    });
+  });
+
   it('maps an absent object to a definitive 200 ok:false (do-not-retry)', () => {
     expect(verifyResponse({ kind: 'absent' })).toEqual({
       status: 200,

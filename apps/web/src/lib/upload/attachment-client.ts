@@ -49,22 +49,41 @@ async function cancel(baseUrl: string, jobId: string): Promise<void> {
 }
 
 export async function uploadAttachment(baseUrl: string, file: File): Promise<UploadAttachmentResult> {
-  const contentHash = await computeContentHash(file);
   const mimeType = file.type || 'application/octet-stream';
   const filename = file.name || 'Untitled';
   const fileSize = file.size;
 
-  const presignRes = await fetchWithAuth(`${baseUrl}/presign`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contentHash, filename, mimeType, fileSize }),
-  });
+  // Hash the bytes before any slot is reserved. A WebCrypto failure here must NOT
+  // throw out of this function — the hook uploads files in a loop with no per-file
+  // catch, so a throw would abort the whole batch. Return a result instead.
+  let contentHash: string;
+  try {
+    contentHash = await computeContentHash(file);
+  } catch {
+    return { ok: false, errorMessage: 'Could not read the file for upload.' };
+  }
+
+  let presignRes: Response;
+  try {
+    presignRes = await fetchWithAuth(`${baseUrl}/presign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentHash, filename, mimeType, fileSize }),
+    });
+  } catch {
+    return { ok: false, errorMessage: 'Upload failed. Please check your connection and try again.' };
+  }
   if (!presignRes.ok) {
     const body = (await presignRes.json().catch(() => ({}))) as { error?: string };
     return { ok: false, errorMessage: attachmentUploadErrorMessage(presignRes.status, body.error) };
   }
-  const presign = (await presignRes.json()) as PresignBody;
+  const presign = (await presignRes.json().catch(() => null)) as PresignBody | null;
+  if (!presign || typeof presign.jobId !== 'string') {
+    return { ok: false, errorMessage: 'Upload failed' };
+  }
+  const { jobId } = presign;
 
+  // A slot is now reserved server-side; every failure below must cancel it.
   try {
     if (!presign.alreadyExists) {
       if (!presign.url) throw new Error('Presign response missing upload URL');
@@ -74,18 +93,24 @@ export async function uploadAttachment(baseUrl: string, file: File): Promise<Upl
     const completeRes = await fetchWithAuth(`${baseUrl}/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: presign.jobId, filename }),
+      body: JSON.stringify({ jobId, filename }),
     });
     if (!completeRes.ok) {
       const body = (await completeRes.json().catch(() => ({}))) as { error?: string };
-      await cancel(baseUrl, presign.jobId);
+      await cancel(baseUrl, jobId);
       return { ok: false, errorMessage: attachmentUploadErrorMessage(completeRes.status, body.error) };
     }
 
-    const completed = (await completeRes.json()) as { file: UploadedAttachment };
+    const completed = (await completeRes.json().catch(() => null)) as { file?: UploadedAttachment } | null;
+    if (!completed?.file) {
+      await cancel(baseUrl, jobId);
+      return { ok: false, errorMessage: 'Upload failed' };
+    }
     return { ok: true, attachment: completed.file };
-  } catch {
-    await cancel(baseUrl, presign.jobId);
-    return { ok: false, errorMessage: 'Upload failed' };
+  } catch (err) {
+    await cancel(baseUrl, jobId);
+    // Surface the real cause (e.g. uploadToTigris's "Upload failed with status 403"
+    // on an expired presigned URL) instead of a blanket message.
+    return { ok: false, errorMessage: err instanceof Error && err.message ? err.message : 'Upload failed' };
   }
 }

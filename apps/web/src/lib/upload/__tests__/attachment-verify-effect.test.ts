@@ -19,6 +19,15 @@ describe('interpretVerifyResponse', () => {
     if (!result.ok) expect(result.status).toBe(422);
   });
 
+  it('rejects a 200 blocked_type verdict as a definitive 415', () => {
+    const result = interpretVerifyResponse(200, { ok: false, reason: 'blocked_type', label: 'svg' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(415);
+      expect(result.error).toMatch(/not allowed/i);
+    }
+  });
+
   it('treats a 200 ok:true with a missing detectedMime as a failure (defensive)', () => {
     const result = interpretVerifyResponse(200, { ok: true, size: 10 });
     expect(result.ok).toBe(false);
