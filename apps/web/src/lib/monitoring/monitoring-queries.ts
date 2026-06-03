@@ -953,20 +953,27 @@ export async function getTokenUsageByUser(
 }
 
 /**
- * What we pay providers, grouped by provider/model, from the real cost now
- * flowing into the ledger. `coverage` is honest about the basis: OpenRouter rows
- * bill on the provider's returned cost ('real'); direct providers fall back to
- * the static estimate ('estimate'). Anchored on the ledger's createdAt; the
- * usage-log join only enriches provider/model.
+ * What we pay providers, grouped by provider/model AND billing basis, from the
+ * real cost now flowing into the ledger. `coverage` is the EXACT per-row basis,
+ * read from `aiUsageLogs.metadata.costSource` that trackAIUsage stamps:
+ * 'openrouter' (real returned cost) → 'real', 'estimate' (static fallback) →
+ * 'estimate'. This is honest even when an OpenRouter call fell back to the
+ * estimate (missing cost metadata) — that row reports 'estimate', not 'real'.
+ * For rows whose usage log was purged (metadata gone) we best-effort fall back
+ * to the provider name. Anchored on the ledger's createdAt; the usage-log join
+ * only enriches provider/model/costSource.
  */
 export async function getProviderCostRollup(
   startDate?: Date,
   endDate?: Date,
 ): Promise<ProviderCostRow[]> {
+  const costSourceExpr = sql<string | null>`${aiUsageLogs.metadata} ->> 'costSource'`;
+
   const rows = await db
     .select({
       provider: aiUsageLogs.provider,
       model: aiUsageLogs.model,
+      costSource: costSourceExpr,
       realCostCents: realCostSum,
       chargedCents: chargedSum,
       requestCount: count(),
@@ -974,14 +981,17 @@ export async function getProviderCostRollup(
     .from(creditLedger)
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(aiUsageLogs.provider, aiUsageLogs.model)
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model, costSourceExpr)
     .orderBy(desc(realCostSum))
     .limit(50);
 
   return rows.map((r) => {
     const provider = r.provider ?? 'unknown';
-    const coverage: CostCoverage =
-      provider === 'openrouter' || provider === 'openrouter_free' ? 'real' : 'estimate';
+    let coverage: CostCoverage;
+    if (r.costSource === 'openrouter') coverage = 'real';
+    else if (r.costSource === 'estimate') coverage = 'estimate';
+    // metadata purged: fall back to the provider-name heuristic.
+    else coverage = provider === 'openrouter' || provider === 'openrouter_free' ? 'real' : 'estimate';
     return {
       provider,
       model: r.model ?? 'unknown',

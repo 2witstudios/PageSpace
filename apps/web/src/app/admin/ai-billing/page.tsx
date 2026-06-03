@@ -339,8 +339,9 @@ export default function AdminAiBillingPage() {
         <CardHeader>
           <CardTitle>Provider cost</CardTitle>
           <CardDescription>
-            What we pay providers per model. <Badge variant="outline">real</Badge> = OpenRouter&apos;s
-            returned cost; <Badge variant="secondary">estimate</Badge> = static fallback for direct providers.
+            What we pay providers per model, split by billing basis. <Badge variant="outline">real</Badge> =
+            OpenRouter&apos;s returned cost; <Badge variant="secondary">estimate</Badge> = static fallback
+            (direct providers, or an OpenRouter call whose cost metadata was missing).
           </CardDescription>
         </CardHeader>
         <CardContent>

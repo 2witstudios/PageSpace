@@ -190,9 +190,9 @@ describe('getTokenUsageByUser', () => {
 });
 
 describe('getProviderCostRollup', () => {
-  it('labels OpenRouter rows as real coverage and computes margin', async () => {
+  it('labels a row real when its costSource is openrouter and computes margin', async () => {
     resetQueue([
-      { provider: 'openrouter', model: 'anthropic/claude', realCostCents: 100, chargedCents: 150, requestCount: 4 },
+      { provider: 'openrouter', model: 'anthropic/claude', costSource: 'openrouter', realCostCents: 100, chargedCents: 150, requestCount: 4 },
     ]);
     const rows = await getProviderCostRollup();
     expect(rows[0]).toMatchObject({
@@ -203,15 +203,26 @@ describe('getProviderCostRollup', () => {
     });
   });
 
-  it('labels openrouter_free as real and direct providers as estimate', async () => {
+  it('labels coverage from the per-row costSource, NOT the provider name (an OpenRouter call that fell back to the estimate reports estimate)', async () => {
     resetQueue([
-      { provider: 'openrouter_free', model: 'm:free', realCostCents: 0, chargedCents: 0, requestCount: 1 },
-      { provider: 'anthropic', model: 'claude', realCostCents: 100, chargedCents: 150, requestCount: 2 },
-      { provider: null, model: null, realCostCents: 10, chargedCents: 10, requestCount: 1 },
+      { provider: 'openrouter', model: 'anthropic/claude', costSource: 'openrouter', realCostCents: 100, chargedCents: 150, requestCount: 2 },
+      { provider: 'openrouter', model: 'anthropic/claude', costSource: 'estimate', realCostCents: 50, chargedCents: 60, requestCount: 1 },
     ]);
     const rows = await getProviderCostRollup();
     expect(rows[0].coverage).toBe('real');
+    // Same provider/model, but this group billed on the static fallback — honest 'estimate'.
     expect(rows[1].coverage).toBe('estimate');
+  });
+
+  it('falls back to the provider-name heuristic when metadata (costSource) was purged', async () => {
+    resetQueue([
+      { provider: 'openrouter_free', model: 'm:free', costSource: null, realCostCents: 0, chargedCents: 0, requestCount: 1 },
+      { provider: 'anthropic', model: 'claude', costSource: null, realCostCents: 100, chargedCents: 150, requestCount: 2 },
+      { provider: null, model: null, costSource: null, realCostCents: 10, chargedCents: 10, requestCount: 1 },
+    ]);
+    const rows = await getProviderCostRollup();
+    expect(rows[0].coverage).toBe('real'); // openrouter_free → real
+    expect(rows[1].coverage).toBe('estimate'); // direct provider → estimate
     expect(rows[2]).toMatchObject({ provider: 'unknown', coverage: 'estimate' });
   });
 
