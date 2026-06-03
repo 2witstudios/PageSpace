@@ -99,6 +99,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: {
     trackUsage: vi.fn().mockResolvedValue(undefined),
   },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({

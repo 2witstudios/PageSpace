@@ -35,7 +35,7 @@ import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
@@ -209,7 +209,7 @@ export async function POST(request: Request): Promise<Response> {
       mcpAllowedDriveIds: getAllowedDriveIds(authResult),
     },
     maxRetries: 20,
-    onFinish: async ({ text, totalUsage }) => {
+    onFinish: async ({ text, totalUsage, steps }) => {
       const assistantId = createId();
       await saveMessageToDatabase({
         messageId: assistantId,
@@ -234,6 +234,7 @@ export async function POST(request: Request): Promise<Response> {
         model: providerResult.modelName,
         inputTokens: totalUsage.inputTokens,
         outputTokens: totalUsage.outputTokens,
+        providerCostDollars: extractOpenRouterCostDollars(steps),
         duration: Date.now() - startTime,
         conversationId,
         messageId: assistantId,

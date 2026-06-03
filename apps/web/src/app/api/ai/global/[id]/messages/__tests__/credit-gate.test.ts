@@ -36,6 +36,7 @@ const captured = vi.hoisted(() => ({
   createUIMessageStreamOptions: {} as MockUIStreamOptions,
   streamTextOptions: {} as MockStreamTextOptions,
   totalUsage: undefined as unknown,
+  steps: [] as unknown,
 }));
 
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
@@ -170,6 +171,7 @@ vi.mock('ai', () => ({
     return {
       toUIMessageStream: () => (async function* () {})(),
       get totalUsage() { return Promise.resolve(captured.totalUsage); },
+      get steps() { return Promise.resolve(captured.steps); },
     };
   }),
   convertToModelMessages: vi.fn().mockReturnValue([]),
@@ -187,6 +189,7 @@ vi.mock('@paralleldrive/cuid2', () => ({ createId: vi.fn().mockReturnValue('test
 vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`) }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
 }));
 vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({
   calculateTotalContextSize: vi.fn().mockReturnValue({

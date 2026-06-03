@@ -170,6 +170,7 @@ vi.mock('ai', () => ({
     return {
       toUIMessageStream: () => (async function* () {})(),
       totalUsage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+      steps: Promise.resolve([]),
     };
   }),
   convertToModelMessages: vi.fn().mockReturnValue([]),
@@ -203,6 +204,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({ trackFeature: vi.
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
 }));
 
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
