@@ -44,12 +44,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * Park us safely inside a single bucket before sequential checks. The limiter
+ * is a weighted *sliding* window keyed on wall-clock-aligned buckets
+ * (windowStart = floor(now/windowMs)*windowMs). If back-to-back checks straddle
+ * a bucket boundary, the previous bucket still contributes a fractional weight
+ * (1 - msIntoBucket/windowMs) just under 1, so effectiveCount lands at e.g.
+ * 1.9999 and `ceil(maxAttempts - effectiveCount)` rounds attemptsRemaining up by
+ * one. Waiting out the tail of the current window keeps every check in one
+ * bucket, where the counts are integers.
+ */
+async function alignToFreshBucket(windowMs: number): Promise<void> {
+  const msIntoBucket = Date.now() % windowMs;
+  const msUntilNextBucket = windowMs - msIntoBucket;
+  if (msUntilNextBucket < 1_000) {
+    await new Promise((r) => setTimeout(r, msUntilNextBucket + 50));
+  }
+}
+
 describe('distributed-rate-limit integration (Postgres)', () => {
   it('allows requests under the limit', async () => {
     if (!dbAvailable) return;
 
     const cfg: RateLimitConfig = { maxAttempts: 3, windowMs: 60_000 };
     const key = TEST_KEY_PREFIX + 'under-limit';
+
+    await alignToFreshBucket(cfg.windowMs);
 
     const r1 = await checkDistributedRateLimit(key, cfg);
     const r2 = await checkDistributedRateLimit(key, cfg);
@@ -65,6 +85,8 @@ describe('distributed-rate-limit integration (Postgres)', () => {
 
     const cfg: RateLimitConfig = { maxAttempts: 2, windowMs: 60_000 };
     const key = TEST_KEY_PREFIX + 'at-limit';
+
+    await alignToFreshBucket(cfg.windowMs);
 
     await checkDistributedRateLimit(key, cfg);
     await checkDistributedRateLimit(key, cfg);
