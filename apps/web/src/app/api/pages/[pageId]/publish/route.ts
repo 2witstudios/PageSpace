@@ -44,13 +44,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   try {
+    // Whether the server can actually publish (dedicated public bucket configured).
+    // The UI uses this to hide the Publish control where publishing is unavailable
+    // (e.g. a deployment that hasn't provisioned PUBLISH_BUCKET) instead of offering
+    // a button that only ever returns 503.
+    const available = isPublishConfigured();
+
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
       columns: { driveId: true, path: true },
     });
 
     if (!row) {
-      return NextResponse.json({ published: false });
+      return NextResponse.json({ published: false, available });
     }
 
     const drive = await db.query.drives.findFirst({
@@ -62,6 +68,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
     return NextResponse.json({
       published: true,
+      available,
       url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
       subdomain,
       path: row.path,

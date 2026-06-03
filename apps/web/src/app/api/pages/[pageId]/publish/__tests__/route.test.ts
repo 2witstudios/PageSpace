@@ -255,16 +255,25 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns { published: false } when no row exists', async () => {
+  it('returns { published: false, available: true } when no row exists and publishing is configured', async () => {
     findFirstPublished.mockResolvedValue(undefined);
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ published: false });
+    expect(json).toEqual({ published: false, available: true });
     expect(findFirstDrive).not.toHaveBeenCalled();
   });
 
-  it('returns { published: true, url } when a row exists', async () => {
+  it('reports available: false when the publish bucket is not configured (UI hides the control)', async () => {
+    isPublishConfigured.mockReturnValue(false);
+    findFirstPublished.mockResolvedValue(undefined);
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ published: false, available: false });
+  });
+
+  it('returns { published: true, url, available } when a row exists', async () => {
     findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome' });
     findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
 
@@ -273,6 +282,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
     const json = await res.json();
     expect(json).toEqual({
       published: true,
+      available: true,
       url: 'https://acme.pagespace.site/welcome',
       subdomain: 'acme',
       path: 'welcome',
