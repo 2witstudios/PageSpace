@@ -24,12 +24,12 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { InvoiceList, type Invoice } from '@/components/billing/InvoiceList';
 import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
-import { BillingGuard } from '@/components/billing/BillingGuard';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
 import { AutomationsCard } from '@/components/billing/AutomationsCard';
 import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
 import { useCreditsMode } from '@/hooks/useCreditsMode';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
 
@@ -60,6 +60,12 @@ export default function BillingPage() {
   const searchParams = useSearchParams();
   // Per-environment switch: credit surfaces show only when credits mode is ON.
   const creditsMode = useCreditsMode();
+  // Stripe/payment sections (subscription, payment methods, invoices, address) are
+  // hidden on iOS (App Store compliance). Non-payment sections — AI credits balance,
+  // usage breakdown, automations, storage — stay visible on every platform (full
+  // mobile parity), so unlike the old BillingGuard we DON'T redirect the whole page.
+  const { isReady, hideBilling } = useBillingVisibility();
+  const showBillingSections = isReady && !hideBilling;
 
   // State
   const [loading, setLoading] = useState(true);
@@ -234,7 +240,6 @@ export default function BillingPage() {
   const scheduledChangeDate = subscriptionData?.subscription?.scheduledChangeDate;
 
   return (
-    <BillingGuard>
     <div className="container mx-auto p-6 space-y-8 max-w-4xl">
       {/* Header */}
       <div>
@@ -248,9 +253,9 @@ export default function BillingPage() {
           Back to Settings
         </Button>
         <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold">Billing</h1>
+          <h1 className="text-4xl font-bold">Billing &amp; Usage</h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            Manage your payment methods, view invoices, and update billing information
+            Your subscription, AI credits, usage, automations, and storage
           </p>
         </div>
       </div>
@@ -301,6 +306,9 @@ export default function BillingPage() {
       {/* Storage usage (moved from the standalone /dashboard/storage page) */}
       <StorageUsageCard />
 
+      {/* Payment & subscription sections — Stripe-backed, hidden on iOS (App Store). */}
+      {showBillingSections && (
+      <>
       {/* Current Subscription */}
       <Card>
         <CardHeader>
@@ -478,7 +486,8 @@ export default function BillingPage() {
           />
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
-    </BillingGuard>
   );
 }
