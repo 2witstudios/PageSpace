@@ -36,7 +36,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
@@ -675,6 +675,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+      providerCostDollars: extractOpenRouterCostDollars(result.steps),
       success: true,
       holdId,
     });

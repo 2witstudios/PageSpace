@@ -72,7 +72,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, type ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -101,6 +101,7 @@ export async function POST(request: Request) {
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
+  let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
@@ -948,6 +949,12 @@ export async function POST(request: Request) {
               return undefined;
             });
 
+          // Steps carry OpenRouter's per-request cost metadata (one request per
+          // tool-loop step); summed in trackUsage to bill on real cost.
+          stepsPromise = aiResult.steps
+            .then((steps) => steps as ProviderMetadataCarrier[])
+            .catch(() => undefined);
+
           await pipeUIMessageStreamStrippingStart(aiResult, writer);
         },
         onFinish: async ({ responseMessage }) => {
@@ -1025,6 +1032,7 @@ export async function POST(request: Request) {
               const duration = Date.now() - startTime;
 
               const usage = usagePromise ? await usagePromise : undefined;
+              const steps = stepsPromise ? await stepsPromise : undefined;
               const inputTokens = usage?.inputTokens ?? undefined;
               const outputTokens = usage?.outputTokens ?? undefined;
               const totalTokens =
@@ -1039,6 +1047,7 @@ export async function POST(request: Request) {
                 inputTokens,
                 outputTokens,
                 totalTokens,
+                providerCostDollars: extractOpenRouterCostDollars(steps),
                 duration,
                 conversationId, // Use actual conversation ID instead of pageId
                 messageId,
@@ -1132,6 +1141,7 @@ export async function POST(request: Request) {
     });
 
     const usage = usagePromise ? await usagePromise : undefined;
+    const steps = stepsPromise ? await stepsPromise : undefined;
 
     // Track AI usage even for errors using enhanced monitoring
     // Note: conversationId might not be available in error path, use chatId as fallback
@@ -1144,6 +1154,7 @@ export async function POST(request: Request) {
       totalTokens:
         usage?.totalTokens ??
         ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
+      providerCostDollars: extractOpenRouterCostDollars(steps),
       duration: Date.now() - startTime,
       conversationId: conversationId || chatId, // Use conversationId if available, fallback to chatId
       pageId: chatId,

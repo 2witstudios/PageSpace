@@ -3,11 +3,14 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { sql, eq, and, or, gte, lte, desc, count } from '@pagespace/db/operators'
+import { sql, eq, and, or, gte, lte, desc, count, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
-import { creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
+import { getTierFromPrice } from '@/lib/stripe/price-config';
+import type { SubscriptionTier } from '@/lib/subscription/plans';
 
 /**
  * Get system health overview
@@ -525,7 +528,19 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 // $0 and report a bogus margin — so we SUM the precise fields and round ONCE at
 // the end. `appliedCents` is exempt: it is the whole-cent amount actually debited
 // (the sub-cent remainder is banked in pendingMillicents), so its sum is exact.
-const realCostSum = sql<number>`ROUND(COALESCE(SUM(${aiUsageLogs.cost}::numeric), 0) * 100)::int`;
+//
+// PURGE FALLBACK: `aiUsageLogs` is reaped on retention while its ledger row
+// survives. For those rows `aiUsageLogs.cost` is NULL, so we fall back per-row to
+// the ledger's preserved `realCostCents` audit value (already whole-cent). Without
+// this, an `?range=all` window would silently count purged traffic as $0 real cost
+// and overstate margin. `SUM(cost)*100 === SUM(cost*100)`, so live rows are
+// unchanged; only purged rows newly contribute their retained cost.
+const realCostSum = sql<number>`ROUND(COALESCE(SUM(
+  CASE
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * 100
+    ELSE ${creditLedger.realCostCents}
+  END
+), 0))::int`;
 const chargedSum = sql<number>`ROUND(COALESCE(SUM(COALESCE(${creditLedger.chargeMillicents}, ABS(${creditLedger.amountCents}) * 1000)), 0) / 1000.0)::int`;
 const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 0)::int`;
 // Debt comes from 'adjustment' rows, which carry only the whole-cent shortfall in
@@ -755,6 +770,357 @@ export function getDateRange(range: '24h' | '7d' | '30d' | 'all') {
     default:
       startDate = undefined;
   }
-  
+
   return { startDate, endDate: now };
+}
+
+// ---------------------------------------------------------------------------
+// AI-billing admin panel queries
+//
+// A dedicated operational view (separate from unit-economics' margin focus):
+// raw token volume, provider cost coverage (real vs estimated), Stripe revenue,
+// and point-in-time credit liability + live holds. Reuses the same precise
+// sub-cent summing and createdAt anchoring as the margin queries above.
+// ---------------------------------------------------------------------------
+
+export interface TokenUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requestCount: number;
+}
+
+export interface TokenUsageByModelRow extends TokenUsageTotals {
+  provider: string;
+  model: string;
+}
+
+export interface TokenUsageByPeriodRow extends TokenUsageTotals {
+  period: string;
+}
+
+export interface TokenUsageByUserRow extends TokenUsageTotals {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+}
+
+export type CostCoverage = 'real' | 'estimate';
+
+export interface ProviderCostRow {
+  provider: string;
+  model: string;
+  coverage: CostCoverage;
+  realCostCents: number;
+  chargedCents: number;
+  marginCents: number;
+  marginPct: number | null;
+  requestCount: number;
+}
+
+export interface CreditRevenue {
+  topupCents: number;
+  topupCount: number;
+  monthlyGrantCents: number;
+  monthlyGrantCount: number;
+  totalCents: number;
+}
+
+export interface SubscriptionsByTierRow {
+  tier: SubscriptionTier;
+  count: number;
+}
+
+export interface CreditLiability {
+  monthlyRemainingCents: number;
+  topupRemainingCents: number;
+  totalLiabilityCents: number;
+  userCount: number;
+}
+
+export interface LiveHolds {
+  holdCount: number;
+  heldCents: number;
+}
+
+// Token sums use double precision (not ::int) so high-volume windows can't
+// overflow int4 (~2.1B); tokens are display-only so float8's 53-bit mantissa is
+// ample. Token usage is inherently a usage-LOG view, so these anchor on
+// aiUsageLogs.timestamp (unlike the ledger-anchored margin queries).
+const inputTokenSum = sql<number>`COALESCE(SUM(${aiUsageLogs.inputTokens}), 0)::double precision`;
+const outputTokenSum = sql<number>`COALESCE(SUM(${aiUsageLogs.outputTokens}), 0)::double precision`;
+const totalTokenSum = sql<number>`COALESCE(SUM(${aiUsageLogs.totalTokens}), 0)::double precision`;
+
+function tokenConditions(startDate?: Date, endDate?: Date): SQL[] {
+  const conditions: SQL[] = [];
+  if (startDate) conditions.push(gte(aiUsageLogs.timestamp, startDate));
+  if (endDate) conditions.push(lte(aiUsageLogs.timestamp, endDate));
+  return conditions;
+}
+
+function tokenWhere(startDate?: Date, endDate?: Date): SQL | undefined {
+  const conditions = tokenConditions(startDate, endDate);
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+/** SUM of input/output/total tokens and request count across the window. */
+export async function getTokenUsageSummary(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<TokenUsageTotals> {
+  const rows = await db
+    .select({
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .where(tokenWhere(startDate, endDate));
+
+  return {
+    inputTokens: rows[0]?.inputTokens ?? 0,
+    outputTokens: rows[0]?.outputTokens ?? 0,
+    totalTokens: rows[0]?.totalTokens ?? 0,
+    requestCount: rows[0]?.requestCount ?? 0,
+  };
+}
+
+/** Token volume grouped by provider/model, busiest first. */
+export async function getTokenUsageByModel(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 50,
+): Promise<TokenUsageByModelRow[]> {
+  const rows = await db
+    .select({
+      provider: aiUsageLogs.provider,
+      model: aiUsageLogs.model,
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .where(tokenWhere(startDate, endDate))
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model)
+    .orderBy(desc(totalTokenSum))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    ...r,
+    provider: r.provider ?? 'unknown',
+    model: r.model ?? 'unknown',
+  }));
+}
+
+/** Token volume per day/month over the window. */
+export async function getTokenUsageByPeriod(
+  startDate?: Date,
+  endDate?: Date,
+  granularity: Granularity = 'day',
+): Promise<TokenUsageByPeriodRow[]> {
+  if (granularity !== 'day' && granularity !== 'month') {
+    throw new Error(`Invalid granularity: ${granularity}`);
+  }
+  const periodExpr = sql<string>`DATE_TRUNC(${granularity}, ${aiUsageLogs.timestamp})`;
+
+  return db
+    .select({
+      period: periodExpr,
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .where(tokenWhere(startDate, endDate))
+    .groupBy(periodExpr)
+    .orderBy(desc(periodExpr))
+    .limit(366);
+}
+
+/** Token volume per user, heaviest first. */
+export async function getTokenUsageByUser(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 10,
+): Promise<TokenUsageByUserRow[]> {
+  return db
+    .select({
+      userId: aiUsageLogs.userId,
+      userName: users.name,
+      userEmail: users.email,
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .innerJoin(users, eq(aiUsageLogs.userId, users.id))
+    .where(tokenWhere(startDate, endDate))
+    .groupBy(aiUsageLogs.userId, users.name, users.email)
+    .orderBy(desc(totalTokenSum))
+    .limit(limit);
+}
+
+/**
+ * What we pay providers, grouped by provider/model AND billing basis, from the
+ * real cost now flowing into the ledger. `coverage` is the EXACT per-row basis,
+ * read from `aiUsageLogs.metadata.costSource` that trackAIUsage stamps:
+ * 'openrouter' (real returned cost) → 'real', 'estimate' (static fallback) →
+ * 'estimate'. This is honest even when an OpenRouter call fell back to the
+ * estimate (missing cost metadata) — that row reports 'estimate', not 'real'.
+ * For rows whose usage log was purged (metadata gone) we best-effort fall back
+ * to the provider name. Anchored on the ledger's createdAt; the usage-log join
+ * only enriches provider/model/costSource.
+ */
+export async function getProviderCostRollup(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<ProviderCostRow[]> {
+  const costSourceExpr = sql<string | null>`${aiUsageLogs.metadata} ->> 'costSource'`;
+
+  const rows = await db
+    .select({
+      provider: aiUsageLogs.provider,
+      model: aiUsageLogs.model,
+      costSource: costSourceExpr,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model, costSourceExpr)
+    .orderBy(desc(realCostSum))
+    .limit(50);
+
+  return rows.map((r) => {
+    const provider = r.provider ?? 'unknown';
+    let coverage: CostCoverage;
+    if (r.costSource === 'openrouter') coverage = 'real';
+    else if (r.costSource === 'estimate') coverage = 'estimate';
+    // metadata purged: fall back to the provider-name heuristic.
+    else coverage = provider === 'openrouter' || provider === 'openrouter_free' ? 'real' : 'estimate';
+    return {
+      provider,
+      model: r.model ?? 'unknown',
+      coverage,
+      realCostCents: r.realCostCents,
+      chargedCents: r.chargedCents,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+      requestCount: r.requestCount,
+    };
+  });
+}
+
+/**
+ * Stripe-sourced credit revenue over the window: top-up purchases and monthly
+ * grants. Both carry the positive credit value in `amountCents`; summed from the
+ * ledger anchored on createdAt.
+ */
+export async function getCreditRevenue(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<CreditRevenue> {
+  const conditions: SQL[] = [inArray(creditLedger.entryType, ['topup_purchase', 'monthly_grant'])];
+  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
+
+  const rows = await db
+    .select({
+      entryType: creditLedger.entryType,
+      cents: sql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::double precision`,
+      count: count(),
+    })
+    .from(creditLedger)
+    .where(and(...conditions))
+    .groupBy(creditLedger.entryType);
+
+  let topupCents = 0;
+  let topupCount = 0;
+  let monthlyGrantCents = 0;
+  let monthlyGrantCount = 0;
+  for (const r of rows) {
+    if (r.entryType === 'topup_purchase') {
+      topupCents = r.cents;
+      topupCount = r.count;
+    } else if (r.entryType === 'monthly_grant') {
+      monthlyGrantCents = r.cents;
+      monthlyGrantCount = r.count;
+    }
+  }
+
+  return {
+    topupCents,
+    topupCount,
+    monthlyGrantCents,
+    monthlyGrantCount,
+    totalCents: topupCents + monthlyGrantCents,
+  };
+}
+
+/**
+ * Active subscriptions counted by tier. Tier is derived from the Stripe price id
+ * via the authoritative price→tier map (the subscriptions table stores only the
+ * price id), aggregated in JS.
+ */
+export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTierRow[]> {
+  const rows = await db
+    .select({ stripePriceId: subscriptions.stripePriceId })
+    .from(subscriptions)
+    .where(eq(subscriptions.status, 'active'));
+
+  const counts: Record<SubscriptionTier, number> = { free: 0, pro: 0, founder: 0, business: 0 };
+  for (const r of rows) {
+    counts[getTierFromPrice(r.stripePriceId)] += 1;
+  }
+
+  return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
+}
+
+/**
+ * Outstanding prepaid liability: the sum of every user's spendable balance
+ * (monthly + top-up remaining) — credit value we owe service against.
+ * Point-in-time, not windowed.
+ */
+export async function getCreditLiability(): Promise<CreditLiability> {
+  const rows = await db
+    .select({
+      monthlyRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
+      topupRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.topupRemainingCents}), 0)::double precision`,
+      userCount: count(),
+    })
+    .from(creditBalances);
+
+  const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
+  const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;
+  return {
+    monthlyRemainingCents,
+    topupRemainingCents,
+    totalLiabilityCents: monthlyRemainingCents + topupRemainingCents,
+    userCount: rows[0]?.userCount ?? 0,
+  };
+}
+
+/**
+ * Live in-flight credit holds (reservations placed by the gate not yet settled
+ * or expired). NOW()-relative so it matches what the gate actually subtracts.
+ */
+export async function getLiveHolds(): Promise<LiveHolds> {
+  const rows = await db
+    .select({
+      holdCount: count(),
+      heldCents: sql<number>`COALESCE(SUM(${creditHolds.estCents}), 0)::double precision`,
+    })
+    .from(creditHolds)
+    .where(sql`${creditHolds.expiresAt} > NOW()`);
+
+  return {
+    holdCount: rows[0]?.holdCount ?? 0,
+    heldCents: rows[0]?.heldCents ?? 0,
+  };
 }

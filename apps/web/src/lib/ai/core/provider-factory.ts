@@ -116,7 +116,11 @@ export async function createAIProvider(
         apiKey: managed.apiKey,
         headers: { 'X-OpenRouter-Cache': 'true' },
       });
-      model = openrouter.chat(currentModel);
+      // usage: { include: true } turns on OpenRouter usage accounting so the
+      // response carries the authoritative per-request cost under
+      // providerMetadata.openrouter.usage.cost — the basis we bill on (see
+      // extractOpenRouterCostDollars / trackAIUsage). Without it, cost is undefined.
+      model = openrouter.chat(currentModel, { usage: { include: true } });
     } else if (currentProvider === 'google') {
       const managed = getManagedProviderKey('google');
       if (!managed?.apiKey) return notConfigured('Google AI');

@@ -150,6 +150,7 @@ vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `**
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({ trackFeature: vi.fn() }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  extractOpenRouterCostDollars: vi.fn(() => undefined),
 }));
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
 vi.mock('@/services/api/page-mutation-service', () => ({

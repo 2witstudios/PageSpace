@@ -603,6 +603,67 @@ export function calculateCost(
 }
 
 /**
+ * A minimal view of an AI-SDK step carrying provider metadata. `streamText`'s
+ * onFinish event and `generateText` results both expose a `steps` array whose
+ * entries match this shape; we only read `providerMetadata`.
+ */
+export interface ProviderMetadataCarrier {
+  providerMetadata?: Record<string, unknown> | undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Extract OpenRouter's authoritative request cost (USD) from AI-SDK steps.
+ *
+ * OpenRouter returns the real per-request cost under
+ * `providerMetadata.openrouter.usage.cost` once usage accounting is enabled
+ * (see provider-factory `openrouter.chat(model, { usage: { include: true } })`).
+ * For BYOK passthrough the upstream provider's charge is reported separately in
+ * `usage.costDetails.upstreamInferenceCost`, so we add both to get total real cost.
+ *
+ * Tool loops (`stepCountIs(n)`) issue one OpenRouter request PER step, each with
+ * its own cost, so we sum across every step — mirroring how routes sum tokens via
+ * `totalUsage`. The AI-SDK types `providerMetadata` as opaque JSON, so every field
+ * is read defensively.
+ *
+ * Returns `undefined` when no step carries OpenRouter cost metadata, signalling the
+ * caller to fall back to the static `calculateCost()` estimate.
+ */
+export function extractOpenRouterCostDollars(
+  steps: ReadonlyArray<ProviderMetadataCarrier> | undefined,
+): number | undefined {
+  if (!steps || steps.length === 0) return undefined;
+
+  let total = 0;
+  let found = false;
+
+  for (const step of steps) {
+    const openrouter = asRecord(asRecord(step?.providerMetadata)?.openrouter);
+    const usage = asRecord(openrouter?.usage);
+    if (!usage) continue;
+
+    const cost = asFiniteNumber(usage.cost);
+    const upstream = asFiniteNumber(asRecord(usage.costDetails)?.upstreamInferenceCost);
+
+    if (cost === undefined && upstream === undefined) continue;
+
+    found = true;
+    total += (cost ?? 0) + (upstream ?? 0);
+  }
+
+  return found ? total : undefined;
+}
+
+/**
  * Estimate tokens from text (rough approximation)
  * Generally 1 token ≈ 4 characters for English text
  */
@@ -630,6 +691,13 @@ export interface AIUsageData {
   success?: boolean;
   error?: string;
   metadata?: Record<string, unknown>;
+
+  // Authoritative provider cost (USD) for this call, captured from OpenRouter's
+  // returned usage accounting (providerMetadata.openrouter.usage.cost, summed
+  // across tool-loop steps). When finite & >= 0 this is billed instead of the
+  // static AI_PRICING estimate. Absent for direct providers (google/anthropic/
+  // openai/ollama) that don't return a cost — those fall back to calculateCost().
+  providerCostDollars?: number;
 
   // The reservation placed by the credit gate (canConsumeAI) at the top of the
   // request, released when this call's real cost is billed. Threaded from the
@@ -659,8 +727,25 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       totalTokens = (inputTokens || 0) + (outputTokens || 0);
     }
     
-    // Calculate cost
-    const cost = calculateCost(data.model, inputTokens, outputTokens);
+    // Bill on OpenRouter's authoritative returned cost when present; otherwise
+    // fall back to the static AI_PRICING estimate (direct providers, or an
+    // OpenRouter call whose metadata went missing). Never drop the charge.
+    const fallbackCost = calculateCost(data.model, inputTokens, outputTokens);
+    const hasRealCost =
+      typeof data.providerCostDollars === 'number' &&
+      Number.isFinite(data.providerCostDollars) &&
+      data.providerCostDollars >= 0;
+    const cost = hasRealCost ? (data.providerCostDollars as number) : fallbackCost;
+    const costSource = hasRealCost ? 'openrouter' : 'estimate';
+    const isOpenRouter = data.provider === 'openrouter' || data.provider === 'openrouter_free';
+    if (!hasRealCost && isOpenRouter) {
+      // An OpenRouter call that should have carried cost metadata didn't — log
+      // and fall back so we still bill (durability), but flag the coverage gap.
+      loggers.ai.debug('openrouter cost metadata missing; falling back to estimate', {
+        model: data.model,
+        provider: data.provider,
+      });
+    }
     const success = data.success !== false;
 
     // Persist the usage log, then debit the user's prepaid credit balance
@@ -705,6 +790,10 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         metadata: {
           ...data.metadata,
           streamingDuration: data.streamingDuration,
+          // Provenance of the billed `cost`: 'openrouter' = real returned cost,
+          // 'estimate' = static AI_PRICING fallback. Lets the admin panel be
+          // honest about real vs estimated coverage.
+          costSource,
         },
       });
       // Bill when real tokens were consumed, regardless of success. A token-less

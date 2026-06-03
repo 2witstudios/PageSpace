@@ -75,6 +75,7 @@ import {
   AI_PRICING,
   MODEL_CONTEXT_WINDOWS,
   AIMonitoring,
+  extractOpenRouterCostDollars,
 } from '../ai-monitoring';
 
 // ---------------------------------------------------------------------------
@@ -417,6 +418,169 @@ describe('trackAIUsage', () => {
     // Token counts must still be present
     expect(callArg.inputTokens).toBe(1000);
     expect(callArg.outputTokens).toBe(500);
+  });
+
+  // ── Real provider cost (OpenRouter) vs static estimate ──────────────────────
+
+  it('bills the real provider cost when providerCostDollars is present (preferred over the static estimate)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_real');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.0123,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Both the usage log and the charge bill on the real cost, not calculateCost().
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ cost: 0.0123 }));
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBe(0.0123);
+  });
+
+  it('stamps costSource=openrouter on the usage log when real cost is used', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.02,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ costSource: 'openrouter' }) }),
+    );
+  });
+
+  it('falls back to the static estimate and stamps costSource=estimate when providerCostDollars is absent', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_est');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expected = calculateCost('claude-3-5-sonnet-20241022', 1_000_000, 0);
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ cost: expected, metadata: expect.objectContaining({ costSource: 'estimate' }) }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBe(expected);
+  });
+
+  it('accepts a real cost of exactly 0 (cached/free OpenRouter call) instead of falling back', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ cost: 0, metadata: expect.objectContaining({ costSource: 'openrouter' }) }),
+    );
+  });
+
+  it('ignores a non-finite or negative providerCostDollars and falls back to the estimate', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      providerCostDollars: -5,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const expected = calculateCost('anthropic/claude-3.5-sonnet', 1_000_000, 0);
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ cost: expected, metadata: expect.objectContaining({ costSource: 'estimate' }) }),
+    );
+  });
+
+  it('logs a coverage-gap debug when an OpenRouter call is missing cost metadata', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter_free',
+      model: 'some/model:free',
+      inputTokens: 10,
+      outputTokens: 10,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockAiLogger.debug).toHaveBeenCalledWith(
+      'openrouter cost metadata missing; falling back to estimate',
+      expect.objectContaining({ provider: 'openrouter_free' }),
+    );
+  });
+
+  it('does NOT log a coverage gap for a direct provider (estimate is expected there)', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 10,
+      outputTokens: 10,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockAiLogger.debug).not.toHaveBeenCalledWith(
+      'openrouter cost metadata missing; falling back to estimate',
+      expect.anything(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractOpenRouterCostDollars
+// ---------------------------------------------------------------------------
+describe('extractOpenRouterCostDollars', () => {
+  function step(cost?: number, upstreamInferenceCost?: number) {
+    const usage: Record<string, unknown> = {};
+    if (cost !== undefined) usage.cost = cost;
+    if (upstreamInferenceCost !== undefined) usage.costDetails = { upstreamInferenceCost };
+    return { providerMetadata: { openrouter: { usage } } };
+  }
+
+  it('returns the single-step OpenRouter cost', () => {
+    expect(extractOpenRouterCostDollars([step(0.0042)])).toBe(0.0042);
+  });
+
+  it('sums cost across multiple tool-loop steps', () => {
+    expect(extractOpenRouterCostDollars([step(0.001), step(0.002), step(0.003)])).toBeCloseTo(0.006, 10);
+  });
+
+  it('adds BYOK upstream inference cost to the OpenRouter fee', () => {
+    expect(extractOpenRouterCostDollars([step(0.0001, 0.005)])).toBeCloseTo(0.0051, 10);
+  });
+
+  it('treats a zeroed (cached) cost as a real 0, not a missing value', () => {
+    expect(extractOpenRouterCostDollars([step(0)])).toBe(0);
+  });
+
+  it('returns undefined when no step carries OpenRouter metadata (caller falls back)', () => {
+    expect(extractOpenRouterCostDollars([{ providerMetadata: { anthropic: {} } }])).toBeUndefined();
+    expect(extractOpenRouterCostDollars([{ providerMetadata: undefined }])).toBeUndefined();
+    expect(extractOpenRouterCostDollars([{}])).toBeUndefined();
+  });
+
+  it('returns undefined for an empty or undefined steps array', () => {
+    expect(extractOpenRouterCostDollars([])).toBeUndefined();
+    expect(extractOpenRouterCostDollars(undefined)).toBeUndefined();
+  });
+
+  it('ignores malformed (non-numeric / NaN) cost fields', () => {
+    const bad = { providerMetadata: { openrouter: { usage: { cost: 'free' } } } } as unknown as { providerMetadata?: Record<string, unknown> };
+    expect(extractOpenRouterCostDollars([bad])).toBeUndefined();
+    const nan = { providerMetadata: { openrouter: { usage: { cost: Number.NaN } } } };
+    expect(extractOpenRouterCostDollars([nan])).toBeUndefined();
+  });
+
+  it('counts only the steps that carry cost when some are missing', () => {
+    expect(extractOpenRouterCostDollars([step(0.01), { providerMetadata: undefined }, step(0.02)])).toBeCloseTo(0.03, 10);
   });
 });
 

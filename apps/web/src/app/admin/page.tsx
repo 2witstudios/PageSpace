@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { MessageSquare, ExternalLink, TrendingUp } from "lucide-react";
+import { MessageSquare, ExternalLink, TrendingUp, Receipt } from "lucide-react";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL ?? 'http://localhost:3005';
 
@@ -28,6 +28,17 @@ export default function AdminPage() {
               Unit Economics
             </CardTitle>
             <CardDescription>AI real cost vs charged credits, margin, and outstanding debt</CardDescription>
+          </CardHeader>
+        </Card>
+      </Link>
+      <Link href="/admin/ai-billing">
+        <Card className="transition-colors hover:bg-accent h-full">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Receipt className="h-5 w-5" />
+              AI Billing
+            </CardTitle>
+            <CardDescription>Token volume, provider cost, credit revenue, liability, and enforcement status</CardDescription>
           </CardHeader>
         </Card>
       </Link>

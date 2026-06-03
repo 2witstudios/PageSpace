@@ -60,7 +60,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, type ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -894,6 +894,7 @@ MENTION PROCESSING:
     });
 
     let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
+    let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
 
     const stream = createUIMessageStream({
       originalMessages: processedMessages,
@@ -941,6 +942,12 @@ MENTION PROCESSING:
             });
             return undefined;
           });
+
+        // Steps carry OpenRouter's per-request cost metadata (one request per
+        // tool-loop step); summed in trackUsage to bill on real cost.
+        stepsPromise = aiResult.steps
+          .then((steps) => steps as ProviderMetadataCarrier[])
+          .catch(() => undefined);
 
         await pipeUIMessageStreamStrippingStart(aiResult, writer);
       },
@@ -992,6 +999,7 @@ MENTION PROCESSING:
             // row, not a skipped one (which would silently front the spend).
             try {
               const usage = usagePromise ? await usagePromise : undefined;
+              const steps = stepsPromise ? await stepsPromise : undefined;
               const duration = Date.now() - startTime;
 
               await AIMonitoring.trackUsage({
@@ -1001,6 +1009,7 @@ MENTION PROCESSING:
                 inputTokens: usage?.inputTokens,
                 outputTokens: usage?.outputTokens,
                 totalTokens: usage?.totalTokens,
+                providerCostDollars: extractOpenRouterCostDollars(steps),
                 duration,
                 conversationId,
                 messageId,

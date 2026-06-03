@@ -35,7 +35,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
@@ -789,6 +789,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     inputTokens: usage?.inputTokens,
     outputTokens: usage?.outputTokens,
     totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+    providerCostDollars: extractOpenRouterCostDollars(result.steps),
     success: true,
   });
 
