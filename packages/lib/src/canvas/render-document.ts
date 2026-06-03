@@ -46,6 +46,23 @@ export const BASELINE_CSP =
   "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'";
 
 /**
+ * Baseline document reset, emitted BEFORE the author CSS.
+ *
+ * The author body is rendered into a real `<body>`, which carries the user-agent
+ * default `body { margin: 8px }`. For full-bleed content (e.g. a `min-height:100vh`
+ * background) that 8px gap shows the page background around the content and reads
+ * as an unwanted border/frame.
+ *
+ * DELIBERATELY scoped to html/body only — it just clears the UA margin/padding.
+ * A universal `box-sizing: border-box` or a default `font-family` would silently
+ * alter arbitrary author HTML/CSS that relies on the browser defaults (content-box
+ * sizing, the UA serif font), reflowing or restyling already-published canvases on
+ * republish. Authors who want a wider reset can add their own. Author rules
+ * targeting html/body still win because the author CSS is concatenated after.
+ */
+export const BASELINE_RESET = 'html,body{margin:0;padding:0;}';
+
+/**
  * Escape a string for safe interpolation into HTML text / the <title> element.
  */
 export function escapeHtml(value: string): string {
@@ -99,7 +116,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     baseTag +
     `<title>${safeTitle}</title>` +
     `<meta http-equiv="Content-Security-Policy" content="${BASELINE_CSP}">` +
-    `<style>${css}</style>` +
+    `<style>${BASELINE_RESET}${css}</style>` +
     '</head><body>' +
     body +
     '</body></html>'
