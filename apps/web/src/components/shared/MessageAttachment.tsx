@@ -152,12 +152,11 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
   const isZoomed = view.zoom > 1;
 
   return (
-    <div className="flex flex-col items-center gap-2">
+    <div className="flex h-full flex-col items-center gap-2">
       <div
         ref={containerRef}
-        className="overflow-hidden flex items-center justify-center w-full"
+        className="overflow-hidden flex items-center justify-center w-full flex-1 min-h-0"
         style={{
-          maxHeight: '78vh',
           cursor: isZoomed ? (dragging ? 'grabbing' : 'grab') : 'zoom-in',
         }}
         onWheel={handleWheel}
@@ -180,7 +179,7 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
             transformOrigin: 'center',
             transition: dragging ? 'none' : 'transform 0.1s ease-out',
             maxWidth: '100%',
-            maxHeight: '78vh',
+            maxHeight: '100%',
             objectFit: 'contain',
             userSelect: 'none',
             pointerEvents: 'none',
@@ -235,7 +234,7 @@ export function MessageAttachment({ message }: MessageAttachmentProps) {
         </button>
 
         <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent className="max-w-[92vw] max-h-[92vh] p-4 flex flex-col gap-0">
+          <DialogContent className="w-[92vw] max-w-[92vw] sm:max-w-[92vw] h-[90vh] max-h-[90vh] p-4 flex flex-col gap-0">
             <DialogTitle className="sr-only">Image preview</DialogTitle>
             <ZoomableImage src={`/api/files/${fileId}/view`} alt={name} />
           </DialogContent>
