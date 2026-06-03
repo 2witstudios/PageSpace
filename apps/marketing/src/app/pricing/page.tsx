@@ -3,8 +3,9 @@ import { Check, X, Building2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
+import { CreditsTransitionNotice } from "@/components/CreditsTransitionNotice";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
-import { MONTHLY_CREDITS } from "@/lib/credits";
+import { MONTHLY_CREDITS, CREDITS_IN_TRANSITION } from "@/lib/credits";
 
 export const metadata = pageMetadata.pricing;
 
@@ -120,6 +121,17 @@ export default function PricingPage() {
           </div>
         </div>
       </section>
+
+      {/* TRANSITION: remove when AI credits are live for all accounts */}
+      {CREDITS_IN_TRANSITION && (
+        <section className="pb-4">
+          <div className="container mx-auto px-4 md:px-6">
+            <div className="mx-auto max-w-3xl">
+              <CreditsTransitionNotice />
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Pricing Cards */}
       <section className="pb-16 md:pb-24">

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 
 // ============================================================================
@@ -170,6 +170,8 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn(
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { getCurrentUsage } from '@/lib/subscription/usage-service';
+import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { streamText } from 'ai';
 
 const mockUserId = 'user_123';
@@ -239,5 +241,45 @@ describe('POST /api/ai/chat - prepaid credit gate', () => {
     const response = await POST(createChatRequest());
 
     expect(response.status).not.toBe(402);
+  });
+
+  // Per-environment switch (CREDITS_ENFORCEMENT_ENABLED): OFF restores the legacy
+  // daily-limit path; ON skips it (prepaid credits are the sole limiter).
+  describe('legacy daily-limit path (credits mode OFF)', () => {
+    afterEach(() => {
+      delete process.env.CREDITS_ENFORCEMENT_ENABLED;
+      // clearAllMocks() keeps implementations, so restore the permissive defaults this
+      // block overrode — otherwise the exhausted-quota mock leaks into later suites.
+      vi.mocked(getCurrentUsage).mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 });
+      vi.mocked(createRateLimitResponse).mockReset();
+    });
+
+    it('OFF: enforces the legacy daily quota (429) when calls are exhausted', async () => {
+      delete process.env.CREDITS_ENFORCEMENT_ENABLED; // OFF (default)
+      vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'enforcement_disabled' });
+      vi.mocked(getCurrentUsage).mockResolvedValue({ success: true, remainingCalls: 0, currentCount: 50, limit: 50 });
+      vi.mocked(createRateLimitResponse).mockReturnValue(
+        new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429 }) as never,
+      );
+
+      const response = await POST(createChatRequest());
+
+      expect(getCurrentUsage).toHaveBeenCalled();
+      expect(createRateLimitResponse).toHaveBeenCalled();
+      expect(response.status).toBe(429);
+      expect(streamText).not.toHaveBeenCalled();
+    });
+
+    it('ON: skips the legacy daily quota entirely (credits are the sole limiter)', async () => {
+      process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
+      vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
+      vi.mocked(getCurrentUsage).mockResolvedValue({ success: true, remainingCalls: 0, currentCount: 50, limit: 50 });
+
+      const response = await POST(createChatRequest());
+
+      expect(getCurrentUsage).not.toHaveBeenCalled();
+      expect(createRateLimitResponse).not.toHaveBeenCalled();
+      expect(response.status).not.toBe(429);
+    });
   });
 });
