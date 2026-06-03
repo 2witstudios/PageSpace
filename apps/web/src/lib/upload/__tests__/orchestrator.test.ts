@@ -156,6 +156,41 @@ describe('uploadFileToS3', () => {
 
     expect(mockFetch).toHaveBeenCalledWith('/api/upload/cancel', expect.objectContaining({ method: 'POST' }));
   });
+
+  it('falls back to a default name and title when the file name is empty', async () => {
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ url: 'https://t/put', jobId: 'job-1', key: 'k' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, page: { id: 'p' } }));
+
+    await uploadFileToS3(makeFile('', 'text/plain'), { driveId: 'drive-1' });
+
+    const presignBody = JSON.parse((mockFetch.mock.calls[0][1] as { body: string }).body);
+    const completeBody = JSON.parse((mockFetch.mock.calls[1][1] as { body: string }).body);
+    expect(presignBody.filename).toBe('Untitled');
+    expect(completeBody.title).toBe('Untitled');
+  });
+
+  it('threads a trimmed title, position and afterNodeId through to /complete', async () => {
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ url: 'https://t/put', jobId: 'job-1', key: 'k' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, page: { id: 'p' } }));
+
+    await uploadFileToS3(makeFile('a.txt', 'text/plain'), {
+      driveId: 'drive-1',
+      parentId: 'parent-1',
+      title: '  Custom  ',
+      position: 'after',
+      afterNodeId: 'sibling-1',
+    });
+
+    const completeBody = JSON.parse((mockFetch.mock.calls[1][1] as { body: string }).body);
+    expect(completeBody).toMatchObject({
+      title: 'Custom',
+      parentId: 'parent-1',
+      position: 'after',
+      afterNodeId: 'sibling-1',
+    });
+  });
 });
 
 describe('callCancel', () => {

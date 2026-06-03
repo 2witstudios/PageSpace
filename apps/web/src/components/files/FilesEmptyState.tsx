@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { FolderOpen, Plus, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { uploadFileToS3 } from '@/lib/upload/orchestrator';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useUIStore } from '@/stores/useUIStore';
 
@@ -14,20 +14,6 @@ interface FilesEmptyStateProps {
   canWrite: boolean;
   onMutate: () => void;
 }
-
-const uploadOne = async (file: File, driveId: string, parentId: string | null) => {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('driveId', driveId);
-  if (parentId) {
-    formData.append('parentId', parentId);
-  }
-  const response = await fetchWithAuth('/api/upload', { method: 'POST', body: formData });
-  if (!response.ok) {
-    const err = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error ?? `Failed to upload ${file.name}`);
-  }
-};
 
 export function FilesEmptyState({ driveId, parentId, canWrite, onMutate }: FilesEmptyStateProps) {
   const [isDropActive, setIsDropActive] = useState(false);
@@ -44,7 +30,7 @@ export function FilesEmptyState({ driveId, parentId, canWrite, onMutate }: Files
       try {
         for (const file of files) {
           try {
-            await uploadOne(file, driveId, parentId);
+            await uploadFileToS3(file, { driveId, parentId });
           } catch (error) {
             toast.error((error as Error).message);
           }

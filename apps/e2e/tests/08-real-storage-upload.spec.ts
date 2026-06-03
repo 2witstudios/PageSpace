@@ -100,30 +100,49 @@ test.describe('Real storage file uploads', () => {
       expect(csrfResponse.status()).toBe(200);
       const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
-      const uploadResponse = await page.request.post('/api/upload', {
+      // 1. Presign a PUT scoped to this exact hash + size.
+      const presignResponse = await page.request.post('/api/upload/presign', {
         headers: { 'X-CSRF-Token': csrfToken },
-        multipart: {
+        data: {
+          contentHash: expectedContentHash,
           driveId,
-          title: fileName,
-          file: {
-            name: fileName,
-            mimeType: 'text/plain',
-            buffer: fileBuffer,
-          },
+          filename: fileName,
+          mimeType: 'text/plain',
+          fileSize: fileBuffer.length,
         },
       });
+      expect(presignResponse.status()).toBe(200);
+      const presign = (await presignResponse.json()) as {
+        jobId: string;
+        url?: string;
+        alreadyExists?: boolean;
+      };
+      expect(presign.jobId).toBeTruthy();
 
-      expect([200, 202]).toContain(uploadResponse.status());
-      const uploadBody = (await uploadResponse.json()) as {
+      // 2. Upload the bytes straight to Tigris (skipped on the dedup path).
+      if (!presign.alreadyExists) {
+        expect(presign.url).toBeTruthy();
+        const putResponse = await page.request.put(presign.url!, {
+          headers: { 'Content-Type': 'text/plain' },
+          data: fileBuffer,
+        });
+        expect([200, 204]).toContain(putResponse.status());
+      }
+
+      // 3. Complete: create the page record from the trusted, presign-reserved slot.
+      const completeResponse = await page.request.post('/api/upload/complete', {
+        headers: { 'X-CSRF-Token': csrfToken },
+        data: { jobId: presign.jobId, title: fileName, parentId: null },
+      });
+      expect(completeResponse.status()).toBe(200);
+      const uploadBody = (await completeResponse.json()) as {
         page?: { id?: string; contentHash?: string; filePath?: string };
-        storageInfo?: { used: number };
       };
       const pageId = uploadBody.page?.id;
 
       expect(pageId).toBeTruthy();
       expect(uploadBody.page?.contentHash).toBe(expectedContentHash);
       expect(uploadBody.page?.filePath).toBe(expectedContentHash);
-      expect(uploadBody.storageInfo?.used).toBeGreaterThanOrEqual(beforeUsedBytes + fileBuffer.length);
       await expect.poll(() => readStorageUsedBytes(userId)).toBeGreaterThanOrEqual(
         beforeUsedBytes + fileBuffer.length
       );

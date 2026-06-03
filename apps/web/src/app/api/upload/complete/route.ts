@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
+import { and, eq, isNull } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
@@ -8,18 +9,87 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { updateActiveUploads, updateStorageUsage } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
+import { buildS3Key } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
+import { checkObjectExists } from '@/lib/upload/s3-effects';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+// The transaction executor passed to db.transaction's callback — also satisfied
+// by `db` itself. resolveUploadPosition takes this so the sibling reads run on
+// the same transactional client as the insert.
+type Executor = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 interface CompleteRequestBody {
   jobId: string;
   title: string;
   parentId?: string | null;
+  // Tree ordering: drop a file before/after a sibling. Omitted = append at end.
+  position?: 'before' | 'after' | null;
+  afterNodeId?: string | null;
   // contentHash / driveId / mimeType / fileSize are intentionally NOT read from
   // the body — they are taken from the presign-reserved slot (see getSlotMetadata).
+}
+
+/**
+ * Resolve the fractional `position` for a newly uploaded page among its
+ * siblings. Ported from the legacy multipart route so drop-between-nodes
+ * ordering in the page tree survives the direct-to-S3 cutover. An unknown
+ * afterNodeId or no position falls back to appending at the end of the list.
+ *
+ * Runs on the caller's transaction executor so the read and the subsequent
+ * insert share one transaction (a stricter isolation level then serializes
+ * concurrent inserts into the same sibling list; under READ COMMITTED two
+ * simultaneous appends can still tie, which fractional ordering tolerates).
+ */
+async function resolveUploadPosition(
+  tx: Executor,
+  parentId: string | null,
+  position: 'before' | 'after' | null | undefined,
+  afterNodeId: string | null | undefined,
+): Promise<number> {
+  const parentWhere = parentId ? eq(pages.parentId, parentId) : isNull(pages.parentId);
+  // Match the page tree, which only renders non-trashed siblings, so the
+  // fractional math is computed against the same set the user sees.
+  const siblingWhere = and(parentWhere, eq(pages.isTrashed, false));
+
+  // Common case (plain append): a single indexed lookup of the last sibling.
+  const appendToEnd = async (): Promise<number> => {
+    const lastPage = await tx.query.pages.findFirst({
+      where: siblingWhere,
+      orderBy: (p, { desc }) => [desc(p.position)],
+    });
+    return lastPage ? lastPage.position + 1 : 0;
+  };
+
+  if ((position !== 'before' && position !== 'after') || !afterNodeId) {
+    return appendToEnd();
+  }
+
+  // Resolve the target from the sibling set itself, so an afterNodeId that
+  // belongs to a different parent (or doesn't exist) falls back to appending
+  // rather than landing at an arbitrary position.
+  const siblings = await tx.query.pages.findMany({
+    where: siblingWhere,
+    orderBy: (p, { asc }) => [asc(p.position)],
+  });
+  const targetIndex = siblings.findIndex((s) => s.id === afterNodeId);
+  if (targetIndex === -1) return appendToEnd();
+
+  const target = siblings[targetIndex];
+
+  if (position === 'before') {
+    // Anchor below the target when it's the first sibling, so we don't collide
+    // with a first sibling sitting at position 0 ((0 + 0) / 2 === 0).
+    const prevPos = targetIndex > 0 ? siblings[targetIndex - 1].position : target.position - 1;
+    return (prevPos + target.position) / 2;
+  }
+
+  const nextSibling = siblings[targetIndex + 1];
+  const nextPos = nextSibling ? nextSibling.position : target.position + 2;
+  return (target.position + nextPos) / 2;
 }
 
 interface NewPageRecord {
@@ -49,6 +119,7 @@ function buildPageRecord(params: {
   fileSize: number;
   userId: string;
   parentId?: string | null;
+  position: number;
 }): NewPageRecord {
   return {
     id: createId(),
@@ -56,7 +127,7 @@ function buildPageRecord(params: {
     type: PageType.FILE,
     content: '',
     processingStatus: 'pending',
-    position: Date.now(),
+    position: params.position,
     driveId: params.driveId,
     parentId: params.parentId ?? null,
     fileSize: params.fileSize,
@@ -91,7 +162,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { jobId, title, parentId } = body;
+  const { jobId, title, parentId, position, afterNodeId } = body;
 
   if (!jobId || !title) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -118,11 +189,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
   }
 
-  const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId });
+  // A client-supplied parentId is only gated by drive-level edit access above, so
+  // confirm the parent actually lives in this (reserved) drive and isn't trashed —
+  // otherwise an editor of one drive could nest the upload under a page in another
+  // (or private) drive.
+  const resolvedParentId = parentId ?? null;
+  if (resolvedParentId) {
+    const parent = await db.query.pages.findFirst({ where: eq(pages.id, resolvedParentId) });
+    if (!parent || parent.driveId !== driveId || parent.isTrashed) {
+      return NextResponse.json({ error: 'Invalid parent page' }, { status: 400 });
+    }
+  }
+
+  // The UI uploads straight to S3, so /complete can be reached without the PUT
+  // ever happening. Confirm the object is actually present before creating a
+  // page/file record and charging storage, so a skipped or failed upload can't
+  // leave an orphaned file page pointing at a missing object.
+  const objectExists = await checkObjectExists(buildS3Key(contentHash));
+  if (!objectExists) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await updateActiveUploads(userId, -1).catch(() => undefined);
+    return NextResponse.json({ error: 'Uploaded object not found in storage' }, { status: 409 });
+  }
 
   let newPage: typeof pages.$inferSelect;
   try {
     newPage = await db.transaction(async (tx) => {
+      // Compute position inside the transaction so the sibling read and the
+      // insert share one transactional snapshot.
+      const calculatedPosition = await resolveUploadPosition(tx, resolvedParentId, position, afterNodeId);
+      const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId: resolvedParentId, position: calculatedPosition });
       const [createdPage] = await tx.insert(pages).values(record).returning();
 
       await tx

@@ -11,14 +11,23 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 const mockTransaction = vi.fn();
+const mockFindFirst = vi.fn();
+const mockFindMany = vi.fn();
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     transaction: (...args: unknown[]) => mockTransaction(...args),
+    query: {
+      pages: {
+        findFirst: (...args: unknown[]) => mockFindFirst(...args),
+        findMany: (...args: unknown[]) => mockFindMany(...args),
+      },
+    },
   },
 }));
 
 vi.mock('@pagespace/db/operators', () => ({
+  and: vi.fn(),
   eq: vi.fn(),
   isNull: vi.fn(),
   desc: vi.fn(),
@@ -65,6 +74,15 @@ vi.mock('@/lib/upload/processor-effects', () => ({
   enqueueProcessorJob: vi.fn(),
 }));
 
+const mockCheckObjectExists = vi.fn();
+vi.mock('@/lib/upload/s3-effects', () => ({
+  checkObjectExists: (...args: unknown[]) => mockCheckObjectExists(...args),
+}));
+
+vi.mock('@pagespace/lib/services/upload-validation', () => ({
+  buildS3Key: (hash: string) => `files/${hash}/original`,
+}));
+
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
@@ -75,9 +93,19 @@ import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 // Captures the values passed to tx.insert(pages).values(...) for assertion
 let capturedPageValues: Record<string, unknown> | undefined;
 
+// resolveUploadPosition runs on the transaction executor, so the tx must expose
+// the same query mocks as db.query.
+const txQuery = {
+  pages: {
+    findFirst: (...args: unknown[]) => mockFindFirst(...args),
+    findMany: (...args: unknown[]) => mockFindMany(...args),
+  },
+};
+
 function makeTxImpl() {
   return async (fn: (tx: unknown) => Promise<unknown>) => {
     const tx = {
+      query: txQuery,
       insert: (table: unknown) => ({
         values: (vals: Record<string, unknown>) => {
           if (table === 'pages') capturedPageValues = vals;
@@ -127,6 +155,12 @@ beforeEach(() => {
   vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue(SLOT_META);
   vi.mocked(enqueueProcessorJob).mockResolvedValue(undefined);
   vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
+
+  // Default sibling lookups: empty list (new page lands at position 0).
+  mockFindFirst.mockResolvedValue(undefined);
+  mockFindMany.mockResolvedValue([]);
+  // Default: the uploaded object is present in storage.
+  mockCheckObjectExists.mockResolvedValue(true);
 
   mockTransaction.mockImplementation(makeTxImpl());
 });
@@ -182,6 +216,46 @@ describe('POST /api/upload/complete', () => {
     });
   });
 
+  describe('object verification', () => {
+    it('returns 409 and creates no page when the uploaded object is missing from storage', async () => {
+      mockCheckObjectExists.mockResolvedValue(false);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(409);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('releases the slot when the object is missing', async () => {
+      mockCheckObjectExists.mockResolvedValue(false);
+      await POST(makeRequest(VALID_BODY));
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+    });
+  });
+
+  describe('parent validation', () => {
+    it('returns 400 when the parent page belongs to a different drive', async () => {
+      mockFindFirst.mockResolvedValueOnce({ id: 'parent-x', driveId: 'other-drive', isTrashed: false });
+      const res = await POST(makeRequest({ ...VALID_BODY, parentId: 'parent-x' }));
+      expect(res.status).toBe(400);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when the parent page is trashed', async () => {
+      mockFindFirst.mockResolvedValueOnce({ id: 'parent-x', driveId: 'drive-1', isTrashed: true });
+      const res = await POST(makeRequest({ ...VALID_BODY, parentId: 'parent-x' }));
+      expect(res.status).toBe(400);
+    });
+
+    it('accepts a parent in the reserved drive', async () => {
+      // 1st findFirst = parent lookup; 2nd = sibling append lookup (none).
+      mockFindFirst
+        .mockResolvedValueOnce({ id: 'parent-x', driveId: 'drive-1', isTrashed: false })
+        .mockResolvedValueOnce(undefined);
+      const res = await POST(makeRequest({ ...VALID_BODY, parentId: 'parent-x' }));
+      expect(res.status).toBe(200);
+      expect(capturedPageValues?.parentId).toBe('parent-x');
+    });
+  });
+
   describe('page record', () => {
     it('stores the raw content hash in filePath, not the S3 key', async () => {
       await POST(makeRequest(VALID_BODY));
@@ -217,6 +291,7 @@ describe('POST /api/upload/complete', () => {
       const callOrder: string[] = [];
       mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
+          query: txQuery,
           insert: () => ({
             values: () => ({
               returning: vi.fn().mockResolvedValue([MOCK_PAGE]),
@@ -237,6 +312,52 @@ describe('POST /api/upload/complete', () => {
       const txIdx = callOrder.indexOf('tx-complete');
       const enqIdx = callOrder.indexOf('enqueue');
       expect(txIdx).toBeLessThan(enqIdx);
+    });
+  });
+
+  describe('tree ordering (position)', () => {
+    it('appends after the last sibling (last.position + 1) by default', async () => {
+      mockFindFirst.mockResolvedValue({ id: 'last', position: 5 });
+      await POST(makeRequest(VALID_BODY));
+      expect(capturedPageValues?.position).toBe(6);
+    });
+
+    it('uses position 0 for the first page in an empty sibling list', async () => {
+      mockFindFirst.mockResolvedValue(undefined);
+      await POST(makeRequest(VALID_BODY));
+      expect(capturedPageValues?.position).toBe(0);
+    });
+
+    it('inserts at the midpoint before a target node', async () => {
+      mockFindMany.mockResolvedValue([
+        { id: 'a', position: 2 },
+        { id: 'sibling', position: 4 },
+      ]);
+      await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'sibling' }));
+      expect(capturedPageValues?.position).toBe(3); // (2 + 4) / 2
+    });
+
+    it('anchors below the target when inserting before the first sibling (no position-0 collision)', async () => {
+      mockFindMany.mockResolvedValue([{ id: 'first', position: 0 }]);
+      await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'first' }));
+      expect(capturedPageValues?.position).toBe(-0.5); // ((0 - 1) + 0) / 2
+    });
+
+    it('inserts at the midpoint after a target node', async () => {
+      mockFindMany.mockResolvedValue([
+        { id: 'sibling', position: 4 },
+        { id: 'b', position: 8 },
+      ]);
+      await POST(makeRequest({ ...VALID_BODY, position: 'after', afterNodeId: 'sibling' }));
+      expect(capturedPageValues?.position).toBe(6); // (4 + 8) / 2
+    });
+
+    it('falls back to appending when afterNodeId is not among the siblings', async () => {
+      // 'ghost' isn't in the sibling set, so resolution appends after the last.
+      mockFindMany.mockResolvedValue([{ id: 'a', position: 2 }]);
+      mockFindFirst.mockResolvedValue({ id: 'last', position: 9 });
+      await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'ghost' }));
+      expect(capturedPageValues?.position).toBe(10);
     });
   });
 
