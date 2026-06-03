@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderCanvasDocument, escapeHtml, BASELINE_CSP } from '../render-document';
+import { renderCanvasDocument, escapeHtml, BASELINE_CSP, BASELINE_RESET } from '../render-document';
 
 describe('renderCanvasDocument', () => {
   it('given any input, should return a full HTML document', () => {
@@ -42,6 +42,20 @@ describe('renderCanvasDocument', () => {
     expect(out).toContain("default-src 'none'");
     expect(out).toContain("script-src 'unsafe-inline'");
     expect(BASELINE_CSP).not.toContain('sandbox');
+  });
+
+  it('should emit a baseline reset that zeroes the body margin (no UA border/frame)', () => {
+    const out = renderCanvasDocument({ html: '<div>x</div>' });
+    expect(out).toContain('html,body{margin:0;padding:0;}');
+    expect(BASELINE_RESET).toContain('box-sizing:border-box');
+  });
+
+  it('should emit the baseline reset BEFORE the author CSS so author rules win', () => {
+    const out = renderCanvasDocument({ html: '<style>body { margin: 40px; }</style><div>x</div>' });
+    const resetIdx = out.indexOf('html,body{margin:0;padding:0;}');
+    const authorIdx = out.indexOf('margin: 40px');
+    expect(resetIdx).toBeGreaterThanOrEqual(0);
+    expect(authorIdx).toBeGreaterThan(resetIdx);
   });
 
   it('should embed NO cookie, session, token, or API URL strings', () => {
