@@ -40,7 +40,7 @@ export function estimateChatHoldCentsForModel(
   model: string | undefined,
   opts: { inputTokens?: number } = {},
 ): number {
-  if (!model || !(model in AI_PRICING)) {
+  if (!model || !Object.prototype.hasOwnProperty.call(AI_PRICING, model)) {
     return CREDIT_HOLD_ESTIMATE_CENTS;
   }
   const inputTokens =

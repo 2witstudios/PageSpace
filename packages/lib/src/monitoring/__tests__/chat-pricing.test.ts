@@ -72,4 +72,12 @@ describe('estimateChatHoldCentsForModel', () => {
     expect(estimateChatHoldCentsForModel(undefined)).toBe(CREDIT_HOLD_ESTIMATE_CENTS);
     expect(mockCalculateCost).not.toHaveBeenCalled();
   });
+
+  it('treats inherited Object keys (e.g. "toString", "constructor") as unknown models', () => {
+    // Guards against `model in AI_PRICING` matching prototype members and pricing a
+    // bogus model off Object.prototype. Own-property check only.
+    expect(estimateChatHoldCentsForModel('toString')).toBe(CREDIT_HOLD_ESTIMATE_CENTS);
+    expect(estimateChatHoldCentsForModel('constructor')).toBe(CREDIT_HOLD_ESTIMATE_CENTS);
+    expect(mockCalculateCost).not.toHaveBeenCalled();
+  });
 });
