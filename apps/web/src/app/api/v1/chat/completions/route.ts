@@ -273,20 +273,6 @@ export async function POST(request: Request): Promise<Response> {
       mcpAllowedDriveIds: getAllowedDriveIds(authResult),
     },
     maxRetries: 20,
-    onFinish: async ({ text, totalUsage, steps }) => {
-      await settle({ aborted: false, text, totalUsage, steps });
-    },
-    onAbort: () => {
-      // Settle partial usage off the SDK's resolved promises (they resolve even on abort,
-      // matching chat/route.ts's usagePromise/stepsPromise approach). Fire-and-forget so the
-      // abort callback stays light; the `settled` guard keeps it single-shot.
-      void (async () => {
-        const totalUsage = await aiResult.totalUsage.catch(() => undefined);
-        const steps = await aiResult.steps.catch(() => undefined);
-        loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
-        await settle({ aborted: true, text: assistantText || undefined, totalUsage, steps });
-      })();
-    },
   });
 
   // 10. Stream response as OpenAI SSE
@@ -304,18 +290,34 @@ export async function POST(request: Request): Promise<Response> {
             controller.enqueue(encoder.encode(line + '\n\n'));
           }
         }
+        // A consumer abort ends the stream gracefully (the SDK emits an abort part) rather
+        // than throwing, so settlement happens here for both normal finish and abort. Doing
+        // it inside the stream lifecycle — and awaiting it before closing — ensures billing
+        // and hold release complete before the response ends, instead of racing a detached
+        // callback that a serverless runtime may freeze after the connection drops.
+        const aborted = abortController.signal.aborted;
+        if (aborted) {
+          loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
+        }
+        const totalUsage = await aiResult.totalUsage.catch(() => undefined);
+        const steps = await aiResult.steps.catch(() => undefined);
+        await settle({ aborted, text: assistantText || undefined, totalUsage, steps });
         controller.close();
       } catch (err) {
-        // A consumer abort surfaces here as an AbortError once the SDK tears the stream
-        // down. onAbort already settled billing/hold, so just close cleanly.
+        // Some providers surface an abort as a thrown AbortError instead. Treat it as a
+        // clean stop and settle the partial usage the same way.
         if (abortController.signal.aborted) {
+          loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
+          const totalUsage = await aiResult.totalUsage.catch(() => undefined);
+          const steps = await aiResult.steps.catch(() => undefined);
+          await settle({ aborted: true, text: assistantText || undefined, totalUsage, steps });
           controller.close();
           return;
         }
         loggers.ai.error('OpenAI API: stream failed', err as Error);
-        // The stream errored before onFinish could settle the charge, so the gate's
-        // reservation would otherwise linger until TTL/reconcile — leaving the user
-        // artificially short on credits. Release it now (idempotent if already settled).
+        // The stream errored before settlement, so the gate's reservation would otherwise
+        // linger until TTL/reconcile — leaving the user artificially short on credits.
+        // Release it now (idempotent if already settled).
         if (!settled && holdId) await releaseHold(holdId).catch(() => {});
         controller.error(err);
       }

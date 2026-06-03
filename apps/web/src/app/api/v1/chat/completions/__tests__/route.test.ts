@@ -110,14 +110,15 @@ vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>();
   return {
     ...actual,
-    streamText: vi.fn().mockImplementation((options: { onFinish?: (data: { text: string; totalUsage: { inputTokens: number; outputTokens: number } }) => Promise<void> }) => ({
+    // The route settles billing after the stream drains, reading aiResult.totalUsage and
+    // aiResult.steps, so the mock exposes those promises alongside the chunk stream.
+    streamText: vi.fn().mockImplementation(() => ({
+      totalUsage: Promise.resolve({ inputTokens: 10, outputTokens: 5 }),
+      steps: Promise.resolve([]),
       toUIMessageStream: async function* () {
         yield { type: 'start' };
         yield { type: 'text-delta', id: 'text-1', delta: 'Hello' };
         yield { type: 'finish' };
-        if (options?.onFinish) {
-          await options.onFinish({ text: 'Hello', totalUsage: { inputTokens: 10, outputTokens: 5 } });
-        }
       },
     })),
   };
@@ -464,22 +465,16 @@ describe('POST /api/v1/chat/completions', () => {
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-xyz' });
 
     const ac = new AbortController();
-    vi.mocked(streamText).mockImplementationOnce(((options: {
-      abortSignal?: AbortSignal;
-      onAbort?: () => void;
-    }) => ({
+    vi.mocked(streamText).mockImplementationOnce((() => ({
       totalUsage: Promise.resolve({ inputTokens: 7, outputTokens: 3 }),
       steps: Promise.resolve([]),
       toUIMessageStream: async function* () {
         yield { type: 'start' };
         yield { type: 'text-delta', id: 't1', delta: 'Partial' };
         // Simulate the consumer dropping the connection mid-stream: this trips the route's
-        // abortController via request.signal, then streamText fires onAbort and tears down.
+        // abortController via request.signal. The SDK then ends the stream gracefully (no
+        // throw), and the route settles using the abort signal state.
         ac.abort();
-        options.onAbort?.();
-        const err = new Error('The operation was aborted');
-        err.name = 'AbortError';
-        throw err;
       },
     })) as unknown as typeof streamText);
 
@@ -491,8 +486,6 @@ describe('POST /api/v1/chat/completions', () => {
     });
     const response = await POST(req);
     await response.text();
-    // onAbort settles via a fire-and-forget IIFE; let its microtasks flush.
-    await new Promise((r) => setTimeout(r, 0));
 
     const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
     assert({
