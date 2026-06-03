@@ -42,6 +42,13 @@ export interface PlanDefinition {
      * to standard models (model-tier gating is kept); paid tiers get standard + Pro.
      */
     proModels: boolean;
+    /**
+     * LEGACY per-day call limits, shown only when the credits switch is OFF
+     * (`creditsMode === false`) so prod keeps the old "N calls/day" plan copy during
+     * dark launch. Remove at the final credits cutover.
+     */
+    aiCalls: number;
+    proCalls: number;
     storage: {
       bytes: number;
       formatted: string;
@@ -83,6 +90,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     limits: {
       monthlyCreditsCents: MONTHLY_CREDIT_CENTS.free,
       proModels: false,
+      aiCalls: 50,
+      proCalls: 0,
       storage: {
         bytes: 500 * 1024 * 1024, // 500MB
         formatted: '500MB',
@@ -129,6 +138,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     limits: {
       monthlyCreditsCents: MONTHLY_CREDIT_CENTS.pro,
       proModels: true,
+      aiCalls: 200,
+      proCalls: 50,
       storage: {
         bytes: 2 * 1024 * 1024 * 1024, // 2GB
         formatted: '2GB',
@@ -172,6 +183,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     limits: {
       monthlyCreditsCents: MONTHLY_CREDIT_CENTS.founder,
       proModels: true,
+      aiCalls: 500,
+      proCalls: 100,
       storage: {
         bytes: 10 * 1024 * 1024 * 1024, // 10GB
         formatted: '10GB',
@@ -210,6 +223,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     limits: {
       monthlyCreditsCents: MONTHLY_CREDIT_CENTS.business,
       proModels: true,
+      aiCalls: 1000,
+      proCalls: 500,
       storage: {
         bytes: 50 * 1024 * 1024 * 1024, // 50GB
         formatted: '50GB',
