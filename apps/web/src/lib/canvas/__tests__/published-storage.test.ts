@@ -4,16 +4,19 @@ import {
   buildPublishedKey,
   putPublishedArtifact,
   deletePublishedArtifact,
+  isPublishConfigured,
 } from '../published-storage';
 
 const send = vi.fn();
 
 vi.mock('server-only', () => ({}));
 
-vi.mock('@/lib/presigned-url', () => ({
-  getS3Client: vi.fn(() => ({ send })),
-  getS3Bucket: vi.fn(() => 'test-bucket'),
-}));
+// Mock only the S3Client constructor (capture .send); keep the real command
+// classes so `instanceof` checks below still hold.
+vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>();
+  return { ...actual, S3Client: vi.fn(() => ({ send })) };
+});
 
 describe('buildPublishedKey', () => {
   it('maps the root path to a single index.html with no double slash', () => {
@@ -55,6 +58,7 @@ describe('putPublishedArtifact', () => {
   beforeEach(() => {
     send.mockReset();
     send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
   });
 
   it('sends a PutObjectCommand with the right bucket, key, body, and content type', async () => {
@@ -82,6 +86,7 @@ describe('deletePublishedArtifact', () => {
   beforeEach(() => {
     send.mockReset();
     send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
   });
 
   it('sends a DeleteObjectCommand with the right bucket and key', async () => {
@@ -94,5 +99,35 @@ describe('deletePublishedArtifact', () => {
       Bucket: 'test-bucket',
       Key: 'published/acme/index.html',
     });
+  });
+});
+
+describe('publish bucket configuration', () => {
+  it('isPublishConfigured reflects PUBLISH_BUCKET presence', () => {
+    const prev = process.env.PUBLISH_BUCKET;
+    try {
+      delete process.env.PUBLISH_BUCKET;
+      expect(isPublishConfigured()).toBe(false);
+      process.env.PUBLISH_BUCKET = 'pagespace-published';
+      expect(isPublishConfigured()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PUBLISH_BUCKET;
+      else process.env.PUBLISH_BUCKET = prev;
+    }
+  });
+
+  it('putPublishedArtifact throws when PUBLISH_BUCKET is unset', async () => {
+    const prev = process.env.PUBLISH_BUCKET;
+    try {
+      send.mockReset();
+      delete process.env.PUBLISH_BUCKET;
+      await expect(
+        putPublishedArtifact({ subdomain: 'acme', path: '', html: '<html></html>' }),
+      ).rejects.toThrow(/PUBLISH_BUCKET/);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.PUBLISH_BUCKET;
+      else process.env.PUBLISH_BUCKET = prev;
+    }
   });
 });

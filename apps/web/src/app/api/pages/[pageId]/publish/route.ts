@@ -11,7 +11,7 @@ import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { renderPublishedPage } from '@/lib/canvas/render-published';
-import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact } from '@/lib/canvas/published-storage';
+import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact, isPublishConfigured } from '@/lib/canvas/published-storage';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -92,6 +92,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Operational kill-switch: lets operators disable publishing without a deploy.
   if (process.env.CANVAS_PUBLISHING_DISABLED === 'true') {
     return NextResponse.json({ error: 'Publishing is temporarily disabled' }, { status: 503 });
+  }
+
+  // Fail fast BEFORE any DB reservation: if the publish bucket isn't configured,
+  // the later upload would throw and leave a published_pages row pointing at a
+  // non-existent object. (Also makes publishing inert anywhere PUBLISH_BUCKET is
+  // unset — e.g. a prod box that hasn't provisioned the public bucket yet.)
+  if (!isPublishConfigured()) {
+    return NextResponse.json({ error: 'Publishing is not configured' }, { status: 503 });
   }
 
   try {
