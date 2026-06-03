@@ -48,6 +48,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { POST } from '../route';
 
+/** Build a synthesize POST request with the given JSON body. */
 function ttsRequest(body: Record<string, unknown>) {
   return new Request('http://localhost/api/voice/synthesize', {
     method: 'POST',
@@ -56,6 +57,7 @@ function ttsRequest(body: Record<string, unknown>) {
   });
 }
 
+/** Mock `fetch` returning a successful OpenAI TTS audio response. */
 function okAudioFetch() {
   return vi.fn().mockResolvedValue({
     ok: true,

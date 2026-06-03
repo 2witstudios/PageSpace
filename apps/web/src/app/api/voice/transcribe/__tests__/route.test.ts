@@ -48,9 +48,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { POST } from '../route';
 
-// A real Request's multipart body parse can hang in the test runtime, and the
-// route only ever calls `request.formData()` (auth/audit are mocked), so hand it a
-// minimal stub whose formData() resolves directly.
+/**
+ * Build a transcribe request. A real Request's multipart body parse can hang in the
+ * test runtime, and the route only ever calls `request.formData()` (auth/audit are
+ * mocked), so hand it a minimal stub whose formData() resolves directly.
+ */
 function audioRequest() {
   const form = new FormData();
   const file = new File([new Uint8Array(2048)], 'clip.webm', { type: 'audio/webm' });
@@ -58,8 +60,10 @@ function audioRequest() {
   return { formData: () => Promise.resolve(form) } as unknown as Request;
 }
 
-// Whisper verbose_json returns the exact audio `duration` in seconds plus `text`.
-// Pass `undefined` to simulate a (degenerate) response with no duration.
+/**
+ * Mock `fetch` for Whisper's verbose_json response (exact audio `duration` + `text`).
+ * Pass `undefined` to simulate a degenerate response with no duration.
+ */
 function okWhisperFetch(duration: number | undefined) {
   return vi.fn().mockResolvedValue({
     ok: true,
