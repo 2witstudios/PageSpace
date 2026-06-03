@@ -15,12 +15,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 const { mockIsBillingEnabled } = vi.hoisted(() => ({ mockIsBillingEnabled: vi.fn(() => true) }));
-vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
-
-vi.mock('@/lib/websocket/socket-utils', () => ({ broadcastCreditsEvent: vi.fn() }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
-}));
+vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 
 // Mutable fixtures the db mock reads.
 let balanceRows: Array<Record<string, unknown>> = [];
@@ -47,7 +42,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-import { getCreditBalance } from '../credit-balance';
+import { getCreditBalance, resolveTier } from '../credit-balance';
 
 const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -140,5 +135,17 @@ describe('getCreditBalance', () => {
     holdRows = [{ reserved: 50 }];
     const b = await getCreditBalance('u1', 'free');
     expect(b.spendable).toBe(0);
+  });
+});
+
+describe('resolveTier', () => {
+  it('returns the stored subscription tier', async () => {
+    userRows = [{ subscriptionTier: 'pro' }];
+    expect(await resolveTier('u1')).toBe('pro');
+  });
+
+  it('defaults to free when the user has no stored tier', async () => {
+    userRows = [{ subscriptionTier: null as unknown as string }];
+    expect(await resolveTier('u1')).toBe('free');
   });
 });
