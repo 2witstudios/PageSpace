@@ -44,11 +44,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   try {
-    // Whether the server can actually publish (dedicated public bucket configured).
-    // The UI uses this to hide the Publish control where publishing is unavailable
-    // (e.g. a deployment that hasn't provisioned PUBLISH_BUCKET) instead of offering
-    // a button that only ever returns 503.
-    const available = isPublishConfigured();
+    // Whether a publish attempt could actually succeed — used by the UI to hide the
+    // Publish control instead of offering a button that only ever returns 503. This
+    // must mirror EVERY 503 fast-path in POST below: the dedicated public bucket must
+    // be configured AND the operational kill-switch must not be engaged.
+    const available =
+      isPublishConfigured() && process.env.CANVAS_PUBLISHING_DISABLED !== 'true';
 
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),

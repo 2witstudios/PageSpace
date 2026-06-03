@@ -273,6 +273,23 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(json).toEqual({ published: false, available: false });
   });
 
+  it('reports available: false when the kill-switch is engaged even if the bucket is configured', async () => {
+    const prev = process.env.CANVAS_PUBLISHING_DISABLED;
+    process.env.CANVAS_PUBLISHING_DISABLED = 'true';
+    try {
+      isPublishConfigured.mockReturnValue(true);
+      findFirstPublished.mockResolvedValue(undefined);
+      const res = await GET(makeReq(), { params });
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      // POST would 503 ("temporarily disabled") here, so the UI must hide the control.
+      expect(json).toEqual({ published: false, available: false });
+    } finally {
+      if (prev === undefined) delete process.env.CANVAS_PUBLISHING_DISABLED;
+      else process.env.CANVAS_PUBLISHING_DISABLED = prev;
+    }
+  });
+
   it('returns { published: true, url, available } when a row exists', async () => {
     findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome' });
     findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
