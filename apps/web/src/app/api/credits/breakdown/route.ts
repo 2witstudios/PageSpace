@@ -3,6 +3,7 @@ import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getUserUsageBreakdown } from '@/lib/subscription/usage-breakdown-query';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isCreditsModeEnabled } from '@pagespace/lib/billing/credit-pricing';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * GET /api/credits/breakdown — the authenticated user's prepaid-credit spend for the
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ ...breakdown, creditsMode: true });
   } catch (error) {
-    console.error('Error fetching usage breakdown:', error);
+    loggers.api.error('Error fetching usage breakdown:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch usage breakdown' }, { status: 500 });
   }
 }

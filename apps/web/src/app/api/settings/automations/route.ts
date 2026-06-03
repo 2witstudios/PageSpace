@@ -63,7 +63,9 @@ export async function PATCH(request: Request) {
 
     const body = await request.json().catch(() => null);
 
-    const { tier } = await loadAutomationState(userId);
+    // Single read of current state; the response view is then derived from it + the
+    // applied decision (no post-write re-read needed — we know exactly what changed).
+    const { tier, pulseRow, personalization } = await loadAutomationState(userId);
     const decision = validateAutomationPatch(body, tier);
     if ('error' in decision) {
       return NextResponse.json({ error: decision.error }, { status: decision.status });
@@ -91,8 +93,10 @@ export async function PATCH(request: Request) {
 
     audit({ eventType: 'admin.settings.changed', userId, resourceType: 'automation_preferences' });
 
-    const { tier: freshTier, pulseRow, personalization } = await loadAutomationState(userId);
-    return NextResponse.json(buildAutomationView(pulseRow, personalization, freshTier));
+    const updatedPulseRow = decision.pulse !== undefined ? { pulseEnabled: decision.pulse } : pulseRow;
+    const updatedPersonalization =
+      decision.memory !== undefined ? { enabled: decision.memory } : personalization;
+    return NextResponse.json(buildAutomationView(updatedPulseRow, updatedPersonalization, tier));
   } catch (error) {
     loggers.api.error('Error updating automation settings:', error as Error);
     return NextResponse.json({ error: 'Failed to update automation settings' }, { status: 500 });
