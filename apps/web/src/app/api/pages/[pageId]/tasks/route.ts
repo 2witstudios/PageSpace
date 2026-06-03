@@ -14,6 +14,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { getTaskRelations, getLinkedTasksForList } from '@/lib/tasks/task-relations';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -281,15 +282,42 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
   }
 
-  const enrichedTasks = tasks.map(({ page, ...t }) => ({
-    ...t,
-    title: page?.title ?? '',
-    activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
-    hasContent: computeHasContent(page?.content),
-    subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
-    subTaskCompletedCount: subTaskCompletedByPageId.get(t.pageId ?? '') ?? 0,
-    page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
-  }));
+  // Load dependency relations for native tasks and any linked tasks together so
+  // chips / blocked badges render without extra round-trips.
+  const linkedTasks = await getLinkedTasksForList(pageId);
+  const relations = await getTaskRelations([
+    ...tasks.map(t => t.id),
+    ...linkedTasks.map(t => t.id),
+  ]);
+
+  const enrichedTasks = tasks.map(({ page, ...t }) => {
+    const rel = relations.get(t.id);
+    return {
+      ...t,
+      title: page?.title ?? '',
+      activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
+      hasContent: computeHasContent(page?.content),
+      subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
+      subTaskCompletedCount: subTaskCompletedByPageId.get(t.pageId ?? '') ?? 0,
+      page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
+      isLinked: false,
+      blockedBy: rel?.blockedBy ?? [],
+      blocks: rel?.blocks ?? [],
+      isBlocked: rel?.isBlocked ?? false,
+    };
+  });
+
+  // Linked tasks render as read-only references in a separate "Linked" group.
+  const enrichedLinkedTasks = linkedTasks.map((lt) => {
+    const rel = relations.get(lt.id);
+    return {
+      ...lt,
+      isLinked: true as const,
+      blockedBy: rel?.blockedBy ?? [],
+      blocks: rel?.blocks ?? [],
+      isBlocked: rel?.isBlocked ?? false,
+    };
+  });
 
   return NextResponse.json({
     taskList: {
@@ -300,6 +328,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       updatedAt: taskList.updatedAt,
     },
     tasks: enrichedTasks,
+    linkedTasks: enrichedLinkedTasks,
     statusConfigs,
   });
 }

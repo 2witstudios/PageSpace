@@ -118,6 +118,51 @@ export const taskAssignees = pgTable('task_assignees', {
   };
 });
 
+/**
+ * Task Links - Reference a task inside a task list other than its home list.
+ *
+ * A task's "home" list is still derived from its page's parentId. A task_links
+ * row surfaces that same task inside a different TASK_LIST page as a read-only
+ * "linked" item, without moving it. Both ends must live in the same drive
+ * (enforced in the service layer). A task cannot be linked into its own home list.
+ */
+export const taskLinks = pgTable('task_links', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  taskId: text('taskId').notNull().references(() => taskItems.id, { onDelete: 'cascade' }),
+  taskListPageId: text('taskListPageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  position: integer('position').notNull().default(0),
+  createdById: text('createdById').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    taskIdx: index('task_links_task_id_idx').on(table.taskId),
+    listPageIdx: index('task_links_list_page_id_idx').on(table.taskListPageId),
+    uniqueLink: unique('task_links_task_list').on(table.taskId, table.taskListPageId),
+  };
+});
+
+/**
+ * Task Dependencies - Directed "blocked by" edges between tasks.
+ *
+ * blockerTaskId must reach a done-group status before blockedTaskId is allowed
+ * to complete (hard gate; see completion-guard). Edges may cross task lists but
+ * must stay within a single drive (enforced in the service layer). Cycles are
+ * rejected at insert time so the graph stays acyclic.
+ */
+export const taskDependencies = pgTable('task_dependencies', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  blockerTaskId: text('blockerTaskId').notNull().references(() => taskItems.id, { onDelete: 'cascade' }),
+  blockedTaskId: text('blockedTaskId').notNull().references(() => taskItems.id, { onDelete: 'cascade' }),
+  createdById: text('createdById').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    blockerIdx: index('task_dependencies_blocker_idx').on(table.blockerTaskId),
+    blockedIdx: index('task_dependencies_blocked_idx').on(table.blockedTaskId),
+    uniquePair: unique('task_dependencies_pair').on(table.blockerTaskId, table.blockedTaskId),
+  };
+});
+
 // Relations
 // Note: The reverse relation (pages.taskList) would cause circular dependency,
 // so pages → taskLists lookups are handled through direct queries:
@@ -163,6 +208,41 @@ export const taskItemsRelations = relations(taskItems, ({ one, many }) => ({
     relationName: 'taskPage',
   }),
   assignees: many(taskAssignees),
+  links: many(taskLinks),
+  blocks: many(taskDependencies, { relationName: 'blocker' }),
+  blockedBy: many(taskDependencies, { relationName: 'blocked' }),
+}));
+
+export const taskLinksRelations = relations(taskLinks, ({ one }) => ({
+  task: one(taskItems, {
+    fields: [taskLinks.taskId],
+    references: [taskItems.id],
+  }),
+  taskListPage: one(pages, {
+    fields: [taskLinks.taskListPageId],
+    references: [pages.id],
+  }),
+  createdBy: one(users, {
+    fields: [taskLinks.createdById],
+    references: [users.id],
+  }),
+}));
+
+export const taskDependenciesRelations = relations(taskDependencies, ({ one }) => ({
+  blocker: one(taskItems, {
+    fields: [taskDependencies.blockerTaskId],
+    references: [taskItems.id],
+    relationName: 'blocker',
+  }),
+  blocked: one(taskItems, {
+    fields: [taskDependencies.blockedTaskId],
+    references: [taskItems.id],
+    relationName: 'blocked',
+  }),
+  createdBy: one(users, {
+    fields: [taskDependencies.createdById],
+    references: [users.id],
+  }),
 }));
 
 export const taskAssigneesRelations = relations(taskAssignees, ({ one }) => ({

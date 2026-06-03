@@ -91,7 +91,8 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@/lib/tasks/completion-guard', () => ({
   checkSubTasksComplete: vi.fn().mockResolvedValue(null),
-  toToolFailure: (p: { code: string; error: string; pending: number; total: number }) => ({
+  checkDependenciesComplete: vi.fn().mockResolvedValue(null),
+  toToolFailure: (p: Record<string, unknown>) => ({
     success: false,
     ...p,
   }),

@@ -3,8 +3,10 @@
  */
 
 // Re-export shared types
-import type { TaskPriority as SharedTaskPriority, TaskAssigneeData, TaskStatusConfig } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import type { TaskPriority as SharedTaskPriority, TaskAssigneeData, TaskStatusConfig, DependencyRef } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { TaskStatusGroup } from '@/lib/task-status-config';
+
+export type { DependencyRef };
 
 export type TaskStatus = string;
 export type TaskPriority = SharedTaskPriority;
@@ -63,6 +65,10 @@ export interface Task {
   statusGroup?: TaskStatusGroup;
   statusLabel?: string;
   statusColor?: string;
+  // Dependency graph (enriched by the API)
+  isBlocked?: boolean;
+  blockedBy?: DependencyRef[];
+  blocks?: DependencyRef[];
 }
 
 export interface TaskFilters {

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { taskLists, taskItems, taskStatusConfigs, taskDependencies, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
@@ -17,7 +17,8 @@ import {
 } from '@/lib/workflows/task-trigger-helpers';
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
-import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
+import { checkSubTasksComplete, checkDependenciesComplete, toToolFailure } from '@/lib/tasks/completion-guard';
+import { linkTask, unlinkTask, addDependency, removeDependency, getTaskRelations, TaskRelationError } from '@/lib/tasks/task-relations';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import {
   normalizeTaskAgentTriggerInput,
@@ -55,6 +56,7 @@ Status:
 
 Completion:
 - A task cannot be marked done while it still has incomplete sub-tasks. When this tool returns { success: false, code: "SUBTASKS_INCOMPLETE" }, do not retry — tell the user that {pending} of {total} sub-tasks remain and must be completed first.
+- A task cannot be marked done while it is blocked by another task. When this tool returns { success: false, code: "BLOCKED_BY_DEPENDENCY" }, do not retry — tell the user which blocking tasks (listed in {blockers}) must be completed first. Manage blockers with add_task_dependency / remove_task_dependency.
 
 Assignment:
 - Use assigneeIds array to assign multiple users and/or agents
@@ -172,6 +174,11 @@ Agent Triggers:
         if (updateData.completedAt instanceof Date && existingTask.pageId) {
           const blocked = await checkSubTasksComplete(existingTask.pageId);
           if (blocked) return toToolFailure(blocked);
+        }
+        // Dependency guard: cannot mark a task done while it has an incomplete blocker
+        if (updateData.completedAt instanceof Date) {
+          const dependencyBlocked = await checkDependenciesComplete(taskId);
+          if (dependencyBlocked) return toToolFailure(dependencyBlocked);
         }
 
         if (priority !== undefined) updateData.priority = priority;
@@ -478,6 +485,158 @@ The position is clamped to the valid range. Returns the refreshed task list refl
   }),
 
   /**
+   * Link an existing task into another TASK_LIST page without moving it.
+   * The task keeps its home list; it surfaces in the target list as a reference.
+   */
+  link_task: tool({
+    description: `Reference an existing task inside another TASK_LIST page WITHOUT moving it.
+
+The task keeps its original home list (it is not relocated); it simply also appears in the target list as a read-only linked reference. Both tasks must be in the same drive. Use unlink_task to remove the reference.`,
+    inputSchema: z.object({
+      taskId: z.string().describe('ID of the task to link'),
+      targetTaskListPageId: z.string().describe('TASK_LIST page ID to surface the task in'),
+    }),
+    execute: async ({ taskId, targetTaskListPageId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      try {
+        const { link, taskTitle } = await linkTask({
+          taskId,
+          destTaskListPageId: targetTaskListPageId,
+          userId,
+          canEdit: (p) => canActorEditPage(ctx, p),
+        });
+        return {
+          success: true,
+          link: { id: link.id, taskId: link.taskId, taskListPageId: link.taskListPageId },
+          message: `Linked task "${taskTitle}" into the target list (still in its home list).`,
+        };
+      } catch (error) {
+        if (error instanceof TaskRelationError) {
+          return { success: false, error: error.message };
+        }
+        console.error('Error in link_task:', error);
+        throw new Error(`Failed to link task: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Remove a linked-task reference from a list. Never affects the task itself.
+   */
+  unlink_task: tool({
+    description: `Remove a linked-task reference from a list. This only removes the reference created by link_task — the task itself and its home list are untouched.`,
+    inputSchema: z.object({
+      taskId: z.string().describe('ID of the linked task'),
+      targetTaskListPageId: z.string().describe('TASK_LIST page ID the task was linked into'),
+    }),
+    execute: async ({ taskId, targetTaskListPageId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      try {
+        await unlinkTask({
+          taskId,
+          destTaskListPageId: targetTaskListPageId,
+          userId,
+          canEdit: (p) => canActorEditPage(ctx, p),
+        });
+        return { success: true, message: 'Removed the linked-task reference.' };
+      } catch (error) {
+        if (error instanceof TaskRelationError) {
+          return { success: false, error: error.message };
+        }
+        console.error('Error in unlink_task:', error);
+        throw new Error(`Failed to unlink task: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Add a blocker dependency: one task is blocked by another (across lists).
+   */
+  add_task_dependency: tool({
+    description: `Make one task depend on (be blocked by) another task. The blocker must reach a done status before the blocked task can be marked done.
+
+Dependencies may cross task lists but both tasks must be in the same drive. Cycles are rejected. Use remove_task_dependency to undo.`,
+    inputSchema: z.object({
+      blockedTaskId: z.string().describe('ID of the task that is blocked (cannot complete until the blocker is done)'),
+      blockerTaskId: z.string().describe('ID of the task that must be completed first'),
+    }),
+    execute: async ({ blockedTaskId, blockerTaskId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      try {
+        const { dependency } = await addDependency({
+          blockedTaskId,
+          blockerTaskId,
+          userId,
+          canEdit: (p) => canActorEditPage(ctx, p),
+        });
+        return {
+          success: true,
+          dependency: { id: dependency.id, blockedTaskId, blockerTaskId },
+          message: 'Added dependency: the blocked task cannot complete until the blocker is done.',
+        };
+      } catch (error) {
+        if (error instanceof TaskRelationError) {
+          return { success: false, error: error.message };
+        }
+        console.error('Error in add_task_dependency:', error);
+        throw new Error(`Failed to add dependency: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Remove a blocker dependency between two tasks.
+   */
+  remove_task_dependency: tool({
+    description: `Remove a blocker dependency so the blocked task is no longer gated by the blocker. Identify the edge by the two task IDs.`,
+    inputSchema: z.object({
+      blockedTaskId: z.string().describe('ID of the blocked task'),
+      blockerTaskId: z.string().describe('ID of the blocker task'),
+      dependencyId: z.string().optional().describe('Optional explicit dependency id (overrides the task-pair lookup)'),
+    }),
+    execute: async ({ blockedTaskId, blockerTaskId, dependencyId }, { experimental_context: context }) => {
+      const ctx = context as ToolExecutionContext;
+      const userId = ctx?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      try {
+        let depId = dependencyId;
+        if (!depId) {
+          const dep = await db.query.taskDependencies.findFirst({
+            where: and(
+              eq(taskDependencies.blockerTaskId, blockerTaskId),
+              eq(taskDependencies.blockedTaskId, blockedTaskId),
+            ),
+          });
+          if (!dep) return { success: false, error: 'Dependency not found' };
+          depId = dep.id;
+        }
+        await removeDependency({
+          dependencyId: depId,
+          userId,
+          canEdit: (p) => canActorEditPage(ctx, p),
+        });
+        return { success: true, message: 'Removed the dependency.' };
+      } catch (error) {
+        if (error instanceof TaskRelationError) {
+          return { success: false, error: error.message };
+        }
+        console.error('Error in remove_task_dependency:', error);
+        throw new Error(`Failed to remove dependency: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
    * Get tasks assigned to an agent (including the current agent)
    * Allows agents to see their workload and responsibilities
    */
@@ -628,6 +787,9 @@ This helps agents understand their responsibilities and coordinate work with oth
           : [];
         const slugToGroup = new Map(allConfigs.map(c => [c.slug, c.group]));
 
+        // Load dependency relations so agents see blockers/blocked + isBlocked.
+        const taskRelations = await getTaskRelations(filteredTasks.map(t => t.id));
+
         // Group tasks by config group (fall back to completedAt/status heuristic)
         const byGroup: Record<string, typeof filteredTasks> = { todo: [], in_progress: [], done: [] };
         for (const t of filteredTasks) {
@@ -675,6 +837,14 @@ This helps agents understand their responsibilities and coordinate work with oth
               id: t.assignee.id,
               name: t.assignee.name,
             } : null,
+            // Dependency graph edges
+            isBlocked: taskRelations.get(t.id)?.isBlocked ?? false,
+            blockedBy: (taskRelations.get(t.id)?.blockedBy ?? []).map(b => ({
+              taskId: b.taskId, title: b.title, status: b.status, completed: b.completedAt !== null,
+            })),
+            blocks: (taskRelations.get(t.id)?.blocks ?? []).map(b => ({
+              taskId: b.taskId, title: b.title, status: b.status, completed: b.completedAt !== null,
+            })),
           })),
           message: `Found ${filteredTasks.length} task(s) assigned to agent "${agent.title}"`,
         };

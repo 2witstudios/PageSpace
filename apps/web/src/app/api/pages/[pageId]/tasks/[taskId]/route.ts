@@ -13,7 +13,7 @@ import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
 import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
-import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
+import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS, checkDependenciesComplete, DEPENDENCY_BLOCKED_STATUS } from '@/lib/tasks/completion-guard';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -191,6 +191,14 @@ export async function PATCH(
     const blocked = await checkSubTasksComplete(existingTask.pageId);
     if (blocked) {
       return NextResponse.json(blocked, { status: SUBTASKS_INCOMPLETE_STATUS });
+    }
+  }
+
+  // Dependency guard: cannot mark a task done while it has an incomplete blocker
+  if (updates.completedAt instanceof Date) {
+    const dependencyBlocked = await checkDependenciesComplete(taskId);
+    if (dependencyBlocked) {
+      return NextResponse.json(dependencyBlocked, { status: DEPENDENCY_BLOCKED_STATUS });
     }
   }
 

@@ -20,11 +20,16 @@ vi.mock('@pagespace/db/db', () => ({
       taskItems: { findMany: vi.fn() },
       taskStatusConfigs: { findMany: vi.fn() },
     },
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
+    select: vi.fn(() => {
+      // Supports both `from().where()` and the relations chain
+      // `from().innerJoin().innerJoin().where()` used by getTaskRelations.
+      const chain: Record<string, unknown> = {
+        innerJoin: vi.fn(() => chain),
         where: vi.fn().mockResolvedValue([]),
-      })),
-    })),
+        groupBy: vi.fn().mockResolvedValue([]),
+      };
+      return { from: vi.fn(() => chain) };
+    }),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -45,9 +50,11 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title', parentId: 'parentId' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description' },
+  taskItems: { id: 'id', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', completedAt: 'completedAt', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description' },
   taskLists: { id: 'id', pageId: 'pageId' },
   taskStatusConfigs: { taskListId: 'taskListId' },
+  taskLinks: { taskId: 'taskId', taskListPageId: 'taskListPageId', position: 'position' },
+  taskDependencies: { id: 'id', blockerTaskId: 'blockerTaskId', blockedTaskId: 'blockedTaskId' },
 }));
 
 vi.mock('@/lib/task-status-config', () => ({
@@ -223,9 +230,11 @@ describe('GET /api/tasks', () => {
     vi.mocked(getDriveIdsForUser).mockResolvedValue(['drive_1']);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
-    // Default: no trashed pages
+    // Default: no trashed pages. Chain supports both `from().where()` and the
+    // `from().innerJoin().innerJoin().where()` shape used by getTaskRelations.
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
+        innerJoin: vi.fn().mockReturnThis(),
         where: vi.fn().mockResolvedValue([]),
       }),
     } as any);
@@ -411,6 +420,7 @@ describe('GET /api/tasks', () => {
       // always return data, not just on the first call.
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnThis(),
           where: vi.fn().mockResolvedValue([{ total: 10 }]),
         }),
       } as any);

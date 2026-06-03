@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { getTaskRelations } from '@/lib/tasks/task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -431,6 +432,18 @@ export async function GET(request: Request) {
       })
       .filter((task): task is NonNullable<typeof task> => task !== null);
 
+    // Attach dependency relations (blocked-by / blocks / isBlocked) for chips + badges.
+    const relations = await getTaskRelations(enrichedTasks.map(t => t.id));
+    const tasksWithRelations = enrichedTasks.map(t => {
+      const rel = relations.get(t.id);
+      return {
+        ...t,
+        blockedBy: rel?.blockedBy ?? [],
+        blocks: rel?.blocks ?? [],
+        isBlocked: rel?.isBlocked ?? false,
+      };
+    });
+
     // Get total count for pagination
     const [countResult] = await db
       .select({ total: count() })
@@ -442,13 +455,13 @@ export async function GET(request: Request) {
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'tasks', resourceId: userId, details: { context: params.context } });
 
     return NextResponse.json({
-      tasks: enrichedTasks,
+      tasks: tasksWithRelations,
       statusConfigsByTaskList: serializedStatusConfigsByTaskList,
       pagination: {
         total,
         limit: params.limit,
         offset: params.offset,
-        hasMore: params.offset + enrichedTasks.length < total,
+        hasMore: params.offset + tasksWithRelations.length < total,
       },
     });
   } catch (error) {

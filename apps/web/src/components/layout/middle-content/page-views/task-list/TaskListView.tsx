@@ -60,6 +60,9 @@ import {
   Bell,
   ChevronRight,
   ChevronDown,
+  Link2,
+  Link2Off,
+  GitFork,
 } from 'lucide-react';
 import {
   DndContext,
@@ -84,6 +87,8 @@ import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
 import Toolbar from '@/components/editors/Toolbar';
 import { TaskRowDescription } from './TaskRowDescription';
+import { TaskDependencies, BlockedBadge } from './TaskDependencies';
+import { TaskRelationPicker } from './TaskRelationPicker';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -98,6 +103,10 @@ import {
   TaskHandlers,
   canExpandTask,
 } from './task-list-types';
+
+/** A row is expandable when it has description content, sub-tasks, or dependencies. */
+const hasDependencies = (task: TaskItem): boolean =>
+  (task.blockedBy?.length ?? 0) > 0 || (task.blocks?.length ?? 0) > 0;
 
 interface TaskListViewProps {
   page: TreePage;
@@ -338,10 +347,11 @@ interface SortableTaskRowProps {
   isCompleted: boolean;
   isExpanded: boolean;
   contextMenu?: React.ReactNode;
+  expansionContent?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, expansionContent, children }: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -385,7 +395,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, contextMenu, 
   const expansionRow = (
     <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
       <td colSpan={8} className="px-4 py-2 border-b bg-muted/20">
-        {isExpanded && <TaskRowDescription task={task} />}
+        {isExpanded && (expansionContent ?? <TaskRowDescription task={task} />)}
       </td>
     </tr>
   );
@@ -529,10 +539,19 @@ function TaskListView({ page }: TaskListViewProps) {
       if (movedIn || movedOut) mutate(`/api/pages/${page.id}/tasks`);
     };
 
+    // Dependency / linked-task changes also refetch this list's tasks.
+    const handleRelationChanged = () => {
+      mutate(`/api/pages/${page.id}/tasks`);
+    };
+
     socket.on('task:task_added', handleTaskAdded);
     socket.on('task:task_updated', handleTaskUpdated);
     socket.on('task:task_deleted', handleTaskDeleted);
     socket.on('task:tasks_reordered', handleTasksReordered);
+    socket.on('task:dependency_added', handleRelationChanged);
+    socket.on('task:dependency_removed', handleRelationChanged);
+    socket.on('task:task_linked', handleRelationChanged);
+    socket.on('task:task_unlinked', handleRelationChanged);
     socket.on('page:moved', handlePageMoved);
 
     return () => {
@@ -540,6 +559,10 @@ function TaskListView({ page }: TaskListViewProps) {
       socket.off('task:task_updated', handleTaskUpdated);
       socket.off('task:task_deleted', handleTaskDeleted);
       socket.off('task:tasks_reordered', handleTasksReordered);
+      socket.off('task:dependency_added', handleRelationChanged);
+      socket.off('task:dependency_removed', handleRelationChanged);
+      socket.off('task:task_linked', handleRelationChanged);
+      socket.off('task:task_unlinked', handleRelationChanged);
       socket.off('page:moved', handlePageMoved);
     };
   }, [socket, connectionStatus, page.id]);
@@ -734,6 +757,32 @@ function TaskListView({ page }: TaskListViewProps) {
       mutate(`/api/pages/${page.id}/tasks`);
     } catch {
       toast.error('Failed to update due date');
+    }
+  };
+
+  // Linked tasks (referenced from other lists, rendered read-only)
+  const linkedTasks = useMemo(() => data?.linkedTasks ?? [], [data?.linkedTasks]);
+
+  // Link an existing drive task into this list (without moving it)
+  const handleLinkTask = async (taskId: string) => {
+    if (!canEdit) return;
+    try {
+      await post(`/api/pages/${page.id}/tasks/links`, { taskId });
+      mutate(`/api/pages/${page.id}/tasks`);
+      toast.success('Linked task into this list');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to link task');
+    }
+  };
+
+  // Remove a linked-task reference from this list
+  const handleUnlinkTask = async (linkId: string) => {
+    if (!canEdit) return;
+    try {
+      await del(`/api/pages/${page.id}/tasks/links/${linkId}`);
+      mutate(`/api/pages/${page.id}/tasks`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to unlink task');
     }
   };
 
@@ -1065,6 +1114,20 @@ function TaskListView({ page }: TaskListViewProps) {
                         canEdit={canEdit}
                         isCompleted={isCompletedStatus(task.status, statusConfigs)}
                         isExpanded={expandedTaskIds.has(task.id)}
+                        expansionContent={
+                          <div className="space-y-3">
+                            <TaskRowDescription task={task} />
+                            <TaskDependencies
+                              taskId={task.id}
+                              listPageId={page.id}
+                              driveId={page.driveId}
+                              blockedBy={task.blockedBy ?? []}
+                              blocks={task.blocks ?? []}
+                              canEdit={canEdit}
+                              onChanged={() => mutate(`/api/pages/${page.id}/tasks`)}
+                            />
+                          </div>
+                        }
                         contextMenu={
                           <ContextMenuContent>
                             {task.pageId && (
@@ -1076,6 +1139,10 @@ function TaskListView({ page }: TaskListViewProps) {
                             <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
                               <Pencil className="h-4 w-4 mr-2" />
                               Rename
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => { setExpandedTaskIds(prev => new Set(prev).add(task.id)); }}>
+                              <GitFork className="h-4 w-4 mr-2" />
+                              Dependencies…
                             </ContextMenuItem>
                             <ContextMenuItem onSelect={() => setTriggerDialogTask(task)} disabled={!canEdit}>
                               <Zap className="h-4 w-4 mr-2" />
@@ -1117,10 +1184,10 @@ function TaskListView({ page }: TaskListViewProps) {
                             />
                           ) : (
                             <div className="flex items-center gap-1">
-                              {canExpandTask(task) ? (
+                              {(canExpandTask(task) || hasDependencies(task) || canEdit) ? (
                                 <button
                                   type="button"
-                                  aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
+                                  aria-label={expandedTaskIds.has(task.id) ? 'Collapse details' : 'Expand details'}
                                   onClick={() => toggleTaskExpand(task.id)}
                                   className="text-muted-foreground hover:text-foreground shrink-0"
                                 >
@@ -1144,6 +1211,7 @@ function TaskListView({ page }: TaskListViewProps) {
                               >
                                 {task.title}
                               </span>
+                              {task.isBlocked && <BlockedBadge className="ml-1 text-[10px]" />}
                             </div>
                           )}
                         </TableCell>
@@ -1305,6 +1373,73 @@ function TaskListView({ page }: TaskListViewProps) {
               </div>
             )}
           </>
+        )}
+
+        {/* Linked tasks — referenced from other lists, not moved here */}
+        {(linkedTasks.length > 0 || canEdit) && (
+          <div className="border-t px-4 py-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-xs font-medium text-muted-foreground inline-flex items-center gap-1">
+                <Link2 className="h-3.5 w-3.5" /> Linked tasks
+              </span>
+              {canEdit && (
+                <TaskRelationPicker
+                  driveId={page.driveId}
+                  excludeIds={[...filteredTasks.map(t => t.id), ...linkedTasks.map(t => t.id)]}
+                  onSelect={(id) => handleLinkTask(id)}
+                  placeholder="Link a task"
+                  label="Search tasks to link…"
+                />
+              )}
+            </div>
+            {linkedTasks.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Reference a task from another list here without moving it.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {linkedTasks.map((lt) => (
+                  <li
+                    key={lt.linkId}
+                    className="flex items-center gap-2 text-sm rounded-md border bg-muted/20 px-2 py-1.5"
+                  >
+                    <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <button
+                      type="button"
+                      onClick={() => lt.pageId && router.push(`/dashboard/${page.driveId}/${lt.pageId}`)}
+                      className={cn(
+                        'truncate hover:underline',
+                        lt.completedAt && 'line-through text-muted-foreground',
+                      )}
+                    >
+                      {lt.title}
+                    </button>
+                    <Badge className={cn('text-xs', statusConfigMap[lt.status]?.color || 'bg-slate-100 text-slate-700')}>
+                      {statusConfigMap[lt.status]?.label || lt.status}
+                    </Badge>
+                    {lt.isBlocked && <BlockedBadge className="text-[10px]" />}
+                    {lt.homeTaskListPageTitle && (
+                      <span className="text-xs text-muted-foreground truncate">
+                        from {lt.homeTaskListPageTitle}
+                      </span>
+                    )}
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 ml-auto shrink-0"
+                        onClick={() => handleUnlinkTask(lt.linkId)}
+                        aria-label="Unlink task"
+                        title="Remove this linked reference"
+                      >
+                        <Link2Off className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </div>
 

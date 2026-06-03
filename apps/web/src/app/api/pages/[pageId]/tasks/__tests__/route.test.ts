@@ -93,6 +93,9 @@ vi.mock('@pagespace/db/db', () => {
         taskStatusConfigs: {
           findMany: vi.fn().mockResolvedValue([]),
         },
+        taskLinks: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
         pages: {
           findFirst: vi.fn(),
         },
@@ -137,6 +140,8 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: {},
   taskStatusConfigs: {},
   taskAssignees: {},
+  taskLinks: {},
+  taskDependencies: {},
   DEFAULT_TASK_STATUSES: [
       { slug: 'pending', name: 'To Do', color: 'bg-slate-100 text-slate-700', group: 'todo', position: 0 },
       { slug: 'in_progress', name: 'In Progress', color: 'bg-amber-100 text-amber-700', group: 'in_progress', position: 1 },
@@ -218,6 +223,8 @@ describe('Task API Routes', () => {
     mockCreateMentionNotification.mockResolvedValue(undefined);
     // Reset default mock for taskStatusConfigs.findMany
     vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    // getLinkedTasksForList queries taskLinks; default to no linked tasks.
+    vi.mocked(db.query.taskLinks.findMany).mockResolvedValue([] as never);
     vi.mocked(isAuthError).mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(auditRequest).mockReturnValue(undefined);

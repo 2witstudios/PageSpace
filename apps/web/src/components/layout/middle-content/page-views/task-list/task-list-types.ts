@@ -31,6 +31,36 @@ export interface TaskAssigneeData {
   } | null;
 }
 
+/** A task referenced by a dependency edge (blocked-by / blocks). */
+export interface DependencyRef {
+  dependencyId: string;
+  taskId: string;
+  title: string;
+  status: string;
+  completedAt: string | null;
+  pageId: string;
+  homeListPageId: string | null;
+}
+
+/** A task linked into a list from elsewhere — rendered read-only in a "Linked" group. */
+export interface LinkedTaskItem {
+  linkId: string;
+  linkPosition: number;
+  id: string;
+  pageId: string | null;
+  title: string;
+  status: string;
+  priority: 'low' | 'medium' | 'high';
+  completedAt: string | null;
+  dueDate: string | null;
+  assignees?: TaskAssigneeData[];
+  homeTaskListPageId: string | null;
+  homeTaskListPageTitle: string | null;
+  isBlocked?: boolean;
+  blockedBy?: DependencyRef[];
+  blocks?: DependencyRef[];
+}
+
 export interface TaskItem {
   id: string;
   userId: string;
@@ -43,6 +73,10 @@ export interface TaskItem {
   position: number;
   dueDate: string | null;
   metadata?: Record<string, unknown> | null;
+  // Dependency graph (enriched by the API)
+  isBlocked?: boolean;
+  blockedBy?: DependencyRef[];
+  blocks?: DependencyRef[];
   // activeTriggerCount is the canonical UI source for trigger presence (live join in
   // /api/pages/[pageId]/tasks). The DB row also carries metadata.hasTrigger/triggerTypes
   // written by recomputeTaskTriggerMetadata, but no UI path reads them.
@@ -88,6 +122,7 @@ export interface TaskListData {
     updatedAt: string;
   };
   tasks: TaskItem[];
+  linkedTasks?: LinkedTaskItem[];
   statusConfigs: TaskStatusConfig[];
 }
 

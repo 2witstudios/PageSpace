@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskItems } from '@pagespace/db/schema/tasks'
+import { taskItems, taskDependencies } from '@pagespace/db/schema/tasks'
 
 export class SubtasksIncompleteError extends Error {
   readonly code = 'SUBTASKS_INCOMPLETE' as const;
@@ -56,10 +56,11 @@ export function toBlockedPayload(e: SubtasksIncompleteError): SubtasksBlockedPay
   return { code: e.code, error: e.message, pending: e.pending, total: e.total };
 }
 
-/** Shape the canonical payload as an AI SDK tool failure result. */
-export function toToolFailure(
-  p: SubtasksBlockedPayload,
-): { success: false } & SubtasksBlockedPayload {
+/**
+ * Shape a canonical blocked payload as an AI SDK tool failure result. Generic so
+ * both the sub-task and dependency guards reuse it.
+ */
+export function toToolFailure<T extends object>(p: T): { success: false } & T {
   return { success: false, ...p };
 }
 
@@ -81,6 +82,93 @@ export async function checkSubTasksComplete(
   } catch (error) {
     if (error instanceof SubtasksIncompleteError) {
       return toBlockedPayload(error);
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dependency guard: a task cannot complete while it is blocked by another task
+// (a task_dependencies edge whose blocker has not yet reached a done status).
+// ---------------------------------------------------------------------------
+
+export class DependencyBlockedError extends Error {
+  readonly code = 'BLOCKED_BY_DEPENDENCY' as const;
+  constructor(
+    public readonly incomplete: number,
+    public readonly total: number,
+    public readonly blockers: { taskId: string; title: string }[],
+  ) {
+    super(`Complete blocking tasks first (${incomplete} of ${total} blockers remaining)`);
+    this.name = 'DependencyBlockedError';
+  }
+}
+
+/**
+ * Throws DependencyBlockedError if the task (by task_items id) has any
+ * non-trashed blocker task that hasn't been completed. Tasks with no blockers
+ * always pass. A blocker is "incomplete" when its completedAt is null — the same
+ * signal the PATCH route uses when moving a task into a done-group status.
+ */
+export async function assertDependenciesComplete(taskId: string): Promise<void> {
+  const blockers = await db
+    .select({
+      blockerTaskId: taskDependencies.blockerTaskId,
+      completedAt: taskItems.completedAt,
+      isTrashed: pages.isTrashed,
+      title: pages.title,
+    })
+    .from(taskDependencies)
+    .innerJoin(taskItems, eq(taskItems.id, taskDependencies.blockerTaskId))
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(eq(taskDependencies.blockedTaskId, taskId));
+
+  const active = blockers.filter(b => !b.isTrashed);
+  if (active.length === 0) return;
+
+  const incomplete = active.filter(b => b.completedAt === null);
+  if (incomplete.length > 0) {
+    throw new DependencyBlockedError(
+      incomplete.length,
+      active.length,
+      incomplete.map(b => ({ taskId: b.blockerTaskId, title: b.title })),
+    );
+  }
+}
+
+/** HTTP status returned when a completion is blocked by an incomplete blocker. */
+export const DEPENDENCY_BLOCKED_STATUS = 422 as const;
+
+/** Canonical, transport-agnostic description of a completion blocked by a dependency. */
+export interface DependencyBlockedPayload {
+  code: 'BLOCKED_BY_DEPENDENCY';
+  error: string;
+  incomplete: number;
+  total: number;
+  blockers: { taskId: string; title: string }[];
+}
+
+/** Map a DependencyBlockedError into the canonical blocked payload. */
+export function toDependencyBlockedPayload(e: DependencyBlockedError): DependencyBlockedPayload {
+  return { code: e.code, error: e.message, incomplete: e.incomplete, total: e.total, blockers: e.blockers };
+}
+
+/**
+ * Run the dependency completion guard for a task (by task_items id).
+ *
+ * Returns `null` when completion is allowed, or the canonical
+ * DependencyBlockedPayload when the task still has an incomplete blocker.
+ * Unexpected errors are rethrown. Single entry point for all completion paths.
+ */
+export async function checkDependenciesComplete(
+  taskId: string,
+): Promise<DependencyBlockedPayload | null> {
+  try {
+    await assertDependenciesComplete(taskId);
+    return null;
+  } catch (error) {
+    if (error instanceof DependencyBlockedError) {
+      return toDependencyBlockedPayload(error);
     }
     throw error;
   }

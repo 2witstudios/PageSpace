@@ -140,6 +140,8 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/tasks/completion-guard', () => ({
   checkSubTasksComplete: vi.fn().mockResolvedValue(null),
   SUBTASKS_INCOMPLETE_STATUS: 422,
+  checkDependenciesComplete: vi.fn().mockResolvedValue(null),
+  DEPENDENCY_BLOCKED_STATUS: 422,
 }));
 
 // ---------- Imports (after mocks) ----------
