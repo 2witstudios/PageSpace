@@ -532,6 +532,11 @@
       "import": "./dist/canvas/sanitize-css.js",
       "require": "./dist/canvas/sanitize-css.js"
     },
+    "./canvas/render-document": {
+      "types": "./dist/canvas/render-document.d.ts",
+      "import": "./dist/canvas/render-document.js",
+      "require": "./dist/canvas/render-document.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -1166,6 +1171,9 @@
       ],
       "canvas/sanitize-css": [
         "./dist/canvas/sanitize-css.d.ts"
+      ],
+      "canvas/render-document": [
+        "./dist/canvas/render-document.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

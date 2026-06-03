@@ -30,7 +30,6 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false });
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,7 +87,6 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
         return;
       }
       setState((prev) => ({ ...prev, published: false, url: null }));
-      setShowPreview(false);
       toast.success('Page unpublished');
     } catch {
       toast.error('Failed to unpublish page');
@@ -143,9 +141,6 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
       <button className="px-2 py-2 text-sm" onClick={handleCopy}>
         Copy link
       </button>
-      <button className="px-2 py-2 text-sm" onClick={() => setShowPreview((v) => !v)}>
-        {showPreview ? 'Hide preview' : 'Preview'}
-      </button>
       <button
         className="px-2 py-2 text-sm text-red-500 disabled:opacity-50"
         onClick={handleUnpublish}
@@ -153,20 +148,6 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
       >
         {isBusy ? 'Unpublishing…' : 'Unpublish'}
       </button>
-
-      {showPreview && (
-        <div className="absolute right-0 top-full z-10 mt-1 h-[60vh] w-[min(40rem,90vw)] border bg-background shadow-lg">
-          {/* COOP/COEP on the app + the authoritative edge CSP are the task-06 hardening; this iframe omits allow-same-origin and credentials. */}
-          <iframe
-            src={state.url}
-            sandbox="allow-scripts"
-            referrerPolicy="no-referrer"
-            {...{ credentialless: true }}
-            className="w-full h-full border-0"
-            title="Published preview"
-          />
-        </div>
-      )}
     </div>
   );
 };
