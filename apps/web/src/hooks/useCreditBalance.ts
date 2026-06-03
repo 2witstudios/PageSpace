@@ -22,6 +22,12 @@ export interface CreditBalance {
   };
   spendable: number;
   reserved: number;
+  /**
+   * Per-environment switch: true → show the new credits UI; false → show the legacy
+   * daily-quota UI. Constant for the process, so it's preserved across `credits:updated`
+   * socket pushes (whose payload carries only the per-user balance, not the mode).
+   */
+  creditsMode: boolean;
 }
 
 const fetcher = async (url: string): Promise<CreditBalance> => {
@@ -66,13 +72,17 @@ export function useCreditBalance() {
 
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
       mutate(
-        {
+        (current) => ({
           billingEnabled: payload.billingEnabled,
           monthly: payload.monthly,
           topup: payload.topup,
           spendable: payload.spendable,
           reserved: payload.reserved,
-        },
+          // Mode is environment-level (not in the socket payload) — keep the value the
+          // initial fetch established; default OFF until it resolves. The revalidate
+          // below re-reads it authoritatively from /api/credits regardless.
+          creditsMode: current?.creditsMode ?? false,
+        }),
         { revalidate: true },
       );
     };

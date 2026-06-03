@@ -28,8 +28,23 @@ type DB = NodePgDatabase<Record<string, unknown>>;
  * Content-addressed storage means one physical blob may back multiple file records
  * (same storagePath). We only treat a record as orphaned when every sibling sharing
  * that storagePath also has no live references.
+ *
+ * When `restrictToFileIds` is provided, only those file records are considered
+ * (all the same reference + content-addressed sibling checks still apply). This
+ * lets a user-facing delete reap just the files its subtree orphaned instead of
+ * sweeping the whole table inline. An empty array reaps nothing; `undefined`
+ * scans every file (the weekly cron's behaviour).
  */
-export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFile[]> {
+export async function findOrphanedFileRecords(
+  database: DB,
+  restrictToFileIds?: string[],
+): Promise<OrphanedFile[]> {
+  if (restrictToFileIds && restrictToFileIds.length === 0) return [];
+
+  const idFilter = restrictToFileIds
+    ? sql` AND f.id = ANY(${restrictToFileIds})`
+    : sql``;
+
   const result = await database.execute(sql`
     SELECT f.id, f."storagePath", f."driveId", f."sizeBytes", f."createdBy"
     FROM files f
@@ -42,7 +57,7 @@ export async function findOrphanedFileRecords(database: DB): Promise<OrphanedFil
       AND cm."fileId" IS NULL
       AND p.id IS NULL
       AND fc."fileId" IS NULL
-      AND dm."fileId" IS NULL
+      AND dm."fileId" IS NULL${idFilter}
       AND (
         f."storagePath" IS NULL
         OR NOT EXISTS (
@@ -100,14 +115,17 @@ export async function isFileOrphaned(database: DB, fileId: string): Promise<bool
 
 /**
  * Hard-delete file records from the database by ID.
- * Returns the number of records deleted.
+ * Returns the IDs of the records actually deleted. Because the DELETE is
+ * atomic, only the single invocation that removes a given row gets its ID
+ * back — callers can credit storage off this set without double-counting
+ * when two reaps race on the same orphan.
  */
-export async function deleteFileRecords(database: DB, fileIds: string[]): Promise<number> {
-  if (fileIds.length === 0) return 0;
+export async function deleteFileRecords(database: DB, fileIds: string[]): Promise<string[]> {
+  if (fileIds.length === 0) return [];
 
   const result = await database
     .delete(files)
     .where(inArray(files.id, fileIds))
     .returning({ id: files.id });
-  return result.length;
+  return result.map(row => row.id);
 }

@@ -141,6 +141,18 @@ export const isPublicPageRoute = (pathname: string): boolean =>
   pathname.startsWith('/invite/') ||
   pathname.startsWith('/s/');
 
+// Published Canvas pages live on *.pagespace.site and are served from object
+// storage, never by this app. If such a request reaches us (proxy misroute /
+// cutover), it must never be auth-gated — return 404, not a login redirect.
+// Mirrors PUBLISH_HOST in app/api/pages/[pageId]/publish/route.ts.
+export const PUBLISH_BASE_HOST = 'pagespace.site';
+
+export const isPublishedSiteHost = (host: string | null | undefined): boolean => {
+  if (!host) return false;
+  const hostname = host.split(':')[0].toLowerCase(); // strip any port
+  return hostname === PUBLISH_BASE_HOST || hostname.endsWith(`.${PUBLISH_BASE_HOST}`);
+};
+
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||

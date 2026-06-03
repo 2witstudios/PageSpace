@@ -42,6 +42,19 @@ export function isCreditsEnforcementEnabled(): boolean {
   return envBool('CREDITS_ENFORCEMENT_ENABLED', false);
 }
 
+/**
+ * The ONE per-environment switch that selects the whole AI-usage experience, aliasing
+ * the enforcement flag so the same image runs two ways by env alone:
+ *   ON  → credits UI + credits enforcement (the new prepaid model).
+ *   OFF → legacy daily-quota UI + the old per-call daily-limit path (prod stays "the old
+ *         way"); credit metering still runs in the background for observability.
+ * Drives: the AI-route limiter choice, the navbar widget, settings copy, and error copy.
+ * Same env flag as enforcement on purpose — one lever flips presentation AND behaviour.
+ */
+export function isCreditsModeEnabled(): boolean {
+  return isCreditsEnforcementEnabled();
+}
+
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 

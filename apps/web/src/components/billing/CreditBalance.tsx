@@ -80,15 +80,15 @@ export function CreditBalance() {
           </TooltipTrigger>
           <TooltipContent>
             <p className="font-medium">{formatCreditDollars(spendable)} AI credits left</p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-primary-foreground/80">
               Monthly: {formatCreditDollars(monthly.remaining)} of{' '}
               {formatCreditDollars(monthly.allowance)}
             </p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-primary-foreground/80">
               Top-up: {formatCreditDollars(topup.remaining)}
             </p>
             {resetDate && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-primary-foreground/80">
                 Monthly resets {resetDate.toLocaleDateString()}
               </p>
             )}

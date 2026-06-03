@@ -84,8 +84,11 @@ export function useFileDrop({
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
-    // Pre-validate file sizes client-side
-    const maxFileSize = parseInt(process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB || '20') * 1024 * 1024;
+    // Pre-validate file sizes client-side against a generous, tier-blind global
+    // ceiling (1GB = the largest tier's per-file limit). The precise per-tier
+    // limit is enforced server-side at presign; this only catches absurd files
+    // early. Deployments can tighten it via NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB.
+    const maxFileSize = parseInt(process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB || '1024') * 1024 * 1024;
 
     const oversizedFiles = files.filter(f => f.size > maxFileSize);
     if (oversizedFiles.length > 0) {

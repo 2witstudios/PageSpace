@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, sql } from '@pagespace/db/operators'
 import { pages, favorites, pageTags, chatMessages } from '@pagespace/db/schema/core'
 import { pagePermissions } from '@pagespace/db/schema/members'
 import { channelMessages } from '@pagespace/db/schema/chat';
@@ -9,6 +9,7 @@ import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -27,6 +28,25 @@ async function recursivelyDelete(pageId: string, tx: typeof db) {
     await tx.delete(channelMessages).where(eq(channelMessages.pageId, pageId));
 
     await tx.delete(pages).where(eq(pages.id, pageId));
+}
+
+// Collect the file IDs a page subtree references — via file_pages links or via a
+// page's filePath matching a file's storagePath — BEFORE the page rows (and their
+// cascading file_pages links) are deleted. Reaping is then scoped to just these
+// files instead of sweeping the whole files table inside the request.
+async function collectSubtreeFileIds(rootPageId: string): Promise<string[]> {
+  const result = await db.execute(sql`
+    WITH RECURSIVE subtree AS (
+      SELECT id, "filePath" FROM pages WHERE id = ${rootPageId}
+      UNION ALL
+      SELECT p.id, p."filePath" FROM pages p JOIN subtree s ON p."parentId" = s.id
+    )
+    SELECT DISTINCT f.id
+    FROM files f
+    WHERE f.id IN (SELECT fp."fileId" FROM file_pages fp JOIN subtree s ON fp."pageId" = s.id)
+       OR f."storagePath" IN (SELECT "filePath" FROM subtree WHERE "filePath" IS NOT NULL)
+  `);
+  return (result.rows as Array<{ id: string }>).map(row => row.id);
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -51,9 +71,30 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const pageTitle = page.title;
     const driveId = page.driveId;
 
+    // Snapshot the files this subtree references BEFORE deleting — afterwards the
+    // cascaded file_pages links are gone and the set can't be recovered.
+    const candidateFileIds = await collectSubtreeFileIds(pageId);
+
     await db.transaction(async (tx) => {
       await recursivelyDelete(pageId, tx);
     });
+
+    // Deleting the page rows cascades away their file_pages links, so any file
+    // backing only these pages is now orphaned. Reap just those files inline so
+    // the user's storage cap frees immediately rather than waiting for the weekly
+    // cron — scoped by candidateFileIds so a backlog of unrelated orphans can't
+    // make this request block. Best-effort: never fail the delete if reaping
+    // hiccups, and skip the scan entirely when the subtree had no files.
+    if (candidateFileIds.length > 0) {
+      try {
+        const reaped = await reapOrphanedFiles(db, { fileIds: candidateFileIds });
+        if (reaped.dbRecordsDeleted > 0) {
+          loggers.api.info(`Permanent delete reaped ${reaped.dbRecordsDeleted} orphaned file(s)`, { pageId });
+        }
+      } catch (error) {
+        loggers.api.warn('Inline orphan reap after permanent delete failed; weekly cron will retry', { pageId, error: error as Error });
+      }
+    }
 
     // Log permanent deletion for compliance (fire-and-forget)
     const actorInfo = await getActorInfo(userId);

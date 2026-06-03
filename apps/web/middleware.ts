@@ -4,6 +4,7 @@ import {
   createSecureResponse,
   createSecureErrorResponse,
   isPublicPageRoute,
+  isPublishedSiteHost,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
@@ -41,6 +42,15 @@ export async function middleware(req: NextRequest) {
     const { pathname } = req.nextUrl;
     const isProduction = process.env.NODE_ENV === 'production';
     const isAPIRoute = pathname.startsWith('/api');
+
+    // Published-page hosts (*.pagespace.site) are public and served from object
+    // storage, not by this app. A request only reaches us via a proxy misroute
+    // or mid-cutover state — it must never be auth-gated, so return a clean 404
+    // instead of redirecting to /auth/signin.
+    if (isPublishedSiteHost(req.headers.get('host'))) {
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
+      return new NextResponse(null, { status: 404, headers: response.headers });
+    }
 
     // Non-cloud route blocking (defense-in-depth)
     // Runs before all other checks to prevent cloud-only routes from executing

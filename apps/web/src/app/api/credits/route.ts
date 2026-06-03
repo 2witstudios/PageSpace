@@ -6,6 +6,7 @@ import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getCreditBalance } from '@/lib/subscription/credit-balance';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isCreditsModeEnabled } from '@pagespace/lib/billing/credit-pricing';
 
 const isSubscriptionTier = (value: string): value is SubscriptionTier =>
   value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
@@ -16,6 +17,10 @@ const isSubscriptionTier = (value: string): value is SubscriptionTier =>
  * Returns the monthly allowance bucket (resets each period), the never-expiring
  * top-up bucket, the spendable total (net of in-flight reservations), and the
  * reserved amount. Drives the credit-balance widget and the buy-credits surfaces.
+ *
+ * Also carries `creditsMode` (the per-environment switch, read at request time) so the
+ * client can render the new credits UI vs the legacy daily-quota UI from the same image
+ * — NEXT_PUBLIC_* can't differ per-env, so the mode must come from the server at runtime.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -41,7 +46,7 @@ export async function GET(request: NextRequest) {
       resourceId: 'self',
     });
 
-    return NextResponse.json(balance);
+    return NextResponse.json({ ...balance, creditsMode: isCreditsModeEnabled() });
   } catch (error) {
     console.error('Error fetching credit balance:', error);
     return NextResponse.json({ error: 'Failed to fetch credit balance' }, { status: 500 });
