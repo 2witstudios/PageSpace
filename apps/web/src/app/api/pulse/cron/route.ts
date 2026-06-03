@@ -36,6 +36,9 @@ import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
@@ -132,6 +135,22 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   // Get user info
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) throw new Error('User not found');
+
+  // Prepaid credit gate — the cron path bills through the SAME pipeline as the
+  // on-demand route, so background generation can't spend uncapped. Denied users
+  // (out of credits / over the in-flight cap) are simply skipped this run; the
+  // reservation is released on any pre-settle exit and settled by trackUsage on
+  // success. Gated up front so we don't do the heavy context-gathering for a user
+  // we won't bill.
+  const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier);
+  if (!gate.allowed) {
+    loggers.api.info('Pulse cron: skipped user (credit gate denied)', {
+      userId,
+      reason: gate.reason,
+    });
+    return;
+  }
+  const holdId = gate.holdId;
 
   const userName = user.name || user.email?.split('@')[0] || 'there';
   // Use stored timezone or default to UTC
@@ -766,21 +785,32 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   });
 
   if (isProviderError(providerResult)) {
+    // Never reached a model call — free the reservation so it doesn't sit until expiry.
+    if (holdId) void releaseHold(holdId).catch(() => {});
     throw new Error(providerResult.error);
   }
 
   // Generate summary
-  const result = await generateText({
-    model: providerResult.model,
-    system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
-    messages: [{ role: 'user', content: userPrompt }],
-    temperature: 0.7,
-    maxRetries: 3,
-  });
+  let result;
+  try {
+    result = await generateText({
+      model: providerResult.model,
+      system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
+      messages: [{ role: 'user', content: userPrompt }],
+      temperature: 0.7,
+      maxRetries: 3,
+    });
+  } catch (err) {
+    // Generation failed before any billable usage — release the hold and rethrow so
+    // the per-user loop records the error.
+    if (holdId) void releaseHold(holdId).catch(() => {});
+    throw err;
+  }
 
   const summary = result.text.trim();
 
-  // Track AI usage
+  // Track AI usage. Passing holdId hands the reservation to trackUsage, which settles
+  // it atomically with the debit (or releases it if there was nothing billable).
   const usage = result.usage;
   AIMonitoring.trackUsage({
     userId,
@@ -790,6 +820,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     outputTokens: usage?.outputTokens,
     totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
     providerCostDollars: extractOpenRouterCostDollars(result.steps),
+    holdId,
     success: true,
   });
 
