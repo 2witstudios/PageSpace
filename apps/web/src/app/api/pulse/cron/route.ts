@@ -38,6 +38,9 @@ import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
@@ -106,13 +109,15 @@ export async function POST(req: Request) {
     loggers.api.info(`Pulse cron: Generating summaries for ${usersNeedingSummary.length} users`);
 
     let generated = 0;
+    let skipped = 0;
     const errors: string[] = [];
 
     // Generate summaries for each user (with rate limiting)
     for (const userId of usersNeedingSummary) {
       try {
-        await generatePulseForUser(userId, now);
-        generated++;
+        const didGenerate = await generatePulseForUser(userId, now);
+        if (didGenerate) generated++;
+        else skipped++;
 
         // Add a small delay between users to avoid overwhelming the AI provider
         if (usersNeedingSummary.length > 1) {
@@ -125,11 +130,14 @@ export async function POST(req: Request) {
       }
     }
 
-    loggers.api.info(`Pulse cron: Complete. Generated ${generated}/${usersNeedingSummary.length} summaries`);
+    loggers.api.info(
+      `Pulse cron: Complete. Generated ${generated}/${usersNeedingSummary.length} summaries (${skipped} skipped by credit gate)`,
+    );
 
     return NextResponse.json({
       message: 'Pulse generation complete',
       generated,
+      skipped,
       total: usersNeedingSummary.length,
       errors: errors.length > 0 ? errors : undefined,
     });
@@ -140,11 +148,60 @@ export async function POST(req: Request) {
   }
 }
 
-async function generatePulseForUser(userId: string, now: Date): Promise<void> {
+/**
+ * Generate and persist one user's pulse summary. Returns true if a summary was
+ * generated, false if the user was skipped by the credit gate (out of credits / over
+ * the in-flight cap). Throws on real failures so the caller records them.
+ */
+async function generatePulseForUser(userId: string, now: Date): Promise<boolean> {
   // Get user info
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) throw new Error('User not found');
 
+  // Prepaid credit gate — the cron path bills through the SAME pipeline as the
+  // on-demand route, so background generation can't spend uncapped. Denied users
+  // (out of credits / over the in-flight cap) are simply skipped this run; the
+  // reservation is released on any pre-settle exit and settled by trackUsage on
+  // success. Gated up front so we don't do the heavy context-gathering for a user
+  // we won't bill.
+  const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier);
+  if (!gate.allowed) {
+    loggers.api.info('Pulse cron: skipped user (credit gate denied)', {
+      userId,
+      reason: gate.reason,
+    });
+    return false;
+  }
+
+  // The gate's reservation is owned here until trackUsage settles it (handoff). The
+  // finally releases it on ANY pre-settle exit — including a throw from the context
+  // gathering below — so a transient failure can't leave the hold sitting until TTL,
+  // mirroring the on-demand /api/pulse/generate route.
+  const holdId = gate.holdId;
+  let holdHandedOff = false;
+  try {
+    await buildAndPersistPulse(user, now, holdId, () => {
+      holdHandedOff = true;
+    });
+    return true;
+  } finally {
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
+  }
+}
+
+/**
+ * Build the workspace context, generate the summary, bill it, and persist it. The
+ * reservation `holdId` is handed to trackUsage on success (call `markHandedOff` so the
+ * caller's finally won't double-release); any throw before that leaves the caller to
+ * release the hold.
+ */
+async function buildAndPersistPulse(
+  user: typeof users.$inferSelect,
+  now: Date,
+  holdId: string | undefined,
+  markHandedOff: () => void,
+): Promise<void> {
+  const userId = user.id;
   const userName = user.name || user.email?.split('@')[0] || 'there';
   // Use stored timezone or default to UTC
   const userTimezone = normalizeTimezone(user.timezone);
@@ -778,10 +835,12 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   });
 
   if (isProviderError(providerResult)) {
+    // Throws before any model call — the caller's finally releases the reservation.
     throw new Error(providerResult.error);
   }
 
-  // Generate summary
+  // Generate summary. A throw here propagates to the caller, whose finally releases
+  // the still-unsettled hold.
   const result = await generateText({
     model: providerResult.model,
     system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
@@ -792,7 +851,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
   const summary = result.text.trim();
 
-  // Track AI usage
+  // Track AI usage. Passing holdId hands the reservation to trackUsage, which settles
+  // it atomically with the debit (or releases it if there was nothing billable).
   const usage = result.usage;
   AIMonitoring.trackUsage({
     userId,
@@ -803,8 +863,11 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     outputTokens: usage?.outputTokens,
     totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
     providerCostDollars: extractOpenRouterCostDollars(result.steps),
+    holdId,
     success: true,
   });
+  // The hold is now owned by trackUsage — keep the caller's finally from releasing it.
+  markHandedOff();
 
   // Extract greeting
   let greeting: string | null = null;

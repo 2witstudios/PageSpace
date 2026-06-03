@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.E2E_BASE_URL ?? process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000';
+const mockPort = Number(process.env.E2E_MOCK_OPENROUTER_PORT ?? 4998);
 
 export default defineConfig({
   testDir: './tests',
@@ -12,6 +13,19 @@ export default defineConfig({
   use: {
     baseURL,
     trace: 'on-first-retry',
+  },
+  // The metering specs need the web app to be running with its AI provider pointed at
+  // the mock below. Start the app separately with (at least):
+  //   CREDITS_ENFORCEMENT_ENABLED=true (OFF by default — the enforcement specs need it ON)
+  //   OPENROUTER_DEFAULT_API_KEY=sk-e2e
+  //   OPENROUTER_BASE_URL=http://127.0.0.1:4998/api/v1
+  //   CRON_SECRET / STRIPE_WEBHOOK_SECRET / CSRF_SECRET shared with this process's env
+  // See apps/e2e/README.metering.md.
+  webServer: {
+    command: 'bun run support/mock-server-main.ts',
+    url: `http://127.0.0.1:${mockPort}/__health`,
+    reuseExistingServer: !process.env.CI,
+    timeout: 30_000,
   },
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',
