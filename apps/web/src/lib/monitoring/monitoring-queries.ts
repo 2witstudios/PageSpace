@@ -6,6 +6,7 @@ import { db } from '@pagespace/db/db'
 import { sql, eq, and, or, gte, lte, desc, count } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
+import { creditLedger } from '@pagespace/db/schema/credits';
 import type { SQL } from '@pagespace/db/operators';
 
 /**
@@ -439,6 +440,298 @@ export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
     slowQueries,
     metricTypes,
   };
+}
+
+// ── AI unit economics (real cost vs charged credits vs margin) ────────────────
+//
+// The metering data already exists; these queries only aggregate it:
+//   - creditLedger.realCostCents   — our REAL provider cost, pre-markup (cents)
+//   - creditLedger.amountCents      — full intended charge to the user (signed)
+//   - creditLedger.appliedCents     — actually debited from the balance (signed)
+//   - 'adjustment' rows             — uncovered debt (charge we couldn't collect)
+// Each AI call has exactly one entryType='usage' ledger row, soft-linked to its
+// aiUsageLogs row via aiUsageLogId, so a join reaches provider/model/timestamp.
+// All magnitudes are taken as ABS() because usage/debt rows store negative values.
+
+export type Granularity = 'day' | 'month';
+
+export interface UnitEconomicsSummary {
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  debtCents: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface MarginByPeriodRow {
+  period: string;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface MarginByModelRow {
+  provider: string;
+  model: string;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface TopSpenderRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface DebtByUserRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  debtCents: number;
+}
+
+/**
+ * Gross margin as a percentage of real cost: (charged − real) / real × 100.
+ * Returns null when real cost is non-positive, since the percentage is then
+ * undefined (a charge against zero cost is infinite margin, not a number).
+ */
+export function computeMarginPct(realCostCents: number, chargedCents: number): number | null {
+  if (!realCostCents || realCostCents <= 0) return null;
+  return ((chargedCents - realCostCents) / realCostCents) * 100;
+}
+
+// Reusable SQL aggregate expressions over the ledger usage rows.
+//
+// IMPORTANT (sub-cent accuracy): a single cheap-model call can cost a fraction
+// of a cent. The ledger stores the PRECISE charge in `chargeMillicents`
+// (1/1000 cent) and the precise real cost lives in `aiUsageLogs.cost` (dollars);
+// the whole-cent `amountCents`/`realCostCents` columns are per-row rounded for
+// audit. Summing the rounded columns would round high-volume sub-cent traffic to
+// $0 and report a bogus margin — so we SUM the precise fields and round ONCE at
+// the end. `appliedCents` is exempt: it is the whole-cent amount actually debited
+// (the sub-cent remainder is banked in pendingMillicents), so its sum is exact.
+const realCostSum = sql<number>`ROUND(COALESCE(SUM(${aiUsageLogs.cost}::numeric), 0) * 100)::int`;
+const chargedSum = sql<number>`ROUND(COALESCE(SUM(COALESCE(${creditLedger.chargeMillicents}, ABS(${creditLedger.amountCents}) * 1000)), 0) / 1000.0)::int`;
+const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 0)::int`;
+// Debt comes from 'adjustment' rows, which carry only the whole-cent shortfall in
+// `amountCents` (no chargeMillicents) — so debt is summed from amountCents.
+const debtSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.amountCents})), 0)::int`;
+
+// Usage-row conditions: entryType='usage' plus optional time range.
+//
+// The window is anchored on the ledger's OWN `createdAt`, never on
+// `aiUsageLogs.timestamp`. The aiUsageLog is a soft link that can be purged on
+// retention; filtering (or grouping/joining) on its timestamp would drop the
+// surviving ledger row from these aggregates and silently under-report charged
+// credits and margin. The ledger is the source of truth for what we billed, so we
+// LEFT JOIN aiUsageLogs only to enrich real provider cost when it's still present.
+function usageConditions(startDate?: Date, endDate?: Date): SQL[] {
+  const conditions: SQL[] = [eq(creditLedger.entryType, 'usage')];
+  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
+  return conditions;
+}
+
+/**
+ * Total real cost vs charged credits, gross margin, request count, and
+ * uncovered debt across the period.
+ */
+export async function getUnitEconomicsSummary(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<UnitEconomicsSummary> {
+  const usage = await db
+    .select({
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)));
+
+  // Debt is summed directly from adjustment rows (no join): an adjustment can
+  // outlive its aiUsageLog after retention purges, and we never want to
+  // under-report outstanding debt. Filter on the ledger's own createdAt.
+  const debtConditions: SQL[] = [eq(creditLedger.entryType, 'adjustment')];
+  if (startDate) debtConditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) debtConditions.push(lte(creditLedger.createdAt, endDate));
+
+  const debt = await db
+    .select({ debtCents: debtSum })
+    .from(creditLedger)
+    .where(and(...debtConditions));
+
+  const realCostCents = usage[0]?.realCostCents ?? 0;
+  const chargedCents = usage[0]?.chargedCents ?? 0;
+  const appliedCents = usage[0]?.appliedCents ?? 0;
+  const requestCount = usage[0]?.requestCount ?? 0;
+  const debtCents = debt[0]?.debtCents ?? 0;
+
+  return {
+    realCostCents,
+    chargedCents,
+    appliedCents,
+    requestCount,
+    debtCents,
+    marginCents: chargedCents - realCostCents,
+    marginPct: computeMarginPct(realCostCents, chargedCents),
+  };
+}
+
+/**
+ * Margin per period (day or month) over the requested window.
+ */
+export async function getMarginByPeriod(
+  startDate?: Date,
+  endDate?: Date,
+  granularity: Granularity = 'day',
+): Promise<MarginByPeriodRow[]> {
+  if (granularity !== 'day' && granularity !== 'month') {
+    throw new Error(`Invalid granularity: ${granularity}`);
+  }
+  // Bucket on the ledger's own createdAt (not the purgeable aiUsageLogs.timestamp),
+  // so a row whose usage log was reaped still lands in the right period. Bound
+  // parameter, not string interpolation — DATE_TRUNC's unit is a value.
+  const periodExpr = sql<string>`DATE_TRUNC(${granularity}, ${creditLedger.createdAt})`;
+
+  const rows = await db
+    .select({
+      period: periodExpr,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(periodExpr)
+    .orderBy(desc(periodExpr))
+    .limit(366);
+
+  return rows.map((r) => ({
+    ...r,
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
+/**
+ * Margin per provider/model — surfaces which models earn or lose money.
+ */
+export async function getMarginByModel(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<MarginByModelRow[]> {
+  const rows = await db
+    .select({
+      provider: aiUsageLogs.provider,
+      model: aiUsageLogs.model,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model)
+    .orderBy(desc(realCostSum))
+    .limit(50);
+
+  // provider/model are null for ledger rows whose usage log was purged — bucket
+  // those under 'unknown' rather than dropping their charged credits.
+  return rows.map((r) => ({
+    ...r,
+    provider: r.provider ?? 'unknown',
+    model: r.model ?? 'unknown',
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
+/**
+ * Top spenders by charged credits, with their real cost and margin.
+ */
+export async function getTopSpendersByMargin(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 10,
+): Promise<TopSpenderRow[]> {
+  const rows = await db
+    .select({
+      userId: creditLedger.userId,
+      userName: users.name,
+      userEmail: users.email,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(creditLedger.userId, users.name, users.email)
+    .orderBy(desc(chargedSum))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    ...r,
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
+/**
+ * Users carrying the most uncovered debt (sum of 'adjustment' rows).
+ */
+export async function getOutstandingDebtByUser(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 10,
+): Promise<DebtByUserRow[]> {
+  const conditions: SQL[] = [eq(creditLedger.entryType, 'adjustment')];
+  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
+
+  const rows = await db
+    .select({
+      userId: creditLedger.userId,
+      userName: users.name,
+      userEmail: users.email,
+      debtCents: debtSum,
+    })
+    .from(creditLedger)
+    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .where(and(...conditions))
+    .groupBy(creditLedger.userId, users.name, users.email)
+    .orderBy(desc(debtSum))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    userId: r.userId,
+    userName: r.userName,
+    userEmail: r.userEmail,
+    debtCents: r.debtCents,
+  }));
 }
 
 /**

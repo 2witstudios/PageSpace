@@ -15,7 +15,8 @@ export default function AdminLayoutClient({
   const pathname = usePathname();
   const router = useRouter();
   const currentTab = pathname === '/admin' ? 'overview' :
-                     pathname.includes('/global-prompt') ? 'global-prompt' : 'overview';
+                     pathname.includes('/global-prompt') ? 'global-prompt' :
+                     pathname.includes('/unit-economics') ? 'unit-economics' : 'overview';
 
   return (
     <div className="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-10">
@@ -45,6 +46,9 @@ export default function AdminLayoutClient({
             </TabsTrigger>
             <TabsTrigger value="global-prompt" asChild>
               <Link href="/admin/global-prompt">Global Prompt</Link>
+            </TabsTrigger>
+            <TabsTrigger value="unit-economics" asChild>
+              <Link href="/admin/unit-economics">Unit Economics</Link>
             </TabsTrigger>
           </TabsList>
 

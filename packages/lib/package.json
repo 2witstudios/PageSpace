@@ -62,10 +62,20 @@
       "import": "./dist/billing/credit-backfill.js",
       "require": "./dist/billing/credit-backfill.js"
     },
+    "./billing/credit-funding": {
+      "types": "./dist/billing/credit-funding.d.ts",
+      "import": "./dist/billing/credit-funding.js",
+      "require": "./dist/billing/credit-funding.js"
+    },
     "./billing/credit-core": {
       "types": "./dist/billing/credit-core.d.ts",
       "import": "./dist/billing/credit-core.js",
       "require": "./dist/billing/credit-core.js"
+    },
+    "./billing/credit-consume": {
+      "types": "./dist/billing/credit-consume.d.ts",
+      "import": "./dist/billing/credit-consume.js",
+      "require": "./dist/billing/credit-consume.js"
     },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
@@ -411,6 +421,21 @@
       "types": "./dist/email-templates/FeedbackNotificationEmail.d.ts",
       "import": "./dist/email-templates/FeedbackNotificationEmail.js",
       "require": "./dist/email-templates/FeedbackNotificationEmail.js"
+    },
+    "./email-templates/CreditsChangeEmail": {
+      "types": "./dist/email-templates/CreditsChangeEmail.d.ts",
+      "import": "./dist/email-templates/CreditsChangeEmail.js",
+      "require": "./dist/email-templates/CreditsChangeEmail.js"
+    },
+    "./email-templates/credits-change-content": {
+      "types": "./dist/email-templates/credits-change-content.d.ts",
+      "import": "./dist/email-templates/credits-change-content.js",
+      "require": "./dist/email-templates/credits-change-content.js"
+    },
+    "./email-templates/render-email": {
+      "types": "./dist/email-templates/render-email.d.ts",
+      "import": "./dist/email-templates/render-email.js",
+      "require": "./dist/email-templates/render-email.js"
     },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
@@ -869,6 +894,9 @@
       "billing/credit-core": [
         "./dist/billing/credit-core.d.ts"
       ],
+      "billing/credit-consume": [
+        "./dist/billing/credit-consume.d.ts"
+      ],
       "billing/credit-pricing": [
         "./dist/billing/credit-pricing.d.ts"
       ],
@@ -877,6 +905,9 @@
       ],
       "billing/credit-backfill": [
         "./dist/billing/credit-backfill.d.ts"
+      ],
+      "billing/credit-funding": [
+        "./dist/billing/credit-funding.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
@@ -1057,6 +1088,15 @@
       ],
       "email-templates/FeedbackNotificationEmail": [
         "./dist/email-templates/FeedbackNotificationEmail.d.ts"
+      ],
+      "email-templates/CreditsChangeEmail": [
+        "./dist/email-templates/CreditsChangeEmail.d.ts"
+      ],
+      "email-templates/credits-change-content": [
+        "./dist/email-templates/credits-change-content.d.ts"
+      ],
+      "email-templates/render-email": [
+        "./dist/email-templates/render-email.d.ts"
       ],
       "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"

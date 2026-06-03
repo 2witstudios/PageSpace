@@ -28,19 +28,19 @@ describe('Subscription Plans', () => {
       expect(PLANS.business.price.monthly).toBe(100);
     });
 
-    it('should have correct AI call limits for each tier', () => {
-      // Standard AI calls
-      expect(PLANS.free.limits.aiCalls).toBe(50);
-      expect(PLANS.pro.limits.aiCalls).toBe(200);
-      expect(PLANS.founder.limits.aiCalls).toBe(500);
-      expect(PLANS.business.limits.aiCalls).toBe(1000);
+    it('should grant a monthly AI-credit allowance per tier, increasing by price', () => {
+      // Allowances come from the canonical billing constants (whole cents).
+      expect(PLANS.free.limits.monthlyCreditsCents).toBeGreaterThan(0);
+      expect(PLANS.pro.limits.monthlyCreditsCents).toBeGreaterThan(PLANS.free.limits.monthlyCreditsCents);
+      expect(PLANS.founder.limits.monthlyCreditsCents).toBeGreaterThan(PLANS.pro.limits.monthlyCreditsCents);
+      expect(PLANS.business.limits.monthlyCreditsCents).toBeGreaterThan(PLANS.founder.limits.monthlyCreditsCents);
     });
 
-    it('should have correct pro AI call limits for each tier', () => {
-      expect(PLANS.free.limits.pro).toBe(0);
-      expect(PLANS.pro.limits.pro).toBe(50);
-      expect(PLANS.founder.limits.pro).toBe(100);
-      expect(PLANS.business.limits.pro).toBe(500);
+    it('should confine free tier to standard models and grant Pro models on paid tiers', () => {
+      expect(PLANS.free.limits.proModels).toBe(false);
+      expect(PLANS.pro.limits.proModels).toBe(true);
+      expect(PLANS.founder.limits.proModels).toBe(true);
+      expect(PLANS.business.limits.proModels).toBe(true);
     });
 
     it('should have correct storage limits for each tier', () => {
@@ -212,10 +212,10 @@ describe('Subscription Plans', () => {
       }
     });
 
-    it('should return plans with increasing AI call limits', () => {
+    it('should return plans with increasing monthly AI-credit allowances', () => {
       const plans = getAllPlans();
       for (let i = 1; i < plans.length; i++) {
-        expect(plans[i].limits.aiCalls).toBeGreaterThan(plans[i - 1].limits.aiCalls);
+        expect(plans[i].limits.monthlyCreditsCents).toBeGreaterThan(plans[i - 1].limits.monthlyCreditsCents);
       }
     });
   });

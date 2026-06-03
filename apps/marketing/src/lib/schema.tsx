@@ -3,6 +3,7 @@
  * @see https://schema.org/
  * @see https://developers.google.com/search/docs/appearance/structured-data
  */
+import { MONTHLY_CREDITS } from "./credits";
 
 // In development, set NEXT_PUBLIC_MARKETING_URL and NEXT_PUBLIC_APP_URL to distinct local origins
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
@@ -86,7 +87,7 @@ export const productSchema = {
       name: "Free",
       price: "0",
       priceCurrency: "USD",
-      description: "500MB storage, 50 daily AI calls",
+      description: `500MB storage, ${MONTHLY_CREDITS.free}/month in AI credits, standard models`,
       availability: "https://schema.org/InStock",
     },
     {
@@ -100,7 +101,7 @@ export const productSchema = {
         priceCurrency: "USD",
         billingDuration: "P1M",
       },
-      description: "2GB storage, 200 daily AI calls, 50 Pro AI sessions",
+      description: `2GB storage, ${MONTHLY_CREDITS.pro}/month in AI credits, standard and Pro models`,
       availability: "https://schema.org/InStock",
     },
     {
@@ -114,7 +115,7 @@ export const productSchema = {
         priceCurrency: "USD",
         billingDuration: "P1M",
       },
-      description: "10GB storage, 500 daily AI calls, 100 Pro AI sessions",
+      description: `10GB storage, ${MONTHLY_CREDITS.founder}/month in AI credits, standard and Pro models`,
       availability: "https://schema.org/InStock",
     },
     {
@@ -128,7 +129,7 @@ export const productSchema = {
         priceCurrency: "USD",
         billingDuration: "P1M",
       },
-      description: "50GB storage, 1000 daily AI calls, 500 Pro AI sessions",
+      description: `50GB storage, ${MONTHLY_CREDITS.business}/month in AI credits, standard and Pro models`,
       availability: "https://schema.org/InStock",
     },
   ],

@@ -1,6 +1,7 @@
 import { Crown, Zap, Shield, Star } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { stripeConfig } from '../stripe-config';
+import { MONTHLY_CREDIT_CENTS, MONTHLY_CREDITS } from './credits';
 
 export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
 
@@ -29,8 +30,18 @@ export interface PlanDefinition {
   accentColor: string;
   description: string;
   limits: {
-    aiCalls: number;
-    pro: number;
+    /**
+     * Monthly included AI-credit allowance, in whole cents of customer-facing credit
+     * value. Sourced from the canonical billing constants via `./credits`. Credits
+     * are the sole AI volume limiter (the old per-day call counts are retired); users
+     * can buy more top-up credits anytime.
+     */
+    monthlyCreditsCents: number;
+    /**
+     * Whether this tier can use the premium "Pro" AI models. Free tiers are confined
+     * to standard models (model-tier gating is kept); paid tiers get standard + Pro.
+     */
+    proModels: boolean;
     storage: {
       bytes: number;
       formatted: string;
@@ -66,8 +77,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'Perfect for getting started with PageSpace',
     limits: {
-      aiCalls: 50,
-      pro: 0,
+      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.free,
+      proModels: false,
       storage: {
         bytes: 500 * 1024 * 1024, // 500MB
         formatted: '500MB',
@@ -78,14 +89,15 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '50 AI calls per day', included: true },
+      { name: `${MONTHLY_CREDITS.free}/month in AI credits`, included: true },
+      { name: 'Buy more credits anytime', included: true },
+      { name: 'Standard AI models', included: true },
       { name: '500MB storage', included: true },
       { name: '20MB max file size', included: true },
       { name: 'Basic processing', included: true },
       { name: 'Community support', included: true },
-      { name: 'Pro AI calls', included: false },
+      { name: 'Pro AI models', included: false },
       { name: 'Priority processing', included: false },
-      { name: 'Advanced AI models', included: false },
       { name: 'Priority support', included: false },
       { name: 'Enterprise features', included: false },
     ],
@@ -111,8 +123,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,
     limits: {
-      aiCalls: 200,
-      pro: 50,
+      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.pro,
+      proModels: true,
       storage: {
         bytes: 2 * 1024 * 1024 * 1024, // 2GB
         formatted: '2GB',
@@ -123,14 +135,13 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '200 AI calls per day', included: true, description: '4x more than Free' },
-      { name: '50 Pro AI calls', included: true, description: 'Advanced AI reasoning' },
+      { name: `${MONTHLY_CREDITS.pro}/month in AI credits`, included: true, description: '3x more than Free' },
+      { name: 'Buy more credits anytime', included: true },
+      { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: '2GB storage', included: true, description: '4x more than Free' },
       { name: '50MB max file size', included: true, description: '2.5x larger files' },
       { name: 'Priority processing', included: true },
-      { name: 'Advanced AI models', included: true },
       { name: 'Priority support', included: true },
-      { name: 'Pro AI calls', included: true },
       { name: 'Community support', included: true },
       { name: 'Enterprise features', included: false },
     ],
@@ -155,8 +166,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     description: 'For power users who want maximum value',
     stripePriceId: STRIPE_PRICE_ID_FOUNDER,
     limits: {
-      aiCalls: 500,
-      pro: 100,
+      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.founder,
+      proModels: true,
       storage: {
         bytes: 10 * 1024 * 1024 * 1024, // 10GB
         formatted: '10GB',
@@ -167,14 +178,13 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '500 AI calls per day', included: true, description: '10x more than Free' },
-      { name: '100 Pro AI calls', included: true, description: 'Advanced AI reasoning' },
+      { name: `${MONTHLY_CREDITS.founder}/month in AI credits`, included: true, description: '10x more than Free' },
+      { name: 'Buy more credits anytime', included: true },
+      { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: '10GB storage', included: true, description: '20x more than Free' },
       { name: '50MB max file size', included: true, description: '2.5x larger files' },
       { name: 'Priority processing', included: true },
-      { name: 'Advanced AI models', included: true },
       { name: 'Priority support', included: true },
-      { name: 'Pro AI calls', included: true },
       { name: 'Community support', included: true },
       { name: 'Enterprise features', included: false },
     ],
@@ -194,8 +204,8 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     description: 'Enterprise-grade features for large teams',
     stripePriceId: STRIPE_PRICE_ID_BUSINESS,
     limits: {
-      aiCalls: 1000,
-      pro: 500,
+      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.business,
+      proModels: true,
       storage: {
         bytes: 50 * 1024 * 1024 * 1024, // 50GB
         formatted: '50GB',
@@ -206,15 +216,14 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: '1000 AI calls per day', included: true, description: '20x more than Free' },
-      { name: '500 Pro AI calls', included: true, description: 'Maximum AI reasoning' },
+      { name: `${MONTHLY_CREDITS.business}/month in AI credits`, included: true, description: '20x more than Free' },
+      { name: 'Buy more credits anytime', included: true },
+      { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
       { name: '50GB storage', included: true, description: '100x more than Free' },
       { name: '100MB max file size', included: true, description: '5x larger files' },
       { name: 'Enterprise processing', included: true },
-      { name: 'Advanced AI models', included: true },
       { name: 'Priority support', included: true },
       { name: 'Enterprise features', included: true },
-      { name: 'Pro AI calls', included: true },
       { name: 'Community support', included: true },
     ],
   },

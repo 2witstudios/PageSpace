@@ -2,6 +2,7 @@ import Link from "next/link";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
+import { MONTHLY_CREDITS } from "@/lib/credits";
 
 export const metadata = pageMetadata.terms;
 
@@ -124,11 +125,14 @@ export default function TermsOfService() {
               PageSpace offers the following subscription plans:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Free Plan:</strong> 50 AI calls per day, 500MB storage</li>
-              <li><strong>Pro Plan ($15/month):</strong> 200 AI calls per day, 50 Pro AI sessions per month, 2GB storage</li>
-              <li><strong>Founder Plan ($50/month):</strong> 500 AI calls per day, 100 Pro AI sessions per month, 10GB storage, priority support</li>
-              <li><strong>Business Plan ($100/month):</strong> 1,000 AI calls per day, 500 Pro AI sessions per month, 50GB storage, priority support</li>
+              <li><strong>Free Plan:</strong> {MONTHLY_CREDITS.free}/month in AI credits, standard models, 500MB storage</li>
+              <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro}/month in AI credits, standard and Pro models, 2GB storage</li>
+              <li><strong>Founder Plan ($50/month):</strong> {MONTHLY_CREDITS.founder}/month in AI credits, standard and Pro models, 10GB storage, priority support</li>
+              <li><strong>Business Plan ($100/month):</strong> {MONTHLY_CREDITS.business}/month in AI credits, standard and Pro models, 50GB storage, priority support</li>
             </ul>
+            <p className="mb-4">
+              Each plan&#39;s monthly AI-credit allowance meters AI usage and resets at the start of each billing period; unused monthly credits do not roll over. Additional credits may be purchased at any time as one-time top-ups, which do not expire at the monthly reset. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.
+            </p>
 
             <h3 className="text-xl font-semibold mb-3">11.2 Billing and Payment</h3>
             <ul className="list-disc pl-6 mb-4">
@@ -140,9 +144,9 @@ export default function TermsOfService() {
               <li>No refunds are provided for partial months of service</li>
             </ul>
 
-            <h3 className="text-xl font-semibold mb-3">11.3 Usage Limits</h3>
+            <h3 className="text-xl font-semibold mb-3">11.3 AI Credits and Usage Limits</h3>
             <p className="mb-4">
-              Each subscription plan includes specific usage limits. Exceeding these limits may result in service throttling or temporary suspension until your next billing cycle.
+              AI usage is metered against your plan&#39;s monthly AI-credit allowance. When your available credits are exhausted, AI features pause until you purchase additional credits or your monthly allowance resets at the start of the next billing period; all non-AI features (documents, tasks, channels, and collaboration) remain available. AI-credit prices and allowances may be adjusted with reasonable notice. Storage and file-size limits also apply per plan, and exceeding them may result in service throttling or temporary suspension until your next billing cycle.
             </p>
           </section>
 

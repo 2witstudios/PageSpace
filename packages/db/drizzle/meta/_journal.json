@@ -1023,6 +1023,13 @@
       "when": 1780438613632,
       "tag": "0145_flawless_living_mummy",
       "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1780453557070,
+      "tag": "0146_furry_abomination",
+      "breakpoints": true
     }
   ]
 }

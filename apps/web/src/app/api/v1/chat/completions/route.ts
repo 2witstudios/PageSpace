@@ -36,6 +36,10 @@ import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 export const maxDuration = 300;
 
@@ -103,6 +107,20 @@ export async function POST(request: Request): Promise<Response> {
   if (isProviderError(providerResult)) {
     return NextResponse.json({ error: providerResult.error }, { status: providerResult.status });
   }
+
+  // 6b. Prepaid credit gate: block out-of-credits users before any model invocation.
+  // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+  const [gateUser] = await db
+    .select({ subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, authResult.userId));
+  const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+  if (!creditGate.allowed) {
+    auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: creditGate.reason }, riskScore: 0 });
+    return creditGateErrorResponse(creditGate.reason);
+  }
+  // The gate's reservation for this call, released when usage is billed in onFinish.
+  const holdId = creditGate.holdId;
 
   // 7. Build system prompt from agent page config
   const systemPrompt = page.systemPrompt
@@ -221,6 +239,7 @@ export async function POST(request: Request): Promise<Response> {
         messageId: assistantId,
         pageId,
         success: true,
+        holdId,
         metadata: { via: 'openai_api_v1' },
       }).catch((err: unknown) => {
         loggers.ai.error('OpenAI API: failed to track usage', err as Error);
@@ -245,6 +264,10 @@ export async function POST(request: Request): Promise<Response> {
         controller.close();
       } catch (err) {
         loggers.ai.error('OpenAI API: stream failed', err as Error);
+        // The stream errored before onFinish could settle the charge, so the gate's
+        // reservation would otherwise linger until TTL/reconcile — leaving the user
+        // artificially short on credits. Release it now (idempotent if already settled).
+        if (holdId) await releaseHold(holdId).catch(() => {});
         controller.error(err);
       }
     },

@@ -110,6 +110,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
+// Mock the prepaid-credit funding shell. The route's unit tests must NOT load the real
+// billing module — it opens a pg pool and drives a query chain the mock db can't satisfy,
+// which would turn every funding-relevant event into a 500. Funding correctness lives in
+// packages/lib/src/billing/__tests__/credit-funding.test.ts; here we only assert the wiring.
+const mockApplyStripeFunding = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/credit-funding', () => ({
+  applyStripeFunding: mockApplyStripeFunding,
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -256,6 +265,7 @@ describe('POST /api/stripe/webhook', () => {
     mockInsertOnConflict.mockResolvedValue(undefined);
     mockUpdateWhere.mockResolvedValue(undefined);
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockApplyStripeFunding.mockResolvedValue(undefined);
   });
 
   describe('Signature Verification', () => {
@@ -565,6 +575,42 @@ describe('POST /api/stripe/webhook', () => {
       expect(response.status).toBe(200);
       expect(body.received).toBe(true);
     });
+
+    it('funds the monthly credit bucket on invoice.paid (passing a tier option)', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+      // Tier is derived from the invoice line; the bare mock invoice has no lines, so the
+      // option is undefined and the funding shell falls back to the stored user tier.
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: undefined });
+    });
+
+    it('returns 500 (retryable) when funding throws on invoice.paid', async () => {
+      mockApplyStripeFunding.mockRejectedValueOnce(new Error('db boom'));
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // withFundingRetry rethrows so the route 500s and Stripe redelivers.
+      expect(response.status).toBe(500);
+    });
   });
 
   describe('Checkout Session Events', () => {
@@ -646,6 +692,27 @@ describe('POST /api/stripe/webhook', () => {
           stripeCustomerId: 'cus_123',
         })
       );
+    });
+
+    it('routes checkout.session.completed through credit funding (top-up bucket)', async () => {
+      const session = mockCheckoutSession({
+        mode: 'payment',
+        metadata: { kind: 'credit_pack', packCents: '2500', userId: 'user_123' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event);
     });
   });
 

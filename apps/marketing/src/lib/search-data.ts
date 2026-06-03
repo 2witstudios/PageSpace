@@ -1,4 +1,5 @@
 import { blogPosts } from "@/app/blog/[slug]/data";
+import { MONTHLY_CREDITS } from "@/lib/credits";
 
 export interface SearchEntry {
   title: string;
@@ -116,19 +117,26 @@ const faqEntries: SearchEntry[] = [
   },
   {
     title: "Is there a free plan?",
-    description:
-      "Yes. Free plan includes 500 MB storage and 50 AI calls per day. No credit card required.",
+    description: `Yes. Free plan includes 500 MB storage and ${MONTHLY_CREDITS.free}/month of AI credits. No credit card required.`,
     href: "/faq#is-there-a-free-plan",
     category: "FAQ",
-    keywords: "free plan pricing cost no credit card",
+    keywords: "free plan pricing cost no credit card ai credits",
   },
   {
-    title: "What happens when I run out of AI calls?",
+    title: "How do AI credits work?",
     description:
-      "Documents, tasks, channels, and collaboration keep working. AI pauses until your limit resets the next day.",
+      "Every plan includes a monthly AI-credit allowance. Each AI action draws down credits based on the model's real cost; unused monthly credits reset each billing period.",
+    href: "/faq#how-ai-credits-work",
+    category: "FAQ",
+    keywords: "ai credits metered usage allowance reset monthly billing",
+  },
+  {
+    title: "What happens when I run out of AI credits?",
+    description:
+      "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits or your monthly allowance resets.",
     href: "/faq#hit-daily-ai-limit",
     category: "FAQ",
-    keywords: "daily limit ai calls reset quota",
+    keywords: "out of credits ai limit reset buy more top up quota",
   },
   {
     title: "How do I sign up?",

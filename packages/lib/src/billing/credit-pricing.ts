@@ -19,6 +19,29 @@ function envInt(name: string, fallback: number): number {
   return Number.parseInt(raw, 10);
 }
 
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === '') return fallback;
+  if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on') return true;
+  if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'off') return false;
+  return fallback; // unrecognized value -> safe default
+}
+
+/**
+ * Whether the prepaid credit gate actually BLOCKS out-of-credits / over-in-flight-cap
+ * requests. Default OFF — the gate is dark-launched: it still does all its bookkeeping
+ * and `consumeCredits` still records real cost + charged credits for unit-economics
+ * observability, but the gate never returns a 402/429. This lets the cutover SHIP
+ * (meter + observe) without surprising users, then flip enforcement on deliberately
+ * once the placeholder allowances are validated against real spend:
+ *   CREDITS_ENFORCEMENT_ENABLED=true
+ * Read at CALL TIME (not module load) so it toggles via an env change + redeploy with
+ * no code change, and so tests can set it per-case.
+ */
+export function isCreditsEnforcementEnabled(): boolean {
+  return envBool('CREDITS_ENFORCEMENT_ENABLED', false);
+}
+
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 
@@ -38,10 +61,43 @@ export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
 
 /**
  * Block AI when spendable credits are at or below this floor. Bounds the single
- * in-flight call that can overshoot zero (cost is only known post-stream), so we
- * never meaningfully front unpaid usage.
+ * in-flight call that can overshoot zero: the gate runs BEFORE a call but the real
+ * cost is only known AFTER the stream, so the gate can wave through one call that
+ * then exceeds the remaining balance. With the floor at 0 that overshoot is the
+ * full cost of the most expensive single call — uncovered and (pre-fix) discarded.
+ *
+ * The default of 25¢ covers a plausible worst-case single completion: a long,
+ * high-token answer from a premium model can run a few cents of real provider cost,
+ * and at the 1.5× markup that lands around ~25¢ of customer-facing credit value.
+ * So once spendable drops to the floor we stop, and the most we ever front on the
+ * one call already in flight is bounded by it. Tune via env per real usage data.
  */
-export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 0);
+export const RESERVE_FLOOR_CENTS = envInt('CREDIT_RESERVE_FLOOR_CENTS', 25);
+
+/**
+ * Estimated spend reserved per in-flight call as a credit_holds row. The gate
+ * subtracts the sum of a user's active holds from spendable, so concurrent calls
+ * can't collectively overshoot the balance before any of them settles. Defaults
+ * to the reserve floor — a plausible worst-case single completion (see
+ * {@link RESERVE_FLOOR_CENTS}). Tune via env per real usage data.
+ */
+export const CREDIT_HOLD_ESTIMATE_CENTS = envInt('CREDIT_HOLD_ESTIMATE_CENTS', RESERVE_FLOOR_CENTS);
+
+/**
+ * How long a hold lives before the reconcile cron may sweep it. Must exceed the
+ * longest possible stream plus its settle window (AI routes cap streams at 300s),
+ * so a still-running call's reservation is never reclaimed out from under it.
+ * Default 15 minutes.
+ */
+export const CREDIT_HOLD_TTL_SECONDS = envInt('CREDIT_HOLD_TTL_SECONDS', 900);
+
+/**
+ * Max concurrent in-flight AI calls for a free-tier user. With daily call counts
+ * gone, this bounds how many simultaneous streams one free user can open — each
+ * of which could overshoot its reservation. Paid tiers are uncapped (bounded by
+ * credits alone). Default 2.
+ */
+export const MAX_FREE_INFLIGHT = envInt('MAX_FREE_INFLIGHT', 2);
 
 export interface CreditPack {
   /** Stable SKU id, also stored in Stripe price metadata. */

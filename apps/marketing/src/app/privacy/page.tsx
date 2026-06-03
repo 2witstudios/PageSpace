@@ -71,7 +71,7 @@ export default function PrivacyPolicy() {
               When you use AI features, we work with external AI providers, each subject to that provider&#39;s own privacy policy. Provider routing is managed by PageSpace at the deployment level — you no longer supply or store provider API keys yourself. Supported providers include:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>PageSpace-hosted (default):</strong> included on every plan, currently backed by GLM inference. Standard and pro models are metered separately against your plan&#39;s daily AI call quotas</li>
+              <li><strong>PageSpace-hosted (default):</strong> included on every plan, currently backed by GLM inference. AI usage is metered against your plan&#39;s monthly AI-credit allowance, with standard and Pro models available depending on your plan</li>
               <li><strong>OpenRouter, Google AI (Gemini), Anthropic (Claude), OpenAI, xAI (Grok), Azure OpenAI, GLM, MiniMax:</strong> routed through provider credentials managed by PageSpace. Availability of any individual provider depends on whether it is configured for your deployment</li>
               <li><strong>Ollama and LM Studio (self-hosted deployments only):</strong> the deployment operator configures the endpoint; prompts and selected context are sent only to that configured server. When the endpoint is a local process, content stays on the machine running it</li>
             </ul>

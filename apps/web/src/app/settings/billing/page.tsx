@@ -25,6 +25,7 @@ import { InvoiceList, type Invoice } from '@/components/billing/InvoiceList';
 import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
 import { BillingGuard } from '@/components/billing/BillingGuard';
+import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
 
@@ -82,6 +83,8 @@ export default function BillingPage() {
 
   // URL params
   const success = searchParams.get('success');
+  // Set by the credit top-up checkout return (`?credits=success|canceled`).
+  const creditsParam = searchParams.get('credits');
 
   const fetchAllData = useCallback(async () => {
     setLoading(true);
@@ -107,13 +110,13 @@ export default function BillingPage() {
 
   // Clear URL params after showing alerts
   useEffect(() => {
-    if (success) {
+    if (success || creditsParam) {
       const timer = setTimeout(() => {
         router.replace('/settings/billing');
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [success, router]);
+  }, [success, creditsParam, router]);
 
   const fetchSubscription = async () => {
     const res = await fetchWithAuth('/api/subscriptions/status');
@@ -256,6 +259,24 @@ export default function BillingPage() {
         </Alert>
       )}
 
+      {/* Credit top-up result alerts */}
+      {creditsParam === 'success' && (
+        <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-800 dark:text-green-200">
+            Credits added! Your top-up balance has been updated.
+          </AlertDescription>
+        </Alert>
+      )}
+      {creditsParam === 'canceled' && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            Credit purchase canceled. You can buy credits anytime.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Error Alert */}
       {error && (
         <Alert variant="destructive">
@@ -263,6 +284,9 @@ export default function BillingPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
+      {/* AI Credits */}
+      <CreditBalanceCard />
 
       {/* Current Subscription */}
       <Card>

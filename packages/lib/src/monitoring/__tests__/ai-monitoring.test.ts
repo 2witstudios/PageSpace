@@ -274,11 +274,32 @@ describe('trackAIUsage', () => {
     );
   });
 
-  it('does not debit credits when the call failed (success=false)', async () => {
+  it('does not debit credits for a token-less failure (pre-generation error, 0 tokens)', async () => {
     mockWriteAiUsage.mockResolvedValueOnce('aul_43');
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('debits credits for an errored call that still consumed tokens (errored-but-real spend)', async () => {
+    // A mid-stream error/abort after tokens were generated: success=false but
+    // real provider cost was incurred, so it must be billed.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_err');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+      success: false,
+      error: 'stream aborted',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_err', userId: 'user-1' }),
+    );
+    const arg = mockConsumeCredits.mock.calls[0][0] as { costDollars: number };
+    expect(arg.costDollars).toBeGreaterThan(0);
   });
 
   it('does not debit credits when no usage-log id is returned (write failed/skipped)', async () => {

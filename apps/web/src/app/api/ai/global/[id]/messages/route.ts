@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { getProviderTier, isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
+import { isAdminOnlyProvider } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { createRateLimitResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent, broadcastChatUserMessage } from '@/lib/websocket';
+import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
@@ -215,8 +219,14 @@ export async function POST(
   const startTime = Date.now();
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
+  // The credit-gate reservation for this request, released when usage is billed.
+  let holdId: string | undefined;
+  // Becomes true once the stream owns the hold (its onFinish will release it via
+  // trackUsage). Until then, any early return/throw below must release the hold so a
+  // pre-generation exit (auth/permission/provider/save failure) doesn't strand the
+  // reservation against the user's balance + in-flight cap until the cron sweeps it.
+  let holdHandedOff = false;
   try {
-    const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
     const browserSessionIdResult = validateBrowserSessionIdHeader(request.headers.get('X-Browser-Session-Id'));
@@ -312,10 +322,33 @@ export async function POST(
     // Parse web search mode (defaults to false - disabled)
     const webSearchMode = webSearchEnabled === true;
 
+    // Prepaid credit gate: block out-of-credits users BEFORE persisting their message
+    // or invoking any model. Running it after the save would append the prompt to the
+    // conversation and then 402, leaving an orphaned message that reappears (duplicated)
+    // when the user tops up and retries — so this MUST precede the save below (mirrors
+    // the page-chat route). Safe in billing-disabled deployments (returns unlimited) and
+    // lazy-inits balances.
+    {
+      const [gateUser] = await db
+        .select({ subscriptionTier: users.subscriptionTier })
+        .from(users)
+        .where(eq(users.id, userId));
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+      if (!creditGate.allowed) {
+        loggers.api.warn('Global Assistant Chat API: AI credit gate denied', {
+          userId: maskIdentifier(userId),
+          reason: creditGate.reason,
+          conversationId,
+        });
+        return creditGateErrorResponse(creditGate.reason);
+      }
+      holdId = creditGate.holdId;
+    }
+
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
-    
+
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
     if (userMessage && userMessage.role === 'user') {
@@ -412,43 +445,10 @@ export async function POST(
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
-    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming.
-    // Per-tier daily quota applies to every managed provider; getUsageLimits
-    // returns -1 for onprem/tenant via !isBillingEnabled().
-    {
-      const providerType = getProviderTier(currentProvider, currentModel);
-
-      loggers.api.debug('Global Assistant Chat API: Checking rate limit before streaming', {
-        userId: maskIdentifier(userId),
-        provider: currentProvider,
-        model: currentModel,
-        providerType,
-        conversationId
-      });
-
-      const currentUsage = await getCurrentUsage(userId, providerType);
-
-      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.api.warn('Global Assistant Chat API: Rate limit exceeded', {
-          userId: maskIdentifier(userId),
-          providerType,
-          currentCount: currentUsage.currentCount,
-          limit: currentUsage.limit,
-          remaining: currentUsage.remainingCalls,
-          conversationId
-        });
-
-        return createRateLimitResponse(providerType, currentUsage.limit);
-      }
-
-      loggers.api.debug('Global Assistant Chat API: Rate limit check passed', {
-        userId: maskIdentifier(userId),
-        providerType,
-        remaining: currentUsage.remainingCalls,
-        limit: currentUsage.limit,
-        conversationId
-      });
-    }
+    // NOTE: daily per-call rate limiting has been retired. Prepaid AI credits are
+    // now the sole volume limiter — enforced by the credit gate above (which also
+    // bounds concurrency via the in-flight hold cap). Model-tier gating
+    // (requiresProSubscription / admin-only providers) above is unchanged.
 
     loggers.api.debug('Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });
 
@@ -986,39 +986,40 @@ MENTION PROCESSING:
 
             loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
 
-            // Track detailed AI usage (tokens, cost, etc.)
+            // Track detailed AI usage (tokens, cost, etc.).
+            // ALWAYS log a row — even when the provider returns no usage metadata —
+            // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
+            // row, not a skipped one (which would silently front the spend).
             try {
               const usage = usagePromise ? await usagePromise : undefined;
+              const duration = Date.now() - startTime;
 
-              if (usage && usage.totalTokens && usage.totalTokens > 0) {
-                const duration = Date.now() - startTime;
-
-                await AIMonitoring.trackUsage({
-                  userId: userId!,
-                  provider: currentProvider,
-                  model: currentModel,
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                  totalTokens: usage.totalTokens,
-                  duration,
-                  conversationId,
-                  messageId,
-                  success: true,
-                  contextMessages: contextCalculation.messageIds,
-                  contextSize: contextCalculation.totalTokens,
-                  systemPromptTokens: contextCalculation.systemPromptTokens,
-                  toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
-                  conversationTokens: contextCalculation.conversationTokens,
-                  messageCount: contextCalculation.messageCount,
-                  wasTruncated: contextCalculation.wasTruncated,
-                  truncationStrategy: contextCalculation.truncationStrategy,
-                  metadata: {
-                    toolCallsCount: extractedToolCalls.length,
-                    toolResultsCount: extractedToolResults.length,
-                    isReadOnly: readOnlyMode,
-                  }
-                });
-              }
+              await AIMonitoring.trackUsage({
+                userId: userId!,
+                provider: currentProvider,
+                model: currentModel,
+                inputTokens: usage?.inputTokens,
+                outputTokens: usage?.outputTokens,
+                totalTokens: usage?.totalTokens,
+                duration,
+                conversationId,
+                messageId,
+                success: true,
+                holdId,
+                contextMessages: contextCalculation.messageIds,
+                contextSize: contextCalculation.totalTokens,
+                systemPromptTokens: contextCalculation.systemPromptTokens,
+                toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+                conversationTokens: contextCalculation.conversationTokens,
+                messageCount: contextCalculation.messageCount,
+                wasTruncated: contextCalculation.wasTruncated,
+                truncationStrategy: contextCalculation.truncationStrategy,
+                metadata: {
+                  toolCallsCount: extractedToolCalls.length,
+                  toolResultsCount: extractedToolResults.length,
+                  isReadOnly: readOnlyMode,
+                }
+              });
             } catch (trackingError) {
               loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
                 conversationId: maskIdentifier(conversationId),
@@ -1027,48 +1028,13 @@ MENTION PROCESSING:
               });
             }
 
-            // Track usage for every managed provider against the per-tier daily quota.
-            try {
-              const providerType = getProviderTier(currentProvider, currentModel);
+            // NOTE: daily per-call counting/broadcast removed — prepaid credits are
+            // the sole volume limiter. The credit hold placed by the gate is settled
+            // by the AIMonitoring.trackUsage call above (holdId threaded in).
 
-              const usageResult = await incrementUsage(userId, providerType);
-
-              usageLogger.info('Global Assistant usage incremented', {
-                userId: maskIdentifier(userId),
-                provider: currentProvider,
-                providerType,
-                messageId: maskIdentifier(messageId),
-                conversationId: maskIdentifier(conversationId),
-                currentCount: usageResult.currentCount,
-                limit: usageResult.limit,
-                remaining: usageResult.remainingCalls,
-                success: usageResult.success,
-              });
-
-              // Broadcast usage event for real-time updates
-              try {
-                const currentUsageSummary = await getUserUsageSummary(userId);
-                await broadcastUsageEvent({
-                  userId,
-                  operation: 'updated',
-                  subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                  standard: currentUsageSummary.standard,
-                  pro: currentUsageSummary.pro
-                });
-              } catch (broadcastError) {
-                usageLogger.error('Global Assistant usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                  userId: maskIdentifier(userId),
-                  conversationId: maskIdentifier(conversationId),
-                });
-              }
-            } catch (usageError) {
-              usageLogger.error('Global Assistant usage tracking failed', usageError as Error, {
-                userId: maskIdentifier(userId),
-                provider: currentProvider,
-                messageId: maskIdentifier(messageId),
-                conversationId: maskIdentifier(conversationId),
-              });
-            }
+            // Push the user's new credit balance to their open tabs so the header
+            // widget updates live after the call settles. Best-effort; never blocks.
+            void emitCreditsUpdated(userId!, { conversationId });
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }
@@ -1080,6 +1046,8 @@ MENTION PROCESSING:
 
     loggers.api.debug('Global Assistant Chat API: Returning stream response', {});
 
+    // The stream's onFinish now owns hold release (via AIMonitoring.trackUsage).
+    holdHandedOff = true;
     return createUIMessageStreamResponse({
       stream,
       headers: { [STREAM_ID_HEADER]: streamId },
@@ -1095,5 +1063,9 @@ MENTION PROCESSING:
     return NextResponse.json({
       error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
+  } finally {
+    // Pre-generation early return or throw: the stream never took ownership, so
+    // free the reservation now rather than waiting for the reconcile sweep.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

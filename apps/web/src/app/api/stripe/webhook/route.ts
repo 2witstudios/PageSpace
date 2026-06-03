@@ -4,8 +4,11 @@ import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
+import type { SubscriptionTier } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 
 export async function POST(request: NextRequest) {
   try {
@@ -60,17 +63,54 @@ export async function POST(request: NextRequest) {
           await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
           break;
 
-        case 'checkout.session.completed':
-          await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+        case 'checkout.session.completed': {
+          // Whole path is retryable: a transient failure in EITHER the handler or
+          // funding clears the idempotency marker so Stripe redelivers (see below).
+          const session = event.data.object as Stripe.Checkout.Session;
+          await withFundingRetry(event.id, async () => {
+            await handleCheckoutCompleted(session);
+            // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
+            await applyStripeFunding(event);
+          });
+          // Push the buyer's new balance to their open tabs so the top-up appears
+          // live. Best-effort, post-commit; never blocks the webhook ack.
+          if (
+            session.mode === 'payment' &&
+            session.metadata?.kind === 'credit_pack' &&
+            session.metadata?.userId
+          ) {
+            void emitCreditsUpdated(session.metadata.userId);
+          }
           break;
+        }
 
         case 'invoice.payment_failed':
           await handlePaymentFailed(event.data.object as Stripe.Invoice);
           break;
 
-        case 'invoice.paid':
-          await handleInvoicePaid(event.data.object as Stripe.Invoice);
+        case 'invoice.paid': {
+          const invoice = event.data.object as Stripe.Invoice;
+          await withFundingRetry(event.id, async () => {
+            await handleInvoicePaid(invoice);
+            // Reset the monthly credit bucket to the tier allowance on each renewal.
+            // Derive the tier from the PAID invoice line so a refill that races ahead
+            // of the subscription webhook still grants the correct (paid) allowance.
+            await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
+          });
+          // Push the refilled balance to the user's open tabs. Best-effort, post-commit.
+          {
+            const customerId = invoice.customer as string | null;
+            if (customerId) {
+              const refilled = await db
+                .select({ id: users.id })
+                .from(users)
+                .where(eq(users.stripeCustomerId, customerId))
+                .limit(1);
+              if (refilled[0]) void emitCreditsUpdated(refilled[0].id);
+            }
+          }
           break;
+        }
 
         default:
           loggers.api.info('Unhandled webhook event type', { eventType: event.type, eventId: event.id });
@@ -107,6 +147,59 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Run a funding-relevant event path with RETRYABLE failure semantics.
+ *
+ * The stripeEvents idempotency marker is committed BEFORE processing, so any error
+ * in this path would otherwise be lost forever: Stripe's redelivery short-circuits
+ * as "already processed" (the insert above conflicts and returns 200), and the local
+ * backfill cron reconciles only usage rows, not Stripe funding. To keep paid credit
+ * from vanishing on a transient DB error, we delete that marker on ANY failure and
+ * rethrow — the webhook then returns 500 and Stripe redelivers, reprocessing the
+ * whole path. Funding is idempotent on creditLedger.stripeRef, so the balance is
+ * credited exactly once even though the event is processed twice.
+ *
+ * The cleanup must wrap the WHOLE path, not just the funding call: the pre-funding
+ * handler also does DB I/O (handleInvoicePaid looks the user up; handleCheckoutCompleted
+ * links the customer), and a transient failure there must be retryable too — otherwise
+ * the event is marked processed and funding never runs on redelivery.
+ *
+ * Safe to reprocess: on these events the pre-funding handlers are log-only/idempotent
+ * (handleInvoicePaid only logs; handleCheckoutCompleted's sole throwable is an
+ * idempotent customer-link upsert, and acts only for mode 'subscription' — a credit-pack
+ * top-up is mode 'payment'; its provisioning POST swallows its own errors).
+ */
+async function withFundingRetry(eventId: string, run: () => Promise<void>) {
+  try {
+    await run();
+  } catch (err) {
+    await db.delete(stripeEvents).where(eq(stripeEvents.id, eventId));
+    throw err;
+  }
+}
+
+/**
+ * Derive the subscription tier from a paid invoice's line price. This is authoritative
+ * for the monthly refill because it reflects what was actually billed, independent of
+ * whether our DB's users.subscriptionTier has caught up with the subscription webhook
+ * (the two events can arrive in either order). Returns undefined when the invoice has
+ * no recognizable subscription price — including getTierFromPrice's 'free' fallback for
+ * an unmapped price — so the funding shell falls back to the stored user tier rather
+ * than wrongly downgrading a paid user. Mirrors the extraction in stripe/invoices/route.ts.
+ */
+function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier | undefined {
+  const lines = invoice.lines?.data ?? [];
+  const line = lines.find((l) => l.pricing?.price_details?.price) ?? lines[0];
+  const priceData = line?.pricing?.price_details?.price;
+  const priceId = typeof priceData === 'string' ? priceData : priceData?.id;
+  if (!priceId) return undefined;
+  const unitAmount = line?.pricing?.unit_amount_decimal
+    ? Math.round(parseFloat(line.pricing.unit_amount_decimal) * 100)
+    : null;
+  const tier = getTierFromPrice(priceId, unitAmount);
+  return tier === 'free' ? undefined : tier;
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {

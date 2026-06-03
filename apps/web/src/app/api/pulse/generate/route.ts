@@ -37,6 +37,10 @@ import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
@@ -47,6 +51,10 @@ export async function POST(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
+  // Credit-gate reservation, released when usage is billed below. Hoisted so the
+  // finally can free it on any pre-generation early return/throw after the gate.
+  let holdId: string | undefined;
+  let holdHandedOff = false;
   try {
     // Parse request body for timezone
     let clientTimezone: string | undefined;
@@ -66,6 +74,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
     const userName = user.name || user.email?.split('@')[0] || 'there';
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    // This is the on-demand (user-triggered) Pulse path; the cron path is intentionally
+    // NOT gated so a failed bill can't 500 the batch.
+    const creditGate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier);
+    if (!creditGate.allowed) {
+      loggers.api.warn('Pulse generate: AI credit gate denied', { userId, reason: creditGate.reason });
+      return creditGateErrorResponse(creditGate.reason);
+    }
+    // The gate's reservation for this call, released when usage is billed below.
+    holdId = creditGate.holdId;
 
     // Determine timezone: use client-provided, then stored preference, then UTC
     const userTimezone = clientTimezone || normalizeTimezone(user?.timezone);
@@ -656,7 +676,10 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
       success: true,
+      holdId,
     });
+    // trackUsage owns the hold release from here.
+    holdHandedOff = true;
 
     // Extract greeting
     let greeting: string | null = null;
@@ -751,5 +774,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   } catch (error) {
     loggers.api.error('Error generating pulse summary:', error as Error);
     return NextResponse.json({ error: 'Failed to generate pulse summary' }, { status: 500 });
+  } finally {
+    // Generation never reached trackUsage (pre-generation error/exit) — free the hold.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

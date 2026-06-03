@@ -42,7 +42,7 @@ vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
 }));
 
 vi.mock('@/lib/websocket', () => ({
-  broadcastUsageEvent: vi.fn().mockResolvedValue(undefined),
+  broadcastCreditsEvent: vi.fn().mockResolvedValue(undefined),
   broadcastChatUserMessage: mockBroadcastChatUserMessage,
 }));
 
@@ -148,6 +148,10 @@ vi.mock('@/lib/subscription/usage-service', () => ({
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createRateLimitResponse: vi.fn(),
   createAdminRestrictedResponse: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
 vi.mock('@/lib/ai/core', () => ({

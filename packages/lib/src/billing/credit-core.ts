@@ -30,17 +30,66 @@ export function markupCents(realCostDollars: number, markupBps: number): number 
   return Math.round(realCostDollars * (markupBps / 10000) * 100);
 }
 
+/**
+ * Convert a real provider cost (dollars) into the customer-facing charge in
+ * MILLICENTS (1/1000 of a cent), applying the markup. Millicents is the fine unit
+ * we accumulate so that sub-cent costs aren't silently rounded down to $0 and
+ * billed nothing on high-volume cheap calls. Non-positive or non-finite cost
+ * yields 0. Integer-only — no float ever reaches stored state.
+ */
+export function chargeMillicents(realCostDollars: number, markupBps: number): number {
+  if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
+  return Math.round(realCostDollars * (markupBps / 10000) * 100_000);
+}
+
+export interface AccrualResult {
+  /** Whole cents to debit from the balance now. */
+  wholeCents: number;
+  /** Sub-cent remainder to carry to the next call; always in [0, 1000). */
+  newPending: number;
+}
+
+/**
+ * Fold a call's charge (already in millicents) into the per-user fractional
+ * remainder, yielding the whole cents to debit now and the leftover to carry.
+ * This is what stops a stream of sub-cent calls from each rounding to $0: their
+ * fractions accumulate in `pending` until they cross a whole cent. Inputs are
+ * clamped to non-negative integers; `newPending` is always in [0, 1000).
+ */
+export function accruePending(pendingMillicents: number, chargeMc: number): AccrualResult {
+  const total = Math.max(0, Math.round(pendingMillicents)) + Math.max(0, Math.round(chargeMc));
+  const wholeCents = Math.floor(total / 1000);
+  return { wholeCents, newPending: total - wholeCents * 1000 };
+}
+
+/**
+ * Convenience composition of {@link chargeMillicents} + {@link accruePending}:
+ * compute a call's charge from dollars and fold it into the remainder in one step.
+ */
+export function accrueCharge(
+  pendingMillicents: number,
+  realCostDollars: number,
+  markupBps: number,
+): AccrualResult {
+  return accruePending(pendingMillicents, chargeMillicents(realCostDollars, markupBps));
+}
+
 export interface SpendResult {
   monthlyCents: number;
   topupCents: number;
   spentMonthly: number;
   spentTopup: number;
+  /** What actually left the balance (spentMonthly + spentTopup); <= amount spent. */
+  appliedCents: number;
   shortfallCents: number;
 }
 
 /**
  * Draw `amountCents` from the balance, monthly bucket first then top-up.
  * Buckets clamp at zero; any uncovered remainder is reported as `shortfallCents`.
+ * `appliedCents` is what truly came out of the balance — the figure the ledger
+ * must record so the books reconcile against the balance delta (the uncovered
+ * `shortfallCents` is owed as debt, not silently dropped).
  */
 export function allocateSpend(balance: Balance, amountCents: number): SpendResult {
   const amount = Math.max(0, Math.round(amountCents));
@@ -53,35 +102,99 @@ export function allocateSpend(balance: Balance, amountCents: number): SpendResul
     topupCents: balance.topupCents - spentTopup,
     spentMonthly,
     spentTopup,
+    appliedCents: spentMonthly + spentTopup,
     shortfallCents,
   };
 }
 
-export type GateReason = 'unlimited' | 'ok' | 'out_of_credits' | 'needs_init';
+export type GateReason =
+  | 'unlimited'
+  | 'ok'
+  | 'out_of_credits'
+  | 'needs_init'
+  | 'too_many_in_flight'
+  // Allowed reason: the gate computed a denial but enforcement is dark-launched
+  // (CREDITS_ENFORCEMENT_ENABLED=false), so the request proceeds and is still
+  // metered. The shell — not evaluateGate — produces this reason.
+  | 'enforcement_disabled';
 
 export interface GateInput {
   billingEnabled: boolean;
   balance: Balance | null;
   reserveFloorCents: number;
+  /**
+   * Sum of this user's already-placed, non-expired holds (estimated spend on
+   * calls still in flight). Subtracted from spendable so concurrent calls can't
+   * collectively overshoot the balance. Defaults to 0 (no outstanding holds).
+   */
+  reservedCents?: number;
+  /** This call's own reservation, also subtracted from spendable. Defaults to 0. */
+  estCostCents?: number;
+  /** Count of this user's non-expired holds (calls currently in flight). Defaults to 0. */
+  inFlightCount?: number;
+  /**
+   * Max concurrent in-flight calls for this user. `undefined`/`null` means no cap
+   * (paid tiers are bounded by credits alone). The free-tier cap stops a single
+   * user from fanning out many simultaneous streams that each overshoot.
+   */
+  maxInFlight?: number | null;
 }
 
 export interface GateResult {
   allowed: boolean;
   reason: GateReason;
+  /** Set by the gate shell when a hold row was inserted for an allowed request. */
+  holdId?: string;
 }
 
 /**
  * The prepaid hard-cap decision. Billing-disabled deployments (tenant/onprem)
  * are always allowed. A missing balance row returns `needs_init` so the shell
- * can lazy-init and re-evaluate. Otherwise allow only while spendable credits
- * exceed the reserve floor (which bounds single in-flight overshoot).
+ * can lazy-init and re-evaluate.
+ *
+ * Two limiters, checked in order:
+ *   1. in-flight cap — deny (`too_many_in_flight`) when this user already has
+ *      `maxInFlight` non-expired holds. Checked first so a user fanning out many
+ *      simultaneous calls is bounded even while they still have credits.
+ *   2. credits — allow only while spendable, AFTER subtracting outstanding holds
+ *      and this call's own reservation, exceeds the reserve floor. The floor +
+ *      per-call reservation together bound how far concurrent calls can overshoot.
  */
 export function evaluateGate(input: GateInput): GateResult {
   if (!input.billingEnabled) return { allowed: true, reason: 'unlimited' };
   if (input.balance === null) return { allowed: false, reason: 'needs_init' };
-  const spendable = input.balance.monthlyCents + input.balance.topupCents;
+
+  const inFlightCount = Math.max(0, input.inFlightCount ?? 0);
+  if (input.maxInFlight != null && inFlightCount >= input.maxInFlight) {
+    return { allowed: false, reason: 'too_many_in_flight' };
+  }
+
+  const reserved = Math.max(0, input.reservedCents ?? 0);
+  const estCost = Math.max(0, input.estCostCents ?? 0);
+  const spendable = input.balance.monthlyCents + input.balance.topupCents - reserved - estCost;
   if (spendable > input.reserveFloorCents) return { allowed: true, reason: 'ok' };
   return { allowed: false, reason: 'out_of_credits' };
+}
+
+/**
+ * Normalize the configured per-call hold estimate into a whole-cent reservation.
+ * Clamps to a non-negative integer; a non-finite or non-positive estimate yields
+ * 0 (the hold still counts toward the in-flight cap, it just reserves no spend).
+ */
+export function reservationCents(estimateCents: number): number {
+  if (!Number.isFinite(estimateCents) || estimateCents <= 0) return 0;
+  return Math.round(estimateCents);
+}
+
+/**
+ * The instant a hold placed at `nowMs` should expire, in epoch ms. Pure (operates
+ * on numbers only — the shell converts to/from Date). A hold lives long enough to
+ * cover the longest stream plus its post-call settle; after that the reconcile
+ * cron treats it as abandoned and sweeps it so a crashed stream's reservation
+ * can't permanently shrink spendable.
+ */
+export function holdExpiresAt(nowMs: number, ttlMs: number): number {
+  return nowMs + Math.max(0, ttlMs);
 }
 
 export interface MonthlyRefill {

@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Send, StopCircle } from 'lucide-react';
 import AiInput from './AiInput';
 import { ChatInputRef } from '@/components/messages/ChatInput';
-import { getAIErrorMessage } from '@/lib/ai/shared/error-messages';
+import { getAIErrorMessage, isOutOfCreditsError } from '@/lib/ai/shared/error-messages';
+import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 interface ChatInputAreaProps {
@@ -115,17 +116,22 @@ export const ChatInputArea = forwardRef<ChatInputAreaRef, ChatInputAreaProps>(
         <div className="max-w-4xl mx-auto w-full">
           {/* Error display */}
           {error && showError && (
-            <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center justify-between">
-              <p className="text-sm text-red-700 dark:text-red-300">
-                {getAIErrorMessage(error.message)}
-              </p>
-              {onClearError && (
-                <button
-                  onClick={onClearError}
-                  className="text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 underline"
-                >
-                  Clear
-                </button>
+            <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-red-700 dark:text-red-300">
+                  {getAIErrorMessage(error.message)}
+                </p>
+                {onClearError && (
+                  <button
+                    onClick={onClearError}
+                    className="shrink-0 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 underline"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {isOutOfCreditsError(error.message) && (
+                <BuyCreditsButton variant="default" size="sm" className="self-start" />
               )}
             </div>
           )}
