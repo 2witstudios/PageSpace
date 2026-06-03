@@ -801,7 +801,16 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       // zero-charge call still reaches consumeCredits, which settles it as
       // 'skipped' without churning a $0 ledger transaction.
       if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
-        await consumeCredits({ aiUsageLogId, userId: data.userId, costDollars: cost, holdId: data.holdId })
+        await consumeCredits({
+          aiUsageLogId,
+          userId: data.userId,
+          costDollars: cost,
+          holdId: data.holdId,
+          // Scope the live balance push so the per-conversation usage monitor
+          // refreshes the right view; the navbar widget updates regardless.
+          conversationId: data.conversationId,
+          pageId: data.pageId,
+        })
           .catch((error) => {
             loggers.ai.debug('credit consume failed', { error: (error as Error).message });
           });

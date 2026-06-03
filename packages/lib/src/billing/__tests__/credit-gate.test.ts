@@ -25,6 +25,8 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: true, strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
+const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
 import { canConsumeAI, addOneMonth } from '../credit-gate';
 
@@ -135,6 +137,9 @@ describe('canConsumeAI', () => {
     // The hold reserves this call's estimate and is scoped to the user.
     expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: EST });
     expect(sink.holdValues?.expiresAt).toBeInstanceOf(Date);
+    // Placing the hold shrank spendable -> push the fresh balance so the navbar
+    // drops the instant the call starts (not just when it settles).
+    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
   });
 
   it('denies with out_of_credits when both buckets are empty (no hold inserted)', async () => {
@@ -147,6 +152,8 @@ describe('canConsumeAI', () => {
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
     expect(r.holdId).toBeUndefined();
     expect(sink.insertCalled).toBeFalsy();
+    // No hold created -> nothing changed -> no push.
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 
   it('denies a free user who has reached the in-flight cap (too_many_in_flight), even with credit', async () => {

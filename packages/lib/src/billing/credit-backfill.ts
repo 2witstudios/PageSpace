@@ -14,6 +14,7 @@ import { and, eq, lt, gt, isNull } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
 import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
+import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 
 const BATCH = 200;
@@ -46,8 +47,16 @@ export async function backfillCredits(): Promise<BackfillResult> {
     const swept = await db
       .delete(creditHolds)
       .where(lt(creditHolds.expiresAt, now))
-      .returning({ id: creditHolds.id });
+      .returning({ id: creditHolds.id, userId: creditHolds.userId });
     expiredHolds = swept.length;
+    // Reclaiming a stale hold raises that user's spendable back up — push the fresh
+    // balance so the navbar recovers without a refresh. This is the backstop for a
+    // call that was interrupted before settlement: its dangling reservation finally
+    // clears here. One emit per distinct user; best-effort, never blocks the cron.
+    const affected = [...new Set(swept.map((h) => h.userId))];
+    for (const uid of affected) {
+      await emitCreditsUpdated(uid);
+    }
   } catch (error) {
     loggers.ai.debug('credit hold expiry sweep failed', { error: (error as Error).message });
   }
