@@ -219,14 +219,17 @@ export async function runAgentWithRetry(
     }
   }
 
-  // Surface a non-network error whenever we give up on a provider error — whether that's
-  // an after-content terminal (can't retry) or retry exhaustion. Phrasing avoids the
-  // client's isNetworkError patterns so useStreamRecovery does not re-run on top of us.
-  if (terminalReason === 'provider-error') {
+  // Surface a non-network error whenever we give up without a usable result: any retry
+  // exhaustion (provider-error / ambiguous / time-budget — these attempts produced no
+  // content) or an after-content provider-error terminal. NOT for content-bearing
+  // terminals (length / content-filter / step-budget / tool-calls-no-finish), which
+  // already streamed a real (if truncated/incomplete) response, nor for user aborts.
+  // Phrasing avoids the client's isNetworkError patterns so useStreamRecovery does not
+  // re-run on top of us.
+  if (finalOutcome === 'exhausted' || terminalReason === 'provider-error') {
     safeWrite({
       type: 'error',
-      errorText:
-        'The assistant could not complete its response. Please try again.',
+      errorText: 'The assistant could not complete its response. Please try again.',
     });
   }
 
