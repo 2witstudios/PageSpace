@@ -70,8 +70,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // Get managed OpenAI key for Whisper
-    const openAISettings = getManagedProviderKey('openai');
+    // Get managed OpenAI key for Whisper (direct api.openai.com, not OpenRouter)
+    const openAISettings = getManagedProviderKey('openai_voice');
     if (!openAISettings?.apiKey) {
       return NextResponse.json(
         {

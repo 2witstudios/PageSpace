@@ -148,6 +148,8 @@ vi.mock('@/lib/subscription/usage-service', () => ({
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createRateLimitResponse: vi.fn(),
   createAdminRestrictedResponse: vi.fn(),
+  requiresProSubscription: vi.fn().mockReturnValue(false),
+  createSubscriptionRequiredResponse: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
@@ -155,7 +157,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'glm-4.5-air' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
@@ -272,9 +274,8 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
   getProviderTier: vi.fn().mockReturnValue('standard'),
-  isAdminOnlyProvider: vi.fn().mockReturnValue(false),
+  isModelAllowedForTier: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({
@@ -317,8 +318,8 @@ const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
     headers,
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
-      selectedProvider: 'pagespace',
-      selectedModel: 'glm-4.5-air',
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.3-chat',
     }),
   });
 };

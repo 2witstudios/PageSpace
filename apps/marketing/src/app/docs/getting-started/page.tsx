@@ -60,23 +60,25 @@ Documents use a TipTap rich-text editor with:
 
 ## 4. Set Up AI
 
-PageSpace routes every model through the Vercel AI SDK across 12 providers. Provider credentials are managed by the deployment operator (on pagespace.ai cloud, that's PageSpace; on self-hosted, that's whoever runs the server) — you don't need to supply API keys.
+Every cloud model is served through **OpenRouter** and organised under its real vendor, so you reach one catalogue that spans many providers without supplying any API keys — credentials are managed by the deployment operator (on pagespace.ai cloud that's PageSpace; on self-hosted, whoever runs the server). The default model is \`openai/gpt-5.3-chat\`.
 
-| Provider | What it is |
-|----------|-----------|
-| PageSpace | Hosted GLM models (default — \`glm-4.7\` on the standard tier, \`glm-5\` on the pro tier) |
-| OpenRouter | Paid and free-tier models from OpenRouter's catalog |
-| Google AI | Gemini 3 and 2.5 families |
+| Vendor | What it is |
+|--------|-----------|
 | OpenAI | GPT-5.4 / 5.3 / 5.2 families |
 | Anthropic | Claude 4.6 / 4.5 / 4.1 families |
+| Google | Gemini 3 and 2.5 families |
 | xAI | Grok 4 family |
+| DeepSeek, Qwen, Mistral, Moonshot, MiniMax, Meta, and more | Additional open and frontier models in the OpenRouter catalogue |
+
+Self-hosted deployments can also point at a configured endpoint instead of OpenRouter:
+
+| Endpoint | What it is |
+|----------|-----------|
 | Azure OpenAI | Models from a configured Azure deployment |
-| GLM | GLM-5, 4.7, 4.6, 4.5 Air |
-| MiniMax | MiniMax M2.x models |
 | Ollama | Models discovered from a configured Ollama server |
 | LM Studio | Models discovered from a configured LM Studio server |
 
-Open **Settings > AI** to pick a provider and model. The picker only shows providers your deployment has enabled — anything unconfigured is hidden. The provider and model you pick become your account-level default; any individual AI Chat page can override both. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts use standard models, while paid plans add Pro (advanced) models.
+Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost. Free accounts use a curated allowlist — \`openai/gpt-5.3-chat\` (default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
 
 ## 5. Create an AI Agent
 

@@ -1,6 +1,6 @@
 {
-  "id": "5b06caa5-ffdc-4704-8e77-06e5774933ee",
-  "prevId": "d00a4a5a-c84c-418a-babe-8b009bc39eff",
+  "id": "5eebc136-5433-4cee-9e55-ae647397ca98",
+  "prevId": "5b06caa5-ffdc-4704-8e77-06e5774933ee",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5918,6 +5918,25 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "reconcile_status": {
+          "name": "reconcile_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reconcile_attempts": {
+          "name": "reconcile_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "reconciled_at": {
+          "name": "reconciled_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -6088,6 +6107,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_ai_usage_reconcile": {
+          "name": "idx_ai_usage_reconcile",
+          "columns": [
+            {
+              "expression": "reconcile_status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "reconcile_status = 'pending'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -15959,6 +16000,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "reconcileGenerationKey": {
+          "name": "reconcileGenerationKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -16017,6 +16064,22 @@
           ],
           "isUnique": true,
           "where": "\"credit_ledger\".\"stripeRef\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "credit_ledger_reconcile_key_unique": {
+          "name": "credit_ledger_reconcile_key_unique",
+          "columns": [
+            {
+              "expression": "reconcileGenerationKey",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"credit_ledger\".\"reconcileGenerationKey\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

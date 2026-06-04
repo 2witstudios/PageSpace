@@ -10,7 +10,8 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, isAdminOnlyProvider, getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, getProviderTier, DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -445,8 +446,8 @@ export async function POST(request: Request) {
     }
     
     // Get user's current AI provider settings (user was loaded above for the gate)
-    const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+    const currentProvider = selectedProvider || user?.currentAiProvider || DEFAULT_PROVIDER;
+    const currentModel = selectedModel || user?.currentAiModel || DEFAULT_MODEL;
 
     // Kick off the userProfiles displayName fetch early so it overlaps with downstream
     // setup (rate-limit checks, tool resolution, conversation load) and never blocks the
@@ -458,25 +459,14 @@ export async function POST(request: Request) {
       .limit(1)
       .catch(() => [] as { displayName: string | null }[]);
 
-    // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    // Subscription gate: free users are limited to the free-model allowlist.
+    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     const isAdminUser = user?.role === 'admin';
 
-    // Admin-only providers (e.g. paid OpenRouter) are restricted to global admins, even if a
-    // stored selection survives a role downgrade.
-    if (isAdminOnlyProvider(currentProvider) && !isAdminUser) {
-      loggers.ai.warn('AI Chat API: admin-only provider blocked for non-admin', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-      });
-      return createAdminRestrictedResponse();
-    }
-
-    // Check if provider requires Pro subscription
+    // Check if the selected model requires a paid plan
     if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier, isAdminUser)) {
-      loggers.ai.warn('AI Chat API: Pro subscription required', {
+      loggers.ai.warn('AI Chat API: paid plan required for model', {
         userId,
         provider: currentProvider,
         model: currentModel,
@@ -485,11 +475,11 @@ export async function POST(request: Request) {
       return createSubscriptionRequiredResponse();
     }
 
-    // Usage tracking will be handled in onFinish callback for PageSpace providers only
-    loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
+    // Usage tracking is handled in the onFinish callback (real OpenRouter cost).
+    loggers.ai.debug('AI Chat API: will track usage in onFinish', {
       userId,
       provider: currentProvider,
-      isPageSpaceProvider: currentProvider === 'pagespace'
+      model: currentModel,
     });
     
     // Update page's AI provider/model if changed
@@ -542,9 +532,8 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    // Use the resolved model name for billing. currentModel may be a PageSpace
-    // tier alias ('standard'/'pro') or an unpriced default ('glm-4.5-air'), which
-    // would meter at $0; providerResult.modelName is the real backend model id.
+    // Use the resolved model name for billing. providerResult.modelName is the
+    // real OpenRouter model id sent to the backend.
     const { model, modelName: resolvedModelName } = providerResult;
 
     // Update user's current provider/model if changed
@@ -912,7 +901,10 @@ export async function POST(request: Request) {
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
           // Resolve once outside the per-attempt factory (the factory is synchronous).
-          const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+          // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
+          // PageSpace alias in currentModel — vision/tool detection pattern-matches the
+          // model string, so an alias yields wrong capability flags.
+          const modelCapabilitiesForTools = await getModelCapabilities(resolvedModelName, currentProvider);
           // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
           // disconnect) or ends mid-tool without the finish tool, transparently
           // re-drive the loop under one message envelope. The loop lives inside
@@ -1012,20 +1004,23 @@ export async function POST(request: Request) {
             }
           });
           
-          // Save the AI's response message with tool calls and results (database-first approach)
+          // Use the server-generated ID that was sent to the client at stream start.
+          const messageId = serverAssistantMessageId!;
+
+          // Extract tool calls/results with safe defaults — responseMessage is absent on
+          // exhausted/no-content runs, but usage settlement below still has to run.
+          const extractedToolCalls = responseMessage ? extractToolCalls(responseMessage) : [];
+          const extractedToolResults = responseMessage ? extractToolResults(responseMessage) : [];
+
+          // Save the AI's response message with tool calls and results (database-first
+          // approach). Best-effort: persistence errors must NOT skip usage/credit
+          // settlement below — that would leak the gate's hold.
           if (chatId && responseMessage) {
             try {
-              // Use the server-generated ID that was sent to the client at stream start
-              // This ensures the saved message ID matches what the client has
-              const messageId = serverAssistantMessageId!;
               const messageContent = extractMessageContent(responseMessage);
-              
-              // Extract tool calls and results from the response
-              const extractedToolCalls = extractToolCalls(responseMessage);
-              const extractedToolResults = extractToolResults(responseMessage);
-              
-              loggers.ai.debug('AI Chat API: Saving AI response message', { 
-                id: messageId, 
+
+              loggers.ai.debug('AI Chat API: Saving AI response message', {
+                id: messageId,
                 contentLength: messageContent.length,
                 contentPreview: messageContent.substring(0, 100),
                 toolCallsCount: extractedToolCalls.length,
@@ -1033,12 +1028,12 @@ export async function POST(request: Request) {
                 hasContent: messageContent.length > 0,
                 hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
               });
-              
-              loggers.ai.trace('AI Chat API: Tool tracking', { 
+
+              loggers.ai.trace('AI Chat API: Tool tracking', {
                 toolCalls: extractedToolCalls.length,
-                toolResults: extractedToolResults.length 
+                toolResults: extractedToolResults.length
               });
-              
+
               // Use the new helper function to save the message with complete UIMessage for chronological ordering
               await saveMessageToDatabase({
                 messageId,
@@ -1051,103 +1046,113 @@ export async function POST(request: Request) {
                 toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
                 uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
               });
-              
+
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
-
-              // LEGACY daily-quota counting (credits mode OFF): keep the old per-tier
-              // counter moving so the restored UsageCounter is accurate on prod during
-              // dark launch. Best-effort — never fail the chat. Remove at final cutover.
-              if (!isCreditsModeEnabled()) {
-                try {
-                  await incrementUsage(userId!, getProviderTier(currentProvider, currentModel));
-                } catch (usageError) {
-                  loggers.ai.error('AI Chat API: legacy usage increment failed', usageError as Error, {
-                    userId: maskIdentifier(userId!),
-                  });
-                }
-              }
-
-              // Track enhanced AI usage with token counting and cost calculation.
-              // Prepaid credit metering ALWAYS runs (both modes) — it settles the gate's
-              // hold and feeds unit-economics observability.
-              const duration = Date.now() - startTime;
-
-              const usage = agentRun?.accumulatedUsage;
-              const steps = agentRun?.accumulatedSteps;
-              const inputTokens = usage?.inputTokens ?? undefined;
-              const outputTokens = usage?.outputTokens ?? undefined;
-              const totalTokens =
-                usage?.totalTokens ??
-                ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined);
-
-              // Use enhanced AI monitoring with token usage from SDK
-              await AIMonitoring.trackUsage({
-                userId: userId!,
-                provider: currentProvider,
-                model: resolvedModelName,
-                source: 'chat',
-                inputTokens,
-                outputTokens,
-                totalTokens,
-                cachedInputTokens: usage?.cachedInputTokens,
-                reasoningTokens: usage?.reasoningTokens,
-                providerCostDollars: extractOpenRouterCostDollars(steps),
-                openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
-                duration,
-                conversationId, // Use actual conversation ID instead of pageId
-                messageId,
-                pageId: chatId,
-                driveId: pageContext?.driveId,
-                // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
-                // completion. Cost still settles regardless (the provider charged us).
-                success: agentRun?.finalOutcome !== 'exhausted',
-                holdId,
-                metadata: {
-                  pageName: page.title,
-                  toolCallsCount: extractedToolCalls.length,
-                  toolResultsCount: extractedToolResults.length,
-                  hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
-                  reasoningTokens: usage?.reasoningTokens,
-                  cachedInputTokens: usage?.cachedInputTokens,
-                  retryAttempts: agentRun?.attempts,
-                  retryOutcome: agentRun?.finalOutcome,
-                  retryTerminalReason: agentRun?.terminalReason,
-                }
-              });
-
-              // Credit balance is pushed live by consumeCredits itself (called from
-              // AIMonitoring.trackUsage above), which now broadcasts at every balance
-              // mutation — so the header widget updates without a route-level emit here.
-
-              // Track tool usage separately for analytics
-              if (extractedToolCalls.length > 0) {
-                for (const toolCall of extractedToolCalls) {
-                  await AIMonitoring.trackToolUsage({
-                    userId: userId!,
-                    provider: currentProvider,
-                    model: resolvedModelName,
-                    toolName: toolCall.toolName,
-                    toolId: toolCall.toolCallId,
-                    args: undefined,
-                    conversationId, // Use actual conversation ID instead of pageId
-                    pageId: chatId,
-                    success: true
-                  });
-                }
-                
-                // Also track feature usage
-                trackFeature(userId!, 'ai_tools_used', {
-                  toolCount: extractedToolCalls.length,
-                  provider: currentProvider,
-                  model: currentModel
-                });
-              }
             } catch (error) {
               loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
               // Don't fail the response - persistence errors shouldn't break the chat
             }
           } else {
             loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
+          }
+
+          // Usage + credit settlement ALWAYS runs after runAgentWithRetry completes —
+          // regardless of whether a responseMessage was produced or persistence above
+          // succeeded. trackUsage settles the gate's hold (holdId) and feeds unit-economics
+          // observability; skipping it on exhausted/no-content runs or save failures would
+          // leak the hold (the route already set holdHandedOff = true).
+          try {
+            // LEGACY daily-quota counting (credits mode OFF): keep the old per-tier
+            // counter moving so the restored UsageCounter is accurate on prod during
+            // dark launch. Best-effort — never fail the chat. Remove at final cutover.
+            if (!isCreditsModeEnabled()) {
+              try {
+                await incrementUsage(userId!, getProviderTier(currentProvider, currentModel));
+              } catch (usageError) {
+                loggers.ai.error('AI Chat API: legacy usage increment failed', usageError as Error, {
+                  userId: maskIdentifier(userId!),
+                });
+              }
+            }
+
+            // Track enhanced AI usage with token counting and cost calculation.
+            // Prepaid credit metering ALWAYS runs (both modes) — it settles the gate's
+            // hold and feeds unit-economics observability.
+            const duration = Date.now() - startTime;
+
+            const usage = agentRun?.accumulatedUsage;
+            const steps = agentRun?.accumulatedSteps;
+            const inputTokens = usage?.inputTokens ?? undefined;
+            const outputTokens = usage?.outputTokens ?? undefined;
+            const totalTokens =
+              usage?.totalTokens ??
+              ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined);
+
+            // Use enhanced AI monitoring with token usage from SDK
+            await AIMonitoring.trackUsage({
+              userId: userId!,
+              provider: currentProvider,
+              model: resolvedModelName,
+              source: 'chat',
+              inputTokens,
+              outputTokens,
+              totalTokens,
+              cachedInputTokens: usage?.cachedInputTokens,
+              reasoningTokens: usage?.reasoningTokens,
+              providerCostDollars: extractOpenRouterCostDollars(steps),
+              openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
+              duration,
+              conversationId, // Use actual conversation ID instead of pageId
+              messageId,
+              pageId: chatId,
+              driveId: pageContext?.driveId,
+              // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
+              // completion. Cost still settles regardless (the provider charged us).
+              success: agentRun?.finalOutcome !== 'exhausted',
+              holdId,
+              metadata: {
+                pageName: page.title,
+                toolCallsCount: extractedToolCalls.length,
+                toolResultsCount: extractedToolResults.length,
+                hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
+                reasoningTokens: usage?.reasoningTokens,
+                cachedInputTokens: usage?.cachedInputTokens,
+                retryAttempts: agentRun?.attempts,
+                retryOutcome: agentRun?.finalOutcome,
+                retryTerminalReason: agentRun?.terminalReason,
+              }
+            });
+
+            // Credit balance is pushed live by consumeCredits itself (called from
+            // AIMonitoring.trackUsage above), which now broadcasts at every balance
+            // mutation — so the header widget updates without a route-level emit here.
+
+            // Track tool usage separately for analytics
+            if (extractedToolCalls.length > 0) {
+              for (const toolCall of extractedToolCalls) {
+                await AIMonitoring.trackToolUsage({
+                  userId: userId!,
+                  provider: currentProvider,
+                  model: resolvedModelName,
+                  toolName: toolCall.toolName,
+                  toolId: toolCall.toolCallId,
+                  args: undefined,
+                  conversationId, // Use actual conversation ID instead of pageId
+                  pageId: chatId,
+                  success: true
+                });
+              }
+
+              // Also track feature usage
+              trackFeature(userId!, 'ai_tools_used', {
+                toolCount: extractedToolCalls.length,
+                provider: currentProvider,
+                model: currentModel
+              });
+            }
+          } catch (error) {
+            loggers.ai.error('AI Chat API: Failed to settle AI usage/credits', error as Error);
+            // Don't fail the response - but the hold may remain for the reconcile sweep.
           }
 
           // Reflect a user stop, including one that landed during inter-attempt backoff or
@@ -1258,8 +1263,8 @@ export async function GET(request: Request) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     
     // Get page-specific settings if pageId provided
-    let currentProvider = user?.currentAiProvider || 'pagespace';
-    let currentModel = user?.currentAiModel || 'glm-4.5-air';
+    let currentProvider = user?.currentAiProvider || DEFAULT_PROVIDER;
+    let currentModel = user?.currentAiModel || DEFAULT_MODEL;
     
     if (pageId) {
       const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
@@ -1303,25 +1308,11 @@ async function validateProviderModel(
   model: string,
   userId: string
 ): Promise<{ valid: boolean; reason?: string }> {
-  // Define valid providers
-  const validProviders = [
-    'pagespace',
-    'openrouter',
-    'openrouter_free',
-    'google',
-    'openai',
-    'anthropic',
-    'xai',
-    'ollama',
-    'lmstudio',
-    'glm'
-  ];
-
   // Check if provider is valid
-  if (!validProviders.includes(provider)) {
+  if (!(ALL_PROVIDER_NAMES as readonly string[]).includes(provider)) {
     return {
       valid: false,
-      reason: `Invalid provider: ${provider}. Supported providers: ${validProviders.join(', ')}`
+      reason: `Invalid provider: ${provider}. Supported providers: ${ALL_PROVIDER_NAMES.join(', ')}`
     };
   }
 
@@ -1333,20 +1324,14 @@ async function validateProviderModel(
     };
   }
 
-  // Check subscription requirements for pro models
+  // Check subscription requirements for paid models
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const isAdminUser = user?.role === 'admin';
-    if (isAdminOnlyProvider(provider) && !isAdminUser) {
-      return {
-        valid: false,
-        reason: 'This provider is restricted to administrators'
-      };
-    }
     if (requiresProSubscription(provider, model, user?.subscriptionTier, isAdminUser)) {
       return {
         valid: false,
-        reason: 'Pro or Business subscription required for this model'
+        reason: 'A paid plan is required for this model'
       };
     }
   } catch (error) {

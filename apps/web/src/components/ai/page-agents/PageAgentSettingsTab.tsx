@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
-import { AI_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
 
@@ -394,7 +394,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(AI_PROVIDERS).filter(([key]) => key === 'pagespace').map(([key, provider]) => {
+                    {Object.entries(getVisibleProviders()).map(([key, provider]) => {
                       const configured = isProviderConfigured(key);
                       return (
                         <SelectItem key={key} value={key} disabled={!configured}>

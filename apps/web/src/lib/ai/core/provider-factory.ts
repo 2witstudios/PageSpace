@@ -2,23 +2,28 @@
  * AI Provider Factory Service
  * Resolves managed provider credentials from deployment env vars and
  * instantiates the appropriate AI SDK client. No per-user keys.
+ *
+ * Every cloud vendor (OpenAI, Anthropic, Google, xAI, …) is served through
+ * OpenRouter: the model id already carries the vendor prefix and is forwarded
+ * verbatim. Local providers (Ollama, LM Studio, Azure OpenAI) keep their own
+ * clients for on-prem deployments.
  */
 
 import { NextResponse } from 'next/server';
 import { LanguageModel } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { getDefaultPageSpaceSettings, getManagedProviderKey } from './ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, resolvePageSpaceModel } from './ai-providers-config';
+import { getManagedProviderKey } from './ai-utils';
+import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidModel } from './ai-providers-config';
+
+// The local/on-prem providers (ONPREM_ALLOWED_PROVIDERS = ollama/lmstudio/azure_openai)
+// serve runtime-discovered models that aren't in the static catalog, so catalog
+// validation is skipped for them — only their provider name is gated.
 
 export interface ProviderRequest {
   selectedProvider?: string;
@@ -50,16 +55,29 @@ export async function createAIProvider(
   const { selectedProvider, selectedModel } = request;
 
   const [user] = await db.select().from(users).where(eq(users.id, userId));
-  const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-  let currentModel = selectedModel || user?.currentAiModel || 'glm-4.7';
 
-  if (currentProvider === 'pagespace') {
-    currentModel = resolvePageSpaceModel(currentModel);
+  // Resolve (provider, model) as one atomic pair — never combine a provider from one
+  // source with a model from another. Falling each field back independently
+  // (`selectedProvider || stored || default` for each) could synthesize an impossible
+  // pair like `anthropic` + the default `openai/…` model when only one field is
+  // present, which then silently reroutes to the default below. Prefer the request
+  // pair (both present), else the stored pair (both present), else the default pair.
+  let currentProvider: string;
+  let currentModel: string;
+  if (selectedProvider && selectedModel) {
+    currentProvider = selectedProvider;
+    currentModel = selectedModel;
+  } else if (user?.currentAiProvider && user?.currentAiModel) {
+    currentProvider = user.currentAiProvider;
+    currentModel = user.currentAiModel;
+  } else {
+    currentProvider = DEFAULT_PROVIDER;
+    currentModel = DEFAULT_MODEL;
   }
 
+  // Deployment policy first: on-prem only permits the local/BAA-eligible providers.
   if (
     isOnPrem() &&
-    currentProvider !== 'pagespace' &&
     !ONPREM_ALLOWED_PROVIDERS.has(currentProvider)
   ) {
     return {
@@ -68,97 +86,25 @@ export async function createAIProvider(
     };
   }
 
+  // Catalog enforcement at generation time: any non-local (provider, model) that
+  // isn't in AI_PROVIDERS is SUBSTITUTED with the default rather than forwarded.
+  // We fall back instead of erroring so that selections left on removed values —
+  // a pre-backfill `pagespace`/`glm-*` row, or an agent configured with a bare
+  // model id via the raw API — degrade to the working default instead of failing
+  // the request. The security goal still holds: an arbitrary/unknown model is
+  // never sent to OpenRouter, it resolves to the default. (Explicit invalid
+  // *selections* are rejected with a clear 400 at the settings PATCH boundary.)
+  // Local providers (ollama/lmstudio/azure) serve runtime-discovered models, so
+  // only their provider name is validated (on-prem allowlist + config lookups).
+  if (!ONPREM_ALLOWED_PROVIDERS.has(currentProvider) && !isValidModel(currentProvider, currentModel)) {
+    currentProvider = DEFAULT_PROVIDER;
+    currentModel = DEFAULT_MODEL;
+  }
+
   try {
     let model;
 
-    if (currentProvider === 'pagespace') {
-      const pageSpaceSettings = getDefaultPageSpaceSettings();
-      if (!pageSpaceSettings) {
-        return notConfigured('PageSpace AI');
-      }
-
-      // The pagespace alias resolves to a real backend provider (glm/google/openrouter).
-      // In on-prem mode, none of those cloud backends are allowed — block here so the
-      // alias can't be a back door around the route-layer policy.
-      if (isOnPrem() && !ONPREM_ALLOWED_PROVIDERS.has(pageSpaceSettings.provider)) {
-        return {
-          error: `PageSpace backend "${pageSpaceSettings.provider}" is not available in on-premise mode.`,
-          status: 403,
-        };
-      }
-
-      if (pageSpaceSettings.provider === 'google') {
-        model = createGoogleGenerativeAI({ apiKey: pageSpaceSettings.apiKey })(currentModel);
-      } else if (pageSpaceSettings.provider === 'glm') {
-        const glmProvider = createOpenAICompatible({
-          name: 'glm',
-          apiKey: pageSpaceSettings.apiKey,
-          baseURL: 'https://api.z.ai/api/coding/paas/v4',
-        });
-        model = glmProvider(currentModel);
-      } else {
-        return {
-          error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`,
-          status: 400,
-        };
-      }
-    } else if (currentProvider === 'openrouter' || currentProvider === 'openrouter_free') {
-      const managed = getManagedProviderKey(currentProvider);
-      if (!managed?.apiKey) return notConfigured('OpenRouter');
-      if (currentProvider === 'openrouter_free' && !currentModel.endsWith(':free')) {
-        return { error: 'openrouter_free only accepts models with the ":free" suffix', status: 400 };
-      }
-      // X-OpenRouter-Cache enables OpenRouter's response cache (default 300s TTL):
-      // byte-identical repeat requests are served from cache at $0 with zeroed
-      // usage. See timestamp-utils.ts — the system-prompt timestamp is bucketed
-      // to the cache window so genuine repeats (regenerate/retry) can HIT.
-      const openrouter = createOpenRouter({
-        apiKey: managed.apiKey,
-        // OPENROUTER_BASE_URL lets a non-prod environment (e.g. e2e) redirect the
-        // OpenRouter API at a deterministic stub that returns known usage.cost, so
-        // billing can be asserted end-to-end. Unset in prod → real OpenRouter.
-        ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
-        headers: { 'X-OpenRouter-Cache': 'true' },
-      });
-      // usage: { include: true } turns on OpenRouter usage accounting so the
-      // response carries the authoritative per-request cost under
-      // providerMetadata.openrouter.usage.cost — the basis we bill on (see
-      // extractOpenRouterCostDollars / trackAIUsage). Without it, cost is undefined.
-      //
-      // extraBody.provider is OpenRouter request-body provider routing (merged into
-      // the request body by the SDK):
-      //   require_parameters: true — only route to upstream providers that actually
-      //     honor every param we send (notably `tools`). A provider that silently
-      //     ignores tools can never call the `finish` tool, which is a root cause of
-      //     "agent runs tools then never finishes". This forces tool-capable routing.
-      //   allow_fallbacks: true — keep OpenRouter's automatic failover to the next
-      //     healthy provider when one errors, reducing mid-stream disconnects.
-      model = openrouter.chat(currentModel, {
-        usage: { include: true },
-        extraBody: {
-          provider: {
-            require_parameters: true,
-            allow_fallbacks: true,
-          },
-        },
-      });
-    } else if (currentProvider === 'google') {
-      const managed = getManagedProviderKey('google');
-      if (!managed?.apiKey) return notConfigured('Google AI');
-      model = createGoogleGenerativeAI({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'openai') {
-      const managed = getManagedProviderKey('openai');
-      if (!managed?.apiKey) return notConfigured('OpenAI');
-      model = createOpenAI({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'anthropic') {
-      const managed = getManagedProviderKey('anthropic');
-      if (!managed?.apiKey) return notConfigured('Anthropic');
-      model = createAnthropic({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'xai') {
-      const managed = getManagedProviderKey('xai');
-      if (!managed?.apiKey) return notConfigured('xAI');
-      model = createXai({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'ollama') {
+    if (currentProvider === 'ollama') {
       const managed = getManagedProviderKey('ollama');
       if (!managed?.baseUrl) return notConfigured('Ollama');
 
@@ -227,28 +173,45 @@ export async function createAIProvider(
         baseURL: managed.baseUrl,
       });
       model = azureProvider(currentModel);
-    } else if (currentProvider === 'glm') {
-      const managed = getManagedProviderKey('glm');
-      if (!managed?.apiKey) return notConfigured('GLM Coder Plan');
-      const glmProvider = createOpenAICompatible({
-        name: 'glm',
-        apiKey: managed.apiKey,
-        baseURL: 'https://api.z.ai/api/coding/paas/v4',
-      });
-      model = glmProvider(currentModel);
-    } else if (currentProvider === 'minimax') {
-      const managed = getManagedProviderKey('minimax');
-      if (!managed?.apiKey) return notConfigured('MiniMax');
-      const minimax = createAnthropic({
-        apiKey: managed.apiKey,
-        baseURL: 'https://api.minimax.io/anthropic/v1',
-      });
-      model = minimax(currentModel);
     } else {
-      return {
-        error: `Unsupported AI provider: ${currentProvider}`,
-        status: 400,
-      };
+      // Every cloud vendor is served through OpenRouter. The model id already
+      // carries its vendor prefix (openai/…, anthropic/…) and is forwarded as-is.
+      const managed = getManagedProviderKey('openrouter');
+      if (!managed?.apiKey) return notConfigured('OpenRouter');
+      // X-OpenRouter-Cache enables OpenRouter's response cache (default 300s TTL):
+      // byte-identical repeat requests are served from cache at $0 with zeroed
+      // usage. See timestamp-utils.ts — the system-prompt timestamp is bucketed
+      // to the cache window so genuine repeats (regenerate/retry) can HIT.
+      const openrouter = createOpenRouter({
+        apiKey: managed.apiKey,
+        // OPENROUTER_BASE_URL lets a non-prod environment (e.g. e2e) redirect the
+        // OpenRouter API at a deterministic stub that returns known usage.cost, so
+        // billing can be asserted end-to-end. Unset in prod → real OpenRouter.
+        ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
+        headers: { 'X-OpenRouter-Cache': 'true' },
+      });
+      // usage: { include: true } turns on OpenRouter usage accounting so the
+      // response carries the authoritative per-request cost under
+      // providerMetadata.openrouter.usage.cost — the basis we bill on (see
+      // extractOpenRouterCostDollars / trackAIUsage). Without it, cost is undefined.
+      //
+      // extraBody.provider is OpenRouter request-body provider routing (merged into
+      // the request body by the SDK):
+      //   require_parameters: true — only route to upstream providers that actually
+      //     honor every param we send (notably `tools`). A provider that silently
+      //     ignores tools can never call the `finish` tool, which is a root cause of
+      //     "agent runs tools then never finishes". This forces tool-capable routing.
+      //   allow_fallbacks: true — keep OpenRouter's automatic failover to the next
+      //     healthy provider when one errors, reducing mid-stream disconnects.
+      model = openrouter.chat(currentModel, {
+        usage: { include: true },
+        extraBody: {
+          provider: {
+            require_parameters: true,
+            allow_fallbacks: true,
+          },
+        },
+      });
     }
 
     return {

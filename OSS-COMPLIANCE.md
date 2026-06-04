@@ -387,7 +387,8 @@ and the seller rotates or retires keys.
 | Stripe | Buyer uses their own Stripe account; seller's keys and products retired. No account transfer. |
 | Resend (transactional email) | Buyer provisions their own account; API keys rotated. |
 | Brave Search API (`BRAVE_API_KEY`) | Buyer provisions their own key; seller's retired. |
-| AI-provider default key (`GLM_DEFAULT_API_KEY`) | Seller's key retired; buyer provisions their own default-provider key. |
+| AI-provider default key (`OPENROUTER_DEFAULT_API_KEY`) | Seller's key retired; buyer provisions their own OpenRouter key (every cloud model is routed through OpenRouter). |
+| Voice (STT/TTS) key (`OPENAI_DEFAULT_API_KEY`) | Seller's key retired; buyer provisions their own OpenAI key. Voice calls hit OpenAI directly (not OpenRouter); without this key the `/api/voice/*` endpoints are unavailable after cutover. |
 
 ### 4.3 Not part of the transfer
 

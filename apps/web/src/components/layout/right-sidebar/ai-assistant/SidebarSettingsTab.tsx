@@ -5,16 +5,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CheckCircle, XCircle, Key, ExternalLink, Zap, Bot, Wrench, FolderTree } from 'lucide-react';
+import { CheckCircle, XCircle, Zap, Bot, Wrench, FolderTree } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { AI_PROVIDERS, getBackendProvider, getUserFacingModelName, getPageSpaceModelTier, PAGESPACE_MODEL_ALIASES } from '@/lib/ai/core/ai-providers-config';
+import {
+  AI_PROVIDERS,
+  getVisibleProviders,
+  getDefaultModel,
+  getUserFacingModelName,
+  isModelAllowedForTier,
+  DEFAULT_PROVIDER,
+  DEFAULT_MODEL,
+} from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import type { AgentInfo } from '@/types/agent';
-
-// Using centralized AI providers configuration from ai-providers-config.ts
 
 interface ProviderAvailability {
   isAvailable: boolean;
@@ -37,6 +43,9 @@ interface SidebarSettingsTabProps {
   selectedAgent: AgentInfo | null;
 }
 
+const isLocalProvider = (provider: string) =>
+  provider === 'ollama' || provider === 'lmstudio' || provider === 'azure_openai';
+
 /**
  * Assistant settings tab for the right sidebar.
  *
@@ -48,8 +57,8 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 }) => {
   const router = useRouter();
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
-  const [selectedModel, setSelectedModel] = useState<string>('glm-4.5-air');
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -68,12 +77,11 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
   const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
   const setShowPageTree = useAssistantSettingsStore((state) => state.setShowPageTree);
 
+  const subscriptionTier = providerSettings?.userSubscriptionTier;
+
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
-    // Return cached results if available
-    if (ollamaModels) {
-      return ollamaModels;
-    }
+    if (ollamaModels) return ollamaModels;
 
     setOllamaModelsLoading(true);
     setOllamaModelsError(null);
@@ -86,14 +94,12 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         setOllamaModels(data.models);
         return data.models;
       } else {
-        // No fallback models - return empty object
         setOllamaModels({});
         setOllamaModelsError(data.error || 'No models available');
         return {};
       }
     } catch (error) {
       console.error('Failed to fetch Ollama models:', error);
-      // No fallback models - return empty object
       setOllamaModels({});
       setOllamaModelsError('Connection failed');
       return {};
@@ -104,10 +110,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
   // Fetch LM Studio models dynamically
   const fetchLMStudioModels = useCallback(async () => {
-    // Return cached results if available
-    if (lmstudioModels) {
-      return lmstudioModels;
-    }
+    if (lmstudioModels) return lmstudioModels;
 
     try {
       const response = await fetchWithAuth('/api/ai/lmstudio/models');
@@ -117,13 +120,11 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         setLmstudioModels(data.models);
         return data.models;
       } else {
-        // No fallback models - return empty object
         setLmstudioModels({});
         return {};
       }
     } catch (error) {
       console.error('Failed to fetch LM Studio models:', error);
-      // No fallback models - return empty object
       setLmstudioModels({});
       return {};
     }
@@ -136,44 +137,21 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
       if (response.ok) {
         const data: ProviderSettings = await response.json();
         setProviderSettings(data);
-
-        // Determine the correct UI provider based on the model
-        let uiProvider = data.currentProvider;
-        if (data.currentProvider === 'openrouter' && data.currentModel) {
-          // Check if the model is a free model (ends with :free)
-          if (data.currentModel.endsWith(':free')) {
-            uiProvider = 'openrouter_free';
-          }
-        }
-
-        setSelectedProvider(uiProvider);
+        setSelectedProvider(data.currentProvider);
         setSelectedModel(data.currentModel);
 
-        // Check if current model is accessible to user, if not, reset to default
-        if (uiProvider === 'pagespace' && getPageSpaceModelTier(data.currentModel) === 'pro') {
-          const userTier = data.userSubscriptionTier;
-          if (userTier !== 'pro' && userTier !== 'business') {
-            // Free user has restricted model selected, reset to default
-            setSelectedModel('glm-4.5-air');
-          }
+        // If the saved model isn't accessible to this tier, reset to the default.
+        if (!isLocalProvider(data.currentProvider) &&
+            !isModelAllowedForTier(data.currentModel, data.userSubscriptionTier)) {
+          setSelectedProvider(DEFAULT_PROVIDER);
+          setSelectedModel(DEFAULT_MODEL);
         }
 
-        // If current provider is Ollama or LM Studio, eagerly fetch models to avoid empty dropdown
-        if (uiProvider === 'ollama') {
-          try {
-            await fetchOllamaModels();
-          } catch {
-            // Silently handle errors - fetchOllamaModels already has error handling
-            console.debug('Initial Ollama model fetch failed, will use fallback models');
-          }
+        if (data.currentProvider === 'ollama') {
+          try { await fetchOllamaModels(); } catch { /* handled in fetcher */ }
         }
-        if (uiProvider === 'lmstudio') {
-          try {
-            await fetchLMStudioModels();
-          } catch {
-            // Silently handle errors - fetchLMStudioModels already has error handling
-            console.debug('Initial LM Studio model fetch failed');
-          }
+        if (data.currentProvider === 'lmstudio') {
+          try { await fetchLMStudioModels(); } catch { /* handled in fetcher */ }
         }
       }
     } catch (error) {
@@ -199,42 +177,40 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     };
   }, [loadSettings]);
 
-
   const handleProviderChange = async (provider: string) => {
     setSelectedProvider(provider);
 
+    // Local providers bypass currentModelLocked, so Save stays enabled after switching.
+    // If discovery yields no models (empty or error), clear the stale cloud model id so
+    // we never PATCH a local provider with a mismatched model.
     if (provider === 'ollama') {
-      // Fetch Ollama models lazily when provider is selected
       try {
         const models = await fetchOllamaModels();
         if (Object.keys(models).length > 0) {
-          const defaultModel = Object.keys(models)[0];
-          setSelectedModel(defaultModel);
+          setSelectedModel(Object.keys(models)[0]);
         } else {
-          // No models available - show error
-          toast.error('No models available in Ollama. Please ensure Ollama server is running and models are downloaded.');
+          setSelectedModel('');
+          toast.error('No models available in Ollama. Ensure the server is running and models are downloaded.');
         }
       } catch {
-        toast.error('Failed to connect to Ollama. Please ensure the server is running.');
+        setSelectedModel('');
+        toast.error('Failed to connect to Ollama. Ensure the server is running.');
       }
     } else if (provider === 'lmstudio') {
-      // Fetch LM Studio models lazily when provider is selected
       try {
         const models = await fetchLMStudioModels();
         if (Object.keys(models).length > 0) {
-          const defaultModel = Object.keys(models)[0];
-          setSelectedModel(defaultModel);
+          setSelectedModel(Object.keys(models)[0]);
         } else {
-          // No models available - show error
-          toast.error('No models available in LM Studio. Please ensure LM Studio server is running and models are loaded.');
+          setSelectedModel('');
+          toast.error('No models available in LM Studio. Ensure the server is running and models are loaded.');
         }
       } catch {
-        toast.error('Failed to connect to LM Studio. Please ensure the server is running.');
+        setSelectedModel('');
+        toast.error('Failed to connect to LM Studio. Ensure the server is running.');
       }
     } else {
-      // For other providers, use static models
-      const defaultModel = Object.keys(AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS].models)[0];
-      setSelectedModel(defaultModel);
+      setSelectedModel(getDefaultModel(provider));
     }
   };
 
@@ -242,76 +218,27 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     setSelectedModel(model);
   };
 
-  // Get models for the current provider (dynamic for Ollama and LM Studio, static for others)
+  // Models for the current provider (dynamic for Ollama/LM Studio, static otherwise)
   const getCurrentProviderModels = (): Record<string, string> => {
-    if (selectedProvider === 'ollama' && ollamaModels) {
-      return ollamaModels;
-    }
-    if (selectedProvider === 'lmstudio' && lmstudioModels) {
-      return lmstudioModels;
-    }
+    if (selectedProvider === 'ollama' && ollamaModels) return ollamaModels;
+    if (selectedProvider === 'lmstudio' && lmstudioModels) return lmstudioModels;
     return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
 
-  // Check if a model requires Pro/Business subscription
-  const requiresSubscription = (provider: string, model: string): boolean => {
-    return provider === 'pagespace' && getPageSpaceModelTier(model) === 'pro';
-  };
-
-  // Check if user has access to a model
+  // Whether the current tier may select this model.
   const hasModelAccess = (provider: string, model: string): boolean => {
-    if (!requiresSubscription(provider, model)) {
-      return true; // All users can access non-subscription models
-    }
-
-    const userTier = providerSettings?.userSubscriptionTier;
-    return userTier === 'pro' || userTier === 'business';
+    if (isLocalProvider(provider)) return true;
+    return isModelAllowedForTier(model, subscriptionTier);
   };
 
   const isProviderConfigured = (provider: string): boolean => {
-    if (!providerSettings?.providers) return false;
-
-    // PageSpace provider should check its own configuration directly
-    // (not the user's OpenRouter configuration)
-    if (provider === 'pagespace') {
-      return providerSettings.providers.pagespace?.isAvailable || false;
-    }
-
-    // GLM provider should check its own configuration directly
-    // (not the OpenAI configuration, even though GLM uses OpenAI-compatible backend)
-    if (provider === 'glm') {
-      return providerSettings.providers.glm?.isAvailable || false;
-    }
-
-    // MiniMax provider should check its own configuration directly
-    // (not the Anthropic configuration, even though MiniMax uses Anthropic-compatible backend)
-    if (provider === 'minimax') {
-      return providerSettings.providers.minimax?.isAvailable || false;
-    }
-
-    // Map UI provider to backend provider for checking configuration
-    const backendProvider = getBackendProvider(provider);
-
-    // Check the appropriate provider configuration
-    switch (backendProvider) {
-      case 'openrouter':
-        return providerSettings.providers.openrouter?.isAvailable || false;
-      case 'google':
-        return providerSettings.providers.google?.isAvailable || false;
-      case 'openai':
-        return providerSettings.providers.openai?.isAvailable || false;
-      case 'anthropic':
-        return providerSettings.providers.anthropic?.isAvailable || false;
-      case 'xai':
-        return providerSettings.providers.xai?.isAvailable || false;
-      case 'ollama':
-        return providerSettings.providers.ollama?.isAvailable || false;
-      case 'lmstudio':
-        return providerSettings.providers.lmstudio?.isAvailable || false;
-      default:
-        return false;
-    }
+    return providerSettings?.providers?.[provider]?.isAvailable ?? false;
   };
+
+  // Providers visible in this deployment that are actually configured.
+  const availableProviders = Object.entries(getVisibleProviders()).filter(([key]) =>
+    isProviderConfigured(key)
+  );
 
   // Get setProviderSettings from the centralized store
   const setStoreProviderSettings = useAssistantSettingsStore((state) => state.setProviderSettings);
@@ -319,28 +246,20 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
   const handleSaveSettings = async () => {
     setSaving(true);
     try {
-      // Don't convert provider - save the UI selection directly
-      // PageSpace and OpenRouter are separate providers from the user's perspective
-
-      // Save model selection to backend
       const result = await patch<SaveSettingsResult>('/api/ai/settings', {
-        provider: selectedProvider, // Send UI provider directly
+        provider: selectedProvider,
         model: selectedModel,
       });
 
-      // Update local state to reflect the saved settings
       if (providerSettings) {
-        const updatedSettings = {
+        setProviderSettings({
           ...providerSettings,
-          currentProvider: selectedProvider, // Keep the UI provider
+          currentProvider: selectedProvider,
           currentModel: selectedModel,
-        };
-        setProviderSettings(updatedSettings);
+        });
       }
 
-      // Update centralized store (for SidebarChatTab and GlobalAssistantView)
       setStoreProviderSettings(selectedProvider, selectedModel);
-
       toast.success(result.message || 'Settings saved successfully!');
     } catch (error) {
       console.error('Failed to save settings:', error);
@@ -348,10 +267,6 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleManageApiKeys = () => {
-    router.push('/settings/ai');
   };
 
   // Agent mode: Show info message instead of global settings
@@ -435,44 +350,27 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        {/* Skeleton header */}
         <div className="p-3 border-b">
           <div className="flex items-center gap-2">
             <Skeleton className="h-4 w-4 rounded" />
             <Skeleton className="h-4 w-28" />
           </div>
         </div>
-        {/* Skeleton content */}
         <div className="flex-grow p-4 space-y-4">
-          {/* Provider selector skeleton */}
           <div className="space-y-2">
             <Skeleton className="h-4 w-24" />
             <Skeleton className="h-10 w-full" />
           </div>
-          {/* Model selector skeleton */}
           <div className="space-y-2">
             <Skeleton className="h-4 w-16" />
             <Skeleton className="h-10 w-full" />
-          </div>
-          {/* Provider status cards skeleton */}
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-32" />
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center justify-between p-3 rounded-lg border">
-                  <div className="flex items-center gap-2">
-                    <Skeleton className="h-4 w-4 rounded-full" />
-                    <Skeleton className="h-4 w-20" />
-                  </div>
-                  <Skeleton className="h-5 w-16 rounded-full" />
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>
     );
   }
+
+  const currentModelLocked = !hasModelAccess(selectedProvider, selectedModel);
 
   return (
     <div className="flex flex-col h-full">
@@ -484,57 +382,11 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
       {/* Settings Content - with native scrolling */}
       <div className="flex-grow overflow-y-auto">
         <div className="p-4 space-y-4">
-          
-          {/* Quick Provider Status */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center justify-between">
-                <span>Provider Status</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleManageApiKeys}
-                  className="h-7 px-2 -mr-2"
-                >
-                  <Key className="h-3 w-3 mr-1" />
-                  Manage Keys
-                  <ExternalLink className="h-3 w-3 ml-1" />
-                </Button>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {/* Display only user-visible providers */}
-                {Object.entries(AI_PROVIDERS).filter(([key]) => key === 'pagespace').map(([key, provider]) => {
-                  
-                  const isConfigured = isProviderConfigured(key);
-                  const displayName = key === 'pagespace' ? `${provider.name} (Default)` : provider.name;
-                  
-                  return (
-                    <div key={key} className="flex items-center justify-between text-xs">
-                      <span>{displayName}</span>
-                      {isConfigured ? (
-                        <Badge variant="default" className="text-xs h-5">
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Ready
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-xs h-5">
-                          <XCircle className="h-3 w-3 mr-1" />
-                          {key === 'pagespace' ? 'Not Configured' : 'No Key'}
-                        </Badge>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
 
           {/* Provider Selection */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Active Provider</CardTitle>
+              <CardTitle className="text-sm">Active Model</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-2">
@@ -544,21 +396,14 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(AI_PROVIDERS).filter(([key]) => key === 'pagespace').map(([key, provider]) => {
-                      const configured = isProviderConfigured(key);
-                      return (
-                        <SelectItem key={key} value={key}>
-                          <div className="flex items-center space-x-2">
-                            <span>{provider.name}</span>
-                            {configured ? (
-                              <CheckCircle className="h-3 w-3 text-green-500" />
-                            ) : (
-                              <XCircle className="h-3 w-3 text-red-500" />
-                            )}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
+                    {availableProviders.map(([key, provider]) => (
+                      <SelectItem key={key} value={key}>
+                        <div className="flex items-center space-x-2">
+                          <span>{provider.name}</span>
+                          <CheckCircle className="h-3 w-3 text-green-500" />
+                        </div>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -580,19 +425,13 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
                   <SelectContent>
                     {Object.entries(getCurrentProviderModels()).map(([key, name]) => {
                       const hasAccess = hasModelAccess(selectedProvider, key);
-                      const needsSubscription = requiresSubscription(selectedProvider, key);
-
                       return (
-                        <SelectItem
-                          key={key}
-                          value={key}
-                          disabled={!hasAccess}
-                        >
+                        <SelectItem key={key} value={key} disabled={!hasAccess}>
                           <div className="flex items-center justify-between w-full">
                             <span className={!hasAccess ? 'text-muted-foreground' : ''}>{name as string}</span>
-                            {needsSubscription && !hasAccess && (
+                            {!hasAccess && (
                               <Badge variant="outline" className="text-xs ml-2">
-                                Pro/Business
+                                Paid
                               </Badge>
                             )}
                           </div>
@@ -605,7 +444,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
               <Button
                 onClick={handleSaveSettings}
-                disabled={saving}
+                disabled={saving || currentModelLocked}
                 className="w-full h-8 text-xs"
               >
                 {saving ? 'Saving...' : 'Save Settings'}
@@ -635,9 +474,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
           </Card>
 
           {/* Upgrade notification for restricted models (hidden on iOS) */}
-          {showBilling &&
-           selectedProvider === 'pagespace' &&
-           !hasModelAccess('pagespace', PAGESPACE_MODEL_ALIASES.pro) && (
+          {showBilling && subscriptionTier === 'free' && currentModelLocked && (
             <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10">
               <CardContent className="pt-6">
                 <div className="text-center space-y-3">
@@ -646,10 +483,10 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
                   </div>
                   <div>
                     <p className="text-sm font-medium text-primary dark:text-foreground">
-                      Unlock Pro AI
+                      Unlock every model
                     </p>
                     <p className="text-xs text-primary/80 dark:text-primary mt-1">
-                      Advanced AI reasoning with Pro or Business
+                      Upgrade to a paid plan for access to the full model catalog.
                     </p>
                   </div>
                   <Button
@@ -665,36 +502,28 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
             </Card>
           )}
 
-          {/* API Key Management Link */}
+          {/* No provider configured */}
           {!providerSettings?.isAnyProviderConfigured && (
             <Card className="border-orange-200 bg-orange-50 dark:bg-orange-950/20">
               <CardContent className="pt-6">
                 <div className="text-center space-y-3">
-                  <Key className="h-8 w-8 mx-auto text-orange-600 dark:text-orange-400" />
+                  <XCircle className="h-8 w-8 mx-auto text-orange-600 dark:text-orange-400" />
                   <p className="text-sm text-orange-800 dark:text-orange-200">
-                    No API keys configured
+                    AI is not configured on this deployment.
                   </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleManageApiKeys}
-                    className="w-full"
-                  >
-                    Configure API Keys
-                  </Button>
                 </div>
               </CardContent>
             </Card>
           )}
         </div>
       </div>
-      
+
       {/* Footer - for consistent structure */}
       <div className="border-t p-3">
         <div className="text-xs text-muted-foreground text-center">
-          {providerSettings?.isAnyProviderConfigured 
-            ? '✓ AI Provider Configured' 
-            : 'Configure API keys to enable AI'}
+          {providerSettings?.isAnyProviderConfigured
+            ? '✓ AI Provider Configured'
+            : 'AI provider not configured'}
         </div>
       </div>
     </div>

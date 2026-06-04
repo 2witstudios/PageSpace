@@ -13,6 +13,20 @@ import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 
 /**
+ * Providers NOT served through OpenRouter. Everything else is a cloud vendor
+ * routed through OpenRouter and bills on real OpenRouter cost. This is an explicit
+ * allowlist, not just the local/on-prem set: `openai_voice` (STT/TTS) hits OpenAI
+ * directly and bills on list price, so a missing OpenRouter cost there is expected,
+ * not a coverage gap.
+ */
+const NON_OPENROUTER_AI_PROVIDERS = new Set<string>([
+  'ollama',
+  'lmstudio',
+  'azure_openai',
+  'openai_voice',
+]);
+
+/**
  * AI Provider Pricing (per 1M tokens, USD)
  * Sources: OpenRouter /api/v1/models (per-token × 1M), Anthropic docs, Google AI docs, xAI docs
  * Updated: 2026-05
@@ -274,7 +288,8 @@ export const AI_PRICING = {
   'MiniMax-M2': { input: 0.30, output: 1.20 },
   'MiniMax-M2-Stable': { input: 0.30, output: 1.20 },
 
-  // GLM Direct Models (openrouter.ai, Dec 2025)
+  // Retired GLM model ids — legacy billing fallback only (no longer in the catalog;
+  // kept so historical ai_usage rows recorded under these bare ids still cost correctly).
   'glm-5': { input: 1.00, output: 3.20 },
   'glm-4.7': { input: 0.39, output: 1.90 },
   'glm-4.6': { input: 0.39, output: 1.90 },
@@ -559,7 +574,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'MiniMax-M2': 128000,
   'MiniMax-M2-Stable': 128000,
 
-  // PageSpace/GLM Models
+  // Retired GLM model ids — legacy fallback for historical rows (not in the catalog).
   'glm-5': 200000,
   'glm-4.7': 200000,
   'glm-4.6': 200000,
@@ -816,7 +831,9 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       data.providerCostDollars >= 0;
     const cost = hasRealCost ? (data.providerCostDollars as number) : fallbackCost;
     const costSource = hasRealCost ? 'openrouter' : 'estimate';
-    const isOpenRouter = data.provider === 'openrouter' || data.provider === 'openrouter_free';
+    // Every cloud vendor is served through OpenRouter; only the providers on the
+    // explicit non-OpenRouter allowlist (local runtimes + direct voice) are not.
+    const isOpenRouter = !NON_OPENROUTER_AI_PROVIDERS.has(data.provider);
     if (!hasRealCost && isOpenRouter) {
       // An OpenRouter call that should have carried cost metadata didn't — log
       // and fall back so we still bill (durability), but flag the coverage gap.
@@ -827,12 +844,16 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     }
     const success = data.success !== false;
 
-    // Mark the row for async cost reconcile only when it was billed on OpenRouter's
-    // returned cost AND carries generation id(s) to look up. Direct providers, missing
-    // metadata, and id-less rows stay NULL so the reconcile cron never picks them up.
+    // Mark the row for async cost reconcile only when it was billed on a real returned
+    // cost AND carries OpenRouter generation id(s) to look up. The id presence — not the
+    // UI provider string, which post-OpenRouter-routing is often an alias like 'pagespace'
+    // — is the authoritative signal that this row went through OpenRouter and has a
+    // /generation cost to reconcile against (extractOpenRouterGenerationIds only ever
+    // reads providerMetadata.openrouter.id). Direct providers, missing metadata, and
+    // id-less rows stay NULL so the reconcile cron never picks them up.
     const generationIds = data.openrouterGenerationIds ?? [];
     const reconcileStatus =
-      isOpenRouter && hasRealCost && generationIds.length > 0 ? ('pending' as const) : undefined;
+      hasRealCost && generationIds.length > 0 ? ('pending' as const) : undefined;
 
     // Persist the usage log, then debit the user's prepaid credit balance
     // (cost × markup) whenever real provider tokens were consumed — even if the

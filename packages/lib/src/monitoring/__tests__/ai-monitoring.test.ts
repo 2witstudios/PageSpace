@@ -134,13 +134,14 @@ describe('calculateCost', () => {
     expect(calculateCost('completely-unknown-model', 1_000_000, 1_000_000)).toBe(0);
   });
 
-  // Regression guard: every PageSpace-tier backend model must be priced. These are
-  // the resolved model ids that createAIProvider returns for the pagespace provider
-  // (standard -> glm-4.7, pro -> glm-5) plus the agent/chat default glm-4.5-air. If
-  // any of these is missing from AI_PRICING it meters at $0 and the platform eats the
-  // spend (see PR #1475 — glm-4.5-air was previously unpriced).
+  // Regression guard: the retired GLM model ids must stay priced as a legacy billing
+  // fallback. Historical ai_usage rows were recorded under these bare ids (glm-4.5-air
+  // was the old agent/chat default; glm-4.7 / glm-5 the old standard/pro tiers) before
+  // every model moved onto OpenRouter. If any drops out of AI_PRICING those historical
+  // rows cost at $0 and the platform eats the spend (see PR #1475 — glm-4.5-air was
+  // previously unpriced).
   it.each(['glm-4.5-air', 'glm-4.7', 'glm-5'])(
-    'prices PageSpace-tier model "%s" above $0',
+    'prices retired GLM model "%s" above $0',
     (model) => {
       expect(calculateCost(model, 1_000_000, 1_000_000)).toBeGreaterThan(0);
     }
@@ -645,23 +646,25 @@ describe('trackAIUsage', () => {
   it('logs a coverage-gap debug when an OpenRouter call is missing cost metadata', async () => {
     await trackAIUsage({
       userId: 'user-1',
-      provider: 'openrouter_free',
-      model: 'some/model:free',
+      provider: 'openai',
+      model: 'openai/some-model',
       inputTokens: 10,
       outputTokens: 10,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mockAiLogger.debug).toHaveBeenCalledWith(
       'openrouter cost metadata missing; falling back to estimate',
-      expect.objectContaining({ provider: 'openrouter_free' }),
+      expect.objectContaining({ provider: 'openai' }),
     );
   });
 
-  it('does NOT log a coverage gap for a direct provider (estimate is expected there)', async () => {
+  it('does NOT log a coverage gap for a local provider (estimate is expected there)', async () => {
+    // Local providers (ollama/lmstudio/azure_openai) never route through OpenRouter,
+    // so a missing real cost is expected and must not be logged as a coverage gap.
     await trackAIUsage({
       userId: 'user-1',
-      provider: 'anthropic',
-      model: 'claude-3-5-sonnet-20241022',
+      provider: 'ollama',
+      model: 'llama3.2',
       inputTokens: 10,
       outputTokens: 10,
     });

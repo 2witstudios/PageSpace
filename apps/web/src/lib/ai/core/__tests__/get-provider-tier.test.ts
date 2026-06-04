@@ -3,173 +3,155 @@ import { assert } from './riteway';
 import { getProviderTier } from '../ai-providers-config';
 
 describe('getProviderTier', () => {
-  test('pagespace standard model', () => {
-    assert({
-      given: 'pagespace provider with glm-4.7',
-      should: 'classify as standard',
-      actual: getProviderTier('pagespace', 'glm-4.7'),
-      expected: 'standard',
-    });
-  });
-
-  test('pagespace pro model', () => {
-    assert({
-      given: 'pagespace provider with glm-5',
-      should: 'classify as pro',
-      actual: getProviderTier('pagespace', 'glm-5'),
-      expected: 'pro',
-    });
-  });
-
-  test('pagespace alias resolution', () => {
-    assert({
-      given: 'pagespace provider with the "pro" alias',
-      should: 'classify as pro after alias resolution',
-      actual: getProviderTier('pagespace', 'pro'),
-      expected: 'pro',
-    });
-  });
-
   test('Anthropic Opus is pro', () => {
     assert({
-      given: 'anthropic provider with claude-opus-4.6',
+      given: 'anthropic provider with anthropic/claude-opus-4.8',
       should: 'classify as pro',
-      actual: getProviderTier('anthropic', 'claude-opus-4.6'),
+      actual: getProviderTier('anthropic', 'anthropic/claude-opus-4.8'),
       expected: 'pro',
     });
   });
 
   test('Anthropic Sonnet is standard', () => {
     assert({
-      given: 'anthropic provider with claude-sonnet-4.6',
+      given: 'anthropic provider with anthropic/claude-sonnet-4.6',
       should: 'classify as standard (only Opus is gated as pro)',
-      actual: getProviderTier('anthropic', 'claude-sonnet-4.6'),
+      actual: getProviderTier('anthropic', 'anthropic/claude-sonnet-4.6'),
       expected: 'standard',
     });
   });
 
   test('Anthropic Haiku is standard', () => {
     assert({
-      given: 'anthropic provider with claude-haiku-4.5',
+      given: 'anthropic provider with anthropic/claude-haiku-4.5',
       should: 'classify as standard',
-      actual: getProviderTier('anthropic', 'claude-haiku-4.5'),
+      actual: getProviderTier('anthropic', 'anthropic/claude-haiku-4.5'),
       expected: 'standard',
     });
   });
 
   test('OpenAI GPT-5 is pro', () => {
     assert({
-      given: 'openai provider with gpt-5',
+      given: 'openai provider with openai/gpt-5',
       should: 'classify as pro',
-      actual: getProviderTier('openai', 'gpt-5'),
+      actual: getProviderTier('openai', 'openai/gpt-5'),
       expected: 'pro',
     });
   });
 
   test('OpenAI GPT-5 versioned variants are pro', () => {
     assert({
-      given: 'openai provider with gpt-5.4-pro',
+      given: 'openai provider with openai/gpt-5.4-pro',
       should: 'classify as pro',
-      actual: getProviderTier('openai', 'gpt-5.4-pro'),
+      actual: getProviderTier('openai', 'openai/gpt-5.4-pro'),
       expected: 'pro',
     });
   });
 
   test('OpenAI GPT-5 mini is standard', () => {
     assert({
-      given: 'openai provider with gpt-5-mini',
+      given: 'openai provider with openai/gpt-5-mini',
       should: 'classify as standard (mini variants are demoted)',
-      actual: getProviderTier('openai', 'gpt-5-mini'),
+      actual: getProviderTier('openai', 'openai/gpt-5-mini'),
       expected: 'standard',
     });
   });
 
-  test('OpenAI GPT-5.2 nano is standard', () => {
+  test('OpenAI GPT-5.4 mini is standard (mini rule wins over gpt-5)', () => {
     assert({
-      given: 'openai provider with gpt-5.2-nano',
+      given: 'openai provider with openai/gpt-5.4-mini',
+      should: 'classify as standard because the mini/nano/flash rule is checked first',
+      actual: getProviderTier('openai', 'openai/gpt-5.4-mini'),
+      expected: 'standard',
+    });
+  });
+
+  test('default free model gpt-5.3-chat is standard (free-allowlist override)', () => {
+    assert({
+      given: 'openai provider with the free-allowlisted default openai/gpt-5.3-chat',
+      should: 'classify as standard so free users are not 429d by the legacy daily pro quota',
+      actual: getProviderTier('openai', 'openai/gpt-5.3-chat'),
+      expected: 'standard',
+    });
+  });
+
+  test('OpenAI GPT-5.4 nano is standard', () => {
+    assert({
+      given: 'openai provider with openai/gpt-5.4-nano',
       should: 'classify as standard',
-      actual: getProviderTier('openai', 'gpt-5.2-nano'),
+      actual: getProviderTier('openai', 'openai/gpt-5.4-nano'),
       expected: 'standard',
     });
   });
 
   test('OpenAI o3 is pro', () => {
     assert({
-      given: 'openai provider with o3-deep-research',
+      given: 'openai provider with openai/o3-deep-research',
       should: 'classify as pro',
-      actual: getProviderTier('openai', 'o3-deep-research'),
+      actual: getProviderTier('openai', 'openai/o3-deep-research'),
       expected: 'pro',
     });
   });
 
   test('OpenAI o4-mini is standard', () => {
     assert({
-      given: 'openai provider with o4-mini-deep-research',
+      given: 'openai provider with openai/o4-mini-deep-research',
       should: 'classify as standard (mini variant)',
-      actual: getProviderTier('openai', 'o4-mini-deep-research'),
+      actual: getProviderTier('openai', 'openai/o4-mini-deep-research'),
       expected: 'standard',
     });
   });
 
   test('OpenAI gpt-4o is standard', () => {
     assert({
-      given: 'openai provider with gpt-4o',
+      given: 'openai provider with openai/gpt-4o',
       should: 'classify as standard (not in pro allowlist)',
-      actual: getProviderTier('openai', 'gpt-4o'),
+      actual: getProviderTier('openai', 'openai/gpt-4o'),
       expected: 'standard',
     });
   });
 
-  test('OpenRouter namespaced GLM 5 is pro', () => {
+  test('Namespaced Opus is pro', () => {
     assert({
-      given: 'openrouter provider with z-ai/glm-5',
+      given: 'anthropic provider with the full OpenRouter id anthropic/claude-opus-4.7',
       should: 'classify as pro',
-      actual: getProviderTier('openrouter', 'z-ai/glm-5'),
+      actual: getProviderTier('anthropic', 'anthropic/claude-opus-4.7'),
       expected: 'pro',
     });
   });
 
-  test('OpenRouter namespaced Opus is pro', () => {
+  test('Namespaced Sonnet is standard', () => {
     assert({
-      given: 'openrouter provider with anthropic/claude-opus-4.6',
-      should: 'classify as pro',
-      actual: getProviderTier('openrouter', 'anthropic/claude-opus-4.6'),
-      expected: 'pro',
-    });
-  });
-
-  test('OpenRouter Sonnet via namespaced ID is standard', () => {
-    assert({
-      given: 'openrouter provider with anthropic/claude-sonnet-4.6',
+      given: 'anthropic provider with anthropic/claude-sonnet-4.6',
       should: 'classify as standard',
-      actual: getProviderTier('openrouter', 'anthropic/claude-sonnet-4.6'),
+      actual: getProviderTier('anthropic', 'anthropic/claude-sonnet-4.6'),
       expected: 'standard',
     });
   });
 
   test('Gemini Flash is standard', () => {
     assert({
-      given: 'google provider with gemini-2.5-flash',
+      given: 'google provider with google/gemini-2.5-flash',
       should: 'classify as standard',
-      actual: getProviderTier('google', 'gemini-2.5-flash'),
+      actual: getProviderTier('google', 'google/gemini-2.5-flash'),
       expected: 'standard',
     });
   });
 
   test('Gemini Pro is standard (not in pro allowlist)', () => {
     assert({
-      given: 'google provider with gemini-2.5-pro',
+      given: 'google provider with google/gemini-2.5-pro',
       should: 'classify as standard',
-      actual: getProviderTier('google', 'gemini-2.5-pro'),
+      actual: getProviderTier('google', 'google/gemini-2.5-pro'),
       expected: 'standard',
     });
   });
 
-  test('Grok 4 is standard', () => {
+  test('Grok is standard', () => {
     assert({
-      given: 'xai provider with grok-4',
+      given: 'xai provider with x-ai/grok-4.3',
       should: 'classify as standard (not in pro allowlist)',
-      actual: getProviderTier('xai', 'grok-4'),
+      actual: getProviderTier('xai', 'x-ai/grok-4.3'),
       expected: 'standard',
     });
   });
@@ -195,8 +177,8 @@ describe('getProviderTier', () => {
   test('MiniMax models are not falsely demoted', () => {
     assert({
       given: 'minimax provider with minimax/minimax-m2.5',
-      should: 'classify as standard (minimax brand should not match the mini demotion)',
-      actual: getProviderTier('openrouter', 'minimax/minimax-m2.5'),
+      should: 'classify as standard (the minimax brand should not match the mini demotion)',
+      actual: getProviderTier('minimax', 'minimax/minimax-m2.5'),
       expected: 'standard',
     });
   });

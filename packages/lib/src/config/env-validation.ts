@@ -40,9 +40,16 @@ export const serverEnvSchema = z
     GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
     GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
 
-    // Optional AI keys
-    GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),
+    // AI keys. OpenRouter powers the cloud model picker; OpenAI is required for
+    // voice mode (direct api.openai.com). The rest are optional, kept for future
+    // native (non-OpenRouter) provider routing.
     OPENROUTER_DEFAULT_API_KEY: z.string().optional(),
+    OPENAI_DEFAULT_API_KEY: z.string().optional(),
+    ANTHROPIC_DEFAULT_API_KEY: z.string().optional(),
+    GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),
+    XAI_DEFAULT_API_KEY: z.string().optional(),
+    GLM_CODER_DEFAULT_API_KEY: z.string().optional(),
+    MINIMAX_DEFAULT_API_KEY: z.string().optional(),
 
     // Optional monitoring
     MONITORING_INGEST_KEY: z.string().optional(),

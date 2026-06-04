@@ -1,4 +1,5 @@
 import { db } from '@pagespace/db/db'
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { eq, and, desc, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
@@ -678,9 +679,16 @@ export const pageService = {
         },
       });
 
-      if (user) {
-        defaultAiProvider = user.currentAiProvider || 'pagespace';
-        defaultAiModel = user.currentAiModel || 'qwen/qwen3-coder:free';
+      // Resolve provider+model as one pair — never mix a stored provider with the
+      // default model (or vice-versa). A partial user row (only one column set) would
+      // otherwise yield an impossible pair like `anthropic` + `openai/gpt-5.3-chat`
+      // that the provider factory rejects on first use.
+      if (user?.currentAiProvider && user.currentAiModel) {
+        defaultAiProvider = user.currentAiProvider;
+        defaultAiModel = user.currentAiModel;
+      } else {
+        defaultAiProvider = DEFAULT_PROVIDER;
+        defaultAiModel = DEFAULT_MODEL;
       }
     }
 

@@ -3,7 +3,7 @@ import { incrementUsage } from './usage-service';
 import { getTomorrowMidnightUTC } from '@pagespace/lib/services/date-utils';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import type { ProviderType } from '@pagespace/lib/services/rate-limit-cache';
-import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, isModelAllowedForTier } from '@/lib/ai/core/ai-providers-config';
 
 /** Subscription tiers that have access to paid features (voice mode, etc.). */
 export const PAID_TIERS = new Set(['pro', 'founder', 'business']);
@@ -91,19 +91,18 @@ export function createRateLimitResponse(
 }
 
 /**
- * Check if provider requires Pro subscription.
- * Billing-disabled deployments (on-prem and tenant) bypass subscription gating via isBillingEnabled().
+ * Whether the user's subscription tier is barred from the requested model.
+ * Free users are limited to the FREE_TIER_MODELS allowlist; every paid tier gets
+ * the full catalog. Billing-disabled deployments (on-prem and tenant) and global
+ * admins bypass the gate entirely.
+ *
+ * The `provider` arg is retained for signature stability with existing call sites;
+ * gating is now purely model-based.
  */
-export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined, isAdmin = false): boolean {
-  // Global admins bypass the subscription gate entirely (e.g. paid OpenRouter access).
+export function requiresProSubscription(_provider: string, model: string | undefined, subscriptionTier: string | undefined, isAdmin = false): boolean {
   if (isAdmin) return false;
   if (!isBillingEnabled()) return false;
-  if (getProviderTier(provider, model) !== 'pro') return false;
-
-  // Prepaid credits model: premium models are open to any paid tier with credits.
-  // Gate via a positive allowlist so an unrecognized tier defaults to denied, not granted.
-  const PAID_TIERS = ['pro', 'founder', 'business'];
-  return !subscriptionTier || !PAID_TIERS.includes(subscriptionTier);
+  return !isModelAllowedForTier(model, subscriptionTier);
 }
 
 /**
@@ -113,7 +112,7 @@ export function createSubscriptionRequiredResponse(): NextResponse {
   return NextResponse.json(
     {
       error: 'Subscription required',
-      message: 'Pro AI provider requires a Pro or Business subscription.',
+      message: 'This model is available on paid plans. Upgrade to access the full model catalog.',
       upgradeUrl: '/settings/billing',
     },
     { status: 403 }

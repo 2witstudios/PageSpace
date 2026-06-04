@@ -1,5 +1,6 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { hasVisionCapability } from './vision-models';
+import { getBackendProvider } from './ai-providers-config';
 
 const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
 
@@ -102,8 +103,8 @@ export async function hasToolCapability(model: string, provider: string): Promis
     return false;
   }
 
-  // For OpenRouter, check their API for authoritative data
-  if (provider === 'openrouter' || provider === 'openrouter_free') {
+  // For OpenRouter-backed cloud vendors, check their API for authoritative data
+  if (getBackendProvider(provider) === 'openrouter') {
     try {
       const openRouterCapabilities = await fetchOpenRouterToolCapabilities();
       const hasTools = openRouterCapabilities.get(model) || false;
@@ -139,17 +140,14 @@ export function getSuggestedToolCapableModels(provider: string): string[] {
   switch (provider) {
     case 'ollama':
       return ['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'];
-    case 'openrouter':
-    case 'openrouter_free':
-      return ['meta-llama/llama-3.1-405b-instruct', 'mistralai/mistral-small-3.2-24b-instruct'];
     case 'google':
-      return ['gemini-2.5-flash', 'gemini-1.5-flash'];
+      return ['google/gemini-3.5-flash', 'google/gemini-2.5-flash'];
     case 'openai':
-      return ['gpt-4o-mini', 'gpt-3.5-turbo'];
+      return ['openai/gpt-5.4-mini', 'openai/gpt-4.1-mini'];
     case 'anthropic':
-      return ['claude-3-haiku-20240307', 'claude-3-5-sonnet-20241022'];
+      return ['anthropic/claude-haiku-4.5', 'anthropic/claude-sonnet-4.6'];
     default:
-      return ['gpt-4o-mini', 'claude-3-haiku-20240307', 'gemini-2.5-flash'];
+      return ['openai/gpt-5.3-chat', 'anthropic/claude-haiku-4.5', 'google/gemini-3.5-flash'];
   }
 }
 

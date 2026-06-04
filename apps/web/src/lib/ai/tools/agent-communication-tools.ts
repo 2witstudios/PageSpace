@@ -12,6 +12,8 @@ import {
   convertDbMessageToUIMessage,
   createAIProvider,
   isProviderError,
+  DEFAULT_PROVIDER,
+  DEFAULT_MODEL,
   type ProviderRequest,
   buildTimestampSystemPrompt,
   type ToolExecutionContext,
@@ -41,8 +43,8 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
-  const selectedProvider = aiProvider || 'pagespace';
-  const selectedModel = aiModel || (selectedProvider === 'pagespace' ? 'glm-4.5-air' : undefined);
+  const selectedProvider = aiProvider || DEFAULT_PROVIDER;
+  const selectedModel = aiModel || DEFAULT_MODEL;
 
   const providerRequest: ProviderRequest = {
     selectedProvider,
@@ -690,10 +692,11 @@ export const agentCommunicationTools = {
             // Use display names from AI_PROVIDERS config
             provider: targetAgent.aiProvider
               ? (AI_PROVIDERS[targetAgent.aiProvider as keyof typeof AI_PROVIDERS]?.name || targetAgent.aiProvider)
-              : AI_PROVIDERS.pagespace.name,
-            model: targetAgent.aiProvider
-              ? getModelDisplayName(targetAgent.aiProvider, targetAgent.aiModel || 'gemini-2.5-flash')
-              : 'Default (Free)',  // PageSpace default model display name
+              : AI_PROVIDERS[DEFAULT_PROVIDER as keyof typeof AI_PROVIDERS].name,
+            model: getModelDisplayName(
+              targetAgent.aiProvider || DEFAULT_PROVIDER,
+              targetAgent.aiModel || DEFAULT_MODEL,
+            ),
             toolsEnabled: (targetAgent.enabledTools as string[] | null)?.length || 0,
             toolCalls: response.steps?.flatMap(step => step.toolCalls || []).length || 0,
             steps: response.steps?.length || 1

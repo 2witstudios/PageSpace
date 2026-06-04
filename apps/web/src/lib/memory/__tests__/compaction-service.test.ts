@@ -41,6 +41,7 @@ const mockCreateAIProvider = vi.fn();
 vi.mock('@/lib/ai/core', () => ({
   createAIProvider: () => mockCreateAIProvider(),
   isProviderError: (result: unknown) => result !== null && typeof result === 'object' && 'error' in result,
+  BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-4.6',
 }));
 
 // Mock loggers

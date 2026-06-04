@@ -22,6 +22,11 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./ai/model-defaults": {
+      "types": "./dist/ai/model-defaults.d.ts",
+      "import": "./dist/ai/model-defaults.js",
+      "require": "./dist/ai/model-defaults.js"
+    },
     "./logging/logger": {
       "types": "./dist/logging/logger.d.ts",
       "import": "./dist/logging/logger.js",
@@ -920,6 +925,9 @@
       ],
       "ai/global-channel-id": [
         "./dist/ai/global-channel-id.d.ts"
+      ],
+      "ai/model-defaults": [
+        "./dist/ai/model-defaults.d.ts"
       ],
       "logging/logger": [
         "./dist/logging/logger.d.ts"
