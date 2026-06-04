@@ -788,7 +788,7 @@ export async function getBalanceDriftAlerts(
     );
 
   return rows
-    .map((r) => {
+    .map((r): BalanceDriftRow | null => {
       const drift = computeBalanceDrift(
         {
           grantCents: r.grantCents,
@@ -799,6 +799,7 @@ export async function getBalanceDriftAlerts(
         },
         toleranceCents,
       );
+      if (!drift.flagged) return null;
       return {
         userId: r.userId,
         userName: r.userName,
@@ -807,13 +808,11 @@ export async function getBalanceDriftAlerts(
         materializedSpendableCents: r.materializedSpendableCents,
         driftCents: drift.driftCents,
         debtCents: r.debtCents,
-        flagged: drift.flagged,
       };
     })
-    .filter((r) => r.flagged)
+    .filter((r): r is BalanceDriftRow => r !== null)
     .sort((a, b) => Math.abs(b.driftCents) - Math.abs(a.driftCents))
-    .slice(0, limit)
-    .map(({ flagged: _flagged, ...row }) => row);
+    .slice(0, limit);
 }
 
 export interface NegativeMarginRow {
