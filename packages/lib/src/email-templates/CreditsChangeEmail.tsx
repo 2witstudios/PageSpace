@@ -48,7 +48,7 @@ const allowanceLabel = {
   margin: '0',
 };
 
-// Eyebrow above the main heading — small, uppercase, brand-tinted.
+// Eyebrow above the main heading: small, uppercase, brand-tinted.
 const eyebrow = {
   fontSize: typography.tiny,
   fontWeight: typography.semibold,
@@ -58,7 +58,7 @@ const eyebrow = {
   margin: `0 0 ${spacing.xs} 0`,
 };
 
-// Soft callout card (model choice, top-ups) — lighter than the tier box.
+// Soft callout card (model choice, top-ups), lighter than the tier box.
 const calloutCard = {
   backgroundColor: colors.pageBackground,
   border: `1px solid ${colors.border}`,
@@ -136,7 +136,7 @@ export function CreditsChangeEmail({
               </Text>
             </Section>
 
-            {/* Model choice — the upside of usage-based billing, per tier. */}
+            {/* Model choice: the upside of usage-based billing, per tier. */}
             <Section style={calloutCard}>
               <Text style={calloutHeading}>
                 {summary.unlocksPremiumModels
@@ -145,12 +145,12 @@ export function CreditsChangeEmail({
               </Text>
               <Text style={calloutText}>
                 {summary.unlocksPremiumModels
-                  ? 'Your plan unlocks the frontier — spend credits on Claude Opus 4.8, GPT-5.5, OpenAI o3, Gemini 2.5 Pro, and more. Reach for a light model on quick work and a flagship when it counts. You choose the trade-off per task.'
-                  : 'Your plan runs on fast, capable standard models tuned to make your credits stretch. No setup, no model wrangling — just send a message and go.'}
+                  ? 'Your plan unlocks the frontier. Spend credits on Claude Opus 4.8, GPT-5.5, OpenAI o3, Gemini 2.5 Pro, and more. Reach for a light model on quick work and a flagship when it counts. You choose the trade-off per task.'
+                  : 'Your plan runs on fast, capable standard models tuned to make your credits stretch. No setup, no model wrangling, just send a message and go.'}
               </Text>
             </Section>
 
-            {/* Top-ups — custom amount plus quick-pick packs. */}
+            {/* Top-ups: custom amount plus quick-pick packs. */}
             <Section style={calloutCard}>
               <Text style={calloutHeading}>Run low? Top up in seconds</Text>
               <Text style={calloutText}>
@@ -169,8 +169,8 @@ export function CreditsChangeEmail({
 
             <Text style={emailStyles.paragraph}>
               Credits only apply to AI features. Your documents, tasks,
-              channels, files, and collaboration are completely unaffected —
-              nothing about how you work with your team is changing.
+              channels, files, and collaboration are completely unaffected.
+              Nothing about how you work with your team is changing.
             </Text>
 
             <Section style={emailStyles.buttonContainer}>
