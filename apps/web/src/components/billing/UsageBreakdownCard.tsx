@@ -7,8 +7,9 @@ import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { formatCreditDollars } from '@/lib/subscription/credits';
+import { formatCreditUnits } from '@/lib/subscription/credits';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { useCreditBalance } from '@/hooks/useCreditBalance';
 
 interface FeatureRow {
   source: string;
@@ -58,6 +59,9 @@ const formatTokens = (tokens: number): string => {
 export function UsageBreakdownCard() {
   const socket = useSocketStore((state) => state.socket);
   const connect = useSocketStore((state) => state.connect);
+  // SWR-deduped alongside CreditBalance/CreditBalanceCard — no extra fetch.
+  const { balance } = useCreditBalance();
+  const allowanceCents = balance?.monthly.allowance ?? 0;
 
   const { data, error, isLoading, mutate } = useSWR<UsageBreakdownResponse>(
     '/api/credits/breakdown',
@@ -78,7 +82,7 @@ export function UsageBreakdownCard() {
     };
   }, [socket, mutate]);
 
-  const resetDate = data?.periodEnd ? new Date(data.periodEnd) : null;
+  const renewDate = data?.periodEnd ? new Date(data.periodEnd) : null;
 
   return (
     <Card>
@@ -88,7 +92,7 @@ export function UsageBreakdownCard() {
           Usage this period
         </CardTitle>
         <CardDescription>
-          Where your AI credits are going{resetDate && <> · resets {resetDate.toLocaleDateString()}</>}
+          Where your AI credits are going{renewDate && <> · renews {renewDate.toLocaleDateString()}</>}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -108,13 +112,24 @@ export function UsageBreakdownCard() {
           </p>
         ) : (
           <div className="space-y-6">
-            <div className="text-2xl font-bold tabular-nums">
-              {formatCreditDollars(data.totalSpendCents)}
-              <span className="ml-2 text-sm font-normal text-muted-foreground">spent</span>
-            </div>
+            {allowanceCents > 0 && (
+              <div className="text-2xl font-bold tabular-nums">
+                {formatCreditUnits(data.totalSpendCents, allowanceCents)}
+                <span className="ml-2 text-sm font-normal text-muted-foreground">credits used</span>
+              </div>
+            )}
 
-            <UsageList title="By feature" rows={data.byFeature.map(featureToRow)} />
-            <UsageList title="By model" rows={data.byModel.map(modelToRow)} formatTokens={formatTokens} />
+            <UsageList
+              title="By feature"
+              rows={data.byFeature.map(featureToRow)}
+              allowanceCents={allowanceCents}
+            />
+            <UsageList
+              title="By model"
+              rows={data.byModel.map(modelToRow)}
+              allowanceCents={allowanceCents}
+              formatTokens={formatTokens}
+            />
           </div>
         )}
       </CardContent>
@@ -154,10 +169,12 @@ const modelToRow = (m: ModelRow): DisplayRow => ({
 function UsageList({
   title,
   rows,
+  allowanceCents,
   formatTokens: fmtTokens,
 }: {
   title: string;
   rows: DisplayRow[];
+  allowanceCents: number;
   formatTokens?: (t: number) => string;
 }) {
   if (rows.length === 0) return null;
@@ -174,7 +191,11 @@ function UsageList({
                   <span className="ml-1.5 text-xs font-normal text-muted-foreground">{row.sublabel}</span>
                 )}
               </span>
-              <span className="shrink-0 tabular-nums">{formatCreditDollars(row.spendCents)}</span>
+              {allowanceCents > 0 && (
+                <span className="shrink-0 tabular-nums">
+                  {formatCreditUnits(row.spendCents, allowanceCents)} cr
+                </span>
+              )}
             </div>
             <Progress value={row.sharePct} className="h-2" />
             <div className="text-xs text-muted-foreground tabular-nums">
