@@ -78,10 +78,6 @@ Pricing is only half of this. PageSpace now runs on scalable, modern infrastruct
 
 This is the foundation the credit model needs. Usage-based pricing only works if the platform can actually absorb the usage, and now it can.
 
-## Publish pages to the web, live now
-
-That same groundwork is already shipping features you can use today. Turn any page into a standalone live site on \`pagespace.site\` with one click: draft it in PageSpace with your AI agents, then publish it as a real public page, with no separate hosting and no export dance.
-
 ## What's next
 
 **Agents that run real code.** AI agents will execute code in isolated, sandboxed containers right inside your workspace. Not "here's a snippet to copy," but the agent actually running it in a throwaway sandbox. More on that as it lands.
