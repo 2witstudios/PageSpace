@@ -16,6 +16,13 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/2witstudios/pagespace
 
+# Serialize deploys: back-to-back merges to master queue instead of racing on the
+# mutable :latest tag (the slower run would otherwise win and land prod on an older
+# commit). Queue rather than cancel so an in-flight migration/deploy is never interrupted.
+concurrency:
+  group: deploy-fly-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     name: Build & Push ${{ matrix.service }}
