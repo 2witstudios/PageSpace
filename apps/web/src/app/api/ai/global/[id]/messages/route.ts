@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { isAdminOnlyProvider, getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
@@ -63,7 +63,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
-import { AIMonitoring, extractOpenRouterCostDollars, type ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -72,7 +72,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
@@ -916,63 +916,68 @@ MENTION PROCESSING:
       browserSessionId,
     });
 
-    let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
-    let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
+    // Outcome of the retry shell, shared from execute() to onFinish(). Carries the
+    // summed usage/steps for billing plus the success flag, abort detection, and retry
+    // observability — so no separate usage/steps promises are needed.
+    let agentRun: RunAgentWithRetryResult | undefined;
 
     const stream = createUIMessageStream({
       originalMessages: processedMessages,
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
-        const aiResult = streamText({
-          model,
-          system: finalSystemPrompt,
-          messages: modelMessages,
-          tools: finalTools,
-          stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
-          // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+        // Resolve once outside the per-attempt factory (the factory is synchronous).
+        const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
+        // Server-side, in-request retry: transparently re-drive the loop under one
+        // message envelope when an attempt drops mid-loop or ends without finishing.
+        // The loop lives inside execute(), so onFinish still fires exactly once below.
+        const runResult = await runAgentWithRetry({
+          writer,
           abortSignal,
-          experimental_context: {
-            userId,
-            timezone: userTimezone,
-            aiProvider: currentProvider,
-            aiModel: currentModel,
-            conversationId,
-            locationContext,
-            modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
-            chatSource: { type: 'global' as const },
-          },
-          maxRetries: 20,
-          onChunk: ({ chunk }) => {
-            const part = chunkToPart(chunk as never);
-            if (part) lifecycle!.pushPart(part);
-          },
-          onAbort: () => {
-            loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
-              userId: maskIdentifier(userId),
+          baseMessages: modelMessages,
+          finishToolName: FINISH_TOOL_NAME,
+          maxSteps: AGENT_MAX_STEPS,
+          startTimeMs: startTime,
+          logger: loggers.api,
+          buildStreamText: (messages) => streamText({
+            model,
+            system: finalSystemPrompt,
+            messages,
+            tools: finalTools,
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+            // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
+            abortSignal,
+            experimental_context: {
+              userId,
+              timezone: userTimezone,
+              aiProvider: currentProvider,
+              aiModel: currentModel,
               conversationId,
-              streamId,
-              model: currentModel,
-              provider: currentProvider,
-            });
-            lifecycle!.finish(true);
-          },
+              locationContext,
+              modelCapabilities: modelCapabilitiesForTools,
+              chatSource: { type: 'global' as const },
+            },
+            maxRetries: 20,
+            onChunk: ({ chunk }) => {
+              const part = chunkToPart(chunk as never);
+              if (part) lifecycle!.pushPart(part);
+            },
+            onAbort: () => {
+              loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
+                userId: maskIdentifier(userId),
+                conversationId,
+                streamId,
+                model: currentModel,
+                provider: currentProvider,
+              });
+              lifecycle!.finish(true);
+            },
+          }),
         });
 
-        usagePromise = aiResult.totalUsage
-          .catch((error) => {
-            loggers.api.debug('Global Assistant: Failed to retrieve token usage from stream', {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            });
-            return undefined;
-          });
-
-        // Steps carry OpenRouter's per-request cost metadata (one request per
-        // tool-loop step); summed in trackUsage to bill on real cost.
-        stepsPromise = aiResult.steps
-          .then((steps) => steps as ProviderMetadataCarrier[])
-          .catch(() => undefined);
-
-        await pipeUIMessageStreamStrippingStart(aiResult, writer);
+        // Billing reads the SUMMED usage / OpenRouter cost across every attempt.
+        // Single onFinish → single consumeCredits → one hold settle: no double-charge,
+        // but failed/partial attempts ARE billed (the provider charged us for them).
+        agentRun = runResult;
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry
@@ -1034,8 +1039,8 @@ MENTION PROCESSING:
             // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
             // row, not a skipped one (which would silently front the spend).
             try {
-              const usage = usagePromise ? await usagePromise : undefined;
-              const steps = stepsPromise ? await stepsPromise : undefined;
+              const usage = agentRun?.accumulatedUsage;
+              const steps = agentRun?.accumulatedSteps;
               const duration = Date.now() - startTime;
 
               await AIMonitoring.trackUsage({
@@ -1050,7 +1055,9 @@ MENTION PROCESSING:
                 duration,
                 conversationId,
                 messageId,
-                success: true,
+                // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
+                // completion. Cost still settles regardless (the provider charged us).
+                success: agentRun?.finalOutcome !== 'exhausted',
                 holdId,
                 contextMessages: contextCalculation.messageIds,
                 contextSize: contextCalculation.totalTokens,
@@ -1064,6 +1071,9 @@ MENTION PROCESSING:
                   toolCallsCount: extractedToolCalls.length,
                   toolResultsCount: extractedToolResults.length,
                   isReadOnly: readOnlyMode,
+                  retryAttempts: agentRun?.attempts,
+                  retryOutcome: agentRun?.finalOutcome,
+                  retryTerminalReason: agentRun?.terminalReason,
                 }
               });
             } catch (trackingError) {
@@ -1084,7 +1094,10 @@ MENTION PROCESSING:
           }
         }
 
-        lifecycle!.finish(false);
+        // Reflect a user stop, including one that landed during inter-attempt backoff or
+        // raced in after the loop broke (onAbort only fires while a streamText is live).
+        // finish() is idempotent, so this is a no-op if onAbort already ran.
+        lifecycle!.finish(agentRun?.terminalReason === 'aborted' || abortSignal.aborted);
       },
     });
 

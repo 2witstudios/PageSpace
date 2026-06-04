@@ -31,9 +31,10 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' },
 }));
+const mockOpenrouterChat = vi.fn(() => ({ modelId: 'openrouter-model' }));
 vi.mock('@openrouter/ai-sdk-provider', () => ({
   createOpenRouter: vi.fn(() => ({
-    chat: vi.fn(() => ({ modelId: 'openrouter-model' })),
+    chat: mockOpenrouterChat,
   })),
 }));
 vi.mock('@ai-sdk/google', () => ({
@@ -250,6 +251,26 @@ describe('provider-factory', () => {
         expect(createOpenRouter).toHaveBeenCalledWith({
           apiKey: 'or-key',
           headers: { 'X-OpenRouter-Cache': 'true' },
+        });
+      });
+
+      it('enables usage accounting and tool-capable provider routing on the chat model', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        mockOpenrouterChat.mockClear();
+
+        await createAIProvider('user-123', {
+          selectedProvider: 'openrouter',
+          selectedModel: 'anthropic/claude-opus-4.7',
+        });
+
+        expect(mockOpenrouterChat).toHaveBeenCalledWith('anthropic/claude-opus-4.7', {
+          usage: { include: true },
+          extraBody: {
+            provider: {
+              require_parameters: true,
+              allow_fallbacks: true,
+            },
+          },
         });
       });
 
