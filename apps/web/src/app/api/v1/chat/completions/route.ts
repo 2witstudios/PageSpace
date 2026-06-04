@@ -190,6 +190,17 @@ export async function POST(request: Request): Promise<Response> {
   // 9. Run inference — no UI coupling (no WebSocket, no stream lifecycle, no session ID)
   const startTime = Date.now();
   const providerType = getProviderTier(page.aiProvider ?? DEFAULT_PROVIDER, page.aiModel ?? undefined);
+
+  // OpenAI-style callers may supply their own system message(s) in the request.
+  // sanitizeMessagesForModel strips system-role messages from the array (system content
+  // must ride in the `system:` option, not messages[], per AI SDK prompt-injection
+  // hardening), so hoist any caller system instructions into the system prompt first —
+  // dropping them silently would break standard OpenAI clients.
+  const callerSystemPrompt = inferenceMessages
+    .filter(m => m.role === 'system')
+    .map(extractMessageContent)
+    .filter(Boolean)
+    .join('\n\n');
   const sanitized = sanitizeMessagesForModel(inferenceMessages);
 
   // Standard OpenAI-style cancel: the consumer closing the HTTP connection stops generation.
@@ -263,7 +274,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const aiResult = streamText({
     model: providerResult.model,
-    system: systemPrompt + toolDiscoveryPrompt,
+    system: systemPrompt + (callerSystemPrompt ? `\n\n${callerSystemPrompt}` : '') + toolDiscoveryPrompt,
     messages: convertToModelMessages(sanitized),
     tools: filteredTools,
     stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
