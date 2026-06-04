@@ -88,7 +88,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Local model discovery (no user data, no external calls) ---
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
-  ['ai/openrouter/models', 'OpenRouter free model discovery — read-only, auth-gated, returns only public model metadata'],
 
   // --- Share link management routes ---
   // TODO: Add audit coverage in follow-up PR

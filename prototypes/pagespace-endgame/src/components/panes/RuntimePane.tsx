@@ -104,12 +104,13 @@ export function RuntimePane() {
       </div>
       <div className="g2" style={{ marginBottom: 12 }}>
         <Card accent="green">
-          <h4>10 providers, 100+ models</h4>
+          <h4>100+ models via OpenRouter</h4>
           <p style={{ marginTop: 6, fontSize: 12 }}>
-            PageSpace (GLM), OpenRouter, Anthropic, OpenAI, Google, xAI,
-            Ollama, LMStudio, GLM (Zhipu), MiniMax. Drive-scoped system
-            prompts, personalization, page tree context, timezone awareness.
-            MCP tool injection via desktop WebSocket bridge.
+            Every cloud model routed through OpenRouter under its real vendor —
+            OpenAI, Anthropic, Google, xAI, DeepSeek, Qwen, Mistral, and more —
+            plus configured Azure OpenAI, Ollama, and LM Studio endpoints.
+            Drive-scoped system prompts, personalization, page tree context,
+            timezone awareness. MCP tool injection via desktop WebSocket bridge.
           </p>
         </Card>
         <Card accent="green">

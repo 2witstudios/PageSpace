@@ -56,8 +56,9 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'glm-4.5-air' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-mini' }),
   isProviderError: vi.fn().mockReturnValue(false),
+  BACKGROUND_LIGHT_MODEL: 'openai/gpt-5.4-mini',
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
   getUserTimeOfDay: vi.fn().mockReturnValue('morning'),
   getStartOfTodayInTimezone: vi.fn().mockReturnValue(new Date(0)),

@@ -10,7 +10,8 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, isAdminOnlyProvider, getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, getProviderTier, DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -445,8 +446,8 @@ export async function POST(request: Request) {
     }
     
     // Get user's current AI provider settings (user was loaded above for the gate)
-    const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-    const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+    const currentProvider = selectedProvider || user?.currentAiProvider || DEFAULT_PROVIDER;
+    const currentModel = selectedModel || user?.currentAiModel || DEFAULT_MODEL;
 
     // Kick off the userProfiles displayName fetch early so it overlaps with downstream
     // setup (rate-limit checks, tool resolution, conversation load) and never blocks the
@@ -458,25 +459,14 @@ export async function POST(request: Request) {
       .limit(1)
       .catch(() => [] as { displayName: string | null }[]);
 
-    // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    // Subscription gate: free users are limited to the free-model allowlist.
+    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     const isAdminUser = user?.role === 'admin';
 
-    // Admin-only providers (e.g. paid OpenRouter) are restricted to global admins, even if a
-    // stored selection survives a role downgrade.
-    if (isAdminOnlyProvider(currentProvider) && !isAdminUser) {
-      loggers.ai.warn('AI Chat API: admin-only provider blocked for non-admin', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-      });
-      return createAdminRestrictedResponse();
-    }
-
-    // Check if provider requires Pro subscription
+    // Check if the selected model requires a paid plan
     if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier, isAdminUser)) {
-      loggers.ai.warn('AI Chat API: Pro subscription required', {
+      loggers.ai.warn('AI Chat API: paid plan required for model', {
         userId,
         provider: currentProvider,
         model: currentModel,
@@ -485,11 +475,11 @@ export async function POST(request: Request) {
       return createSubscriptionRequiredResponse();
     }
 
-    // Usage tracking will be handled in onFinish callback for PageSpace providers only
-    loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
+    // Usage tracking is handled in the onFinish callback (real OpenRouter cost).
+    loggers.ai.debug('AI Chat API: will track usage in onFinish', {
       userId,
       provider: currentProvider,
-      isPageSpaceProvider: currentProvider === 'pagespace'
+      model: currentModel,
     });
     
     // Update page's AI provider/model if changed
@@ -542,9 +532,8 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    // Use the resolved model name for billing. currentModel may be a PageSpace
-    // tier alias ('standard'/'pro') or an unpriced default ('glm-4.5-air'), which
-    // would meter at $0; providerResult.modelName is the real backend model id.
+    // Use the resolved model name for billing. providerResult.modelName is the
+    // real OpenRouter model id sent to the backend.
     const { model, modelName: resolvedModelName } = providerResult;
 
     // Update user's current provider/model if changed
@@ -1268,8 +1257,8 @@ export async function GET(request: Request) {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     
     // Get page-specific settings if pageId provided
-    let currentProvider = user?.currentAiProvider || 'pagespace';
-    let currentModel = user?.currentAiModel || 'glm-4.5-air';
+    let currentProvider = user?.currentAiProvider || DEFAULT_PROVIDER;
+    let currentModel = user?.currentAiModel || DEFAULT_MODEL;
     
     if (pageId) {
       const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
@@ -1313,25 +1302,11 @@ async function validateProviderModel(
   model: string,
   userId: string
 ): Promise<{ valid: boolean; reason?: string }> {
-  // Define valid providers
-  const validProviders = [
-    'pagespace',
-    'openrouter',
-    'openrouter_free',
-    'google',
-    'openai',
-    'anthropic',
-    'xai',
-    'ollama',
-    'lmstudio',
-    'glm'
-  ];
-
   // Check if provider is valid
-  if (!validProviders.includes(provider)) {
+  if (!(ALL_PROVIDER_NAMES as readonly string[]).includes(provider)) {
     return {
       valid: false,
-      reason: `Invalid provider: ${provider}. Supported providers: ${validProviders.join(', ')}`
+      reason: `Invalid provider: ${provider}. Supported providers: ${ALL_PROVIDER_NAMES.join(', ')}`
     };
   }
 
@@ -1343,20 +1318,14 @@ async function validateProviderModel(
     };
   }
 
-  // Check subscription requirements for pro models
+  // Check subscription requirements for paid models
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const isAdminUser = user?.role === 'admin';
-    if (isAdminOnlyProvider(provider) && !isAdminUser) {
-      return {
-        valid: false,
-        reason: 'This provider is restricted to administrators'
-      };
-    }
     if (requiresProSubscription(provider, model, user?.subscriptionTier, isAdminUser)) {
       return {
         valid: false,
-        reason: 'Pro or Business subscription required for this model'
+        reason: 'A paid plan is required for this model'
       };
     }
   } catch (error) {

@@ -69,8 +69,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // Get managed OpenAI key for TTS
-    const openAISettings = getManagedProviderKey('openai');
+    // Get managed OpenAI key for TTS (direct api.openai.com, not OpenRouter)
+    const openAISettings = getManagedProviderKey('openai_voice');
     if (!openAISettings?.apiKey) {
       return NextResponse.json(
         {

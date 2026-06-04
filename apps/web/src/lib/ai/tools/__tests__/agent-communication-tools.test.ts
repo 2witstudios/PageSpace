@@ -108,8 +108,10 @@ vi.mock('../../core', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(() => false),
   buildTimestampSystemPrompt: vi.fn(() => ''),
-  AI_PROVIDERS: { pagespace: { name: 'PageSpace' } },
+  AI_PROVIDERS: { openai: { name: 'OpenAI' } },
   getModelDisplayName: vi.fn(() => 'Test Model'),
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
 import { agentCommunicationTools } from '../agent-communication-tools';
@@ -207,8 +209,8 @@ describe('agent-communication-tools', () => {
       } as never);
       vi.mocked(createAIProvider).mockResolvedValue({
         model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
-        provider: 'pagespace',
-        modelName: 'glm-5',
+        provider: 'openai',
+        modelName: 'openai/gpt-5.3-chat',
       } as Awaited<ReturnType<typeof createAIProvider>>);
       vi.mocked(generateText).mockResolvedValue({
         text: 'Agent response',
@@ -358,13 +360,13 @@ describe('agent-communication-tools', () => {
         );
 
         // ask_agent runs a tool loop (stepCountIs(20)); it must bill the requesting
-        // user against the resolved backend model (glm-5), not the unmetered alias,
+        // user against the resolved backend model (openai/gpt-5.3-chat), not the unmetered alias,
         // using totalUsage so every round-trip is counted.
         expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(
           expect.objectContaining({
             userId: 'user-123',
-            provider: 'pagespace',
-            model: 'glm-5',
+            provider: 'openai',
+            model: 'openai/gpt-5.3-chat',
             inputTokens: 100,
             outputTokens: 200,
             totalTokens: 300,

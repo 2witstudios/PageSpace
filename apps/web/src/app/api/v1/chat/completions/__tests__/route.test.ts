@@ -59,7 +59,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'glm-4.5-air' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   buildSystemPrompt: vi.fn().mockReturnValue('You are a helpful agent.'),
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
   saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
@@ -152,8 +152,8 @@ const agentPage = {
   title: 'Test Agent',
   driveId: 'drive-abc',
   systemPrompt: null,
-  aiProvider: 'pagespace',
-  aiModel: 'glm-4.5-air',
+  aiProvider: 'openai',
+  aiModel: 'openai/gpt-5.3-chat',
   includeDrivePrompt: false,
 };
 

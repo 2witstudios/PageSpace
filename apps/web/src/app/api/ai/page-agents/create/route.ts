@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageSpaceTools } from '@/lib/ai/core';
+import { pageSpaceTools, DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
@@ -98,10 +98,33 @@ export async function POST(request: Request) {
       }
     }
 
+    // Resolve the agent's (provider, model) as one atomic pair — never mix a caller
+    // provider with the default model. A partial body (only one field) falls back to
+    // the product default pair rather than synthesizing an impossible combination.
+    let agentProvider: string;
+    let agentModel: string;
+    if (aiProvider && aiModel) {
+      agentProvider = aiProvider;
+      agentModel = aiModel;
+    } else {
+      agentProvider = DEFAULT_PROVIDER;
+      agentModel = DEFAULT_MODEL;
+    }
+
+    // Reject an explicit, off-catalog cloud pair at this write boundary (like the
+    // settings PATCH) so a broken selection is surfaced now, not as a 400 on first
+    // use. Local/on-prem providers serve runtime-discovered models, so only their
+    // provider name is gated, not the model id.
+    if (!ONPREM_ALLOWED_PROVIDERS.has(agentProvider) && !isValidModel(agentProvider, agentModel)) {
+      return NextResponse.json(
+        { error: `Invalid AI model selection: ${agentProvider} / ${agentModel}` },
+        { status: 400 }
+      );
+    }
+
     // Get next position
     const nextPosition = await pageAgentRepository.getNextPosition(drive.id, parentId || null);
 
-    // Prepare agent data with default PageSpace provider and standard model
     const agentData: AgentData = {
       title,
       type: 'AI_CHAT',
@@ -111,10 +134,8 @@ export async function POST(request: Request) {
       parentId: parentId || null,
       isTrashed: false,
       systemPrompt,
-      // Default to PageSpace provider with "standard" model
-      // Agents can use 'standard' or 'pro' as friendly aliases
-      aiProvider: aiProvider || 'pagespace',
-      aiModel: aiModel || 'standard',
+      aiProvider: agentProvider,
+      aiModel: agentModel,
       createdBy: userId,
     };
 

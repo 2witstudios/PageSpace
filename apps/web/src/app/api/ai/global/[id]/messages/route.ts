@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { isAdminOnlyProvider, getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { createAdminRestrictedResponse, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { createRateLimitResponse, requiresProSubscription, createSubscriptionRequiredResponse } from '@/lib/subscription/rate-limit-middleware';
 // LEGACY: daily-quota path, active only when isCreditsModeEnabled() is OFF. Remove at final credits cutover.
 import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
 import { isCreditsModeEnabled, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
@@ -331,11 +331,13 @@ export async function POST(
     // when the user tops up and retries — so this MUST precede the save below (mirrors
     // the page-chat route). Safe in billing-disabled deployments (returns unlimited) and
     // lazy-inits balances.
+    let userSubscriptionTier: string | undefined;
     {
       const [gateUser] = await db
         .select({ subscriptionTier: users.subscriptionTier })
         .from(users)
         .where(eq(users.id, userId));
+      userSubscriptionTier = gateUser?.subscriptionTier ?? undefined;
       const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
@@ -437,15 +439,15 @@ export async function POST(
 
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
 
-    // Admin-only providers (e.g. paid OpenRouter) are restricted to global admins on the
-    // per-user global assistant too — defends against a stored selection surviving a role downgrade.
-    if (isAdminOnlyProvider(currentProvider) && auth.role !== 'admin') {
-      loggers.api.warn('Global Assistant Chat API: admin-only provider blocked for non-admin', {
+    // Free users are limited to the free-model allowlist; defends against a model id
+    // submitted directly in the request bypassing the settings-time gate.
+    if (requiresProSubscription(currentProvider, currentModel, userSubscriptionTier, auth.role === 'admin')) {
+      loggers.api.warn('Global Assistant Chat API: paid plan required for model', {
         userId: maskIdentifier(userId),
         provider: currentProvider,
         model: currentModel,
       });
-      return createAdminRestrictedResponse();
+      return createSubscriptionRequiredResponse();
     }
 
     // Update user's current provider/model if changed

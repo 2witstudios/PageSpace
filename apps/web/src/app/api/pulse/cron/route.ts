@@ -8,6 +8,7 @@ import {
   getStartOfTodayInTimezone,
   normalizeTimezone,
   formatDateInTimezone,
+  BACKGROUND_LIGHT_MODEL,
 } from '@/lib/ai/core';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, lt, gte, ne, desc, inArray, isNull, isNotNull } from '@pagespace/db/operators'
@@ -830,8 +831,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
   // Get AI provider
   const providerResult = await createAIProvider(userId, {
-    selectedProvider: 'pagespace',
-    selectedModel: 'standard',
+    selectedProvider: 'openai',
+    selectedModel: BACKGROUND_LIGHT_MODEL,
   });
 
   if (isProviderError(providerResult)) {

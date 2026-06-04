@@ -351,29 +351,33 @@ describe('getContextWindowSize', () => {
     });
   });
 
-  describe('PageSpace / GLM family', () => {
-    it('should return 200k for glm-5', () => {
-      expect(getContextWindowSize('glm-5')).toBe(200_000);
+  describe('OpenRouter vendor-prefixed models', () => {
+    // The pagespace/glm branch was removed; every cloud model now carries its real
+    // vendor prefix. getContextWindowSize prefers an exact match in the authoritative
+    // shared catalog (MODEL_CONTEXT_WINDOWS) so truncation enforces the model's real
+    // limit; the substring heuristic is only a fallback for ids absent from the catalog.
+    it('returns the catalog window for openai/gpt-5.3-chat (272k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.3-chat')).toBe(272_000);
     });
 
-    it('should return 200k for glm-4.7', () => {
-      expect(getContextWindowSize('glm-4.7')).toBe(200_000);
+    it('returns the catalog window for openai/gpt-5.4-mini (128k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.4-mini')).toBe(128_000);
     });
 
-    it('should return 200k for glm-4.6', () => {
-      expect(getContextWindowSize('glm-4.6')).toBe(200_000);
+    it('returns the catalog window for anthropic/claude-haiku-4.5 (200k)', () => {
+      expect(getContextWindowSize('anthropic/claude-haiku-4.5')).toBe(200_000);
     });
 
-    it('should return 128k for glm-4.5', () => {
-      expect(getContextWindowSize('glm-4.5')).toBe(128_000);
+    it('returns the catalog window for anthropic/claude-sonnet-4.6 (1M)', () => {
+      expect(getContextWindowSize('anthropic/claude-sonnet-4.6')).toBe(1_000_000);
     });
 
-    it('should return 200k default for unknown glm model', () => {
-      expect(getContextWindowSize('glm-99')).toBe(200_000);
+    it('returns the catalog window for google/gemini-2.5-flash (1M)', () => {
+      expect(getContextWindowSize('google/gemini-2.5-flash')).toBe(1_000_000);
     });
 
-    it('should match via provider=pagespace', () => {
-      expect(getContextWindowSize('some-model', 'pagespace')).toBe(200_000);
+    it('falls back to the heuristic 200k default for an uncatalogued vendor model', () => {
+      expect(getContextWindowSize('some-totally-unknown-vendor/model')).toBe(200_000);
     });
   });
 

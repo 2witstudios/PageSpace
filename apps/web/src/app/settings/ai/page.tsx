@@ -16,8 +16,8 @@ interface ProviderAvailability {
 interface ProviderSettingsResponse {
   currentProvider: string;
   currentModel: string;
-  pageSpaceBackend: 'glm' | 'google' | 'openrouter' | null;
   providers: Record<string, ProviderAvailability>;
+  isAnyProviderConfigured: boolean;
 }
 
 export default function AiSettingsPage() {
@@ -43,7 +43,7 @@ export default function AiSettingsPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const isAvailable = !!data?.providers['pagespace']?.isAvailable;
+  const isAvailable = !!data?.isAnyProviderConfigured;
 
   return (
     <div className="container mx-auto py-10 space-y-8 px-10">

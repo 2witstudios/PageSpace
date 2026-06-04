@@ -132,15 +132,6 @@ vi.mock('@/lib/ai/core', () => ({
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
-  getUserOpenRouterSettings: vi.fn(),
-  getUserGoogleSettings: vi.fn(),
-  getDefaultPageSpaceSettings: vi.fn(),
-  getUserOpenAISettings: vi.fn(),
-  getUserAnthropicSettings: vi.fn(),
-  getUserXAISettings: vi.fn(),
-  getUserOllamaSettings: vi.fn(),
-  getUserLMStudioSettings: vi.fn(),
-  getUserGLMSettings: vi.fn(),
   pageSpaceTools: {},
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
@@ -232,9 +223,12 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
   getProviderTier: vi.fn().mockReturnValue('standard'),
-  isAdminOnlyProvider: vi.fn().mockReturnValue(false),
+  isModelAllowedForTier: vi.fn().mockReturnValue(true),
+  ONPREM_ALLOWED_PROVIDERS: new Set<string>(['ollama', 'lmstudio', 'azure_openai']),
+  DYNAMIC_MODEL_PROVIDERS: new Set<string>(['ollama', 'lmstudio']),
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({
@@ -264,16 +258,16 @@ const mockDbRow = {
   title: 'Test Page',
   systemPrompt: null,
   enabledTools: null,
-  aiProvider: 'pagespace',
-  aiModel: 'glm-4.5-air',
+  aiProvider: 'openai',
+  aiModel: 'openai/gpt-5.3-chat',
   driveId: 'drive-1',
   includeDrivePrompt: false,
   includePageTree: false,
   pageTreeScope: null,
   revision: 0,
   name: 'Auth User',
-  currentAiProvider: 'pagespace',
-  currentAiModel: 'glm-4.5-air',
+  currentAiProvider: 'openai',
+  currentAiModel: 'openai/gpt-5.3-chat',
   subscriptionTier: 'free',
   timezone: 'UTC',
   displayName: 'Profile User',
@@ -304,8 +298,8 @@ const makeRequest = (overrides: { browserSessionId?: string | null; conversation
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page-1',
       conversationId: overrides.conversationId ?? 'conv-1',
-      selectedProvider: 'pagespace',
-      selectedModel: 'glm-4.5-air',
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.3-chat',
     }),
   });
 };
