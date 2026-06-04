@@ -12,10 +12,18 @@ import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 
 /**
- * Providers NOT served through OpenRouter (local / on-prem). Everything else is a
- * cloud vendor routed through OpenRouter and bills on real OpenRouter cost.
+ * Providers NOT served through OpenRouter. Everything else is a cloud vendor
+ * routed through OpenRouter and bills on real OpenRouter cost. This is an explicit
+ * allowlist, not just the local/on-prem set: `openai_voice` (STT/TTS) hits OpenAI
+ * directly and bills on list price, so a missing OpenRouter cost there is expected,
+ * not a coverage gap.
  */
-const LOCAL_AI_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
+const NON_OPENROUTER_AI_PROVIDERS = new Set<string>([
+  'ollama',
+  'lmstudio',
+  'azure_openai',
+  'openai_voice',
+]);
 
 /**
  * AI Provider Pricing (per 1M tokens, USD)
@@ -759,9 +767,9 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       data.providerCostDollars >= 0;
     const cost = hasRealCost ? (data.providerCostDollars as number) : fallbackCost;
     const costSource = hasRealCost ? 'openrouter' : 'estimate';
-    // Every cloud vendor is served through OpenRouter; only the local providers
-    // (Ollama, LM Studio, Azure OpenAI) are not.
-    const isOpenRouter = !LOCAL_AI_PROVIDERS.has(data.provider);
+    // Every cloud vendor is served through OpenRouter; only the providers on the
+    // explicit non-OpenRouter allowlist (local runtimes + direct voice) are not.
+    const isOpenRouter = !NON_OPENROUTER_AI_PROVIDERS.has(data.provider);
     if (!hasRealCost && isOpenRouter) {
       // An OpenRouter call that should have carried cost metadata didn't — log
       // and fall back so we still bill (durability), but flag the coverage gap.

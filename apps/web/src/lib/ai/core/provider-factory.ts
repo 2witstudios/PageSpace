@@ -55,8 +55,25 @@ export async function createAIProvider(
   const { selectedProvider, selectedModel } = request;
 
   const [user] = await db.select().from(users).where(eq(users.id, userId));
-  let currentProvider = selectedProvider || user?.currentAiProvider || DEFAULT_PROVIDER;
-  let currentModel = selectedModel || user?.currentAiModel || DEFAULT_MODEL;
+
+  // Resolve (provider, model) as one atomic pair — never combine a provider from one
+  // source with a model from another. Falling each field back independently
+  // (`selectedProvider || stored || default` for each) could synthesize an impossible
+  // pair like `anthropic` + the default `openai/…` model when only one field is
+  // present, which then silently reroutes to the default below. Prefer the request
+  // pair (both present), else the stored pair (both present), else the default pair.
+  let currentProvider: string;
+  let currentModel: string;
+  if (selectedProvider && selectedModel) {
+    currentProvider = selectedProvider;
+    currentModel = selectedModel;
+  } else if (user?.currentAiProvider && user?.currentAiModel) {
+    currentProvider = user.currentAiProvider;
+    currentModel = user.currentAiModel;
+  } else {
+    currentProvider = DEFAULT_PROVIDER;
+    currentModel = DEFAULT_MODEL;
+  }
 
   // Deployment policy first: on-prem only permits the local/BAA-eligible providers.
   if (

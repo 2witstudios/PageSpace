@@ -353,28 +353,30 @@ describe('getContextWindowSize', () => {
 
   describe('OpenRouter vendor-prefixed models', () => {
     // The pagespace/glm branch was removed; every cloud model now carries its real
-    // vendor prefix and matches the vendor branch by provider name or model substring.
-    it('should return 400k for openai/gpt-5.3-chat (gpt-5.3 branch)', () => {
-      expect(getContextWindowSize('openai/gpt-5.3-chat')).toBe(400_000);
+    // vendor prefix. getContextWindowSize prefers an exact match in the authoritative
+    // shared catalog (MODEL_CONTEXT_WINDOWS) so truncation enforces the model's real
+    // limit; the substring heuristic is only a fallback for ids absent from the catalog.
+    it('returns the catalog window for openai/gpt-5.3-chat (272k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.3-chat')).toBe(272_000);
     });
 
-    it('should return 400k for openai/gpt-5.4-mini (gpt-5.4 branch)', () => {
-      expect(getContextWindowSize('openai/gpt-5.4-mini')).toBe(400_000);
+    it('returns the catalog window for openai/gpt-5.4-mini (128k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.4-mini')).toBe(128_000);
     });
 
-    it('should return 200k for anthropic/claude-haiku-4.5', () => {
+    it('returns the catalog window for anthropic/claude-haiku-4.5 (200k)', () => {
       expect(getContextWindowSize('anthropic/claude-haiku-4.5')).toBe(200_000);
     });
 
-    it('should return 200k for anthropic/claude-sonnet-4.6', () => {
-      expect(getContextWindowSize('anthropic/claude-sonnet-4.6')).toBe(200_000);
+    it('returns the catalog window for anthropic/claude-sonnet-4.6 (1M)', () => {
+      expect(getContextWindowSize('anthropic/claude-sonnet-4.6')).toBe(1_000_000);
     });
 
-    it('should return 1M for google/gemini-3.5-flash (non 2.5-pro gemini default)', () => {
-      expect(getContextWindowSize('google/gemini-3.5-flash')).toBe(1_000_000);
+    it('returns the catalog window for google/gemini-2.5-flash (1M)', () => {
+      expect(getContextWindowSize('google/gemini-2.5-flash')).toBe(1_000_000);
     });
 
-    it('should return 200k default for an unknown vendor model with no provider', () => {
+    it('falls back to the heuristic 200k default for an uncatalogued vendor model', () => {
       expect(getContextWindowSize('some-totally-unknown-vendor/model')).toBe(200_000);
     });
   });

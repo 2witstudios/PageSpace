@@ -5,6 +5,8 @@
  * Tracks which messages are included in each API call to determine real context window usage.
  */
 
+import { MODEL_CONTEXT_WINDOWS } from './ai-monitoring';
+
 /**
  * Minimal UIMessage type for token estimation
  * (Compatible with Vercel AI SDK UIMessage)
@@ -136,6 +138,17 @@ export function estimateMessageTokens(message: UIMessage): number {
 export function getContextWindowSize(model: string, provider?: string): number {
   const providerLower = provider?.toLowerCase() || '';
   const modelLower = model.toLowerCase();
+
+  // Authoritative first: every cloud model is now vendor-prefixed ('vendor/model')
+  // and declared in the shared catalog (MODEL_CONTEXT_WINDOWS in ai-monitoring).
+  // Prefer an exact catalog match for those ids so truncation enforces the model's
+  // real limit instead of a drifting substring guess. Scoped to prefixed ids only:
+  // bare/legacy names and locally-discovered models keep the substring heuristic
+  // below (the catalog also holds bare aliases whose rounded values would otherwise
+  // shift long-standing heuristic results).
+  if (model.includes('/') && model in MODEL_CONTEXT_WINDOWS) {
+    return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS];
+  }
 
   // OpenAI models
   if (providerLower === 'openai' || modelLower.includes('gpt')) {

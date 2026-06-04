@@ -66,6 +66,10 @@ vi.mock('@/lib/ai/core', () => ({
   },
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  ONPREM_ALLOWED_PROVIDERS: new Set(['ollama', 'lmstudio', 'azure_openai']),
+  // Cloud models are vendor-prefixed; treat any 'vendor/model' id as valid here.
+  isValidModel: (_provider: string, model: string) =>
+    typeof model === 'string' && model.includes('/'),
 }));
 
 // Mock DB — wraps both the pages insert and membership insert in a transaction.
@@ -343,8 +347,8 @@ describe('POST /api/ai/page-agents/create', () => {
         title: 'Test Agent',
         systemPrompt: 'You are helpful.',
         enabledTools: ['read_page', 'list_pages'],
-        aiProvider: 'openrouter',
-        aiModel: 'anthropic/claude-3-opus',
+        aiProvider: 'anthropic',
+        aiModel: 'anthropic/claude-haiku-4.5',
         welcomeMessage: 'Hello!',
       });
 
@@ -359,8 +363,8 @@ describe('POST /api/ai/page-agents/create', () => {
           type: 'AI_CHAT',
           systemPrompt: 'You are helpful.',
           enabledTools: ['read_page', 'list_pages'],
-          aiProvider: 'openrouter',
-          aiModel: 'anthropic/claude-3-opus',
+          aiProvider: 'anthropic',
+          aiModel: 'anthropic/claude-haiku-4.5',
           content: 'Hello!',
           driveId: mockDriveId,
           parentId: null,
@@ -398,8 +402,8 @@ describe('POST /api/ai/page-agents/create', () => {
         title: 'Test Agent',
         systemPrompt: 'You are helpful.',
         enabledTools: ['read_page', 'list_pages'],
-        aiProvider: 'openrouter',
-        aiModel: 'anthropic/claude-3-opus',
+        aiProvider: 'anthropic',
+        aiModel: 'anthropic/claude-haiku-4.5',
       });
 
       const response = await POST(request);
@@ -407,8 +411,8 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(body.agentConfig).toMatchObject({
         enabledTools: ['read_page', 'list_pages'],
-        aiProvider: 'openrouter',
-        aiModel: 'anthropic/claude-3-opus',
+        aiProvider: 'anthropic',
+        aiModel: 'anthropic/claude-haiku-4.5',
       });
     });
   });

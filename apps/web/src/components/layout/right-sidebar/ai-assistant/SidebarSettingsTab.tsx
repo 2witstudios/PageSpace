@@ -43,7 +43,8 @@ interface SidebarSettingsTabProps {
   selectedAgent: AgentInfo | null;
 }
 
-const isLocalProvider = (provider: string) => provider === 'ollama' || provider === 'lmstudio';
+const isLocalProvider = (provider: string) =>
+  provider === 'ollama' || provider === 'lmstudio' || provider === 'azure_openai';
 
 /**
  * Assistant settings tab for the right sidebar.
@@ -179,15 +180,20 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
   const handleProviderChange = async (provider: string) => {
     setSelectedProvider(provider);
 
+    // Local providers bypass currentModelLocked, so Save stays enabled after switching.
+    // If discovery yields no models (empty or error), clear the stale cloud model id so
+    // we never PATCH a local provider with a mismatched model.
     if (provider === 'ollama') {
       try {
         const models = await fetchOllamaModels();
         if (Object.keys(models).length > 0) {
           setSelectedModel(Object.keys(models)[0]);
         } else {
+          setSelectedModel('');
           toast.error('No models available in Ollama. Ensure the server is running and models are downloaded.');
         }
       } catch {
+        setSelectedModel('');
         toast.error('Failed to connect to Ollama. Ensure the server is running.');
       }
     } else if (provider === 'lmstudio') {
@@ -196,9 +202,11 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         if (Object.keys(models).length > 0) {
           setSelectedModel(Object.keys(models)[0]);
         } else {
+          setSelectedModel('');
           toast.error('No models available in LM Studio. Ensure the server is running and models are loaded.');
         }
       } catch {
+        setSelectedModel('');
         toast.error('Failed to connect to LM Studio. Ensure the server is running.');
       }
     } else {

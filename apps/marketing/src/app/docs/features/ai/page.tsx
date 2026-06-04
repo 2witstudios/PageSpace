@@ -26,7 +26,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## How it works
 
-**Models.** Every cloud model is routed through OpenRouter and grouped under its real vendor — OpenAI, Anthropic, Google, xAI, and more — so the picker is one catalogue spanning many providers. Credentials are held by the deployment operator (on cloud that's PageSpace; on a self-hosted install, whoever runs the server), so you never paste an API key. Self-hosted deployments can also point at a configured Azure OpenAI, Ollama, or LM Studio endpoint instead. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts use standard models, while paid plans add Pro (advanced) models.
+**Models.** Every cloud model is routed through OpenRouter and grouped under its real vendor — OpenAI, Anthropic, Google, xAI, and more — so the picker is one catalogue spanning many providers. Credentials are held by the deployment operator (on cloud that's PageSpace; on a self-hosted install, whoever runs the server), so you never paste an API key. Self-hosted deployments can also point at a configured Azure OpenAI, Ollama, or LM Studio endpoint instead. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts pick from a curated set of efficient models, while paid plans unlock the full catalogue across every vendor.
 
 **Permissions.** When an agent acts, it acts as **you**. It can only see pages you can see and only change pages you can change. Share a page with a teammate and *their* agents can now see it too, under their account. Revoke access and the agents lose access immediately — there is no AI back-door.
 

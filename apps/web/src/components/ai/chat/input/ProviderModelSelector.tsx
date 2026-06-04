@@ -36,6 +36,7 @@ interface ProviderSettings {
 const LOCAL_PROVIDERS: Record<string, true> = {
   ollama: true,
   lmstudio: true,
+  azure_openai: true,
 };
 
 /** Derive provider groups from visible providers (filtered by deployment mode) */

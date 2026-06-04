@@ -679,9 +679,16 @@ export const pageService = {
         },
       });
 
-      if (user) {
-        defaultAiProvider = user.currentAiProvider || DEFAULT_PROVIDER;
-        defaultAiModel = user.currentAiModel || DEFAULT_MODEL;
+      // Resolve provider+model as one pair — never mix a stored provider with the
+      // default model (or vice-versa). A partial user row (only one column set) would
+      // otherwise yield an impossible pair like `anthropic` + `openai/gpt-5.3-chat`
+      // that the provider factory rejects on first use.
+      if (user?.currentAiProvider && user.currentAiModel) {
+        defaultAiProvider = user.currentAiProvider;
+        defaultAiModel = user.currentAiModel;
+      } else {
+        defaultAiProvider = DEFAULT_PROVIDER;
+        defaultAiModel = DEFAULT_MODEL;
       }
     }
 
