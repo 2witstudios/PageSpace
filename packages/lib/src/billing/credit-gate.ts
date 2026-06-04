@@ -133,16 +133,19 @@ export async function canConsumeAI(
   // the same predicate in its WHERE, so a concurrent reset/refill that rolled the
   // window forward between our read and write matches zero rows and we re-read.
   if (tier === 'free' && row && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now)) {
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
+    // Pass the current remaining so unspent credits roll over into the new period
+    // (matching the paid invoice.paid path). The WHERE re-checks the predicate to
+    // handle a concurrent reset that already rolled the window forward.
+    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, row.monthlyRemainingCents ?? 0);
     const newEnd = addOneMonth(now);
     await db
       .update(creditBalances)
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // The renewal-equivalent for free/no-sub users: restore the FULL allowance and
-        // FORGIVE any outstanding overage (refill.debtCents === 0), so last period's
-        // debt never reduces this period — matching the paid invoice.paid refill.
+        // The renewal-equivalent for free/no-sub users: add the allowance to carried
+        // balance and FORGIVE any outstanding overage (refill.debtCents === 0), so
+        // last period's debt never reduces this period — matching the paid refill.
         debtCents: refill.debtCents,
         monthlyPeriodStart: now,
         monthlyPeriodEnd: newEnd,

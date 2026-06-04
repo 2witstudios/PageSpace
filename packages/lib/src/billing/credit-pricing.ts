@@ -72,7 +72,8 @@ export const CACHE_READ_DISCOUNT_FACTOR_BPS = envInt('CACHE_READ_DISCOUNT_FACTOR
 
 /**
  * Monthly credit allowance granted on each subscription renewal, per tier.
- * Resets every period (use-it-or-lose-it).
+ * Accumulates across periods (rollover): each renewal ADDS this allowance to
+ * the current balance rather than replacing it.
  */
 export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
   // Free: generous $5/mo of credit value, but the free-tier-only premium gate

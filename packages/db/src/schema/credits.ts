@@ -6,7 +6,7 @@ import { users } from './auth';
 /**
  * creditBalances — denormalized, one row per user. The fast pre-request gate and
  * the dashboard read this. Two buckets plus a debt counter:
- *   - monthly: subscription allowance, RESET each period (use-it-or-lose-it)
+ *   - monthly: subscription allowance, ACCUMULATES across periods (rollover)
  *   - topup:   purchased packs, NEVER expire
  *   - debt:    overage owed (a NON-NEGATIVE magnitude). Accrues when a call's real
  *              cost can't be covered; paid down by a purchase; FORGIVEN (zeroed) at

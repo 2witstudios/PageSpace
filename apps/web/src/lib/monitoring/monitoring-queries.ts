@@ -756,7 +756,8 @@ export interface BalanceDriftRow {
 /**
  * Accounts whose MATERIALIZED spendable buckets diverge from the ledger-implied amount
  * beyond tolerance — a drift smell detector for the admin panel (see computeBalanceDrift;
- * monthly resets / debt-forgiveness make this approximate, hence a generous tolerance).
+ * rollover carry-forwards / debt-forgiveness make this approximate, hence a generous
+ * tolerance; with rollover there are no silent per-period drops to explain away).
  * Aggregates the whole ledger per user (drift is a stock, not a period flow), joins the
  * live balance, and returns only flagged rows, worst drift first.
  */

@@ -65,6 +65,21 @@ function balanceUpsert(cap: Captured) {
   };
 }
 
+// Build a select chain for reading the current creditBalances row inside the tx.
+function balanceSelectReturning(monthlyRemainingCents: number) {
+  return { from: () => ({ where: () => ({ limit: () => Promise.resolve([{ monthlyRemainingCents }]) }) }) };
+}
+
+// tx for the monthly refill path: ledger insert -> select current balance -> balance upsert.
+function refillTx(cap: Captured, ledgerReturned: Array<{ id: string }>, currentRemaining: number) {
+  return {
+    insert: vi.fn()
+      .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
+      .mockReturnValueOnce(balanceUpsert(cap)),
+    select: vi.fn().mockReturnValueOnce(balanceSelectReturning(currentRemaining)),
+  };
+}
+
 // Ensure-row insert in the top-up path: .values({userId}).onConflictDoNothing({target}).
 function ensureRowInsert() {
   return { values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }) };
@@ -141,16 +156,12 @@ describe('applyStripeFunding', () => {
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
-  it('invoice.paid resets the monthly bucket to the tier allowance, sets the period, and writes a monthly_grant row', async () => {
+  it('invoice.paid adds the tier allowance to the current balance, sets the period, and writes a monthly_grant row', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};
+    // No prior balance row (currentRemaining = 0): rollover of 0 + allowance = allowance.
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-      const tx = {
-        insert: vi.fn()
-          .mockReturnValueOnce(ledgerInsert([{ id: 'led_1' }], cap))
-          .mockReturnValueOnce(balanceUpsert(cap)),
-      };
-      await cb(tx);
+      await cb(refillTx(cap, [{ id: 'led_1' }], 0));
     });
 
     await applyStripeFunding(invoiceEvent);
@@ -173,6 +184,24 @@ describe('applyStripeFunding', () => {
       debtCents: 0,
       monthlyPeriodStart: new Date(1_700_000_000 * 1000),
       monthlyPeriodEnd: new Date(1_702_592_000 * 1000),
+    });
+  });
+
+  it('invoice.paid accumulates: adds allowance on top of carried monthly balance (rollover)', async () => {
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    // 600 cents carried from the previous period → 600 + pro allowance.
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(refillTx(cap, [{ id: 'led_rollover' }], 600));
+    });
+
+    await applyStripeFunding(invoiceEvent);
+
+    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.pro;
+    expect(cap.balanceSet).toMatchObject({
+      monthlyRemainingCents: 600 + allowance,
+      monthlyAllowanceCents: allowance,
+      debtCents: 0,
     });
   });
 
@@ -267,12 +296,7 @@ describe('applyStripeFunding', () => {
     mockDb.select.mockReturnValue(userSelectReturning([{ id: 'u1', subscriptionTier: 'free' }]));
     const cap: Captured = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-      const tx = {
-        insert: vi.fn()
-          .mockReturnValueOnce(ledgerInsert([{ id: 'led_tier' }], cap))
-          .mockReturnValueOnce(balanceUpsert(cap)),
-      };
-      await cb(tx);
+      await cb(refillTx(cap, [{ id: 'led_tier' }], 0));
     });
 
     await applyStripeFunding(invoiceEvent, { tier: 'business' });
@@ -289,12 +313,7 @@ describe('applyStripeFunding', () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-      const tx = {
-        insert: vi.fn()
-          .mockReturnValueOnce(ledgerInsert([{ id: 'led_1' }], cap))
-          .mockReturnValueOnce(balanceUpsert(cap)),
-      };
-      await cb(tx);
+      await cb(refillTx(cap, [{ id: 'led_1' }], 0));
     });
 
     await applyStripeFunding(invoiceEvent);
