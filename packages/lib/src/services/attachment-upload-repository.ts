@@ -10,16 +10,9 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { files, filePages, fileConversations } from '@pagespace/db/schema/storage';
-import type { AttachmentTarget } from './attachment-upload';
+import type { AttachmentTarget, FileRecordInput } from './attachment-upload-core';
 
-export interface FileRecordInput {
-  id: string;
-  driveId: string | null;
-  sizeBytes: number;
-  mimeType: string;
-  storagePath: string;
-  createdBy: string;
-}
+export type { FileRecordInput };
 
 async function saveFileRecord(input: FileRecordInput): Promise<void> {
   const inserted = await db

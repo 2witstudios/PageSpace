@@ -68,6 +68,18 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Draft persistence (personal, ephemeral, own-user-only) ---
   ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],
 
+  // --- Direct-to-S3 attachment uploads (thin routes; audit lives in the shared
+  //     orchestrator) — presign/complete emit data.write via attachment-direct.ts
+  //     (auditRequest) and the resolvers emit authz.access.denied on permission /
+  //     email-verification denials via attachment-route-helpers.ts; cancel is a
+  //     low-risk slot release with no data write. ---
+  ['channels/[pageId]/upload/presign', 'Audit emitted by attachment-direct orchestrator + channel resolver denial audit'],
+  ['channels/[pageId]/upload/complete', 'Audit emitted by attachment-direct orchestrator + channel resolver denial audit'],
+  ['channels/[pageId]/upload/cancel', 'Low-risk slot release, no data write; resolver still authorizes'],
+  ['messages/[conversationId]/upload/presign', 'Audit emitted by attachment-direct orchestrator + DM resolver denial audit'],
+  ['messages/[conversationId]/upload/complete', 'Audit emitted by attachment-direct orchestrator + DM resolver denial audit'],
+  ['messages/[conversationId]/upload/cancel', 'Low-risk slot release, no data write; resolver still authorizes'],
+
   // --- Read receipts (low-risk, high-frequency) ---
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],
   ['notifications/[id]/read', 'Notification read receipt, low-risk'],

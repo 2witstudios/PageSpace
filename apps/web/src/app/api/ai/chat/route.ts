@@ -18,8 +18,9 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 // LEGACY: daily-quota path, active only when isCreditsModeEnabled() is OFF. Remove at final credits cutover.
 import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
-import { isCreditsModeEnabled } from '@pagespace/lib/billing/credit-pricing';
+import { isCreditsModeEnabled, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -352,7 +353,10 @@ export async function POST(request: Request) {
     // unlimited) and lazy-inits balances. On an allowed request it places a hold
     // (reservation + in-flight marker) whose id is threaded to billing and released
     // at settle; out_of_credits -> 402, the free-tier in-flight cap -> 429.
-    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
+    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      estCostCents: estimateChatHoldCentsForModel(selectedModel),
+      maxInFlight: MAX_CHAT_INFLIGHT,
+    });
     if (!creditGate.allowed) {
       loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
       return creditGateErrorResponse(creditGate.reason);
@@ -1076,6 +1080,7 @@ export async function POST(request: Request) {
                 userId: userId!,
                 provider: currentProvider,
                 model: resolvedModelName,
+                source: 'chat',
                 inputTokens,
                 outputTokens,
                 totalTokens,
@@ -1181,6 +1186,7 @@ export async function POST(request: Request) {
       userId: userId || 'unknown',
       provider: selectedProvider || 'unknown',
       model: selectedModel || 'unknown',
+      source: 'chat',
       inputTokens: usage?.inputTokens ?? undefined,
       outputTokens: usage?.outputTokens ?? undefined,
       totalTokens:

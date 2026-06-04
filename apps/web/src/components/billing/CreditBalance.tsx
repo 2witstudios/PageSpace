@@ -52,11 +52,15 @@ export function CreditBalance() {
     return null;
   }
 
-  const { spendable, monthly, topup, debt } = balance;
+  const { spendable, monthly, topup, reserved, debt } = balance;
   // In the red: the user owes overage and can't use AI until back to positive.
   const inDebt = spendable < 0;
   const isLow = inDebt || spendable <= Math.max(LOW_BALANCE_FLOOR_CENTS, Math.round(monthly.allowance * 0.15));
   const resetDate = monthly.periodEnd ? new Date(monthly.periodEnd) : null;
+  // Surface in-flight reservations as a quiet signal, not in the headline number — the
+  // displayed balance is gross of holds (see getCreditBalance) so it doesn't dip-then-pop
+  // across a call; this dot just tells the user a call is currently consuming credits.
+  const hasInFlight = reserved > 0;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -69,9 +73,17 @@ export function CreditBalance() {
               className="hidden sm:flex items-center gap-1.5"
               aria-label="View AI credit balance"
             >
-              <Coins
-                className={`h-4 w-4 ${isLow ? 'text-amber-500' : 'text-muted-foreground'}`}
-              />
+              <span className="relative inline-flex">
+                <Coins
+                  className={`h-4 w-4 ${isLow ? 'text-amber-500' : 'text-muted-foreground'}`}
+                />
+                {hasInFlight && (
+                  <span
+                    className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500"
+                    aria-hidden="true"
+                  />
+                )}
+              </span>
               <Badge
                 variant={isLow ? 'destructive' : 'secondary'}
                 className="text-xs font-medium tabular-nums"
@@ -98,6 +110,11 @@ export function CreditBalance() {
             <p className="text-xs text-primary-foreground/80">
               Top-up: {formatCreditDollars(topup.remaining)}
             </p>
+            {hasInFlight && (
+              <p className="text-xs text-primary-foreground/80">
+                ~{formatCreditDollars(reserved)} reserved on in-flight calls
+              </p>
+            )}
             {resetDate && (
               <p className="text-xs text-primary-foreground/80">
                 Monthly resets {resetDate.toLocaleDateString()}

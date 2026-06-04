@@ -9,6 +9,7 @@ import {
   allocateSpend,
   evaluateGate,
   reservationCents,
+  estimateChatHoldCents,
   holdExpiresAt,
   computeMonthlyRefill,
   applyTopup,
@@ -289,6 +290,34 @@ describe('reservationCents', () => {
     expect(reservationCents(0)).toBe(0);
     expect(reservationCents(-5)).toBe(0);
     expect(reservationCents(Number.NaN)).toBe(0);
+  });
+});
+
+describe('estimateChatHoldCents', () => {
+  // markupBps 15000 = 1.5×. floor 2¢, ceiling 25¢ throughout.
+  it('applies the markup to the real-cost estimate and rounds to whole cents', () => {
+    // $0.10 real × 1.5 = $0.15 = 15¢, within [2, 25].
+    expect(estimateChatHoldCents(0.10, 15000, 2, 25)).toBe(15);
+  });
+
+  it('clamps up to the floor when the marked-up estimate is below it', () => {
+    // A sub-cent call ($0.0005 × 1.5 ≈ 0.075¢ → rounds to 0) must still reserve the floor.
+    expect(estimateChatHoldCents(0.0005, 15000, 2, 25)).toBe(2);
+    expect(estimateChatHoldCents(0, 15000, 2, 25)).toBe(2);
+  });
+
+  it('clamps down to the ceiling when the marked-up estimate exceeds it', () => {
+    // $0.50 real × 1.5 = 75¢ → capped at the legacy 25¢ ceiling.
+    expect(estimateChatHoldCents(0.50, 15000, 2, 25)).toBe(25);
+  });
+
+  it('treats a non-finite or negative estimate as zero cost (floor applies)', () => {
+    expect(estimateChatHoldCents(Number.NaN, 15000, 2, 25)).toBe(2);
+    expect(estimateChatHoldCents(-1, 15000, 2, 25)).toBe(2);
+  });
+
+  it('keeps floor <= ceiling even if misconfigured (ceiling below floor coerces up)', () => {
+    expect(estimateChatHoldCents(1, 15000, 10, 5)).toBe(10);
   });
 });
 

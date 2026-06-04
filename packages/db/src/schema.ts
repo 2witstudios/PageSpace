@@ -23,6 +23,7 @@ export * from './schema/hotkeys';
 export * from './schema/push-notifications';
 export * from './schema/integrations';
 export * from './schema/personalization';
+export * from './schema/automation-preferences';
 export * from './schema/calendar';
 export * from './schema/calendar-triggers';
 export * from './schema/workflows';
@@ -68,6 +69,7 @@ import * as hotkeys from './schema/hotkeys';
 import * as pushNotifications from './schema/push-notifications';
 import * as integrations from './schema/integrations';
 import * as personalization from './schema/personalization';
+import * as automationPreferences from './schema/automation-preferences';
 import * as calendar from './schema/calendar';
 import * as calendarTriggers from './schema/calendar-triggers';
 import * as workflows from './schema/workflows';
@@ -114,6 +116,7 @@ export const schema = {
   ...pushNotifications,
   ...integrations,
   ...personalization,
+  ...automationPreferences,
   ...calendar,
   ...calendarTriggers,
   ...workflows,

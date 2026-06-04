@@ -3,8 +3,8 @@
 import { useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { createId } from '@paralleldrive/cuid2';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { uploadAttachment } from '@/lib/upload/attachment-client';
 
 export interface FileAttachment {
   /** Client-side unique key for UI tracking (e.g. remove-by-slot). NOT the server file id. */
@@ -32,21 +32,6 @@ interface UseAttachmentUploadReturn {
   removeAttachment: (id: string) => void;
 }
 
-interface UploadErrorBody {
-  error?: string;
-}
-
-interface UploadFileResult {
-  success: boolean;
-  file?: FileAttachment;
-  error?: string;
-  fileName?: string;
-}
-
-interface BatchUploadBody {
-  files: UploadFileResult[];
-}
-
 export function useAttachmentUpload({
   uploadUrl,
   onUploaded,
@@ -69,51 +54,25 @@ export function useAttachmentUpload({
       startEditing(sessionId, 'form', { componentName: 'useAttachmentUpload' });
 
       try {
-        const formData = new FormData();
-        for (const file of files) {
-          formData.append('file', file);
-        }
-
-        const response = await fetchWithAuth(uploadUrl, {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const errorData = (await response
-            .json()
-            .catch(() => ({ error: 'Upload failed' }))) as UploadErrorBody;
-          if (response.status === 413) {
-            toast.error(errorData.error || 'File too large');
-          } else if (response.status === 429) {
-            toast.error('Too many uploads in progress. Please wait.');
-          } else if (response.status === 403) {
-            toast.error(
-              errorData.error || 'You do not have permission to upload files here.'
-            );
-          } else {
-            toast.error(errorData.error || 'Upload failed');
-          }
-          return;
-        }
-
-        const body = (await response.json()) as BatchUploadBody;
         const succeeded: FileAttachment[] = [];
 
-        for (const result of body.files ?? []) {
-          if (result.success && result.file) {
+        // Direct-to-S3: each file goes presign → PUT(Tigris) → complete. Serial so
+        // the per-user upload semaphore isn't contended by one message's batch.
+        for (const file of files) {
+          const result = await uploadAttachment(uploadUrl, file);
+          if (result.ok) {
             const attachment: FileAttachment = {
               instanceId: createId(),
-              id: result.file.id,
-              originalName: result.file.originalName,
-              size: result.file.size,
-              mimeType: result.file.mimeType,
-              contentHash: result.file.contentHash,
+              id: result.attachment.id,
+              originalName: result.attachment.originalName,
+              size: result.attachment.size,
+              mimeType: result.attachment.mimeType,
+              contentHash: result.attachment.contentHash,
             };
             succeeded.push(attachment);
             onUploadedRef.current?.(attachment);
           } else {
-            toast.error(result.error || `Failed to upload ${result.fileName ?? 'file'}`);
+            toast.error(result.errorMessage || `Failed to upload ${file.name || 'file'}`);
           }
         }
 

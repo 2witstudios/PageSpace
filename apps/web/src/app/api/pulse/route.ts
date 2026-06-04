@@ -9,6 +9,8 @@ import { taskItems } from '@pagespace/db/schema/tasks'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core';
 
@@ -63,6 +65,14 @@ export async function GET(req: Request) {
     // Get user timezone for accurate "today" boundaries
     const [user] = await db.select({ timezone: users.timezone }).from(users).where(eq(users.id, userId));
     const userTimezone = normalizeTimezone(user?.timezone);
+
+    // Whether the user has Pulse enabled (opt-out: no row ⇒ enabled). When off, we
+    // never tell the client to auto-generate, so no credits are spent on Pulse.
+    const [pulsePref] = await db
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId));
+    const pulseEnabled = resolvePulseEnabled(pulsePref);
     const startOfToday = getStartOfTodayInTimezone(userTimezone);
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
@@ -257,8 +267,8 @@ export async function GET(req: Request) {
       ? new Date(latestSummary.generatedAt).getTime() < sixHoursAgo.getTime()
       : true;
 
-    // Determine if client should refresh
-    const shouldRefresh = !latestSummary || isStale;
+    // Determine if client should refresh — never when the user disabled Pulse.
+    const shouldRefresh = pulseEnabled && (!latestSummary || isStale);
 
     const response: PulseResponse = {
       summary: latestSummary

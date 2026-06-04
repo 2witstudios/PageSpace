@@ -41,6 +41,36 @@ const fetcher = async (url: string): Promise<CreditBalance> => {
 };
 
 /**
+ * Pure: fold an authoritative `credits:updated` payload into the cached balance. The
+ * payload carries the full server-computed balance, so we replace the per-user fields
+ * wholesale. `creditsMode` is a process-level flag absent from the payload, so we keep
+ * whatever the initial fetch established (default OFF until it resolves).
+ */
+export function applyCreditsPayload(
+  payload: CreditsEventPayload,
+  current: CreditBalance | undefined,
+): CreditBalance {
+  return {
+    billingEnabled: payload.billingEnabled,
+    monthly: payload.monthly,
+    topup: payload.topup,
+    debt: payload.debt,
+    spendable: payload.spendable,
+    reserved: payload.reserved,
+    creditsMode: current?.creditsMode ?? false,
+  };
+}
+
+/**
+ * Mutate options for applying a socket push. We do NOT revalidate: the payload is the
+ * authoritative server balance, so a follow-up GET /api/credits only races it — an
+ * in-flight hold created/expired between the emit and the refetch would yield a third,
+ * different number and reintroduce the "more → less → more" flicker. The initial fetch
+ * and the visibility-change refetch remain the authoritative reads.
+ */
+export const CREDITS_PUSH_MUTATE_OPTIONS = { revalidate: false } as const;
+
+/**
  * Live prepaid AI-credit balance. Reads `/api/credits` once and then updates from
  * `credits:updated` socket events (emitted after a call settles, a refill lands, or
  * a top-up is purchased) rather than polling.
@@ -63,31 +93,15 @@ export function useCreditBalance() {
     connect();
   }, [connect]);
 
-  // Apply live balance pushes. The payload is shown immediately for instant feedback,
-  // then we revalidate against `/api/credits` (the authoritative current balance) so an
-  // out-of-order or stale snapshot can't stick — e.g. a delayed turn-start "hold placed"
-  // push arriving AFTER its own settlement push would otherwise roll the navbar back to
-  // the reserved value. SWR dedupes concurrent revalidations, so bursty start+finish
-  // events coalesce into a single refetch.
+  // Apply live balance pushes. The payload is the authoritative server-computed balance
+  // (one push per settle/funding event — the gate no longer pushes when a hold is just
+  // placed), so we apply it without revalidating. Revalidating here used to race the
+  // payload and produce a third number; see CREDITS_PUSH_MUTATE_OPTIONS.
   useEffect(() => {
     if (!socket) return;
 
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
-      mutate(
-        (current) => ({
-          billingEnabled: payload.billingEnabled,
-          monthly: payload.monthly,
-          topup: payload.topup,
-          debt: payload.debt,
-          spendable: payload.spendable,
-          reserved: payload.reserved,
-          // Mode is environment-level (not in the socket payload) — keep the value the
-          // initial fetch established; default OFF until it resolves. The revalidate
-          // below re-reads it authoritatively from /api/credits regardless.
-          creditsMode: current?.creditsMode ?? false,
-        }),
-        { revalidate: true },
-      );
+      mutate((current) => applyCreditsPayload(payload, current), CREDITS_PUSH_MUTATE_OPTIONS);
     };
 
     socket.on('credits:updated', handleCreditsUpdated);

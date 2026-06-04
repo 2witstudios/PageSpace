@@ -1,0 +1,58 @@
+import type { APIRequestContext, APIResponse } from '@playwright/test';
+import type { SeededUser } from './db';
+
+const MOCK_BASE = process.env.E2E_MOCK_OPENROUTER_URL ?? 'http://127.0.0.1:4998';
+
+/**
+ * POST as a session-authenticated user: sends the opaque session cookie plus the
+ * matching X-CSRF-Token header. No Origin header — `validateOrigin` allows a missing
+ * Origin (same-origin / non-browser clients), so this satisfies the CSRF gate.
+ */
+export function sessionPost(
+  request: APIRequestContext,
+  path: string,
+  user: SeededUser,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<APIResponse> {
+  return request.post(path, {
+    headers: {
+      cookie: `session=${user.sessionToken}`,
+      'x-csrf-token': user.csrf,
+      'content-type': 'application/json',
+      ...extraHeaders,
+    },
+    data: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+/**
+ * POST with an MCP bearer token. Bearer auth is exempt from CSRF/origin checks, so this
+ * is the clean way to drive routes that accept `allow: ['session', 'mcp']`.
+ */
+export function mcpPost(
+  request: APIRequestContext,
+  path: string,
+  mcpToken: string,
+  body?: unknown,
+): Promise<APIResponse> {
+  return request.post(path, {
+    headers: {
+      authorization: `Bearer ${mcpToken}`,
+      'content-type': 'application/json',
+    },
+    data: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+/** Reset the mock OpenRouter call recorder. */
+export async function resetMock(request: APIRequestContext): Promise<void> {
+  await request.post(`${MOCK_BASE}/__reset`);
+}
+
+/** How many chat-completions hits the mock has seen since the last reset. */
+export async function mockCallCount(request: APIRequestContext): Promise<number> {
+  const res = await request.get(`${MOCK_BASE}/__calls`);
+  const json = (await res.json()) as { count: number };
+  return json.count;
+}

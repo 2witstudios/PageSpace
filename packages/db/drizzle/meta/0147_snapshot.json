@@ -1,5 +1,5 @@
 {
-  "id": "09e054be-c59c-4365-9ece-62c3abf5c248",
+  "id": "c9893bd3-442f-4ea1-a5dc-0451f234a228",
   "prevId": "3986c8bf-af38-4659-a04d-c3a92dccfb56",
   "version": "7",
   "dialect": "postgresql",
@@ -5852,6 +5852,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
@@ -5935,6 +5941,33 @@
           "columns": [
             {
               "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_ai_usage_user_source": {
+          "name": "idx_ai_usage_user_source",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -12125,6 +12158,72 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
+    "public.user_automation_preferences": {
+      "name": "user_automation_preferences",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pulseEnabled": {
+          "name": "pulseEnabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_automation_preferences_user_idx": {
+          "name": "user_automation_preferences_user_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_automation_preferences_userId_users_id_fk": {
+          "name": "user_automation_preferences_userId_users_id_fk",
+          "tableFrom": "user_automation_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
     "public.calendar_events": {
       "name": "calendar_events",
       "schema": "",
@@ -15626,13 +15725,6 @@
         },
         "topupRemainingCents": {
           "name": "topupRemainingCents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "debtCents": {
-          "name": "debtCents",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,

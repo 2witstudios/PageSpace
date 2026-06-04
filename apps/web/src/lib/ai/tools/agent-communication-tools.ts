@@ -613,6 +613,7 @@ export const agentCommunicationTools = {
           userId,
           provider: resolvedProvider,
           model: resolvedModelName,
+          source: 'page_agent',
           inputTokens: response.totalUsage?.inputTokens,
           outputTokens: response.totalUsage?.outputTokens,
           totalTokens: response.totalUsage?.totalTokens,

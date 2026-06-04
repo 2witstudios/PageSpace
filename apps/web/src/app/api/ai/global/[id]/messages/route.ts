@@ -6,8 +6,9 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createAdminRestrictedResponse, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 // LEGACY: daily-quota path, active only when isCreditsModeEnabled() is OFF. Remove at final credits cutover.
 import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
-import { isCreditsModeEnabled } from '@pagespace/lib/billing/credit-pricing';
+import { isCreditsModeEnabled, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -335,7 +336,10 @@ export async function POST(
         .select({ subscriptionTier: users.subscriptionTier })
         .from(users)
         .where(eq(users.id, userId));
-      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        estCostCents: estimateChatHoldCentsForModel(selectedModel),
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
       if (!creditGate.allowed) {
         loggers.api.warn('Global Assistant Chat API: AI credit gate denied', {
           userId: maskIdentifier(userId),
@@ -1038,6 +1042,7 @@ MENTION PROCESSING:
                 userId: userId!,
                 provider: currentProvider,
                 model: currentModel,
+                source: 'chat',
                 inputTokens: usage?.inputTokens,
                 outputTokens: usage?.outputTokens,
                 totalTokens: usage?.totalTokens,

@@ -32,6 +32,7 @@ export async function extractActionItems(
       userId,
       provider: provider.provider,
       model: provider.modelName,
+      source: 'integration',
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage
