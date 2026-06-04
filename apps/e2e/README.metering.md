@@ -15,9 +15,8 @@ only the model provider and Stripe (webhook side) faked.
 | `13-metering-reconcile.spec.ts` | The cost-reconcile cron (`GET /api/cron/reconcile-ai-cost`): a billed-inline call whose authoritative `/generation` cost differs gets a correcting **adjustment** ledger row + balance delta; the correction is **idempotent** across a duplicate generation set and a re-run. The mock now also serves `GET /generation?id=` (overridable per-id via `POST /__set-generation-cost`). |
 | `14-metering-daily-cap.spec.ts` | The per-user/day exposure cap: with enforcement ON and a small `DAILY_CAP_BUSINESS_CENTS`, driving calls past the ceiling returns **429 `daily_cap_exceeded`** — the model isn't called on the over-cap request and nothing is billed beyond the cap. |
 
-Meter-only mode (`CREDITS_ENFORCEMENT_ENABLED=false`) and the cost-extraction/settlement
-math are covered by unit tests in `packages/lib/src/billing/__tests__/` — they aren't
-re-run here because the flag is read in the app process and is fixed at app launch.
+The cost-extraction/settlement math is covered by unit tests in
+`packages/lib/src/billing/__tests__/`.
 
 ## Running
 
@@ -25,7 +24,6 @@ re-run here because the flag is read in the app process and is fixed at app laun
 
    ```bash
    DATABASE_URL=postgres://…@localhost:5432/…   # local DB only — seeders refuse non-local hosts
-   CREDITS_ENFORCEMENT_ENABLED=true             # enforcement is OFF by default — turn it ON for this run
    DAILY_CAP_BUSINESS_CENTS=25                  # 14-metering-daily-cap only; read at call time in the app process
    OPENROUTER_DEFAULT_API_KEY=sk-e2e            # any non-empty value; enables the openrouter branch + reconcile fetcher
    OPENROUTER_BASE_URL=http://127.0.0.1:4998/api/v1
@@ -36,9 +34,9 @@ re-run here because the flag is read in the app process and is fixed at app laun
    ```
 
    `DAILY_CAP_BUSINESS_CENTS` is scoped to the `business` tier so it only affects the
-   daily-cap spec (every other metering spec uses `pro`/`free`). Like
-   `CREDITS_ENFORCEMENT_ENABLED`, it's read at call time in the app process, so it must be
-   set when the app launches — it cannot be set from inside a spec.
+   daily-cap spec (every other metering spec uses `pro`/`free`). It's read at call time
+   in the app process, so it must be set when the app launches — it cannot be set from
+   inside a spec.
 
    `CRON_SECRET`, `STRIPE_WEBHOOK_SECRET`, and `CSRF_SECRET` must be the **same** values the
    Playwright process sees (both load `.env`), so the test can forge valid signatures/tokens.
