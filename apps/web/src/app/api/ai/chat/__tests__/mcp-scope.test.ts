@@ -163,6 +163,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
     trackToolUsage: vi.fn(),
   },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
+  extractOpenRouterGenerationIds: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/mcp', () => ({
