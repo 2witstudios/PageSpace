@@ -985,12 +985,18 @@ MENTION PROCESSING:
 
         loggers.api.debug('Global Assistant Chat API: onFinish callback triggered for AI response', {});
 
+        const messageId = serverAssistantMessageId;
+
+        // Extract tool calls/results with safe defaults — responseMessage is absent on
+        // exhausted/no-content runs, but usage settlement below still has to run.
+        const extractedToolCalls = responseMessage ? extractToolCalls(responseMessage) : [];
+        const extractedToolResults = responseMessage ? extractToolResults(responseMessage) : [];
+
+        // Save the assistant message. Best-effort: persistence errors must NOT skip
+        // usage/credit settlement below — that would leak the gate's hold.
         if (responseMessage) {
           try {
-            const messageId = serverAssistantMessageId;
             const messageContent = extractMessageContent(responseMessage);
-            const extractedToolCalls = extractToolCalls(responseMessage);
-            const extractedToolResults = extractToolResults(responseMessage);
 
             loggers.api.debug('Global Assistant Chat API: Saving AI response message', {
               id: messageId,
@@ -1020,79 +1026,85 @@ MENTION PROCESSING:
               .where(eq(conversations.id, conversationId));
 
             loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
-
-            // LEGACY daily-quota counting (credits mode OFF): keep the old per-tier
-            // counter moving so the restored UsageCounter is accurate on prod during
-            // dark launch. Best-effort — never fail the chat. Remove at final cutover.
-            if (!isCreditsModeEnabled()) {
-              try {
-                await incrementUsage(userId!, getProviderTier(currentProvider, currentModel));
-              } catch (usageError) {
-                loggers.api.error('Global Assistant Chat API: legacy usage increment failed', usageError as Error, {
-                  userId: maskIdentifier(userId!),
-                });
-              }
-            }
-
-            // Track detailed AI usage (tokens, cost, etc.).
-            // ALWAYS log a row — even when the provider returns no usage metadata —
-            // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
-            // row, not a skipped one (which would silently front the spend).
-            try {
-              const usage = agentRun?.accumulatedUsage;
-              const steps = agentRun?.accumulatedSteps;
-              const duration = Date.now() - startTime;
-
-              await AIMonitoring.trackUsage({
-                userId: userId!,
-                provider: currentProvider,
-                model: currentModel,
-                source: 'chat',
-                inputTokens: usage?.inputTokens,
-                outputTokens: usage?.outputTokens,
-                totalTokens: usage?.totalTokens,
-                providerCostDollars: extractOpenRouterCostDollars(steps),
-                duration,
-                conversationId,
-                messageId,
-                // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
-                // completion. Cost still settles regardless (the provider charged us).
-                success: agentRun?.finalOutcome !== 'exhausted',
-                holdId,
-                contextMessages: contextCalculation.messageIds,
-                contextSize: contextCalculation.totalTokens,
-                systemPromptTokens: contextCalculation.systemPromptTokens,
-                toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
-                conversationTokens: contextCalculation.conversationTokens,
-                messageCount: contextCalculation.messageCount,
-                wasTruncated: contextCalculation.wasTruncated,
-                truncationStrategy: contextCalculation.truncationStrategy,
-                metadata: {
-                  toolCallsCount: extractedToolCalls.length,
-                  toolResultsCount: extractedToolResults.length,
-                  isReadOnly: readOnlyMode,
-                  retryAttempts: agentRun?.attempts,
-                  retryOutcome: agentRun?.finalOutcome,
-                  retryTerminalReason: agentRun?.terminalReason,
-                }
-              });
-            } catch (trackingError) {
-              loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
-                conversationId: maskIdentifier(conversationId),
-                messageId: maskIdentifier(messageId),
-                error: trackingError instanceof Error ? trackingError.message : 'Unknown error',
-              });
-            }
-
-            // NOTE: daily per-call counting/broadcast removed — prepaid credits are
-            // the sole volume limiter. The credit hold placed by the gate is settled
-            // by the AIMonitoring.trackUsage call above (holdId threaded in), which
-            // now also broadcasts the user's fresh balance — so no route-level emit
-            // is needed for the header widget to update live.
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }
         }
+
+        // Usage + credit settlement ALWAYS runs after runAgentWithRetry completes —
+        // regardless of whether a responseMessage was produced or persistence above
+        // succeeded. trackUsage settles the gate's hold (holdId); skipping it on
+        // exhausted/no-content runs or save failures would leak the hold (the route
+        // already set holdHandedOff = true).
+        //
+        // LEGACY daily-quota counting (credits mode OFF): keep the old per-tier
+        // counter moving so the restored UsageCounter is accurate on prod during
+        // dark launch. Best-effort — never fail the chat. Remove at final cutover.
+        if (!isCreditsModeEnabled()) {
+          try {
+            await incrementUsage(userId!, getProviderTier(currentProvider, currentModel));
+          } catch (usageError) {
+            loggers.api.error('Global Assistant Chat API: legacy usage increment failed', usageError as Error, {
+              userId: maskIdentifier(userId!),
+            });
+          }
+        }
+
+        // Track detailed AI usage (tokens, cost, etc.).
+        // ALWAYS log a row — even when the provider returns no usage metadata —
+        // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
+        // row, not a skipped one (which would silently front the spend).
+        try {
+          const usage = agentRun?.accumulatedUsage;
+          const steps = agentRun?.accumulatedSteps;
+          const duration = Date.now() - startTime;
+
+          await AIMonitoring.trackUsage({
+            userId: userId!,
+            provider: currentProvider,
+            model: currentModel,
+            source: 'chat',
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            totalTokens: usage?.totalTokens,
+            providerCostDollars: extractOpenRouterCostDollars(steps),
+            duration,
+            conversationId,
+            messageId,
+            // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
+            // completion. Cost still settles regardless (the provider charged us).
+            success: agentRun?.finalOutcome !== 'exhausted',
+            holdId,
+            contextMessages: contextCalculation.messageIds,
+            contextSize: contextCalculation.totalTokens,
+            systemPromptTokens: contextCalculation.systemPromptTokens,
+            toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+            conversationTokens: contextCalculation.conversationTokens,
+            messageCount: contextCalculation.messageCount,
+            wasTruncated: contextCalculation.wasTruncated,
+            truncationStrategy: contextCalculation.truncationStrategy,
+            metadata: {
+              toolCallsCount: extractedToolCalls.length,
+              toolResultsCount: extractedToolResults.length,
+              isReadOnly: readOnlyMode,
+              retryAttempts: agentRun?.attempts,
+              retryOutcome: agentRun?.finalOutcome,
+              retryTerminalReason: agentRun?.terminalReason,
+            }
+          });
+        } catch (trackingError) {
+          loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
+            conversationId: maskIdentifier(conversationId),
+            messageId: maskIdentifier(messageId),
+            error: trackingError instanceof Error ? trackingError.message : 'Unknown error',
+          });
+        }
+
+        // NOTE: daily per-call counting/broadcast removed — prepaid credits are
+        // the sole volume limiter. The credit hold placed by the gate is settled
+        // by the AIMonitoring.trackUsage call above (holdId threaded in), which
+        // now also broadcasts the user's fresh balance — so no route-level emit
+        // is needed for the header widget to update live.
 
         // Reflect a user stop, including one that landed during inter-attempt backoff or
         // raced in after the loop broke (onAbort only fires while a streamText is live).
