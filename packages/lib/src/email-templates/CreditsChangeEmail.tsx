@@ -145,7 +145,7 @@ export function CreditsChangeEmail({
               </Text>
               <Text style={calloutText}>
                 {summary.unlocksPremiumModels
-                  ? 'Your plan unlocks the frontier. Spend credits on Claude Opus 4.8, GPT-5.5, OpenAI o3, Gemini 2.5 Pro, and more. Reach for a light model on quick work and a flagship when it counts. You choose the trade-off per task.'
+                  ? 'Your plan unlocks the frontier. Spend credits on Claude Opus 4.8, GPT-5.5, Gemini 3.1 Pro, and more. Reach for a light model on quick work and a flagship when it counts. You choose the trade-off per task.'
                   : 'Your plan runs on fast, capable standard models tuned to make your credits stretch. No setup, no model wrangling, just send a message and go.'}
               </Text>
             </Section>
