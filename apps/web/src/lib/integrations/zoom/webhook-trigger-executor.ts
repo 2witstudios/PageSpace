@@ -20,9 +20,9 @@ export interface ZoomWebhookEvent {
  *
  * Mirrors executeCalendarTrigger: the webhook_triggers row holds only the
  * (connection, eventType → workflow) wiring, so we load the linked workflows
- * row for the execution payload, preflight access + agent page, consume a
- * usage credit on the connection owner's budget, and delegate to the shared
- * executor. Per-fire state lives in workflow_runs (written by the executor).
+ * row for the execution payload, preflight access + agent page, and delegate
+ * to the shared executor. Per-fire state lives in workflow_runs (written by
+ * the executor).
  */
 export async function executeWebhookTrigger(
   trigger: WebhookTrigger,
