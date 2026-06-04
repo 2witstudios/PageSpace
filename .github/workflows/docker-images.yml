@@ -31,19 +31,13 @@ jobs:
           - service: web
             dockerfile: apps/web/Dockerfile
             context: .
+            # Realtime is same-origin: Caddy routes pagespace.ai/socket.io/* → realtime.
+            # NEXT_PUBLIC_* are baked at build time — the fly.web.toml runtime [env] cannot
+            # override them, so the storage cap MUST match (1024), not the old VPS-era 20.
             build_args: |
               NEXT_PUBLIC_APP_URL=https://pagespace.ai
               NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
-              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
-              NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
-              NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
-          - service: web-fly
-            dockerfile: apps/web/Dockerfile
-            context: .
-            build_args: |
-              NEXT_PUBLIC_APP_URL=https://pagespace.ai
-              NEXT_PUBLIC_REALTIME_URL=https://pagespace-proxy.fly.dev
-              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
+              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=1024
               NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
               NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
           - service: migrate
@@ -172,8 +166,8 @@ jobs:
 
       - name: Deploy web
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-web-fly:latest
-          docker tag ghcr.io/2witstudios/pagespace-web-fly:latest registry.fly.io/pagespace-web:latest
+          docker pull ghcr.io/2witstudios/pagespace-web:latest
+          docker tag ghcr.io/2witstudios/pagespace-web:latest registry.fly.io/pagespace-web:latest
           docker push registry.fly.io/pagespace-web:latest
           flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
         env:
@@ -194,6 +188,15 @@ jobs:
           docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
           docker push registry.fly.io/pagespace-processor:latest
           flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 300
+
+          # The processor has no [http_service], so Fly has no autostart for it and a
+          # `flyctl deploy` against an already-stopped machine re-images it but leaves it
+          # STOPPED. Web reaches it over pagespace-processor.internal:3003 (no auto-start),
+          # so a stopped machine = file uploads silently fail. Guarantee every machine ends
+          # started; already-running machines no-op.
+          for id in $(flyctl machines list --app pagespace-processor --json | jq -r '.[].id'); do
+            flyctl machine start "$id" --app pagespace-processor 2>/dev/null || true
+          done
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -203,5 +206,19 @@ jobs:
           docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
           docker push registry.fly.io/pagespace-admin:latest
           flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy cron
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-cron:latest
+          docker tag ghcr.io/2witstudios/pagespace-cron:latest registry.fly.io/pagespace-cron:latest
+          docker push registry.fly.io/pagespace-cron:latest
+          flyctl deploy --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
+
+          # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
+          # (memory/pulse crons) double-fire. Reconcile to a single started machine — never
+          # "start all" like the processor guard. scale count 1 keeps it a singleton.
+          flyctl scale count 1 --app pagespace-cron --yes 2>/dev/null || true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
