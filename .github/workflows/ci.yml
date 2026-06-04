@@ -1,0 +1,98 @@
+name: CI
+
+# Reusable test + lint suite. Called by test.yml (PR/push feedback) and by
+# docker-images.yml (gates the Fly deploy on green tests). Single source of truth —
+# no duplicated job definitions.
+on:
+  workflow_call:
+
+# Minimal permissions: read source only. No write access needed — artifact upload
+# uses the Actions API (not git), which is allowed under contents: read.
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pagespace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build packages
+        run: bun run build
+
+      - name: Generate migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: bun run db:generate
+
+      - name: Setup test database
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: bun run --filter '@pagespace/db' db:migrate
+
+      - name: Run tests with coverage
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: bun run test:coverage
+
+      - name: Coverage report
+        if: always()
+        run: node scripts/coverage-report.mjs
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-reports
+          path: |
+            apps/*/coverage/coverage-summary.json
+            packages/*/coverage/coverage-summary.json
+          retention-days: 30
+
+  lint:
+    name: Lint & TypeScript Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run ESLint
+        run: bun run lint
+
+      - name: Run TypeScript check
+        run: bun run typecheck
