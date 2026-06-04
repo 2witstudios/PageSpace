@@ -33,9 +33,9 @@ export const blogPosts: Record<string, BlogPost> = {
 
 The old way of metering AI in PageSpace was a daily call count. Free got 50 AI calls a day. Pro got 200. Cross the line and you were done until midnight — even if every call that day was a one-line cheap completion.
 
-It punished the wrong thing. A quick question and a deep multi-step agent run counted the same: one call. Someone running ten heavy research agents and someone asking ten yes/no questions hit the same wall. The number on the wall had almost nothing to do with the cost behind it.
+It punished the wrong thing. A quick yes/no question and a ten-step research agent counted the same: one call. The number on the wall had nothing to do with the cost behind it.
 
-So we tore it out. AI in PageSpace is now usage-based. You get a monthly pool of credits, and you spend it on exactly what you use, measured in real cost rather than an arbitrary tally.
+So we tore it out. AI in PageSpace is now usage-based. You get a monthly pool of credits and spend it on exactly what you use, priced on what each model costs instead of an arbitrary tally.
 
 ## Credits, not call counts
 
@@ -48,7 +48,7 @@ Every plan comes with a monthly pool of AI credits:
 
 Your pool refreshes at the start of every billing period. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
 
-Each call draws from your balance based on the model's **real cost**. We bill what the model actually costs to run, plus a flat 1.5× that keeps the platform running. No hidden multipliers that change by model, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little; an expensive model costs you more; the math is the underlying price times 1.5, every time.
+Each call draws from your balance at **our cost for that model, plus a flat 1.5×**. We pass the model's price straight through with one simple markup. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more, and keeping the math that simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
 
 That's the whole point of usage-based pricing: what you pay tracks what you actually do.
 
@@ -56,29 +56,25 @@ That's the whole point of usage-based pricing: what you pay tracks what you actu
 
 Here's the part daily limits could never give you: when billing is usage-based, model choice opens up.
 
-**Free** runs on fast, capable standard models — GPT-5.3 Chat, Claude Haiku 4.5, Gemini 3.5 Flash, and the GPT-5 mini and nano variants. They're quick, they're cheap, and your $5 stretches a long way across them. You don't pick a model on Free; you get a strong default that's tuned to make the allowance go far.
+**Free** runs on fast, capable standard models — GPT-5.3 Chat by default, plus Claude Haiku 4.5, Gemini 3.5 Flash, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your $5 stretches a long way across them.
 
-**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, OpenAI o3, Gemini 3.1 Pro, Grok 4.3 — whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
-
-Cheaper model, credits stretch further. Premium model, more capability per credit. The control is yours.
+**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, OpenAI o3, Gemini 2.5 Pro — whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
 
 ## When you run low
 
 If your balance runs out before the period resets, you're not locked out until tomorrow. Top up.
 
-You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack — $10, $25, or $50. Top-up credits never expire. They sit on top of your monthly allowance and get spent after it, so a one-time top-up during a busy week carries over instead of evaporating at the next reset.
+You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack — $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
 
-Run low, top up, keep going. No daily wall to wait out.
+Run low, top up, keep going. No more waiting out a daily reset.
 
 ## Built to scale
 
-Pricing is only half of this. Underneath, PageSpace moved to new infrastructure built to grow.
+Pricing is only half of this. PageSpace now runs on Fly.io with Tigris object storage, infrastructure built to grow:
 
-We run on Fly.io with Tigris object storage. In plain terms:
-
-- **Horizontal scale.** Instead of one box that eventually tips over, PageSpace runs across many machines that come online as demand rises. Capacity scales with usage instead of capping it.
-- **Faster, closer delivery.** Your files and pages serve from object storage near you rather than round-tripping through a single server. Less waiting, more consistent speed.
-- **Bigger uploads, including video.** With files on object storage instead of a single machine's disk, upload limits go up and video is in. Bigger attachments, smoother handling.
+- **Built to scale out.** Storage and request handling are stateless, so PageSpace can spread across many machines and bring more online as demand rises. Capacity grows with usage instead of capping it.
+- **Faster file delivery.** Your uploads and attachments serve straight from object storage instead of round-tripping through a single app server. Less waiting, more consistent speed.
+- **Bigger uploads, including video.** With files on object storage instead of one machine's disk, upload limits go up and video is in.
 
 This is the foundation the credit model needs. Usage-based pricing only works if the platform can actually absorb the usage — and now it can.
 
@@ -86,7 +82,7 @@ This is the foundation the credit model needs. Usage-based pricing only works if
 
 Two things this groundwork unlocks, coming soon:
 
-**Agents that run real code.** AI agents will execute code in isolated, sandboxed containers — right inside your workspace. Not "here's a snippet to copy," but the agent actually running it: processing data, executing scripts, returning real results, with the blast radius contained to a throwaway sandbox.
+**Agents that run real code.** AI agents will execute code in isolated, sandboxed containers right inside your workspace. Not "here's a snippet to copy," but the agent actually running it in a throwaway sandbox.
 
 **Publish pages to the web.** Turn any page into a standalone live site on \`pagespace.site\` with one click. Draft it in PageSpace with your AI agents, then ship it as a real public page — no separate hosting, no export dance.
 
@@ -94,9 +90,7 @@ Both ride on the same Fly and object-storage foundation the pricing change is bu
 
 ## What doesn't change
 
-Credits only meter AI. Everything else about PageSpace works exactly as it did.
-
-Your documents, tasks, channels, files, canvases, spreadsheets, and every bit of real-time collaboration are completely unaffected. There's no credit cost to write a doc, run a board, message your team, or organize your workspace. Credits are for the AI. Nothing about how you and your team actually work together is changing.
+Credits only meter AI. Your documents, tasks, channels, files, and collaboration cost nothing and work exactly as before — nothing about how you and your team work together is changing.
 
 Open your plan to see your balance, pick your models, and top up when you want. Pay for what you use, run what you need.
     `,
