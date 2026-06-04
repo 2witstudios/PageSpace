@@ -54,10 +54,12 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  *     fraction so cheap calls accumulate instead of rounding to $0.
  *   - Actual decrement (R2b): we record `appliedCents` = what truly left the balance,
  *     not the intended charge, so the ledger reconciles against the balance delta.
- *   - Debt (R2b): when the balance can't cover the charge, the uncovered remainder
- *     is written as an 'adjustment' row (visible, queryable, recoverable) instead of
- *     evaporating. Balances stay >= 0 (the DB CHECK invariant); debt lives in the
- *     ledger, never as a negative balance.
+ *   - Debt (R2b): when the balance can't cover the charge, the uncovered remainder is
+ *     BOTH raised on `debtCents` (the live materialized debt — so the net balance,
+ *     monthly + topup − debt, goes negative and the gate blocks further AI) AND written
+ *     as an 'adjustment' ledger row (the per-overage incurrence history). The buckets
+ *     themselves stay >= 0; the negative lives in `debtCents`, which a purchase pays
+ *     down and the next renewal forgives (zeroes).
  * If no balance row exists yet, the ledger row is left untouched ('pending') so the
  * reconcile cron settles it once a balance is created. Shared by consumeCredits and
  * settlePendingLedgerRow.
@@ -114,6 +116,13 @@ async function decrementAndSettle(
       monthlyRemainingCents: spend.monthlyCents,
       topupRemainingCents: spend.topupCents,
       pendingMillicents: accrual.newPending,
+      // Uncovered cost becomes debt: the net balance (monthly + topup − debt) goes
+      // negative and the gate blocks further AI until it's paid down by a purchase or
+      // forgiven at the next renewal. Buckets still floor at 0 (above); debt carries
+      // the overage. No-op when the call was fully covered (shortfallCents === 0).
+      ...(spend.shortfallCents > 0
+        ? { debtCents: sql`${creditBalances.debtCents} + ${spend.shortfallCents}` }
+        : {}),
     })
     .where(eq(creditBalances.userId, userId));
 

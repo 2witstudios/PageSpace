@@ -10,6 +10,7 @@ vi.mock('@pagespace/db/schema/credits', () => ({
     monthlyRemainingCents: 'cb.monthly',
     topupRemainingCents: 'cb.topup',
     monthlyAllowanceCents: 'cb.allowance',
+    debtCents: 'cb.debt',
     monthlyPeriodStart: 'cb.periodStart',
     monthlyPeriodEnd: 'cb.periodEnd',
   },
@@ -181,6 +182,44 @@ describe('canConsumeAI', () => {
     expect(sink.insertCalled).toBeFalsy();
     // No hold created -> nothing changed -> no push.
     expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
+  });
+
+  it('denies when outstanding debt drags net spendable to/under the floor', async () => {
+    // monthly 100, topup 0, but 100 owed -> net 0 - est 25 < floor 25 -> out_of_credits.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }]));
+    const sink: { insertCalled?: boolean } = {};
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('allows when the buckets still clear the floor net of a smaller debt', async () => {
+    // monthly 200, topup 0, debt 100 -> net 100 - est 25 = 75 > floor 25 -> ok.
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 100, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro');
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
+  it('forgives outstanding debt at the gate-driven free reset (debtCents -> 0, full allowance)', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown> } = {};
+    mockDb.update.mockReturnValue(updateCapturing(sink));
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    // Renewal restores the FULL allowance AND wipes the debt.
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, monthlyAllowanceCents: 500, debtCents: 0 });
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
   });
 
   it('denies a free user who has reached the in-flight cap (too_many_in_flight), even with credit', async () => {

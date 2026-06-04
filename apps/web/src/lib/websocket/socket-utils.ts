@@ -92,6 +92,8 @@ export interface CreditsEventPayload {
   topup: {
     remaining: number;
   };
+  /** Outstanding overage owed (non-negative). When > 0, `spendable` is negative. */
+  debt: number;
   spendable: number;
   reserved: number;
   conversationId?: string;

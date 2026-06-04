@@ -75,6 +75,7 @@ export async function emitCreditsUpdated(
       billingEnabled: summary.billingEnabled,
       monthly: summary.monthly,
       topup: summary.topup,
+      debt: summary.debt,
       spendable: summary.spendable,
       reserved: summary.reserved,
       ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),

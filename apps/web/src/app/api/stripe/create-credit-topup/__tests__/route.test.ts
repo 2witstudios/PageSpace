@@ -59,7 +59,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest:
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { CREDIT_PACKS } from '@pagespace/lib/billing/credit-pricing';
+import { CREDIT_PACKS, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS } from '@pagespace/lib/billing/credit-pricing';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -142,6 +142,36 @@ describe('POST /api/stripe/create-credit-topup', () => {
     const response = await POST(req({ packId: 'pack_does_not_exist' }));
     expect(response.status).toBe(400);
     expect((await response.json()).error).toMatch(/unknown/i);
+  });
+
+  it('creates a checkout for a valid custom amount, pricing+metadata from amountCents', async () => {
+    const amountCents = 1234; // $12.34, within [min, max]
+    const response = await POST(req({ amountCents }));
+    expect(response.status).toBe(200);
+
+    const arg = mockCheckoutCreate.mock.calls[0][0];
+    expect(arg.line_items[0].price_data.unit_amount).toBe(amountCents);
+    expect(arg.metadata).toEqual(
+      expect.objectContaining({ kind: 'credit_pack', packId: 'custom', packCents: String(amountCents), userId: mockUserId }),
+    );
+  });
+
+  it('returns 400 for a custom amount below the minimum', async () => {
+    const response = await POST(req({ amountCents: CREDIT_TOPUP_MIN_CENTS - 1 }));
+    expect(response.status).toBe(400);
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for a custom amount above the maximum', async () => {
+    const response = await POST(req({ amountCents: CREDIT_TOPUP_MAX_CENTS + 1 }));
+    expect(response.status).toBe(400);
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for a non-integer custom amount (fractional cents)', async () => {
+    const response = await POST(req({ amountCents: 1000.5 }));
+    expect(response.status).toBe(400);
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the user is not found', async () => {

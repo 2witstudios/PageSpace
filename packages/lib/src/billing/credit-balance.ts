@@ -5,17 +5,20 @@
  * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
  * the monthly reset live in `./credit-gate` (the imperative shell that owns the clock
  * and the row lock). Here we only mirror the gate's semantics for presentation:
- *   - free tier whose monthly window has lapsed is shown its full allowance (the gate
- *     will reset it on the next call) rather than a stale, pessimistic remainder;
+ *   - free tier whose monthly window has lapsed is shown its full allowance with
+ *     renewal-equivalent debt forgiveness (the gate will reset it on the next call)
+ *     rather than stale, pessimistic balances;
  *   - paid tier whose window has lapsed is shown 0 monthly (use-it-or-lose-it — the
  *     gate excludes the expired allowance until the renewal invoice refills it);
- *   - spendable is the FUNDED balance (monthly + top-up remaining), clamped at 0, and
- *     is deliberately GROSS of in-flight holds. We surface the sum of still-active
- *     holds separately as `reserved` (for an optional "call running" indicator) but do
- *     NOT subtract it from the headline: a per-call reservation that places, then
- *     settles to a fraction of its estimate, would otherwise make the displayed number
- *     dip-then-pop on every call. Overspend is bounded by the gate's own locked check
- *     (see ./credit-gate), not by this display; hiding holds here cannot over-grant.
+ *   - spendable is the FUNDED balance (monthly + top-up remaining) MINUS outstanding
+ *     debt, and is deliberately GROSS of in-flight holds. We surface the sum of
+ *     still-active holds separately as `reserved` (for an optional "call running"
+ *     indicator) but do NOT subtract it from the headline: a per-call reservation that
+ *     places, then settles to a fraction of its estimate, would otherwise make the
+ *     displayed number dip-then-pop on every call. Overspend is bounded by the gate's
+ *     own locked check (see ./credit-gate), not by this display; hiding holds here
+ *     cannot over-grant. It is clamped at 0 ONLY when there is no debt — outstanding
+ *     overage pulls it negative, and that negative is surfaced so the widget shows red.
  *
  * Money is always whole cents of customer-facing credit value, matching credit-core.
  *
@@ -45,9 +48,16 @@ export interface CreditBalanceSummary {
     remaining: number;
   };
   /**
-   * Funded balance for display: monthly + topup remaining, clamped to >= 0. GROSS of
-   * in-flight holds (see file header) — `reserved` is reported separately, not netted
-   * out here, so the headline doesn't dip-then-pop across a call's reserve/settle cycle.
+   * Outstanding overage owed (a non-negative magnitude). Accrues when a call's cost
+   * exceeds the buckets; paid down by a purchase; forgiven at the next renewal. When
+   * > 0 the net `spendable` is dragged down (and can be negative).
+   */
+  debt: number;
+  /**
+   * Funded balance for display: monthly + topup remaining MINUS debt. GROSS of in-flight
+   * holds (see file header) — `reserved` is reported separately, not netted out here, so
+   * the headline doesn't dip-then-pop across a call's reserve/settle cycle. Clamped to
+   * >= 0 only when debt is 0; outstanding overage makes it negative (shown in red).
    */
   spendable: number;
   /**
@@ -67,6 +77,7 @@ function disabledSummary(): CreditBalanceSummary {
     billingEnabled: false,
     monthly: { remaining: 0, allowance: 0, periodEnd: null },
     topup: { remaining: 0 },
+    debt: 0,
     spendable: 0,
     reserved: 0,
   };
@@ -91,6 +102,7 @@ export async function getCreditBalance(
         monthlyRemainingCents: creditBalances.monthlyRemainingCents,
         monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
         topupRemainingCents: creditBalances.topupRemainingCents,
+        debtCents: creditBalances.debtCents,
         monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
       })
       .from(creditBalances)
@@ -114,6 +126,7 @@ export async function getCreditBalance(
       billingEnabled: true,
       monthly: { remaining: allowance, allowance, periodEnd: null },
       topup: { remaining: 0 },
+      debt: 0,
       spendable,
       reserved,
     };
@@ -134,7 +147,16 @@ export async function getCreditBalance(
   }
 
   const topupRemaining = row.topupRemainingCents;
-  const spendable = Math.max(0, monthlyRemaining + topupRemaining);
+  const debt = tier === 'free' && expired ? 0 : row.debtCents ?? 0;
+  // GROSS of in-flight holds (master semantics: `reserved` is surfaced separately, not
+  // netted out, so the headline doesn't dip-then-pop across a call). Clamped at 0 ONLY
+  // when there's no debt — outstanding overage pulls spendable negative so the widget
+  // shows the red. Debt accrues only after both buckets are exhausted, so the negative
+  // branch is effectively −debt.
+  const spendable =
+    debt > 0
+      ? monthlyRemaining + topupRemaining - debt
+      : Math.max(0, monthlyRemaining + topupRemaining);
 
   return {
     billingEnabled: true,
@@ -144,6 +166,7 @@ export async function getCreditBalance(
       periodEnd: periodEnd ? periodEnd.toISOString() : null,
     },
     topup: { remaining: topupRemaining },
+    debt,
     spendable,
     reserved,
   };

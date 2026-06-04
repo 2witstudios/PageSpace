@@ -111,6 +111,22 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(500);
   });
 
+  it('mirrors gate forgiveness for expired free-period debt', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        debtCents: 300,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.monthly.remaining).toBe(500);
+    expect(b.debt).toBe(0);
+    expect(b.spendable).toBe(500);
+  });
+
   it('zeroes the expired monthly bucket for a paid tier (use-it-or-lose-it)', async () => {
     balanceRows = [
       {
@@ -123,6 +139,29 @@ describe('getCreditBalance', () => {
     const b = await getCreditBalance('u1', 'pro');
     expect(b.monthly.remaining).toBe(0);
     expect(b.spendable).toBe(250); // only top-up survives
+  });
+
+  it('surfaces a NEGATIVE spendable and the debt when the user is in the red', async () => {
+    // Debt accrues only after both buckets are exhausted, so monthly/topup are 0.
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 1500,
+        topupRemainingCents: 0,
+        debtCents: 250,
+        monthlyPeriodEnd: future,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'pro');
+    expect(b.debt).toBe(250);
+    // Not clamped: the user owes $2.50, shown as a negative balance.
+    expect(b.spendable).toBe(-250);
+  });
+
+  it('reports debt: 0 when no balance row exists', async () => {
+    balanceRows = [];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.debt).toBe(0);
   });
 
   it('does not let in-flight holds reduce the displayed spendable', async () => {

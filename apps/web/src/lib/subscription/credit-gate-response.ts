@@ -25,7 +25,7 @@ export function creditGatePayload(reason: GateResult['reason']): {
   return {
     status: 402,
     error: 'out_of_credits',
-    message: 'You have run out of AI credits. Add credits or wait for your monthly allowance to reset.',
+    message: 'Your AI credit balance is too low. Add credits to get back to positive, or wait for your monthly allowance to reset.',
   };
 }
 

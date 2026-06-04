@@ -56,6 +56,7 @@ export function addOneMonth(from: Date): Date {
 interface BalanceRow {
   monthlyRemainingCents: number;
   topupRemainingCents: number;
+  debtCents: number;
   monthlyPeriodEnd: Date | null;
 }
 
@@ -91,6 +92,7 @@ export async function canConsumeAI(
       .select({
         monthlyRemainingCents: creditBalances.monthlyRemainingCents,
         topupRemainingCents: creditBalances.topupRemainingCents,
+        debtCents: creditBalances.debtCents,
         monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
       })
       .from(creditBalances)
@@ -121,6 +123,10 @@ export async function canConsumeAI(
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
+        // The renewal-equivalent for free/no-sub users: restore the FULL allowance and
+        // FORGIVE any outstanding overage (refill.debtCents === 0), so last period's
+        // debt never reduces this period — matching the paid invoice.paid refill.
+        debtCents: refill.debtCents,
         monthlyPeriodStart: now,
         monthlyPeriodEnd: newEnd,
       })
@@ -173,6 +179,7 @@ export async function canConsumeAI(
       .select({
         monthlyRemainingCents: creditBalances.monthlyRemainingCents,
         topupRemainingCents: creditBalances.topupRemainingCents,
+        debtCents: creditBalances.debtCents,
         monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
       })
       .from(creditBalances)
@@ -209,6 +216,10 @@ export async function canConsumeAI(
         ? {
             monthlyCents: paidMonthlyExpired ? 0 : bal.monthlyRemainingCents,
             topupCents: bal.topupRemainingCents,
+            // Outstanding overage drags net spendable down: a user in the red must get
+            // back to net-positive (buy credits, or wait for the renewal that forgives
+            // it) before the gate allows again.
+            debtCents: bal.debtCents,
           }
         : null,
       reserveFloorCents: RESERVE_FLOOR_CENTS,

@@ -20,6 +20,8 @@ export interface CreditBalance {
   topup: {
     remaining: number;
   };
+  /** Outstanding overage owed (non-negative). When > 0, `spendable` is negative. */
+  debt: number;
   spendable: number;
   reserved: number;
   /**
@@ -52,6 +54,7 @@ export function applyCreditsPayload(
     billingEnabled: payload.billingEnabled,
     monthly: payload.monthly,
     topup: payload.topup,
+    debt: payload.debt,
     spendable: payload.spendable,
     reserved: payload.reserved,
     creditsMode: current?.creditsMode ?? false,

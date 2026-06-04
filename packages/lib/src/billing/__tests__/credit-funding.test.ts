@@ -10,7 +10,7 @@ const mockApiLogger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: v
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId', topupRemainingCents: 'cb.topup' },
+  creditBalances: { userId: 'cb.userId', topupRemainingCents: 'cb.topup', debtCents: 'cb.debt' },
   creditLedger: { id: 'cl.id', stripeRef: 'cl.stripeRef' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -71,13 +71,18 @@ function ensureRowInsert() {
 }
 
 // Build the tx the top-up path drives: ledger insert -> ensure-row insert ->
-// SELECT ... FOR UPDATE (returns `existingTopup`) -> UPDATE (captured).
-function topupTx(cap: Captured, ledgerReturned: Array<{ id: string }>, existingTopup: number) {
+// SELECT ... FOR UPDATE (returns `existingTopup`/`existingDebt`) -> UPDATE (captured).
+function topupTx(
+  cap: Captured,
+  ledgerReturned: Array<{ id: string }>,
+  existingTopup: number,
+  existingDebt = 0,
+) {
   return {
     insert: vi.fn()
       .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
       .mockReturnValueOnce(ensureRowInsert()),
-    select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ topupRemainingCents: existingTopup }]) }) }) }),
+    select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ topupRemainingCents: existingTopup, debtCents: existingDebt }]) }) }) }),
     update: () => ({ set: (v: Record<string, unknown>) => { cap.balanceSet = v; return { where: () => Promise.resolve(undefined) }; } }),
   };
 }
@@ -164,6 +169,8 @@ describe('applyStripeFunding', () => {
     expect(cap.balanceSet).toEqual({
       monthlyRemainingCents: allowance,
       monthlyAllowanceCents: allowance,
+      // Renewal forgives any outstanding overage — full allowance, never reduced.
+      debtCents: 0,
       monthlyPeriodStart: new Date(1_700_000_000 * 1000),
       monthlyPeriodEnd: new Date(1_702_592_000 * 1000),
     });
@@ -187,14 +194,41 @@ describe('applyStripeFunding', () => {
       stripeRef: 'cs_123',
       consumeStatus: 'applied', // settled on insert; not swept/clawed back by backfill
     });
-    // applyTopup(1000, 2500) = 3500 — the pack is ADDED, not reset.
-    expect(cap.balanceSet).toEqual({ topupRemainingCents: 3500 });
+    // No debt: applyPaymentToDebt(0, 1000, 2500) -> top-up 1000 + 2500 = 3500, debt 0.
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 3500, debtCents: 0 });
+  });
+
+  it('credit-pack checkout pays down outstanding debt FIRST, then credits the remainder to top-up', async () => {
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      // owe 1000 in debt, 0 top-up; a $25 pack pays the 1000 debt then banks 1500.
+      await cb(topupTx(cap, [{ id: 'led_debt' }], 0, 1000));
+    });
+
+    await applyStripeFunding(topupEvent);
+
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 1500, debtCents: 0 });
+  });
+
+  it('credit-pack checkout smaller than the debt reduces debt and adds nothing to top-up', async () => {
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      // owe 5000, a $25 pack only chips 2500 off the debt; top-up stays 0.
+      await cb(topupTx(cap, [{ id: 'led_partial' }], 0, 5000));
+    });
+
+    await applyStripeFunding(topupEvent);
+
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 0, debtCents: 2500 });
   });
 
   it('credit-pack checkout for a first-time buyer (no balance row) credits the full pack, race-safe', async () => {
     // Regression guard: the path ensures a balance row exists, then reads it under
     // FOR UPDATE, so two concurrent first purchases can't both read 0 and clobber
-    // each other. Here the freshly-ensured row reads 0 -> applyTopup(0, 2500) = 2500.
+    // each other. Here the freshly-ensured row reads 0 debt / 0 top-up ->
+    // applyPaymentToDebt(0, 0, 2500) credits the full 2500 to top-up.
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
@@ -203,7 +237,7 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(topupEvent);
 
-    expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500 });
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500, debtCents: 0 });
   });
 
   it('resolves a first-time credit-pack buyer from trusted session metadata.userId when the customer is unlinked', async () => {
@@ -223,7 +257,7 @@ describe('applyStripeFunding', () => {
       stripeRef: 'cs_meta',
       consumeStatus: 'applied',
     });
-    expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500 });
+    expect(cap.balanceSet).toEqual({ topupRemainingCents: 2500, debtCents: 0 });
   });
 
   it('invoice.paid uses the tier passed by the caller (invoice-derived) over a stale stored tier', async () => {

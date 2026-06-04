@@ -1,7 +1,7 @@
 /**
  * credit-funding — imperative shell that turns a paid Stripe event into spendable
  * prepaid credit. Pure routing/arithmetic (classifyStripeEvent, computeMonthlyRefill,
- * applyTopup) comes from credit-core; this file only does I/O.
+ * applyPaymentToDebt) comes from credit-core; this file only does I/O.
  *
  * Two funding paths:
  *   - monthly_refill (invoice.paid): a subscription renewal RESETS the monthly
@@ -28,7 +28,7 @@ import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { classifyStripeEvent, computeMonthlyRefill, applyTopup } from './credit-core';
+import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
 import { TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
@@ -191,6 +191,9 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         userId: user.id,
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
+        // Renewal restores the FULL allowance and FORGIVES outstanding overage
+        // (refill.debtCents === 0): last period's debt never reduces this period.
+        debtCents: refill.debtCents,
         monthlyPeriodStart: start,
         monthlyPeriodEnd: end,
       })
@@ -199,6 +202,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         set: {
           monthlyRemainingCents: refill.monthlyRemainingCents,
           monthlyAllowanceCents: refill.monthlyAllowanceCents,
+          debtCents: refill.debtCents,
           monthlyPeriodStart: start,
           monthlyPeriodEnd: end,
         },
@@ -214,9 +218,12 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
 }
 
 /**
- * checkout.session.completed (credit_pack) — add the purchased pack to the
- * never-expiring top-up bucket, recording a topup_purchase ledger row keyed on
- * the session id. The balance increment only runs if the row was newly inserted.
+ * checkout.session.completed (credit_pack) — apply the purchased pack to the user's
+ * balance: pay down any outstanding overage (debtCents) FIRST, then credit the
+ * remainder to the never-expiring top-up bucket. Records a topup_purchase ledger row
+ * keyed on the session id for the FULL amount (the debt-vs-topup split is derivable);
+ * the balance change only runs if that row was newly inserted. Covers both fixed packs
+ * and custom amounts — both arrive as `packCents`.
  */
 async function applyTopupFunding(event: FundingEvent, packCents: number): Promise<void> {
   const obj = event.data.object;
@@ -258,24 +265,30 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
     // Ensure a balance row exists FIRST, so the FOR UPDATE below always locks a real
     // row. Without this, two concurrent first-time purchases (distinct session ids —
     // their ledger inserts don't serialize each other) would both read 0 from a
-    // non-existent row, both compute applyTopup(0, pack), and the second write would
-    // overwrite the first: a lost top-up on a money path. The lock makes the
-    // read-add-write atomic so both increments apply.
+    // non-existent row, both compute applyPaymentToDebt(.., pack), and the second write
+    // would overwrite the first: a lost top-up on a money path. The lock makes the
+    // read-modify-write atomic so both increments apply.
     await tx
       .insert(creditBalances)
       .values({ userId: user.id })
       .onConflictDoNothing({ target: creditBalances.userId });
 
     const rows = await tx
-      .select({ topupRemainingCents: creditBalances.topupRemainingCents })
+      .select({
+        topupRemainingCents: creditBalances.topupRemainingCents,
+        debtCents: creditBalances.debtCents,
+      })
       .from(creditBalances)
       .where(eq(creditBalances.userId, user.id))
       .for('update');
-    const newTopup = applyTopup(rows[0].topupRemainingCents, packCents);
+    // Pay down any outstanding overage FIRST, then credit the remainder to the
+    // never-expiring top-up bucket. This is the within-period recovery: a user in the
+    // red who buys credits clears their debt before any surplus becomes spendable.
+    const settled = applyPaymentToDebt(rows[0].debtCents, rows[0].topupRemainingCents, packCents);
 
     await tx
       .update(creditBalances)
-      .set({ topupRemainingCents: newTopup })
+      .set({ topupRemainingCents: settled.topupCents, debtCents: settled.debtCents })
       .where(eq(creditBalances.userId, user.id));
   });
 

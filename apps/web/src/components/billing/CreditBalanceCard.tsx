@@ -6,7 +6,7 @@ import { Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
-import { formatCreditDollars } from '@/lib/subscription/credits';
+import { formatCreditDollars, formatCreditDollarsSigned } from '@/lib/subscription/credits';
 
 /**
  * Settings card showing the user's prepaid AI-credit balance: the monthly allowance
@@ -50,11 +50,21 @@ export function CreditBalanceCard() {
         ) : balance ? (
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="space-y-2">
-              <div className="text-3xl font-bold tabular-nums">
-                {formatCreditDollars(balance.spendable)}
+              <div
+                className={`text-3xl font-bold tabular-nums ${
+                  balance.spendable < 0 ? 'text-red-600 dark:text-red-400' : ''
+                }`}
+              >
+                {formatCreditDollarsSigned(balance.spendable)}
                 <span className="ml-2 text-sm font-normal text-muted-foreground">available</span>
               </div>
               <div className="text-sm text-muted-foreground space-y-0.5">
+                {balance.debt > 0 && (
+                  <div className="text-red-600 dark:text-red-400">
+                    You owe {formatCreditDollars(balance.debt)} in overage — add credits to keep
+                    using AI (or it clears at your next reset).
+                  </div>
+                )}
                 <div>
                   Monthly allowance: {formatCreditDollars(balance.monthly.remaining)} of{' '}
                   {formatCreditDollars(balance.monthly.allowance)}

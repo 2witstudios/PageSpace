@@ -6,7 +6,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
-import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
+import { getCreditPack, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { validateTopupAmountCents } from '@pagespace/lib/billing/credit-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -43,18 +44,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
 
-    const packId =
-      body && typeof body === 'object' && typeof (body as { packId?: unknown }).packId === 'string'
-        ? (body as { packId: string }).packId
-        : undefined;
+    const obj = (body && typeof body === 'object' ? body : {}) as { packId?: unknown; amountCents?: unknown };
 
-    if (!packId) {
-      return NextResponse.json({ error: 'packId is required' }, { status: 400 });
-    }
-
-    const pack = getCreditPack(packId);
-    if (!pack) {
-      return NextResponse.json({ error: 'Unknown credit pack' }, { status: 400 });
+    // Two ways to buy: a fixed pack by id, OR a custom whole-cent amount. Resolve both
+    // to a single { id, cents, label } so the checkout session is built once.
+    let purchase: { id: string; cents: number; label: string };
+    if (typeof obj.packId === 'string') {
+      const pack = getCreditPack(obj.packId);
+      if (!pack) {
+        return NextResponse.json({ error: 'Unknown credit pack' }, { status: 400 });
+      }
+      purchase = { id: pack.id, cents: pack.cents, label: pack.label };
+    } else if (typeof obj.amountCents === 'number') {
+      const cents = validateTopupAmountCents(obj.amountCents, CREDIT_TOPUP_MIN_CENTS, CREDIT_TOPUP_MAX_CENTS);
+      if (cents === null) {
+        return NextResponse.json(
+          {
+            error: `Enter an amount between $${CREDIT_TOPUP_MIN_CENTS / 100} and $${CREDIT_TOPUP_MAX_CENTS / 100}.`,
+          },
+          { status: 400 },
+        );
+      }
+      purchase = { id: 'custom', cents, label: 'Custom' };
+    } else {
+      return NextResponse.json({ error: 'packId or amountCents is required' }, { status: 400 });
     }
 
     const [user] = await db.select().from(users).where(eq(users.id, userId));
@@ -77,25 +90,29 @@ export async function POST(request: NextRequest) {
           quantity: 1,
           price_data: {
             currency: 'usd',
-            unit_amount: pack.cents,
+            unit_amount: purchase.cents,
             product_data: {
-              name: `${pack.label} (AI credits)`,
+              name:
+                purchase.id === 'custom'
+                  ? 'Custom AI credits'
+                  : `${purchase.label} (AI credits)`,
               description: 'Prepaid AI credits added to your PageSpace top-up balance.',
             },
           },
         },
       ],
       // Round-tripped verbatim through the signature-verified webhook event; the
-      // funding shell trusts metadata.userId and reads packCents to size the top-up.
+      // funding shell trusts metadata.userId and reads packCents to size the top-up
+      // (custom amounts arrive the same way — packCents is the chosen amount).
       metadata: {
         kind: 'credit_pack',
-        packId: pack.id,
-        packCents: String(pack.cents),
+        packId: purchase.id,
+        packCents: String(purchase.cents),
         userId: user.id,
       },
       // Mirror the metadata onto the resulting PaymentIntent for traceability.
       payment_intent_data: {
-        metadata: { kind: 'credit_pack', packId: pack.id, userId: user.id },
+        metadata: { kind: 'credit_pack', packId: purchase.id, userId: user.id },
       },
       success_url: `${baseUrl}/settings/billing?credits=success`,
       cancel_url: `${baseUrl}/settings/billing?credits=canceled`,
@@ -111,7 +128,7 @@ export async function POST(request: NextRequest) {
       userId,
       resourceType: 'credit_topup',
       resourceId: session.id,
-      details: { action: 'create_checkout', packId: pack.id, packCents: pack.cents },
+      details: { action: 'create_checkout', packId: purchase.id, packCents: purchase.cents },
     });
 
     return NextResponse.json({ url: session.url, sessionId: session.id });

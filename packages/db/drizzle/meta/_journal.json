@@ -1037,6 +1037,20 @@
       "when": 1780509785523,
       "tag": "0147_flimsy_gorilla_man",
       "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1780531248456,
+      "tag": "0148_hot_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1780531255529,
+      "tag": "0149_credit_balances_nonneg_checks",
+      "breakpoints": true
     }
   ]
 }

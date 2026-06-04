@@ -13,7 +13,7 @@ import { AlertCircle, Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
-import { formatCreditDollars } from '@/lib/subscription/credits';
+import { formatCreditDollars, formatCreditDollarsSigned } from '@/lib/subscription/credits';
 
 /** Whole cents below which we visually warn the user their balance is running low. */
 const LOW_BALANCE_FLOOR_CENTS = 50;
@@ -52,8 +52,10 @@ export function CreditBalance() {
     return null;
   }
 
-  const { spendable, monthly, topup, reserved } = balance;
-  const isLow = spendable <= Math.max(LOW_BALANCE_FLOOR_CENTS, Math.round(monthly.allowance * 0.15));
+  const { spendable, monthly, topup, reserved, debt } = balance;
+  // In the red: the user owes overage and can't use AI until back to positive.
+  const inDebt = spendable < 0;
+  const isLow = inDebt || spendable <= Math.max(LOW_BALANCE_FLOOR_CENTS, Math.round(monthly.allowance * 0.15));
   const resetDate = monthly.periodEnd ? new Date(monthly.periodEnd) : null;
   // Surface in-flight reservations as a quiet signal, not in the headline number — the
   // displayed balance is gross of holds (see getCreditBalance) so it doesn't dip-then-pop
@@ -86,12 +88,21 @@ export function CreditBalance() {
                 variant={isLow ? 'destructive' : 'secondary'}
                 className="text-xs font-medium tabular-nums"
               >
-                {formatCreditDollars(spendable)}
+                {formatCreditDollarsSigned(spendable)}
               </Badge>
             </button>
           </TooltipTrigger>
           <TooltipContent>
-            <p className="font-medium">{formatCreditDollars(spendable)} AI credits left</p>
+            <p className="font-medium">
+              {inDebt
+                ? `${formatCreditDollarsSigned(spendable)} — add credits to keep using AI`
+                : `${formatCreditDollars(spendable)} AI credits left`}
+            </p>
+            {debt > 0 && (
+              <p className="text-xs text-primary-foreground/80">
+                Owed: {formatCreditDollars(debt)} (cleared by a purchase or your next reset)
+              </p>
+            )}
             <p className="text-xs text-primary-foreground/80">
               Monthly: {formatCreditDollars(monthly.remaining)} of{' '}
               {formatCreditDollars(monthly.allowance)}

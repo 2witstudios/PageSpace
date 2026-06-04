@@ -12,7 +12,8 @@ import {
   estimateChatHoldCents,
   holdExpiresAt,
   computeMonthlyRefill,
-  applyTopup,
+  applyPaymentToDebt,
+  validateTopupAmountCents,
   classifyStripeEvent,
   computeBackfillActions,
 } from '../credit-core';
@@ -220,6 +221,43 @@ describe('evaluateGate', () => {
     }).reason).toBe('ok');
   });
 
+  it('subtracts outstanding debt from spendable (must be net-positive to spend)', () => {
+    // 100 monthly, 0 floor, but 100 owed -> net 0 -> denied.
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 100, topupCents: 0, debtCents: 100 },
+      reserveFloorCents: 0,
+    })).toEqual({ allowed: false, reason: 'out_of_credits' });
+    // Debt smaller than the buckets -> still net-positive above floor -> allowed.
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 100, topupCents: 50, debtCents: 100 },
+      reserveFloorCents: 25,
+    })).toEqual({ allowed: true, reason: 'ok' });
+  });
+
+  it('treats debt that drags net to/under the floor as out_of_credits', () => {
+    // monthly 30 + topup 0 - debt 5 = 25 == floor -> denied.
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 30, topupCents: 0, debtCents: 5 },
+      reserveFloorCents: 25,
+    }).allowed).toBe(false);
+  });
+
+  it('treats a missing/negative debtCents as zero debt', () => {
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 10, topupCents: 0 },
+      reserveFloorCents: 0,
+    }).reason).toBe('ok');
+    expect(evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 10, topupCents: 0, debtCents: -999 },
+      reserveFloorCents: 0,
+    }).reason).toBe('ok');
+  });
+
   it('applies no in-flight cap when maxInFlight is null/undefined (paid tiers)', () => {
     expect(evaluateGate({
       billingEnabled: true,
@@ -293,28 +331,86 @@ describe('holdExpiresAt', () => {
 });
 
 describe('computeMonthlyRefill', () => {
-  it('resets remaining to the full tier allowance', () => {
+  it('resets remaining to the full tier allowance and forgives debt (debtCents: 0)', () => {
     expect(computeMonthlyRefill('pro', ALLOWANCE)).toEqual({
       monthlyRemainingCents: 1500,
       monthlyAllowanceCents: 1500,
+      debtCents: 0,
     });
     expect(computeMonthlyRefill('business', ALLOWANCE).monthlyAllowanceCents).toBe(10000);
+    // The renewal always wipes debt — last period's overage never carries forward.
+    expect(computeMonthlyRefill('business', ALLOWANCE).debtCents).toBe(0);
   });
 
-  it('falls back to the free allowance for an unknown tier', () => {
+  it('falls back to the free allowance for an unknown tier (debt still forgiven)', () => {
     expect(computeMonthlyRefill('enterprise' as SubscriptionTier, ALLOWANCE))
-      .toEqual({ monthlyRemainingCents: 50, monthlyAllowanceCents: 50 });
+      .toEqual({ monthlyRemainingCents: 50, monthlyAllowanceCents: 50, debtCents: 0 });
   });
 });
 
-describe('applyTopup', () => {
-  it('adds the pack amount to the existing top-up balance', () => {
-    expect(applyTopup(0, 1000)).toBe(1000);
-    expect(applyTopup(1000, 2500)).toBe(3500);
+describe('applyPaymentToDebt', () => {
+  it('puts the whole payment toward debt when payment < debt (nothing to top-up)', () => {
+    expect(applyPaymentToDebt(1000, 0, 400)).toEqual({
+      debtCents: 600,
+      topupCents: 0,
+      paidDebt: 400,
+    });
   });
 
-  it('throws on a negative pack amount', () => {
-    expect(() => applyTopup(0, -100)).toThrow();
+  it('clears the debt exactly when payment == debt', () => {
+    expect(applyPaymentToDebt(500, 200, 500)).toEqual({
+      debtCents: 0,
+      topupCents: 200,
+      paidDebt: 500,
+    });
+  });
+
+  it('clears debt then credits the remainder to top-up when payment > debt', () => {
+    // owe 500, pay 2500 -> debt 0, 2000 added to the existing 100 top-up.
+    expect(applyPaymentToDebt(500, 100, 2500)).toEqual({
+      debtCents: 0,
+      topupCents: 2100,
+      paidDebt: 500,
+    });
+  });
+
+  it('credits the whole payment to top-up when there is no debt', () => {
+    expect(applyPaymentToDebt(0, 1000, 2500)).toEqual({
+      debtCents: 0,
+      topupCents: 3500,
+      paidDebt: 0,
+    });
+  });
+
+  it('throws on a negative or non-finite payment', () => {
+    expect(() => applyPaymentToDebt(0, 0, -100)).toThrow();
+    expect(() => applyPaymentToDebt(0, 0, Number.NaN)).toThrow();
+  });
+});
+
+describe('validateTopupAmountCents', () => {
+  const MIN = 500;
+  const MAX = 20000;
+
+  it('accepts an in-range integer and returns it normalized', () => {
+    expect(validateTopupAmountCents(1234, MIN, MAX)).toBe(1234);
+  });
+
+  it('accepts the exact bounds', () => {
+    expect(validateTopupAmountCents(MIN, MIN, MAX)).toBe(MIN);
+    expect(validateTopupAmountCents(MAX, MIN, MAX)).toBe(MAX);
+  });
+
+  it('rejects amounts below the min or above the max', () => {
+    expect(validateTopupAmountCents(MIN - 1, MIN, MAX)).toBeNull();
+    expect(validateTopupAmountCents(MAX + 1, MIN, MAX)).toBeNull();
+  });
+
+  it('rejects non-integer, non-finite, or negative amounts', () => {
+    expect(validateTopupAmountCents(1000.5, MIN, MAX)).toBeNull();
+    expect(validateTopupAmountCents(Number.NaN, MIN, MAX)).toBeNull();
+    expect(validateTopupAmountCents(Number.POSITIVE_INFINITY, MIN, MAX)).toBeNull();
+    expect(validateTopupAmountCents(-1000, MIN, MAX)).toBeNull();
   });
 });
 
@@ -383,6 +479,79 @@ describe('computeBackfillActions', () => {
 
   it('returns no actions when nothing is unsettled', () => {
     expect(computeBackfillActions([], [])).toEqual([]);
+  });
+});
+
+describe('credit-core debt invariants (property-based, seeded)', () => {
+  // Dependency-free generative testing: a deterministic PRNG drives thousands of
+  // random operation sequences so a regression reproduces from the seed. The single
+  // invariant under test is the one the DB CHECK also guards: a balance's debt and
+  // buckets can NEVER go negative, no matter the order of spend/pay/refill.
+  const mulberry32 = (seed: number) => () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  const ALLOW: Record<SubscriptionTier, number> = { free: 500, pro: 1500, founder: 5000, business: 10000 };
+  const TIERS: SubscriptionTier[] = ['free', 'pro', 'founder', 'business'];
+
+  it('debt and buckets stay >= 0 across 5000 random spend/pay/refill sequences', () => {
+    const rand = mulberry32(0xc0ffee);
+    let monthly = 0;
+    let topup = 0;
+    let debt = 0;
+
+    for (let i = 0; i < 5000; i++) {
+      const op = Math.floor(rand() * 3);
+      if (op === 0) {
+        // SPEND: draw monthly-first; the uncovered remainder accrues as debt.
+        const amount = Math.floor(rand() * 4000);
+        const spent = allocateSpend({ monthlyCents: monthly, topupCents: topup }, amount);
+        monthly = spent.monthlyCents;
+        topup = spent.topupCents;
+        debt += spent.shortfallCents;
+      } else if (op === 1) {
+        // PAY: a purchase clears debt first, remainder to top-up.
+        const payment = Math.floor(rand() * 6000);
+        const before = debt + topup;
+        const paid = applyPaymentToDebt(debt, topup, payment);
+        debt = paid.debtCents;
+        topup = paid.topupCents;
+        // Conservation: a payment grows (debt + topup) by exactly the amount paid
+        // (debt shrinks, top-up grows, dollar-for-dollar — nothing vanishes).
+        expect(debt + topup).toBe(before + payment);
+      } else {
+        // REFILL (renewal): full allowance restored, debt forgiven.
+        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW);
+        monthly = refill.monthlyRemainingCents;
+        debt = refill.debtCents;
+      }
+
+      // The invariant the DB CHECK also enforces — true after EVERY operation.
+      expect(debt).toBeGreaterThanOrEqual(0);
+      expect(monthly).toBeGreaterThanOrEqual(0);
+      expect(topup).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('validateTopupAmountCents accepts a value iff it is an integer within [min,max]', () => {
+    const rand = mulberry32(0x1234);
+    const MIN = 500;
+    const MAX = 20000;
+    for (let i = 0; i < 2000; i++) {
+      const cents = Math.floor(rand() * 30000) - 1000; // range spans below 0, in-band, and above max
+      const result = validateTopupAmountCents(cents, MIN, MAX);
+      if (cents >= MIN && cents <= MAX) {
+        expect(result).toBe(cents);
+      } else {
+        expect(result).toBeNull();
+      }
+      // A fractional amount is always rejected, in or out of band.
+      expect(validateTopupAmountCents(cents + 0.5, MIN, MAX)).toBeNull();
+    }
   });
 });
 

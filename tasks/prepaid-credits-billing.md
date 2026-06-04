@@ -17,10 +17,11 @@ Zero-I/O decision layer (`packages/lib/src/billing/credit-core.ts`) plus injecta
 - Given a real AI cost in dollars, `markupCents` should return the ×1.5 value rounded to whole cents, including sub-cent and zero costs.
 - Given a balance and a spend amount, `allocateSpend` should draw down the monthly bucket before the top-up bucket and report any shortfall.
 - Given billing is disabled (tenant/onprem), `evaluateGate` should return allowed without consulting a balance.
-- Given a balance whose spendable sum is at or below the reserve floor, `evaluateGate` should deny with reason `out_of_credits`.
+- Given a balance whose spendable sum (monthly + top-up − debt) is at or below the reserve floor, `evaluateGate` should deny with reason `out_of_credits` — outstanding debt drags net spendable down until paid off or forgiven.
 - Given no balance row exists, `evaluateGate` should return reason `needs_init` rather than denying outright.
-- Given a tier, `computeMonthlyRefill` should reset remaining to that tier's full allowance, falling back to free for an unknown tier.
-- Given a current top-up balance and a pack amount, `applyTopup` should add to top-up without touching the monthly bucket and reject a negative amount.
+- Given a tier, `computeMonthlyRefill` should reset remaining to that tier's full allowance AND forgive any outstanding debt (`debtCents: 0`), falling back to free for an unknown tier.
+- Given a debt, a top-up balance, and a payment, `applyPaymentToDebt` should pay outstanding debt FIRST and credit only the remainder to the never-expiring top-up bucket (with zero debt the whole payment lands in top-up); a negative payment is rejected.
+- Given a custom top-up amount and min/max bounds, `validateTopupAmountCents` should return the amount only when it is a finite integer within range, else null.
 - Given a Stripe event, `classifyStripeEvent` should map `invoice.paid`→monthly_refill, credit-pack checkout→topup, subscription tier change→tier_change, and all else→ignore.
 - Given the core module, it should import no `db`, `stripe`, `env`, or `Date` — enforced by a test.
 
@@ -31,7 +32,7 @@ Zero-I/O decision layer (`packages/lib/src/billing/credit-core.ts`) plus injecta
 New `packages/db/src/schema/credits.ts` (two-bucket balances + append-only ledger); migration via `bun run db:generate`.
 
 **Requirements**:
-- Given the two-bucket model, `creditBalances` should store the resetting monthly balance and the persistent top-up balance as separate columns on one row per user.
+- Given the two-bucket model plus overage, `creditBalances` should store the resetting monthly balance, the persistent top-up balance, and a non-negative `debtCents` overage counter as separate columns on one row per user (net spendable = monthly + top-up − debt).
 - Given a usage event, `creditLedger` should guarantee at most one decrement per `aiUsageLogId` via a unique index.
 - Given a payment event, `creditLedger` should guarantee at most one credit per `stripeRef` via a unique index.
 - Given the backfill sweep, the ledger should be indexed on `(consumeStatus, createdAt)` for cheap selection of unsettled rows.
@@ -45,6 +46,7 @@ Local decrement shell (`credit-consume.ts`) wired into `trackAIUsage`, plus the 
 **Requirements**:
 - Given `writeAiUsage` inserts a usage row, it should return that row's id so consume has a deterministic idempotency key.
 - Given a completed AI call with known cost, `consumeCredits` should decrement the balance via `allocateSpend` exactly once, even when invoked twice for the same `aiUsageLogId`.
+- Given a charge that exceeds the spendable buckets, `consumeCredits` should ADD the uncovered shortfall to `debtCents` (accumulating across calls, never overwriting) so the net balance goes negative, while still recording the per-overage `adjustment` ledger row.
 - Given a consume failure, it should mark the ledger row `pending` and never throw into the AI request.
 - Given an AI call that failed (`success:false`), `trackAIUsage` should not consume credits.
 - Given the partial unique index on `aiUsageLogId` (`WHERE aiUsageLogId IS NOT NULL`), the idempotent claim insert should declare the index predicate so Postgres can infer the conflict arbiter — otherwise every insert raises `42P10` and no credits are ever consumed.
@@ -71,8 +73,8 @@ Signed-cron route (`api/cron/reconcile-credits`) over the pure `computeBackfillA
 Funding shell (`credit-funding.ts`) + webhook dispatch via `classifyStripeEvent` + one-time credit-pack Checkout route.
 
 **Requirements**:
-- Given an `invoice.paid` event, `refillMonthlyAllowance` should reset the monthly bucket to the tier allowance and leave the top-up bucket untouched.
-- Given a credit-pack `checkout.session.completed` (mode `payment`, metadata `kind:credit_pack`), `addTopupCredits` should add to the never-expiring top-up bucket.
+- Given an `invoice.paid` event, the monthly refill should reset the monthly bucket to the tier allowance, FORGIVE any outstanding debt (`debtCents` → 0), and leave the top-up bucket untouched.
+- Given a credit-pack `checkout.session.completed` (mode `payment`, metadata `kind:credit_pack`), top-up funding should pay down outstanding debt FIRST, then add the remainder to the never-expiring top-up bucket.
 - Given the same `stripeRef` twice, funding should credit the account only once.
 - Given a replayed webhook event id, the handler should be a no-op via `stripeEvents` dedupe.
 - Given an unknown credit-pack SKU, the purchase route should reject the checkout request.
@@ -87,6 +89,7 @@ Funding shell (`credit-funding.ts`) + webhook dispatch via `classifyStripeEvent`
 - Given a user with no spendable credits, the AI route should return 402 with a buy-credits CTA instead of a 429 rate-limit error.
 - Given tenant/onprem deployment, the AI route should never gate on credits.
 - Given a user with no balance row, the first AI request should lazy-init the row from tier defaults before deciding.
+- Given a free user's period has expired with outstanding debt, the balance display should show the renewal-equivalent forgiven debt and refreshed allowance.
 - Given the credits model, per-day call counting (`incrementUsage`, `rate-limit-cache` wiring) should be removed from the AI path and `plans.ts` copy should advertise monthly credits.
 - Given an unrecognized subscription tier, premium-model gating should deny (require upgrade) rather than grant access — gate on a positive allowlist of paid tiers, not by excluding `free`.
 
