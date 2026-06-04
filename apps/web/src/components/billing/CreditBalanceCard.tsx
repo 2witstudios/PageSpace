@@ -58,18 +58,20 @@ export function CreditBalanceCard() {
                 {formatCreditUnitsSigned(balance.spendable, balance.monthly.allowance)}
                 <span className="ml-2 text-sm font-normal text-muted-foreground">/ 100 credits</span>
               </div>
-              <Progress
-                value={Math.min(
-                  100,
-                  Math.max(
-                    0,
-                    ((balance.monthly.allowance - balance.monthly.remaining) /
-                      balance.monthly.allowance) *
-                      100,
-                  ),
-                )}
-                className="h-2"
-              />
+              {balance.monthly.allowance > 0 && (
+                <Progress
+                  value={Math.min(
+                    100,
+                    Math.max(
+                      0,
+                      ((balance.monthly.allowance - balance.monthly.remaining) /
+                        balance.monthly.allowance) *
+                        100,
+                    ),
+                  )}
+                  className="h-2"
+                />
+              )}
               <div className="text-sm text-muted-foreground space-y-0.5">
                 {balance.debt > 0 && (
                   <div className="text-red-600 dark:text-red-400">
