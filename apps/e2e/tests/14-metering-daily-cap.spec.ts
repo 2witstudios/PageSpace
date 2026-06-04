@@ -10,11 +10,10 @@ import { mcpPost, resetMock, mockCallCount } from '../support/http';
  * — without calling the model and without billing past the cap.
  *
  * GOTCHA: dailyExposureCapForTier reads DAILY_CAP_<TIER>_CENTS at CALL time, in the WEB
- * SERVER's process, so it must be in the app's launch env (like CREDITS_ENFORCEMENT_ENABLED),
- * NOT set from inside this spec. This spec uses the `business` tier so the cap it relies on
- * (DAILY_CAP_BUSINESS_CENTS) doesn't perturb the other metering specs (which use pro/free).
+ * SERVER's process, so it must be in the app's launch env, NOT set from inside this spec.
+ * This spec uses the `business` tier so the cap it relies on (DAILY_CAP_BUSINESS_CENTS)
+ * doesn't perturb the other metering specs (which use pro/free).
  * Launch the app for this run with (in addition to README.metering.md):
- *   CREDITS_ENFORCEMENT_ENABLED=true
  *   DAILY_CAP_BUSINESS_CENTS=25
  * With the 25¢ stub-model hold estimate, the first call fits the 25¢ cap and the next is denied.
  */
