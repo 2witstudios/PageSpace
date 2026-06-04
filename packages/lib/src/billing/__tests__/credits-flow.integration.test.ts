@@ -578,6 +578,42 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
     expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false);
   });
+
+  it('ACCUMULATES debt across two in-flight overages (settle adds to existing debt, never overwrites)', async () => {
+    seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+
+    // Two calls go in-flight TOGETHER: both clear the gate (net 1500 − two 25¢
+    // reservations still above the floor) before either settles. This is the only
+    // path that drives a SECOND overage settle while debtCents is already > 0, which
+    // is exactly what the additive `debtCents + shortfall` SQL increment exists to
+    // handle — an overwrite would silently erase the first overage's debt.
+    const g1 = await canConsumeAI('u1', 'pro');
+    const g2 = await canConsumeAI('u1', 'pro');
+    expect(g1.allowed).toBe(true);
+    expect(g2.allowed).toBe(true);
+    expect(store.creditHolds).toHaveLength(2); // both reservations live, nothing settled yet
+
+    // ── SETTLE #1: $12 -> 1800¢. Spends the full 1500 monthly; 300¢ becomes debt. ──
+    await consumeCredits({ aiUsageLogId: 'log_a', userId: 'u1', costDollars: 12, holdId: g1.holdId });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
+    expect(balanceOf('u1')!.debtCents).toBe(300);
+
+    // ── SETTLE #2: $4 -> 600¢. Buckets already empty, so the WHOLE 600¢ is shortfall
+    // and must ADD to the existing 300 -> 900. (If the write overwrote rather than
+    // incremented, debt would read 600 here.) ───────────────────────────────────────
+    await consumeCredits({ aiUsageLogId: 'log_b', userId: 'u1', costDollars: 4, holdId: g2.holdId });
+    expect(balanceOf('u1')!.debtCents).toBe(900); // 300 + 600, accumulated
+
+    // Each overage left its own incurrence row; the two sum to the live debt counter.
+    const debtRows = ledgerOf('u1').filter((r) => r.entryType === 'adjustment');
+    expect(debtRows).toHaveLength(2);
+    expect(debtRows.map((r) => r.amountCents).sort((a, b) => Number(a) - Number(b))).toEqual([-600, -300]);
+    expect(store.creditHolds).toHaveLength(0); // both holds released at settle
+
+    // Net = 0 − 900 < floor → blocked until paid down or forgiven.
+    expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false);
+  });
 });
 
 describe('credits flow — idempotency', () => {
