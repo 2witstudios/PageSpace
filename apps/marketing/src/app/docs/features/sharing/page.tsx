@@ -16,7 +16,7 @@ Who sees what in PageSpace. Access is open within a drive and private by excepti
 ## What you can do
 
 - Invite someone to a drive as a member or admin — by email, even if they don't have an account yet. The invite waits for them and becomes access the moment they sign up. Members see the whole drive except pages marked private; admins get full access, the same as the owner.
-- Share a drive or a single page with a link. Anyone who opens a drive link can join with the role you set; a page link grants access to that page. Links are revocable and can carry an expiry.
+- Share a drive or a single page with a link. Opening either link adds the person to the drive — a drive link with the role you set, a page link as a member with that page's permissions — so they'll also see the drive's other non-private pages; mark anything sensitive private first. Links are revocable and can carry an expiry.
 - Share a single page with a specific person using the four flags: View, Edit, Share, Delete. Edit, Share, and Delete require View to be on; otherwise you combine them however you like. A person can have View + Share without Edit, for example.
 - Create custom roles (like "Editor" or "Reviewer") that carry their own view/edit/share permissions, pick a color for the badge, optionally make one the default for new members, and assign a role right from an invite or share link.
 - See who has access to a page from the **Share** dialog, and see every page a given member can reach from the drive-level members view.
@@ -38,7 +38,7 @@ Custom roles let owners and admins bundle access under a name. A role carries it
 
 ## Good to know
 
-- **Invite by email, share by link, or grant per-person.** You can invite someone who has no account yet — the invite is held against their email and becomes access on signup. Share links let anyone who opens them join (drive) or view (page) with the role you choose, and stay revocable.
+- **Invite by email, share by link, or grant per-person.** You can invite someone who has no account yet — the invite is held against their email and becomes access on signup. A share link adds whoever opens it to the drive — a drive link with the role you choose, a page link as a member with that page's permissions — so they also see the drive's non-private pages; mark sensitive pages private first. Links stay revocable.
 - **Explicit grants don't cascade to children.** Granting access to a folder lets someone open the folder page itself; each child page is checked on its own grants. Drive members already see non-private pages across the tree — that's the membership baseline, separate from explicit grants.
 
 ## Related

@@ -26,7 +26,7 @@ Tokens authenticate as your user. Every operation runs with your permissions; dr
 1. Open **Settings > MCP** in PageSpace.
 2. Click **Create Token** and give it a name.
 3. Copy the token. It starts with \`mcp_\` and is shown **once** — only a SHA3-256 hash is stored server-side.
-4. Optionally scope the token to specific drives, and give it a role. A scoped token joins those drives as an **app** — it appears on each drive's member list with its own role and can never reach more than you can. Scoped tokens cannot create new drives.
+4. Optionally scope the token to specific drives, and give it a role. A scoped token joins those drives as an **app** — it appears on each drive's member list, and its access is governed by the role you give it there. Scoped tokens cannot create new drives.
 
 ## Step 2: Configure your AI tool
 

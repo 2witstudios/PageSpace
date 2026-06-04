@@ -29,7 +29,7 @@ A plain member sees every page in the drive that isn't marked private — no per
 
 ### Agents and apps
 
-AI agents and connected apps (MCP tokens) are drive members too, each with its own role on the drive. An agent or app can never see or do more than the member who added it, and its access is revoked automatically if that member is removed or downgraded.
+AI agents and connected apps (MCP tokens) are drive members too, each with its own role on the drive — member, admin, or a custom role. Their access follows that role the same way a person's does: a member-level agent or app sees the drive's non-private pages and nothing marked private unless it's been granted. Give an agent or app a narrower role to limit what it can reach.
 
 ### Page-level collaborators
 

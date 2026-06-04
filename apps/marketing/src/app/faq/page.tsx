@@ -186,7 +186,7 @@ const faqs: FAQItem[] = [
     id: "share-with-a-link",
     question: "Can I share a page or drive with a link?",
     answer:
-      "Yes. Generate a share link for a single page or a whole drive: anyone who opens a drive link can join with the role you choose, and a page link grants access to that page. Links are revocable and can carry an expiry. You can also invite someone by email before they even have an account — the invite waits for them and becomes access when they sign up.",
+      "Yes. Generate a share link for a single page or a whole drive. Opening either link adds the person to the drive — a drive link with the role you choose, a page link as a member with that page's permissions — so they'll also see the drive's other non-private pages; mark anything sensitive private first. Links are revocable and can carry an expiry. You can also invite someone by email before they even have an account — the invite waits for them and becomes access when they sign up.",
     category: "Collaboration and sharing",
   },
   {
