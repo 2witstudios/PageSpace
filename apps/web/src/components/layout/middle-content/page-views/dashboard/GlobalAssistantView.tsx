@@ -83,6 +83,7 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import { useGlobalEffectiveStream } from './useGlobalEffectiveStream';
 import { useAuth } from '@/hooks/useAuth';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
@@ -158,7 +159,7 @@ const GlobalAssistantView: React.FC = () => {
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
   const voiceBaselineRef = useRef<string | null | undefined>(undefined);
   // Agent mode state (provider/model settings)
-  const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
+  const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
 
   // Voice mode state

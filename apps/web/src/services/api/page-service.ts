@@ -1,4 +1,5 @@
 import { db } from '@pagespace/db/db'
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { eq, and, desc, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
@@ -679,8 +680,8 @@ export const pageService = {
       });
 
       if (user) {
-        defaultAiProvider = user.currentAiProvider || 'pagespace';
-        defaultAiModel = user.currentAiModel || 'qwen/qwen3-coder:free';
+        defaultAiProvider = user.currentAiProvider || DEFAULT_PROVIDER;
+        defaultAiModel = user.currentAiModel || DEFAULT_MODEL;
       }
     }
 

@@ -1051,6 +1051,13 @@
       "when": 1780531255529,
       "tag": "0149_credit_balances_nonneg_checks",
       "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "7",
+      "when": 1780540802111,
+      "tag": "0150_rapid_mauler",
+      "breakpoints": true
     }
   ]
 }

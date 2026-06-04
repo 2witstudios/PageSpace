@@ -226,13 +226,13 @@ describe('getProviderCostRollup', () => {
 
   it('falls back to the provider-name heuristic when metadata (costSource) was purged', async () => {
     resetQueue([
-      { provider: 'openrouter_free', model: 'm:free', costSource: null, realCostCents: 0, chargedCents: 0, requestCount: 1 },
-      { provider: 'anthropic', model: 'claude', costSource: null, realCostCents: 100, chargedCents: 150, requestCount: 2 },
+      { provider: 'anthropic', model: 'anthropic/claude-sonnet-4.6', costSource: null, realCostCents: 100, chargedCents: 150, requestCount: 2 },
+      { provider: 'ollama', model: 'llama3.2', costSource: null, realCostCents: 0, chargedCents: 0, requestCount: 1 },
       { provider: null, model: null, costSource: null, realCostCents: 10, chargedCents: 10, requestCount: 1 },
     ]);
     const rows = await getProviderCostRollup();
-    expect(rows[0].coverage).toBe('real'); // openrouter_free → real
-    expect(rows[1].coverage).toBe('estimate'); // direct provider → estimate
+    expect(rows[0].coverage).toBe('real'); // cloud vendor (OpenRouter-backed) → real
+    expect(rows[1].coverage).toBe('estimate'); // local provider → estimate
     expect(rows[2]).toMatchObject({ provider: 'unknown', coverage: 'estimate' });
   });
 

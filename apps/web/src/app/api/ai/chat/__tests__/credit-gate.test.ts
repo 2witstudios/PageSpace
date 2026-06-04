@@ -43,8 +43,8 @@ vi.mock('@pagespace/db/db', () => {
     title: 'Test Page',
     systemPrompt: null,
     enabledTools: null,
-    aiProvider: 'pagespace',
-    aiModel: 'test-model',
+    aiProvider: 'openai',
+    aiModel: 'openai/gpt-5.3-chat',
     driveId: 'drive_A',
     includeDrivePrompt: false,
     includePageTree: false,
@@ -193,8 +193,8 @@ const createChatRequest = () =>
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page_123',
-      selectedProvider: 'pagespace',
-      selectedModel: 'test-model',
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.3-chat',
     }),
   });
 

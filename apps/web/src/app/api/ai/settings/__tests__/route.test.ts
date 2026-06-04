@@ -1,9 +1,10 @@
 /**
  * Contract tests for GET/POST/PATCH/DELETE /api/ai/settings.
  *
- * Post-BYOK: GET reports deployment-level provider availability,
- * POST/DELETE return 410 Gone, PATCH updates the user's selected
- * provider/model and rejects unavailable providers with 503.
+ * Post-BYOK + OpenRouter consolidation: GET reports deployment-level provider
+ * availability for every vendor (all OpenRouter-backed in cloud), POST/DELETE
+ * return 410 Gone, PATCH updates the user's selected provider/model and rejects
+ * unavailable providers with 503 and non-allowlist models for free users with 403.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -53,18 +54,12 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
 const ENV_KEYS = [
-  'ANTHROPIC_DEFAULT_API_KEY',
-  'OPENAI_DEFAULT_API_KEY',
-  'GOOGLE_AI_DEFAULT_API_KEY',
-  'XAI_DEFAULT_API_KEY',
   'OPENROUTER_DEFAULT_API_KEY',
-  'GLM_CODER_DEFAULT_API_KEY',
-  'MINIMAX_DEFAULT_API_KEY',
+  'OPENAI_DEFAULT_API_KEY',
   'OLLAMA_BASE_URL',
   'LMSTUDIO_BASE_URL',
   'AZURE_OPENAI_API_KEY',
   'AZURE_OPENAI_ENDPOINT',
-  'GLM_DEFAULT_API_KEY',
 ] as const;
 
 const mockUserId = 'user_123';
@@ -95,8 +90,8 @@ describe('AI settings route', () => {
     vi.mocked(requiresProSubscription).mockReturnValue(false);
     vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
       id: mockUserId,
-      currentAiProvider: 'pagespace',
-      currentAiModel: 'glm-4.7',
+      currentAiProvider: 'openai',
+      currentAiModel: 'openai/gpt-5.3-chat',
       subscriptionTier: 'pro',
     });
     for (const key of ENV_KEYS) delete process.env[key];
@@ -113,89 +108,71 @@ describe('AI settings route', () => {
 
       expect(response.status).toBe(200);
       expect(body.providers.anthropic.isAvailable).toBe(false);
-      // pagespace is always available — it is PageSpace's own hosted backend
-      expect(body.providers.pagespace.isAvailable).toBe(true);
-      expect(body.providers.openai.isAvailable).toBe(false);
-      // pagespace always available means isAnyProviderConfigured is always true
-      expect(body.isAnyProviderConfigured).toBe(true);
-    });
-
-    it('reports isAnyProviderConfigured true when at least one provider has an env key', async () => {
-      process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
-
-      const response = await GET(makeRequest('GET'));
-      const body = await response.json();
-
-      expect(body.isAnyProviderConfigured).toBe(true);
-    });
-
-    it('marks pagespace available when GLM_DEFAULT_API_KEY is set', async () => {
-      process.env.GLM_DEFAULT_API_KEY = 'glm-managed';
-
-      const response = await GET(makeRequest('GET'));
-      const body = await response.json();
-
-      expect(body.providers.pagespace.isAvailable).toBe(true);
-      expect(body.pageSpaceBackend).toBe('glm');
-    });
-
-    it('masks non-user-visible providers as unavailable in cloud mode even when env vars are set', async () => {
-      process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
-      process.env.OPENAI_DEFAULT_API_KEY = 'b';
-      process.env.GOOGLE_AI_DEFAULT_API_KEY = 'c';
-      process.env.XAI_DEFAULT_API_KEY = 'd';
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'e';
-
-      const response = await GET(makeRequest('GET'));
-      const body = await response.json();
-
-      // Cloud mode exposes only the user-visible providers (pagespace + openrouter_free);
-      // everything else is masked even when env keys are present.
-      expect(body.providers.anthropic.isAvailable).toBe(false);
       expect(body.providers.openai.isAvailable).toBe(false);
       expect(body.providers.google.isAvailable).toBe(false);
-      expect(body.providers.xai.isAvailable).toBe(false);
-      expect(body.providers.openrouter.isAvailable).toBe(false);
-      expect(body.providers.pagespace.isAvailable).toBe(true);
-      expect(body.providers.openrouter_free.isAvailable).toBe(true);
+      expect(body.isAnyProviderConfigured).toBe(false);
     });
 
-    it('exposes paid openrouter to admins in cloud mode when configured', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'e';
+    it('reports all cloud vendors available once OPENROUTER_DEFAULT_API_KEY is set', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      // Admins additionally see the paid OpenRouter provider (gated on role, not tier).
-      expect(body.providers.openrouter.isAvailable).toBe(true);
+      // Every cloud vendor is OpenRouter-backed, so the single key lights them all up.
+      expect(body.providers.openai.isAvailable).toBe(true);
+      expect(body.providers.anthropic.isAvailable).toBe(true);
+      expect(body.providers.google.isAvailable).toBe(true);
+      expect(body.providers.xai.isAvailable).toBe(true);
+      expect(body.providers.deepseek.isAvailable).toBe(true);
+      expect(body.isAnyProviderConfigured).toBe(true);
     });
 
-    it('masks paid openrouter for non-admins even when configured', async () => {
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'e';
+    it('does not return the retired pageSpaceBackend field', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.providers.openrouter.isAvailable).toBe(false);
+      expect(body.pageSpaceBackend).toBeUndefined();
     });
 
-    it('marks openrouter_free unavailable in cloud mode when OPENROUTER_DEFAULT_API_KEY is unset', async () => {
+    it('exposes all vendor providers in cloud mode (no admin-only masking) when configured', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.providers.openrouter_free.isAvailable).toBe(false);
+      // Cloud mode exposes every vendor provider once OpenRouter is configured —
+      // there is no per-provider admin masking anymore.
+      expect(body.providers.anthropic.isAvailable).toBe(true);
+      expect(body.providers.openai.isAvailable).toBe(true);
+      expect(body.providers.google.isAvailable).toBe(true);
+      expect(body.providers.xai.isAvailable).toBe(true);
+      expect(body.providers.mistral.isAvailable).toBe(true);
     });
 
-    it('masks ollama as unavailable in cloud mode regardless of OLLAMA_BASE_URL', async () => {
-      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+    it('does not expose a paid `openrouter` or `pagespace` provider key', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      // The removed virtual providers no longer appear in the availability map.
+      expect(body.providers.openrouter).toBeUndefined();
+      expect(body.providers.openrouter_free).toBeUndefined();
+      expect(body.providers.pagespace).toBeUndefined();
+    });
+
+    it('reports ollama unavailable when OLLAMA_BASE_URL is unset', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
       const response = await GET(makeRequest('GET'));
       expect((await response.json()).providers.ollama.isAvailable).toBe(false);
     });
 
     it('exposes configured local providers in onprem mode without masking', async () => {
       vi.mocked(isOnPrem).mockReturnValue(true);
-      process.env.ANTHROPIC_DEFAULT_API_KEY = 'set';
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'set';
       process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
 
       const response = await GET(makeRequest('GET'));
@@ -212,7 +189,7 @@ describe('AI settings route', () => {
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
         currentAiProvider: 'anthropic',
-        currentAiModel: 'claude-sonnet-4-6',
+        currentAiModel: 'anthropic/claude-sonnet-4.6',
         subscriptionTier: 'business',
       });
 
@@ -220,8 +197,24 @@ describe('AI settings route', () => {
       const body = await response.json();
 
       expect(body.currentProvider).toBe('anthropic');
-      expect(body.currentModel).toBe('claude-sonnet-4-6');
+      expect(body.currentModel).toBe('anthropic/claude-sonnet-4.6');
       expect(body.userSubscriptionTier).toBe('business');
+    });
+
+    it('falls back to the default provider/model when the user has no selection', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: null,
+        currentAiModel: null,
+        subscriptionTier: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-5.3-chat');
+      expect(body.userSubscriptionTier).toBe('free');
     });
 
     it('returns auth error when not authenticated', async () => {
@@ -255,108 +248,64 @@ describe('AI settings route', () => {
   });
 
   describe('PATCH', () => {
-    it('updates the user selection when provider is pagespace', async () => {
-      const response = await PATCH(makeRequest('PATCH', {
-        provider: 'pagespace',
-        model: 'glm-4.5-air',
-      }));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
-        provider: 'pagespace',
-        model: 'glm-4.5-air',
-      });
-    });
-
-    it('allows an admin to select paid openrouter in cloud mode when configured', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+    it('updates the user selection for a configured cloud vendor', async () => {
       process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
       const response = await PATCH(makeRequest('PATCH', {
-        provider: 'openrouter',
-        model: 'anthropic/claude-opus-4.7',
+        provider: 'openai',
+        model: 'openai/gpt-5.3-chat',
       }));
       const body = await response.json();
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
-        provider: 'openrouter',
-        model: 'anthropic/claude-opus-4.7',
+        provider: 'openai',
+        model: 'openai/gpt-5.3-chat',
       });
     });
 
-    it('lets an admin select a pro paid-openrouter model without a pro subscription', async () => {
+    it('allows selecting another configured vendor (anthropic) on a paid tier', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+    });
+
+    it('passes isAdmin=true to the subscription gate for admin callers', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
       process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
-        currentAiProvider: 'pagespace',
-        currentAiModel: 'glm-4.7',
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.3-chat',
         subscriptionTier: 'free',
       });
 
       const response = await PATCH(makeRequest('PATCH', {
-        provider: 'openrouter',
-        model: 'anthropic/claude-opus-4.7',
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
       }));
 
       expect(response.status).toBe(200);
       // Admins bypass the subscription gate — it must be told the caller is an admin.
-      expect(requiresProSubscription).toHaveBeenCalledWith('openrouter', 'anthropic/claude-opus-4.7', 'free', true);
+      expect(requiresProSubscription).toHaveBeenCalledWith('anthropic', 'anthropic/claude-opus-4.8', 'free', true);
     });
 
-    it('returns 503 when a non-admin tries to select paid openrouter', async () => {
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-
-      const response = await PATCH(makeRequest('PATCH', {
-        provider: 'openrouter',
-        model: 'anthropic/claude-opus-4.7',
-      }));
-      const body = await response.json();
-
-      expect(response.status).toBe(503);
-      expect(body.error).toContain('not available on this instance');
-      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
-    });
-
-    it('returns 503 for non-user-visible providers in cloud mode', async () => {
-      process.env.ANTHROPIC_DEFAULT_API_KEY = 'a';
-
+    it('returns 503 for a cloud vendor when OPENROUTER_DEFAULT_API_KEY is not configured', async () => {
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'anthropic',
-        model: 'claude-sonnet-4-6',
-      }));
-      const body = await response.json();
-
-      expect(response.status).toBe(503);
-      expect(body.error).toContain('not available on this instance');
-      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
-    });
-
-    it('accepts openrouter_free in cloud mode when OPENROUTER_DEFAULT_API_KEY is set', async () => {
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-
-      const response = await PATCH(makeRequest('PATCH', {
-        provider: 'openrouter_free',
-        model: 'qwen/qwen3-coder:free',
-      }));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
-        provider: 'openrouter_free',
-        model: 'qwen/qwen3-coder:free',
-      });
-    });
-
-    it('returns 503 for openrouter_free when OPENROUTER_DEFAULT_API_KEY is not configured', async () => {
-      const response = await PATCH(makeRequest('PATCH', {
-        provider: 'openrouter_free',
-        model: 'qwen/qwen3-coder:free',
+        model: 'anthropic/claude-sonnet-4.6',
       }));
       const body = await response.json();
 
@@ -365,35 +314,7 @@ describe('AI settings route', () => {
       expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
     });
 
-    it('returns 400 when openrouter_free is used with a non-free model', async () => {
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-
-      const response = await PATCH(makeRequest('PATCH', {
-        provider: 'openrouter_free',
-        model: 'openai/gpt-4o',
-      }));
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toContain(':free');
-      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
-    });
-
-    it('allows openrouter_free without a model (dynamic model list, picked after provider switch)', async () => {
-      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-
-      const response = await PATCH(makeRequest('PATCH', { provider: 'openrouter_free' }));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
-        provider: 'openrouter_free',
-        model: undefined,
-      });
-    });
-
-    it('allows non-pagespace providers in onprem mode when configured', async () => {
+    it('allows local providers in onprem mode when configured', async () => {
       vi.mocked(isOnPrem).mockReturnValue(true);
       process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
 
@@ -411,26 +332,52 @@ describe('AI settings route', () => {
       expect(response.status).toBe(400);
     });
 
-    it('returns 400 when model is missing for pagespace', async () => {
-      const response = await PATCH(makeRequest('PATCH', { provider: 'pagespace' }));
+    it('returns 400 when model is missing for a cloud vendor', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+      const response = await PATCH(makeRequest('PATCH', { provider: 'openai' }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('Model is required');
     });
 
-    it('returns 403 when pro-tier model selected on free subscription', async () => {
-      process.env.GLM_DEFAULT_API_KEY = 'g';
+    it('returns 403 when a free user selects a non-allowlist model', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.3-chat',
+        subscriptionTier: 'free',
+      });
       vi.mocked(requiresProSubscription).mockReturnValue(true);
 
       const response = await PATCH(makeRequest('PATCH', {
-        provider: 'pagespace',
-        model: 'glm-5',
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
       }));
       const body = await response.json();
 
       expect(response.status).toBe(403);
       expect(body.upgradeUrl).toBe('/settings/billing');
+    });
+
+    it('lets a free user select an allowlist model (default model)', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'openai',
+        currentAiModel: 'openai/gpt-5.3-chat',
+        subscriptionTier: 'free',
+      });
+      vi.mocked(requiresProSubscription).mockReturnValue(false);
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'openai',
+        model: 'openai/gpt-5.3-chat',
+      }));
+
+      expect(response.status).toBe(200);
     });
   });
 });

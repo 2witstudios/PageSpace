@@ -13,7 +13,7 @@ import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
+import { createAIProvider, isProviderError, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
@@ -203,8 +203,8 @@ async function runDiscoveryPass(
   conversationContext: string
 ): Promise<string[]> {
   const providerResult = await createAIProvider(userId, {
-    selectedProvider: 'pagespace',
-    selectedModel: 'pro',
+    selectedProvider: 'anthropic',
+    selectedModel: BACKGROUND_HEAVY_MODEL,
   });
 
   if (isProviderError(providerResult)) {

@@ -82,6 +82,8 @@ vi.mock('@/lib/ai/core', () => ({
     search_pages: { name: 'search_pages' },
   },
   buildTimestampSystemPrompt: vi.fn(() => 'Timestamp: now'),
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
 vi.mock('@/lib/ai/core/message-utils', () => ({
@@ -133,8 +135,8 @@ const mockAgent = {
   title: 'Report Agent',
   systemPrompt: 'You are a report generator.',
   includeDrivePrompt: false,
-  aiProvider: 'pagespace',
-  aiModel: 'glm-4.5-air',
+  aiProvider: 'openai',
+  aiModel: 'openai/gpt-5.3-chat',
   enabledTools: ['list_pages', 'create_page'],
   driveId: 'drive_abc',
 };
@@ -149,8 +151,8 @@ const mockDrive = {
 
 const mockProviderResult = {
   model: { id: 'mock-model' },
-  provider: 'pagespace',
-  modelName: 'glm-4.5-air',
+  provider: 'openai',
+  modelName: 'openai/gpt-5.3-chat',
 };
 
 function setupSelectChain(...results: unknown[][]) {

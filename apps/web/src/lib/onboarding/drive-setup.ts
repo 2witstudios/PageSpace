@@ -5,6 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { getAboutPageSpaceAgentSystemPrompt, getReferenceSeedTemplate, type SeedNodeTemplate, type SeedTaskTemplate } from './onboarding-faq';
 import { buildBudgetSheetContent } from './faq/content-page-types';
 import { PLANNING_ASSISTANT_SYSTEM_PROMPT } from './faq/example-agent-prompts';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;
@@ -366,8 +367,8 @@ Edit this page. Add your own headings, lists, and notes. Documents support rich 
     content: '',
     systemPrompt: getAboutPageSpaceAgentSystemPrompt(),
     agentDefinition: 'Onboarding guide that teaches PageSpace using the reference knowledge base.',
-    aiProvider: 'pagespace',
-    aiModel: 'glm-4.5-air',
+    aiProvider: DEFAULT_PROVIDER,
+    aiModel: DEFAULT_MODEL,
     enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
     includePageTree: true,
     pageTreeScope: 'drive',
@@ -383,8 +384,8 @@ Edit this page. Add your own headings, lists, and notes. Documents support rich 
     content: '',
     systemPrompt: PLANNING_ASSISTANT_SYSTEM_PROMPT,
     agentDefinition: 'Helps plan workspace structure, organize projects, and break down ideas into actionable steps.',
-    aiProvider: 'pagespace',
-    aiModel: 'glm-4.5-air',
+    aiProvider: DEFAULT_PROVIDER,
+    aiModel: DEFAULT_MODEL,
     enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
     includePageTree: true,
     pageTreeScope: 'drive',

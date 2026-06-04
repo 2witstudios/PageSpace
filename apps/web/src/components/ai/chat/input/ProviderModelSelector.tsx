@@ -8,6 +8,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
 import { ChevronDown, Check, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
@@ -17,6 +18,7 @@ import {
   getModelDisplayName,
   getDefaultModel,
   getVisibleProviders,
+  isModelAllowedForTier,
 } from '@/lib/ai/core/ai-providers-config';
 
 interface ProviderStatus {
@@ -27,36 +29,29 @@ interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
   providers: Record<string, ProviderStatus>;
+  userSubscriptionTier?: string;
 }
 
-/** Category mapping for providers */
-const PROVIDER_CATEGORIES: Record<string, 'default' | 'cloud' | 'local'> = {
-  pagespace: 'default',
-  ollama: 'local',
-  lmstudio: 'local',
-  azure_openai: 'cloud',
-  // All others default to 'cloud'
+/** Providers served from a local server (model lists fetched at runtime). */
+const LOCAL_PROVIDERS: Record<string, true> = {
+  ollama: true,
+  lmstudio: true,
 };
 
 /** Derive provider groups from visible providers (filtered by deployment mode) */
 function buildProviderGroups() {
   const visibleProviders = getVisibleProviders();
   const groups: { label: string; providers: { id: string; name: string }[] }[] = [
-    { label: 'Default', providers: [] },
-    { label: 'Cloud Providers', providers: [] },
+    { label: 'Models', providers: [] },
     { label: 'Local', providers: [] },
   ];
 
   for (const [id, config] of Object.entries(visibleProviders)) {
-    const category = PROVIDER_CATEGORIES[id] || 'cloud';
     const provider = { id, name: config.name };
-
-    if (category === 'default') {
-      groups[0].providers.push(provider);
-    } else if (category === 'local') {
-      groups[2].providers.push(provider);
-    } else {
+    if (id === 'ollama' || id === 'lmstudio' || id === 'azure_openai') {
       groups[1].providers.push(provider);
+    } else {
+      groups[0].providers.push(provider);
     }
   }
 
@@ -98,10 +93,9 @@ export function ProviderModelSelector({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Dynamic model state
+  // Dynamic model state (local providers only)
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
-  const [openrouterFreeModels, setOpenrouterFreeModels] = useState<Record<string, string> | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   // Fetch Ollama models dynamically
@@ -148,28 +142,6 @@ export function ProviderModelSelector({
     return {};
   }, [lmstudioModels]);
 
-  // Fetch OpenRouter free models dynamically
-  const fetchOpenRouterFreeModels = useCallback(async () => {
-    if (openrouterFreeModels !== null) return openrouterFreeModels;
-    setIsLoadingModels(true);
-    try {
-      const response = await fetchWithAuth('/api/ai/openrouter/models');
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.models) {
-          setOpenrouterFreeModels(data.models);
-          return data.models;
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch OpenRouter free models:', error);
-    } finally {
-      setIsLoadingModels(false);
-    }
-    setOpenrouterFreeModels({});
-    return {};
-  }, [openrouterFreeModels]);
-
   // Fetch provider settings
   const fetchSettings = useCallback(async () => {
     setIsLoading(true);
@@ -199,7 +171,6 @@ export function ProviderModelSelector({
       // Clear cached models so they get refetched
       setOllamaModels(null);
       setLmstudioModels(null);
-      setOpenrouterFreeModels(null);
     };
     window.addEventListener('ai-settings-updated', handleSettingsUpdate);
     return () => {
@@ -207,7 +178,7 @@ export function ProviderModelSelector({
     };
   }, [fetchSettings]);
 
-  // Fetch dynamic models when a provider with a live list is selected
+  // Fetch dynamic models when a local provider is selected
   useEffect(() => {
     if (provider === 'ollama' && ollamaModels === null) {
       fetchOllamaModels();
@@ -215,20 +186,19 @@ export function ProviderModelSelector({
     if (provider === 'lmstudio' && lmstudioModels === null) {
       fetchLMStudioModels();
     }
-    if (provider === 'openrouter_free' && openrouterFreeModels === null) {
-      fetchOpenRouterFreeModels();
-    }
-  }, [provider, ollamaModels, lmstudioModels, openrouterFreeModels, fetchOllamaModels, fetchLMStudioModels, fetchOpenRouterFreeModels]);
+  }, [provider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
+
+  const subscriptionTier = providerSettings?.userSubscriptionTier;
 
   // Get display names
   const providerDisplayName = useMemo(() => {
-    if (!provider) return 'PageSpace';
+    if (!provider) return 'Model';
     const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
     return config?.name || provider;
   }, [provider]);
 
   const modelDisplayName = useMemo(() => {
-    if (!model || !provider) return 'Standard';
+    if (!model || !provider) return 'Model';
 
     if (provider === 'ollama' && ollamaModels && ollamaModels[model]) {
       return ollamaModels[model];
@@ -236,12 +206,9 @@ export function ProviderModelSelector({
     if (provider === 'lmstudio' && lmstudioModels && lmstudioModels[model]) {
       return lmstudioModels[model];
     }
-    if (provider === 'openrouter_free' && openrouterFreeModels && openrouterFreeModels[model]) {
-      return openrouterFreeModels[model];
-    }
 
     return getModelDisplayName(provider, model);
-  }, [provider, model, ollamaModels, lmstudioModels, openrouterFreeModels]);
+  }, [provider, model, ollamaModels, lmstudioModels]);
 
   // Check whether the deployment has this provider configured.
   const isProviderAvailable = useCallback(
@@ -250,6 +217,15 @@ export function ProviderModelSelector({
       return providerSettings.providers[providerId]?.isAvailable ?? false;
     },
     [providerSettings]
+  );
+
+  // Whether the current subscription tier may select this model.
+  const isModelAccessible = useCallback(
+    (providerId: string, modelId: string) => {
+      if (LOCAL_PROVIDERS[providerId]) return true; // local models are not tier-gated
+      return isModelAllowedForTier(modelId, subscriptionTier);
+    },
+    [subscriptionTier]
   );
 
   // Get models for current provider
@@ -262,14 +238,11 @@ export function ProviderModelSelector({
     if (provider === 'lmstudio' && lmstudioModels) {
       return Object.entries(lmstudioModels);
     }
-    if (provider === 'openrouter_free' && openrouterFreeModels) {
-      return Object.entries(openrouterFreeModels);
-    }
 
     const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
     if (!config) return [];
     return Object.entries(config.models);
-  }, [provider, ollamaModels, lmstudioModels, openrouterFreeModels]);
+  }, [provider, ollamaModels, lmstudioModels]);
 
   // Handle provider selection
   const handleProviderSelect = useCallback(
@@ -324,7 +297,7 @@ export function ProviderModelSelector({
         setModelOpen(false);
       } catch (error) {
         console.error('Failed to update model:', error);
-        toast.error('Failed to update model');
+        toast.error(error instanceof Error ? error.message : 'Failed to update model');
       } finally {
         setIsSaving(false);
       }
@@ -428,24 +401,31 @@ export function ProviderModelSelector({
                 <div className="text-xs text-muted-foreground px-2 py-2">
                   {provider === 'ollama' || provider === 'lmstudio'
                     ? 'No models found. Start your local server.'
-                    : provider === 'openrouter_free'
-                    ? 'No free models available.'
                     : 'No models available'}
                 </div>
               ) : (
                 availableModels.map(([modelId, modelName]) => {
                   const isSelected = model === modelId;
+                  const accessible = isModelAccessible(provider as string, modelId);
                   return (
                     <Button
                       key={modelId}
                       variant={isSelected ? 'secondary' : 'ghost'}
                       size="sm"
-                      disabled={isSaving}
+                      disabled={isSaving || !accessible}
                       onClick={() => handleModelSelect(modelId)}
                       className="w-full justify-between text-xs h-7 px-2 min-w-0"
                     >
-                      <span className="truncate min-w-0">{modelName}</span>
-                      {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                      <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
+                        {modelName}
+                      </span>
+                      {isSelected ? (
+                        <Check className="h-3 w-3 shrink-0 ml-1" />
+                      ) : !accessible ? (
+                        <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
+                          Paid
+                        </Badge>
+                      ) : null}
                     </Button>
                   );
                 })

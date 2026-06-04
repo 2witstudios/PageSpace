@@ -3,6 +3,7 @@
  */
 
 import { db } from '@pagespace/db/db'
+import { getBackendProvider } from '@/lib/ai/core/ai-providers-config'
 import { sql, eq, and, or, gt, gte, lte, desc, count, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
@@ -996,8 +997,9 @@ export async function getProviderCostRollup(
     // Voice (STT/TTS): cost is deterministic exact-quantity × published OpenAI rate,
     // not a live provider-returned figure (real) nor a token-guess fallback (estimate).
     else if (r.costSource === 'list_price') coverage = 'list_price';
-    // metadata purged: fall back to the provider-name heuristic.
-    else coverage = provider === 'openrouter' || provider === 'openrouter_free' ? 'real' : 'estimate';
+    // metadata purged: fall back to the provider-name heuristic (cloud vendors are
+    // OpenRouter-backed → real; local providers → estimate).
+    else coverage = getBackendProvider(provider) === 'openrouter' ? 'real' : 'estimate';
     return {
       provider,
       model: r.model ?? 'unknown',

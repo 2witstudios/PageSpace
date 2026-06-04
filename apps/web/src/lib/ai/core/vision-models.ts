@@ -102,9 +102,6 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'qwen3.5-27b': true,
   'qwen3-max-thinking': true,
 
-  // Chinese/Asian Vision Models
-  'glm-4.5v': true,
-
   // MiniMax Vision Models
   'MiniMax-M2.5': true,
   'minimax-m2.5': true,

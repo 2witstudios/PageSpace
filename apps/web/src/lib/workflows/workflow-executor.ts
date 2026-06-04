@@ -7,6 +7,8 @@ import {
   isProviderError,
   pageSpaceTools,
   buildTimestampSystemPrompt,
+  DEFAULT_PROVIDER,
+  DEFAULT_MODEL,
   type ToolExecutionContext,
   type ProviderRequest,
 } from '@/lib/ai/core';
@@ -240,8 +242,8 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
     }
 
     // 5. Resolve AI provider using workflow creator's keys
-    const selectedProvider = agent.aiProvider || 'pagespace';
-    const selectedModel = agent.aiModel || (selectedProvider === 'pagespace' ? 'glm-4.5-air' : undefined);
+    const selectedProvider = agent.aiProvider || DEFAULT_PROVIDER;
+    const selectedModel = agent.aiModel || DEFAULT_MODEL;
 
     const providerRequest: ProviderRequest = {
       selectedProvider,

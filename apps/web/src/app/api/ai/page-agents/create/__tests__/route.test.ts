@@ -64,6 +64,8 @@ vi.mock('@/lib/ai/core', () => ({
     update_page: {},
     delete_page: {},
   },
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
 // Mock DB — wraps both the pages insert and membership insert in a transaction.

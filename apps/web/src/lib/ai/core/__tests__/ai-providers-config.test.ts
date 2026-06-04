@@ -1,111 +1,111 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
-  PAGESPACE_MODEL_ALIASES,
   ONPREM_ALLOWED_PROVIDERS,
-  ADMIN_ONLY_PROVIDERS,
   AI_PROVIDERS,
-  resolvePageSpaceModel,
-  isPageSpaceModelAlias,
-  getPageSpaceModelTier,
+  FREE_TIER_MODELS,
+  DEFAULT_PROVIDER,
+  DEFAULT_MODEL,
+  isModelAllowedForTier,
+  getBackendProvider,
   getDefaultModel,
+  getModelDisplayName,
   getUserFacingModelName,
   getVisibleProviders,
-  isAdminOnlyProvider,
 } from '../ai-providers-config';
 
 describe('ai-providers-config', () => {
-  describe('PAGESPACE_MODEL_ALIASES', () => {
-    it('should define standard and pro tiers', () => {
-      expect(PAGESPACE_MODEL_ALIASES).toHaveProperty('standard');
-      expect(PAGESPACE_MODEL_ALIASES).toHaveProperty('pro');
+  describe('catalog shape', () => {
+    it('groups models under real vendor providers (no pagespace/glm/openrouter)', () => {
+      expect(AI_PROVIDERS).toHaveProperty('openai');
+      expect(AI_PROVIDERS).toHaveProperty('anthropic');
+      expect(AI_PROVIDERS).toHaveProperty('google');
+      expect(AI_PROVIDERS).not.toHaveProperty('pagespace');
+      expect(AI_PROVIDERS).not.toHaveProperty('openrouter');
+      expect(AI_PROVIDERS).not.toHaveProperty('openrouter_free');
+      expect(AI_PROVIDERS).not.toHaveProperty('glm');
     });
 
-    it('should map standard to glm-4.7', () => {
-      expect(PAGESPACE_MODEL_ALIASES.standard).toBe('glm-4.7');
+    it('uses full OpenRouter model ids as keys', () => {
+      expect(AI_PROVIDERS.openai.models).toHaveProperty('openai/gpt-5.3-chat');
+      expect(AI_PROVIDERS.anthropic.models).toHaveProperty('anthropic/claude-haiku-4.5');
+      expect(AI_PROVIDERS.minimax.models).toHaveProperty('minimax/minimax-m3');
     });
 
-    it('should map pro to glm-5', () => {
-      expect(PAGESPACE_MODEL_ALIASES.pro).toBe('glm-5');
-    });
-  });
-
-  describe('resolvePageSpaceModel', () => {
-    it('should resolve standard alias to glm-4.7', () => {
-      expect(resolvePageSpaceModel('standard')).toBe('glm-4.7');
-    });
-
-    it('should resolve pro alias to glm-5', () => {
-      expect(resolvePageSpaceModel('pro')).toBe('glm-5');
-    });
-
-    it('should be case-insensitive', () => {
-      expect(resolvePageSpaceModel('STANDARD')).toBe('glm-4.7');
-      expect(resolvePageSpaceModel('PRO')).toBe('glm-5');
-    });
-
-    it('should return the model unchanged if not an alias', () => {
-      expect(resolvePageSpaceModel('glm-4.7')).toBe('glm-4.7');
-      expect(resolvePageSpaceModel('some-other-model')).toBe('some-other-model');
+    it('drops all GLM (z-ai) models', () => {
+      const allModels = Object.values(AI_PROVIDERS).flatMap((p) => Object.keys(p.models));
+      expect(allModels.some((m) => m.startsWith('z-ai/') || m.startsWith('glm-'))).toBe(false);
     });
   });
 
-  describe('isPageSpaceModelAlias', () => {
-    it('should return true for standard alias', () => {
-      expect(isPageSpaceModelAlias('standard')).toBe(true);
+  describe('FREE_TIER_MODELS', () => {
+    it('contains the curated free allowlist', () => {
+      expect(FREE_TIER_MODELS.has('openai/gpt-5.3-chat')).toBe(true);
+      expect(FREE_TIER_MODELS.has('openai/gpt-5.4-nano')).toBe(true);
+      expect(FREE_TIER_MODELS.has('openai/gpt-5.4-mini')).toBe(true);
+      expect(FREE_TIER_MODELS.has('anthropic/claude-haiku-4.5')).toBe(true);
+      expect(FREE_TIER_MODELS.has('google/gemini-3.5-flash')).toBe(true);
     });
 
-    it('should return true for pro alias', () => {
-      expect(isPageSpaceModelAlias('pro')).toBe(true);
+    it('does NOT contain frontier models', () => {
+      expect(FREE_TIER_MODELS.has('anthropic/claude-opus-4.8')).toBe(false);
+      expect(FREE_TIER_MODELS.has('openai/gpt-5.5-pro')).toBe(false);
     });
 
-    it('should be case-insensitive', () => {
-      expect(isPageSpaceModelAlias('STANDARD')).toBe(true);
-      expect(isPageSpaceModelAlias('PRO')).toBe(true);
+    it('every free model is a valid catalog model', () => {
+      const allModels = new Set(
+        Object.values(AI_PROVIDERS).flatMap((p) => Object.keys(p.models))
+      );
+      for (const m of FREE_TIER_MODELS) {
+        expect(allModels.has(m)).toBe(true);
+      }
     });
 
-    it('should return false for non-alias model names', () => {
-      expect(isPageSpaceModelAlias('glm-4.7')).toBe(false);
-      expect(isPageSpaceModelAlias('glm-5')).toBe(false);
+    it('DEFAULT_MODEL is in the free allowlist and valid', () => {
+      expect(FREE_TIER_MODELS.has(DEFAULT_MODEL)).toBe(true);
+      expect(AI_PROVIDERS[DEFAULT_PROVIDER as keyof typeof AI_PROVIDERS].models)
+        .toHaveProperty(DEFAULT_MODEL);
     });
   });
 
-  describe('getPageSpaceModelTier', () => {
-    it('should return standard for glm-4.7', () => {
-      expect(getPageSpaceModelTier('glm-4.7')).toBe('standard');
+  describe('isModelAllowedForTier', () => {
+    it('allows any paid tier the full catalog', () => {
+      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'pro')).toBe(true);
+      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'founder')).toBe(true);
+      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'business')).toBe(true);
     });
 
-    it('should return pro for glm-5', () => {
-      expect(getPageSpaceModelTier('glm-5')).toBe('pro');
+    it('limits free tier to the allowlist', () => {
+      expect(isModelAllowedForTier('openai/gpt-5.3-chat', 'free')).toBe(true);
+      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'free')).toBe(false);
     });
 
-    it('should be case-insensitive', () => {
-      expect(getPageSpaceModelTier('GLM-4.7')).toBe('standard');
-      expect(getPageSpaceModelTier('GLM-5')).toBe('pro');
+    it('treats undefined/unknown tier as free', () => {
+      expect(isModelAllowedForTier('openai/gpt-5.3-chat', undefined)).toBe(true);
+      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', undefined)).toBe(false);
+    });
+  });
+
+  describe('getBackendProvider', () => {
+    it('routes cloud vendors through openrouter', () => {
+      expect(getBackendProvider('openai')).toBe('openrouter');
+      expect(getBackendProvider('anthropic')).toBe('openrouter');
+      expect(getBackendProvider('minimax')).toBe('openrouter');
     });
 
-    it('should return null for non-tier models', () => {
-      expect(getPageSpaceModelTier('glm-4.6')).toBe(null);
-      expect(getPageSpaceModelTier('some-other-model')).toBe(null);
-    });
-
-    it('should return null for alias names (not resolved models)', () => {
-      // Aliases are names like "standard", "pro" - not the actual model IDs
-      expect(getPageSpaceModelTier('standard')).toBe(null);
-      expect(getPageSpaceModelTier('pro')).toBe(null);
+    it('passes local providers through', () => {
+      expect(getBackendProvider('ollama')).toBe('ollama');
+      expect(getBackendProvider('lmstudio')).toBe('lmstudio');
+      expect(getBackendProvider('azure_openai')).toBe('azure_openai');
     });
   });
 
   describe('getDefaultModel', () => {
-    it('should return glm-4.7 for pagespace provider', () => {
-      expect(getDefaultModel('pagespace')).toBe('glm-4.7');
+    it('returns the first model of a vendor', () => {
+      expect(getDefaultModel('openai')).toBe('openai/gpt-5.5-pro');
     });
 
-    it('should return gemini-3.5-flash for google provider', () => {
-      expect(getDefaultModel('google')).toBe('gemini-3.5-flash');
-    });
-
-    it('should return glm-4.7 for unknown provider', () => {
-      expect(getDefaultModel('unknown-provider')).toBe('glm-4.7');
+    it('returns DEFAULT_MODEL for an unknown provider', () => {
+      expect(getDefaultModel('unknown-provider')).toBe(DEFAULT_MODEL);
     });
   });
 
@@ -149,46 +149,20 @@ describe('ai-providers-config', () => {
     });
   });
 
-  describe('admin-only providers', () => {
-    it('treats paid openrouter as admin-only', () => {
-      expect(ADMIN_ONLY_PROVIDERS.has('openrouter')).toBe(true);
-      expect(isAdminOnlyProvider('openrouter')).toBe(true);
+  describe('getModelDisplayName / getUserFacingModelName', () => {
+    it('returns the real model display name', () => {
+      expect(getModelDisplayName('openai', 'openai/gpt-5.3-chat')).toBe('GPT-5.3 Chat');
+      expect(getUserFacingModelName('openai', 'openai/gpt-5.3-chat')).toBe('GPT-5.3 Chat');
+      expect(getUserFacingModelName('anthropic', 'anthropic/claude-haiku-4.5')).toBe('Claude Haiku 4.5');
     });
 
-    it('does not treat pagespace or openrouter_free as admin-only', () => {
-      expect(isAdminOnlyProvider('pagespace')).toBe(false);
-      expect(isAdminOnlyProvider('openrouter_free')).toBe(false);
-    });
-  });
-
-  describe('openrouter catalog', () => {
-    it('includes minimax/minimax-m3', () => {
-      expect(AI_PROVIDERS.openrouter.models['minimax/minimax-m3']).toBe('MiniMax M3');
-    });
-  });
-
-  describe('getUserFacingModelName', () => {
-    it('should return PageSpace Standard for glm-4.7', () => {
-      expect(getUserFacingModelName('pagespace', 'glm-4.7')).toBe('PageSpace Standard');
+    it('falls back to the raw model id for unknown models', () => {
+      expect(getUserFacingModelName('openai', 'openai/does-not-exist')).toBe('openai/does-not-exist');
     });
 
-    it('should return PageSpace Pro for glm-5', () => {
-      expect(getUserFacingModelName('pagespace', 'glm-5')).toBe('PageSpace Pro');
-    });
-
-    it('should resolve aliases correctly', () => {
-      expect(getUserFacingModelName('pagespace', 'standard')).toBe('PageSpace Standard');
-      expect(getUserFacingModelName('pagespace', 'pro')).toBe('PageSpace Pro');
-    });
-
-    it('should return PageSpace AI for non-pagespace providers', () => {
-      expect(getUserFacingModelName('openrouter', 'gpt-4')).toBe('PageSpace AI');
-      expect(getUserFacingModelName('google', 'gemini-2.5-flash')).toBe('PageSpace AI');
-    });
-
-    it('should return PageSpace AI for null/undefined model', () => {
-      expect(getUserFacingModelName('pagespace', null)).toBe('PageSpace AI');
-      expect(getUserFacingModelName('pagespace', undefined)).toBe('PageSpace AI');
+    it('returns AI for a null/undefined model', () => {
+      expect(getUserFacingModelName('openai', null)).toBe('AI');
+      expect(getUserFacingModelName('openai', undefined)).toBe('AI');
     });
   });
 });

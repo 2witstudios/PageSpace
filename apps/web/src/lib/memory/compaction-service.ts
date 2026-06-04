@@ -7,7 +7,7 @@
  */
 
 import { generateText } from 'ai';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
+import { createAIProvider, isProviderError, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import {
@@ -80,8 +80,8 @@ export async function compactField(
   const targetLength = Math.floor(maxLength * COMPACTION_TARGET_RATIO);
 
   const providerResult = await createAIProvider(userId, {
-    selectedProvider: 'pagespace',
-    selectedModel: 'pro',
+    selectedProvider: 'anthropic',
+    selectedModel: BACKGROUND_HEAVY_MODEL,
   });
 
   if (isProviderError(providerResult)) {

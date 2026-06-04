@@ -16,17 +16,22 @@ export interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
   providers: Partial<Record<
-    | 'pagespace'
-    | 'openrouter'
-    | 'openrouter_free'
-    | 'google'
     | 'openai'
     | 'anthropic'
+    | 'google'
     | 'xai'
+    | 'deepseek'
+    | 'qwen'
+    | 'mistral'
+    | 'moonshot'
+    | 'minimax'
+    | 'meta'
+    | 'bytedance'
+    | 'ai21'
+    | 'inception'
+    | 'writer'
     | 'ollama'
     | 'lmstudio'
-    | 'glm'
-    | 'minimax'
     | 'azure_openai',
     ProviderAvailability
   >>;

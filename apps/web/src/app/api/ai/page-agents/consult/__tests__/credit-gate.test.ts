@@ -26,7 +26,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
-const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'pagespace', aiModel: 'glm-4.5-air', systemPrompt: 'You help.', enabledTools: [] };
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: [] };
 
 vi.mock('@pagespace/db/db', () => {
   type QueryBuilder = {
@@ -59,11 +59,13 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'glm-4.5-air' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   isProviderError: vi.fn().mockReturnValue(false),
   pageSpaceTools: {},
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })) }));

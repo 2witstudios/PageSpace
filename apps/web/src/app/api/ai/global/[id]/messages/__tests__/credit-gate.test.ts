@@ -121,7 +121,12 @@ vi.mock('@/lib/subscription/usage-service', () => ({
   }),
 }));
 
-vi.mock('@/lib/subscription/rate-limit-middleware', () => ({ createRateLimitResponse: vi.fn(), createAdminRestrictedResponse: vi.fn() }));
+vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
+  createRateLimitResponse: vi.fn(),
+  createAdminRestrictedResponse: vi.fn(),
+  requiresProSubscription: vi.fn().mockReturnValue(false),
+  createSubscriptionRequiredResponse: vi.fn(),
+}));
 
 // The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
@@ -129,7 +134,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/ai/core', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'glm-4.5-air' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
@@ -218,9 +223,8 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 }));
 vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn().mockReturnValue(true) }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getPageSpaceModelTier: vi.fn().mockReturnValue('standard'),
   getProviderTier: vi.fn().mockReturnValue('standard'),
-  isAdminOnlyProvider: vi.fn().mockReturnValue(false),
+  isModelAllowedForTier: vi.fn().mockReturnValue(true),
 }));
 vi.mock('@/lib/ai/core/tool-utils', () => ({
   mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })),
@@ -252,8 +256,8 @@ const makeRequest = () =>
     headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Browser-Session-Id': 'session-1' },
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
-      selectedProvider: 'pagespace',
-      selectedModel: 'glm-4.5-air',
+      selectedProvider: 'openai',
+      selectedModel: 'openai/gpt-5.3-chat',
     }),
   });
 
@@ -370,7 +374,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect(call.model).toBe('glm-4.5-air');
+    expect(call.model).toBe('openai/gpt-5.3-chat');
     expect(call.totalTokens).toBeUndefined();
   });
 
@@ -383,7 +387,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'glm-4.5-air', totalTokens: 20 });
+    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'openai/gpt-5.3-chat', totalTokens: 20 });
   });
 
   it('AWAITS trackUsage in onFinish (durable persistence, not fire-and-forget)', async () => {
@@ -431,7 +435,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     expect(mockSaveGlobalAssistantMessageToDatabase.mock.calls.length).toBe(savesBeforeFinish);
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect(call.model).toBe('glm-4.5-air');
+    expect(call.model).toBe('openai/gpt-5.3-chat');
   });
 
   it('settles the hold (trackUsage) even when persisting the assistant message throws', async () => {

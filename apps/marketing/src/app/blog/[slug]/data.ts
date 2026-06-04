@@ -39,12 +39,12 @@ In practice nothing breaks. Open an AI Chat, pick a model, send a message. The m
 - **Your previously-stored keys are gone from our side.** We've deleted them. Your accounts at OpenAI, Anthropic, Google AI, and the other providers are untouched — those keys still exist with the upstream provider. Revoke them there if you want, but you don't have to.
 - **Provider availability is now a deployment-level concern.** On pagespace.ai cloud, that's whatever PageSpace has enabled. On a self-hosted install, it's whatever your operator has configured via environment variables.
 
-## Standard vs pro models
+## Which models you can reach
 
-AI usage is metered against a monthly AI-credit allowance, and which models you can reach depends on your plan:
+Every cloud model is served through OpenRouter and grouped under its real vendor, so the picker is one catalogue spanning OpenAI, Anthropic, Google, xAI, and more. AI usage is metered against a monthly AI-credit allowance, and how much of the catalogue you can reach depends on your plan:
 
-- **Standard** covers smaller and mid-tier models — Gemini Flash, Claude Haiku, GPT mini variants, GLM 4.7, and similar. Available on every plan, including Free.
-- **Pro** covers frontier flagships — Claude Opus, the GPT-5 family, OpenAI o3, and GLM-5. Available on paid plans.
+- **Free** plans use a curated allowlist of fast, capable models — GPT-5.3 Chat (the default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family.
+- **Paid** plans unlock the full catalogue, including frontier flagships like Claude Opus, the full GPT-5 family, and Gemini Pro.
 
 Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime or wait for your monthly allowance to reset — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
 

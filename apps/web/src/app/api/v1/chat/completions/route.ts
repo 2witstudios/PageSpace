@@ -33,7 +33,7 @@ import { incrementUsage } from '@/lib/subscription/usage-service';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
-import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
+import { getProviderTier, DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -189,7 +189,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // 9. Run inference — no UI coupling (no WebSocket, no stream lifecycle, no session ID)
   const startTime = Date.now();
-  const providerType = getProviderTier(page.aiProvider ?? 'pagespace', page.aiModel ?? undefined);
+  const providerType = getProviderTier(page.aiProvider ?? DEFAULT_PROVIDER, page.aiModel ?? undefined);
   const sanitized = sanitizeMessagesForModel(inferenceMessages);
 
   // Standard OpenAI-style cancel: the consumer closing the HTTP connection stops generation.

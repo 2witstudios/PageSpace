@@ -14,6 +14,8 @@ import {
   pageSpaceTools,
   buildTimestampSystemPrompt,
   getUserTimezone,
+  DEFAULT_PROVIDER,
+  DEFAULT_MODEL,
   type ToolExecutionContext,
 } from '@/lib/ai/core';
 import { db } from '@pagespace/db/db'
@@ -133,8 +135,8 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
   const { aiProvider, aiModel } = agentConfig;
 
   // Use default provider/model if agent doesn't have specific configuration
-  const selectedProvider = aiProvider || 'pagespace';
-  const selectedModel = aiModel || (selectedProvider === 'pagespace' ? 'glm-4.5-air' : undefined);
+  const selectedProvider = aiProvider || DEFAULT_PROVIDER;
+  const selectedModel = aiModel || DEFAULT_MODEL;
 
   const providerRequest: ProviderRequest = {
     selectedProvider,
@@ -275,8 +277,8 @@ export async function POST(request: Request) {
 
     // Get configured AI model for agent
     let model;
-    let resolvedProvider = agent.aiProvider || 'pagespace';
-    let resolvedModelName = agent.aiModel || 'glm-4.5-air';
+    let resolvedProvider = agent.aiProvider || DEFAULT_PROVIDER;
+    let resolvedModelName = agent.aiModel || DEFAULT_MODEL;
     try {
       const providerResult = await getConfiguredModel(userId, {
         aiProvider: agent.aiProvider,

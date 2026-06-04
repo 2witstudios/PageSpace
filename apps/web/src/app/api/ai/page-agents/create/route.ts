@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageSpaceTools } from '@/lib/ai/core';
+import { pageSpaceTools, DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-agent-repository';
@@ -111,10 +111,9 @@ export async function POST(request: Request) {
       parentId: parentId || null,
       isTrashed: false,
       systemPrompt,
-      // Default to PageSpace provider with "standard" model
-      // Agents can use 'standard' or 'pro' as friendly aliases
-      aiProvider: aiProvider || 'pagespace',
-      aiModel: aiModel || 'standard',
+      // Default to the product default model (OpenRouter-backed).
+      aiProvider: aiProvider || DEFAULT_PROVIDER,
+      aiModel: aiModel || DEFAULT_MODEL,
       createdBy: userId,
     };
 

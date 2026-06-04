@@ -5,29 +5,15 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   ALL_PROVIDER_NAMES,
   buildProviderAvailabilityMap,
-  getDefaultPageSpaceSettings,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidModel } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-
-// Providers exposed to users. Expand this as per-provider billing tiers are set up.
-// `openrouter_free` is the OpenRouter free tier — all models carry the `:free` suffix
-// and never count against PageSpace's paid quota, so it is safe to expose alongside pagespace.
-const USER_VISIBLE_PROVIDERS = new Set(['pagespace', 'openrouter_free']);
-
-// Providers visible to this request's user. Admins additionally see admin-only providers
-// (e.g. paid OpenRouter), gated purely on role — not on subscription tier.
-function visibleProvidersFor(role: 'user' | 'admin'): Set<string> {
-  const set = new Set(USER_VISIBLE_PROVIDERS);
-  if (role === 'admin') for (const p of ADMIN_ONLY_PROVIDERS) set.add(p);
-  return set;
-}
 
 const GONE_RESPONSE = {
   error: 'Per-user API key configuration has been retired. AI providers are now managed at the deployment level.',
@@ -51,28 +37,18 @@ export async function GET(request: Request) {
     const userId = auth.userId;
 
     const user = await aiSettingsRepository.getUserSettings(userId);
-    const pageSpaceSettings = getDefaultPageSpaceSettings();
-    const rawProviders = buildProviderAvailabilityMap(availabilityOptions());
-    // On-prem deployments expose all configured local providers; cloud masks everything except pagespace.
-    const visible = visibleProvidersFor(auth.role);
-    const providers = isOnPrem()
-      ? rawProviders
-      : Object.fromEntries(
-          Object.entries(rawProviders).map(([k, v]) => [
-            k,
-            { isAvailable: visible.has(k) ? v.isAvailable : false },
-          ])
-        );
+    // Every cloud vendor is OpenRouter-backed and user-visible; on-prem masking is
+    // handled inside buildProviderAvailabilityMap via the on-prem allowlist.
+    const providers = buildProviderAvailabilityMap(availabilityOptions());
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
       action: 'get_settings',
     } });
 
     return NextResponse.json({
-      currentProvider: user?.currentAiProvider || 'pagespace',
-      currentModel: user?.currentAiModel || 'glm-4.5-air',
+      currentProvider: user?.currentAiProvider || DEFAULT_PROVIDER,
+      currentModel: user?.currentAiModel || DEFAULT_MODEL,
       userSubscriptionTier: user?.subscriptionTier || 'free',
-      pageSpaceBackend: pageSpaceSettings?.provider ?? null,
       providers,
       isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
     });
@@ -124,13 +100,6 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (!isOnPrem() && !visibleProvidersFor(auth.role).has(provider)) {
-      return NextResponse.json(
-        { error: `Provider "${provider}" is not available on this instance.` },
-        { status: 503 }
-      );
-    }
-
     if (!isProviderAvailable(provider, availabilityOptions())) {
       return NextResponse.json(
         { error: `Provider "${provider}" is not configured on this deployment.` },
@@ -146,9 +115,14 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (provider === 'openrouter_free' && model && !model.endsWith(':free')) {
+    // Hard-enforce the curated catalog at the explicit selection boundary: a saved
+    // (provider, model) must exist in AI_PROVIDERS. Generation is tolerant (it
+    // substitutes the default for stale stored configs), but a user/API explicitly
+    // choosing an off-catalog model gets a clear 400 here rather than a silent
+    // fallback later.
+    if (!skipModelValidation && !isValidModel(provider, model)) {
       return NextResponse.json(
-        { error: 'openrouter_free only accepts models with the ":free" suffix' },
+        { error: `Model "${model}" is not a valid model for provider "${provider}".` },
         { status: 400 }
       );
     }
@@ -165,7 +139,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json(
         {
           error: 'Subscription required',
-          message: 'PageSpace Pro AI requires a Pro or Business subscription.',
+          message: 'This model is available on paid plans. Upgrade to access the full model catalog.',
           upgradeUrl: '/settings/billing',
         },
         { status: 403 }
