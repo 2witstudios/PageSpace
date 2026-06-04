@@ -3,7 +3,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Sharing & Permissions",
-  description: "Who sees what in PageSpace — drive membership, role templates, and per-page grants, in plain English.",
+  description: "Who sees what in PageSpace — open-by-default drive membership, page privacy, custom roles, email and link invites, and per-page grants, in plain English.",
   path: "/docs/features/sharing",
   keywords: ["sharing", "permissions", "access", "collaboration", "roles", "drive members"],
 });
@@ -11,15 +11,16 @@ export const metadata = createMetadata({
 const content = `
 # Sharing & Permissions
 
-Who sees what in PageSpace. Every page is protected by two layers: a drive-level role that covers everyone in the workspace, and per-page grants that cover individual pages. Four flags — **View**, **Edit**, **Share**, **Delete** — describe what each person can do. View is the foundation; Edit, Share, and Delete only make sense on top of it.
+Who sees what in PageSpace. Access is open within a drive and private by exception: members see the drive's pages by default, you mark individual pages **private** to lock them down, and per-page grants extend access to specific pages or to people who aren't drive members. Four flags — **View**, **Edit**, **Share**, **Delete** — describe what each person can do. View is the foundation; Edit, Share, and Delete only make sense on top of it.
 
 ## What you can do
 
-- Invite someone to a drive as a member or admin. Admins get full access to every page in the drive, the same as the owner.
+- Invite someone to a drive as a member or admin — by email, even if they don't have an account yet. The invite waits for them and becomes access the moment they sign up. Members see the whole drive except pages marked private; admins get full access, the same as the owner.
+- Share a drive or a single page with a link. Anyone who opens a drive link can join with the role you set; a page link grants access to that page. Links are revocable and can carry an expiry.
 - Share a single page with a specific person using the four flags: View, Edit, Share, Delete. Edit, Share, and Delete require View to be on; otherwise you combine them however you like. A person can have View + Share without Edit, for example.
-- Create role templates (like "Editor" or "Reviewer") that bundle view, edit, and share across many pages at once, pick a color for the badge, and optionally make one the default role for new members.
+- Create custom roles (like "Editor" or "Reviewer") that carry their own view/edit/share permissions, pick a color for the badge, optionally make one the default for new members, and assign a role right from an invite or share link.
 - See who has access to a page from the **Share** dialog, and see every page a given member can reach from the drive-level members view.
-- Revoke any grant instantly. The person loses access the next time they load the page.
+- Revoke any grant, share link, or pending invite instantly.
 
 ## How it works
 
@@ -29,16 +30,16 @@ If you're the drive **owner**, you can see, edit, share, and delete every page i
 
 If you're a drive **admin** who has accepted the invitation, you get the same full access as the owner across every page in the drive.
 
-If you're a drive **member** — the default role — you start with nothing. You only see pages where someone has explicitly granted you access, or where a role template you're assigned includes those pages. Membership is the ticket to the drive; it isn't the ticket to the pages inside.
+If you're a drive **member** — the default role — you can see every page in the drive that isn't marked **private**, and post in its channels, without anyone granting each page one by one. To hide a page from the membership, mark it private; then only the owner, admins, and the people or roles explicitly granted access can reach it. Editing, sharing, or deleting other pages still needs a grant or a role.
 
-Every per-page grant is one record per person per page, with four flags. **There is no inheritance.** A grant on a folder does not imply anything for the pages inside it — each page is checked on its own. This is deliberate: it stops the common "I shared one subfolder and accidentally gave away the whole tree" mistake.
+Per-page grants are how you reach a *private* page, or how someone who isn't a drive member gets in. Each grant is one record per person per page, with four flags, and **explicit grants don't inherit** — a grant on a folder says nothing about the pages inside it; each is checked on its own. (Drive-wide visibility for members is the separate open-by-default baseline above, not an inherited grant.)
 
-Role templates are a convenience layer for owners and admins. A template says "people with this role get View + Edit on this set of pages" — it saves you from wiring up the same grants by hand every time you onboard a new person. Templates don't change the resolution order; they're just a tidy way to produce the same per-page grants.
+Custom roles let owners and admins bundle access under a name. A role carries its own per-page view/edit/share map, and the access check consults it directly — so assigning someone the "Reviewer" role grants exactly what that role defines, and a role can also explicitly withhold view on a page. Assign a role when you invite someone or hand it out later.
 
 ## Good to know
 
-- **Sharing is per-person, not per-link.** Every grant is tied to a specific PageSpace account — there are no public URLs. If the person doesn't have an account yet, they sign up before you can grant them anything.
-- **Folder access doesn't cascade to children.** Granting access to a folder lets someone open the folder page itself; each child page is checked on its own grants. This prevents the common "I shared a subfolder and accidentally gave away the tree" accident.
+- **Invite by email, share by link, or grant per-person.** You can invite someone who has no account yet — the invite is held against their email and becomes access on signup. Share links let anyone who opens them join (drive) or view (page) with the role you choose, and stay revocable.
+- **Explicit grants don't cascade to children.** Granting access to a folder lets someone open the folder page itself; each child page is checked on its own grants. Drive members already see non-private pages across the tree — that's the membership baseline, separate from explicit grants.
 
 ## Related
 

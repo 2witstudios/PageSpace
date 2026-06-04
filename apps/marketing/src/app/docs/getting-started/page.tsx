@@ -60,7 +60,7 @@ Documents use a TipTap rich-text editor with:
 
 ## 4. Set Up AI
 
-Every cloud model is served through **OpenRouter** and organised under its real vendor, so you reach one catalogue that spans many providers without supplying any API keys — credentials are managed by the deployment operator (on pagespace.ai cloud that's PageSpace; on self-hosted, whoever runs the server). The default model is \`openai/gpt-5.3-chat\`.
+PageSpace gives you one catalogue of models from many vendors, organised by vendor, so you reach them all without supplying any API keys — PageSpace manages the credentials. The default model is \`openai/gpt-5.3-chat\`.
 
 | Vendor | What it is |
 |--------|-----------|
@@ -68,15 +68,7 @@ Every cloud model is served through **OpenRouter** and organised under its real 
 | Anthropic | Claude 4.6 / 4.5 / 4.1 families |
 | Google | Gemini 3 and 2.5 families |
 | xAI | Grok 4 family |
-| DeepSeek, Qwen, Mistral, Moonshot, MiniMax, Meta, and more | Additional open and frontier models in the OpenRouter catalogue |
-
-Self-hosted deployments can also point at a configured endpoint instead of OpenRouter:
-
-| Endpoint | What it is |
-|----------|-----------|
-| Azure OpenAI | Models from a configured Azure deployment |
-| Ollama | Models discovered from a configured Ollama server |
-| LM Studio | Models discovered from a configured LM Studio server |
+| DeepSeek, Qwen, Mistral, Moonshot, MiniMax, Meta, and more | Additional open and frontier models in the catalogue |
 
 Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost. Free accounts use a curated allowlist — \`openai/gpt-5.3-chat\` (default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
 

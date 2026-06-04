@@ -113,7 +113,7 @@ const faqs: FAQItem[] = [
     id: "how-do-i-get-my-team-in",
     question: "How do I get my team in?",
     answer:
-      "Invite teammates by email from your drive settings. They get a link, set up their account (passkey or magic link), and land directly in your workspace. Admins get access to everything in the drive; regular members only see pages you specifically share with them.",
+      "Invite teammates by email from your drive settings — even before they have an account — or share a join link. They set up their account (passkey or magic link) and land directly in your workspace. Members see everything in the drive except pages you've marked private; mark a page private to keep it to yourself or a chosen few.",
     category: "Getting started",
   },
   {
@@ -149,7 +149,7 @@ const faqs: FAQItem[] = [
     id: "which-models-available",
     question: "Which AI models are available?",
     answer:
-      "You can pick from models across OpenAI, Anthropic, Google, xAI, OpenRouter, and others, or run a local model via Ollama. Each agent in your workspace can use a different model.",
+      "PageSpace gives you one catalogue of models from many vendors — OpenAI, Anthropic, Google, xAI, and more. Free accounts use a curated set of efficient models; paid plans unlock the full catalogue. Each agent in your workspace can use a different model.",
     category: "Working with AI",
   },
   {
@@ -176,10 +176,24 @@ const faqs: FAQItem[] = [
     category: "Collaboration and sharing",
   },
   {
-    id: "no-permission-inheritance",
-    question: "If I share a folder with someone, do they get access to everything inside it?",
+    id: "keep-a-page-private",
+    question: "Can I keep a page private from the rest of the drive?",
     answer:
-      "No. Sharing a folder only gives access to that folder — pages inside each need their own share. Admins and owners are the exception; they get access to everything in the drive automatically.",
+      "Yes. Drive members see the drive's pages by default, so collaboration is the starting point — but you can mark any page (or folder) private, and then only the owner, admins, and the people or roles you explicitly grant access can see it. Marking a page private takes effect immediately.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "share-with-a-link",
+    question: "Can I share a page or drive with a link?",
+    answer:
+      "Yes. Generate a share link for a single page or a whole drive: anyone who opens a drive link can join with the role you choose, and a page link grants access to that page. Links are revocable and can carry an expiry. You can also invite someone by email before they even have an account — the invite waits for them and becomes access when they sign up.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "publish-to-web",
+    question: "Can I publish a page to the public web?",
+    answer:
+      "Yes — Canvas pages can be published as standalone web pages at their own address on a separate public domain, away from your workspace. Hit Publish, share the link, and unpublish whenever you like.",
     category: "Collaboration and sharing",
   },
   {
@@ -202,7 +216,7 @@ const faqs: FAQItem[] = [
     answer: (
       <>
         Yes. Content is encrypted at rest and in transit. Stored credentials
-        like API keys get an additional layer of encryption. More on the{" "}
+        like integration tokens get an additional layer of encryption. More on the{" "}
         {docsLink("/security", "Security page")}.
       </>
     ),
@@ -256,7 +270,9 @@ const faqs: FAQItem[] = [
       <>
         Yes — via the PageSpace MCP server. Create a token in your settings,
         point your client at the PageSpace MCP endpoint, and it can read and
-        write your workspace using the same tools the built-in agents use.{" "}
+        write your workspace using the same tools the built-in agents use. The
+        same token doubles as an OpenAI-compatible API key, so you can call any
+        of your agents as a model from your own code.{" "}
         {docsLink("/docs/integrations/mcp", "Setup guide")}.
       </>
     ),

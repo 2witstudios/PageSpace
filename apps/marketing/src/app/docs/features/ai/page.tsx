@@ -18,7 +18,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 - @mention an AI Chat page from a document, channel, sheet cell, or another AI Chat to pull that agent into the thread.
 - Use the **global assistant** in the right-hand sidebar to work across every drive you can see.
 - Ask one agent to consult another by name — the called agent runs under its own prompt and tools, then returns a single response.
-- Pick your provider and model in **Settings > AI**. The list shows whichever providers your deployment has enabled — your account-level pick sets the default and any individual AI Chat page can override it.
+- Pick your model in **Settings > AI** from one catalogue spanning every vendor — your account-level pick sets the default, and any individual AI Chat page can override it.
 - Restrict any agent to a specific toolset by editing its AI Chat page's allow-list.
 - Toggle **Read-only mode** on any AI Chat page to guarantee it cannot create, edit, or delete anything.
 - Toggle **Web search** on any AI Chat page to let that agent look things up outside your workspace.
@@ -26,7 +26,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## How it works
 
-**Models.** Every cloud model is routed through OpenRouter and grouped under its real vendor — OpenAI, Anthropic, Google, xAI, and more — so the picker is one catalogue spanning many providers. Credentials are held by the deployment operator (on cloud that's PageSpace; on a self-hosted install, whoever runs the server), so you never paste an API key. Self-hosted deployments can also point at a configured Azure OpenAI, Ollama, or LM Studio endpoint instead. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts pick from a curated set of efficient models, while paid plans unlock the full catalogue across every vendor.
+**Models.** PageSpace gives you one catalogue of models from many vendors — OpenAI, Anthropic, Google, xAI, and more — all in a single picker. PageSpace holds the credentials, so you never paste an API key or manage a provider account. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts pick from a curated set of efficient models, while paid plans unlock the full catalogue across every vendor, plus top-up credits whenever you need more.
 
 **Permissions.** When an agent acts, it acts as **you**. It can only see pages you can see and only change pages you can change. Share a page with a teammate and *their* agents can now see it too, under their account. Revoke access and the agents lose access immediately — there is no AI back-door.
 
