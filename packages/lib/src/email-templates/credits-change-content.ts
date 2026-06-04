@@ -12,6 +12,8 @@
 import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
   CREDIT_PACKS,
+  CREDIT_TOPUP_MIN_CENTS,
+  CREDIT_TOPUP_MAX_CENTS,
   type CreditPack,
 } from '../billing/credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
@@ -34,14 +36,6 @@ const TIER_LABELS: Record<SubscriptionTier, string> = {
   business: 'Business',
 };
 
-/**
- * Custom top-up amount bounds, in cents. Mirrors the in-app custom top-up
- * limits ($5–$500) so the announcement copy can't promise a range the
- * checkout won't accept. Kept here so the email, marketing copy, and tests
- * read one source.
- */
-export const TOPUP_MIN_CENTS = 500;
-export const TOPUP_MAX_CENTS = 50_000;
 
 export interface TopupPackSummary {
   /** Stable pack SKU id (matches `CreditPack.id`). */
@@ -99,7 +93,7 @@ export function getTierCreditSummary(tier: SubscriptionTier): TierCreditSummary 
     monthlyAllowanceLabel: formatCents(monthlyAllowanceCents),
     topupPacks,
     unlocksPremiumModels: tier !== 'free',
-    topupMinLabel: formatCents(TOPUP_MIN_CENTS),
-    topupMaxLabel: formatCents(TOPUP_MAX_CENTS),
+    topupMinLabel: formatCents(CREDIT_TOPUP_MIN_CENTS),
+    topupMaxLabel: formatCents(CREDIT_TOPUP_MAX_CENTS),
   };
 }

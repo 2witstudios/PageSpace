@@ -56,9 +56,9 @@ That's the whole point of usage-based pricing: what you pay tracks what you actu
 
 Here's the part daily limits could never give you: when billing is usage-based, model choice opens up.
 
-**Free** runs on fast, capable standard models — Gemini Flash, Claude Haiku, GPT mini variants, GLM 4.7. They're quick, they're cheap, and your $5 stretches a long way across them. You don't pick a model on Free; you get a strong default that's tuned to make the allowance go far.
+**Free** runs on fast, capable standard models — GPT-5.3 Chat, Claude Haiku 4.5, Gemini 3.5 Flash, and the GPT-5 mini and nano variants. They're quick, they're cheap, and your $5 stretches a long way across them. You don't pick a model on Free; you get a strong default that's tuned to make the allowance go far.
 
-**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, OpenAI o3, GLM-5 — whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
+**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, OpenAI o3, Gemini 3.1 Pro, Grok 4.3 — whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
 
 Cheaper model, credits stretch further. Premium model, more capability per credit. The control is yours.
 
