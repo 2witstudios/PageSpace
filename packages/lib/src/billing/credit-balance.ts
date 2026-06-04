@@ -9,8 +9,13 @@
  *     will reset it on the next call) rather than a stale, pessimistic remainder;
  *   - paid tier whose window has lapsed is shown 0 monthly (use-it-or-lose-it — the
  *     gate excludes the expired allowance until the renewal invoice refills it);
- *   - spendable nets out the sum of the user's still-active holds (reservations on
- *     calls currently in flight), clamped at 0.
+ *   - spendable is the FUNDED balance (monthly + top-up remaining), clamped at 0, and
+ *     is deliberately GROSS of in-flight holds. We surface the sum of still-active
+ *     holds separately as `reserved` (for an optional "call running" indicator) but do
+ *     NOT subtract it from the headline: a per-call reservation that places, then
+ *     settles to a fraction of its estimate, would otherwise make the displayed number
+ *     dip-then-pop on every call. Overspend is bounded by the gate's own locked check
+ *     (see ./credit-gate), not by this display; hiding holds here cannot over-grant.
  *
  * Money is always whole cents of customer-facing credit value, matching credit-core.
  *
@@ -39,9 +44,16 @@ export interface CreditBalanceSummary {
   topup: {
     remaining: number;
   };
-  /** monthly + topup remaining, minus active holds, clamped to >= 0. */
+  /**
+   * Funded balance for display: monthly + topup remaining, clamped to >= 0. GROSS of
+   * in-flight holds (see file header) — `reserved` is reported separately, not netted
+   * out here, so the headline doesn't dip-then-pop across a call's reserve/settle cycle.
+   */
   spendable: number;
-  /** Sum of this user's non-expired holds (estimated spend on in-flight calls). */
+  /**
+   * Sum of this user's non-expired holds (estimated spend on in-flight calls). Surfaced
+   * for an optional in-flight indicator; NOT subtracted from `spendable`.
+   */
   reserved: number;
 }
 
@@ -97,7 +109,7 @@ export async function getCreditBalance(
   // so present that as the spendable monthly balance.
   if (!row) {
     const allowance = allowanceFor(tier);
-    const spendable = Math.max(0, allowance - reserved);
+    const spendable = Math.max(0, allowance);
     return {
       billingEnabled: true,
       monthly: { remaining: allowance, allowance, periodEnd: null },
@@ -122,7 +134,7 @@ export async function getCreditBalance(
   }
 
   const topupRemaining = row.topupRemainingCents;
-  const spendable = Math.max(0, monthlyRemaining + topupRemaining - reserved);
+  const spendable = Math.max(0, monthlyRemaining + topupRemaining);
 
   return {
     billingEnabled: true,

@@ -5,6 +5,7 @@ import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { UIMessage } from 'ai';
 import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
 import { InputCard } from '@/components/ui/floating-input/InputCard';
+import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
@@ -296,8 +297,9 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
         {/* Floating input */}
         <InputPositioner position={inputPosition}>
           <InputCard
-            error={showError && error ? error.message : null}
-            onClearError={onClearError}
+            errorSlot={
+              <ChatErrorBanner error={error} show={showError} onClearError={onClearError} />
+            }
           >
             {inputContent}
           </InputCard>

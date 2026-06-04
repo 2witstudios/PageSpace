@@ -40,8 +40,7 @@ import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { isEditingActive } from '@/stores/useEditingStore';
-import { getAIErrorMessage, isOutOfCreditsError } from '@/lib/ai/shared/error-messages';
-import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
+import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
@@ -902,24 +901,11 @@ const SidebarChatTab: React.FC = () => {
           paddingBottom: isKeyboardOpen ? `calc(0.75rem + ${keyboardHeight}px)` : undefined,
         }}
       >
-        {error && showError && (
-          <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-red-700 dark:text-red-300">
-                {getAIErrorMessage(error.message)}
-              </p>
-              <button
-                onClick={() => setShowError(false)}
-                className="shrink-0 text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200 underline"
-              >
-                Clear
-              </button>
-            </div>
-            {isOutOfCreditsError(error.message) && (
-              <BuyCreditsButton variant="default" size="sm" className="self-start" />
-            )}
-          </div>
-        )}
+        <ChatErrorBanner
+          error={error}
+          show={showError}
+          onClearError={() => setShowError(false)}
+        />
 
         <div className="px-1">
           <ProviderModelSelector

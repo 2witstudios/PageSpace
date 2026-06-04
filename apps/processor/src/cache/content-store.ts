@@ -440,6 +440,34 @@ export class ContentStore {
     }
   }
 
+  /**
+   * HEAD-probe an original object and return its size in bytes, or `null` if it
+   * is definitively absent (not-found) or the hash is malformed. Unlike
+   * {@link getOriginal} — which swallows every error into `null` — this RE-THROWS
+   * genuine infrastructure failures (network, auth, 5xx) so callers can tell a
+   * transient outage apart from an absent object. Used by the verify endpoint to
+   * gate the synchronous download on size without first buffering the bytes.
+   */
+  async headOriginalSize(contentHash: string): Promise<number | null> {
+    let normalizedHash: string;
+    try {
+      normalizedHash = this.normalizeContentHash(contentHash);
+    } catch (error) {
+      if (error instanceof InvalidContentHashError) return null;
+      throw error;
+    }
+
+    try {
+      const resp = await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
+      );
+      return typeof resp.ContentLength === 'number' ? resp.ContentLength : null;
+    } catch (err) {
+      if (isS3NotFound(err)) return null;
+      throw err;
+    }
+  }
+
   private async hashFile(filePath: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const hash = crypto.createHash('sha256');

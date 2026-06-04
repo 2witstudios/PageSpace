@@ -114,6 +114,10 @@ export async function createAIProvider(
       // to the cache window so genuine repeats (regenerate/retry) can HIT.
       const openrouter = createOpenRouter({
         apiKey: managed.apiKey,
+        // OPENROUTER_BASE_URL lets a non-prod environment (e.g. e2e) redirect the
+        // OpenRouter API at a deterministic stub that returns known usage.cost, so
+        // billing can be asserted end-to-end. Unset in prod → real OpenRouter.
+        ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
         headers: { 'X-OpenRouter-Cache': 'true' },
       });
       // usage: { include: true } turns on OpenRouter usage accounting so the

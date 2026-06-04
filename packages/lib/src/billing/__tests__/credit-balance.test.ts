@@ -72,12 +72,14 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(b.monthly.allowance);
   });
 
-  it('subtracts active holds from spendable when no row exists', async () => {
+  it('reports active holds as reserved but does NOT subtract them from spendable when no row exists', async () => {
     balanceRows = [];
     holdRows = [{ reserved: 25 }];
     const b = await getCreditBalance('u1', 'free');
+    // Display is gross of in-flight holds: reserved is surfaced separately, but the
+    // headline spendable stays the funded balance so it doesn't dip when a call starts.
     expect(b.reserved).toBe(25);
-    expect(b.spendable).toBe(b.monthly.allowance - 25);
+    expect(b.spendable).toBe(b.monthly.allowance);
   });
 
   it('uses stored remaining for a free tier within its period', async () => {
@@ -123,7 +125,7 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(250); // only top-up survives
   });
 
-  it('clamps spendable at zero when holds exceed the balance', async () => {
+  it('does not let in-flight holds reduce the displayed spendable', async () => {
     balanceRows = [
       {
         monthlyRemainingCents: 10,
@@ -134,7 +136,10 @@ describe('getCreditBalance', () => {
     ];
     holdRows = [{ reserved: 50 }];
     const b = await getCreditBalance('u1', 'free');
-    expect(b.spendable).toBe(0);
+    // Holds larger than the balance must NOT drive the headline to 0 mid-call; the
+    // gate enforces overspend independently. Spendable stays the funded balance.
+    expect(b.reserved).toBe(50);
+    expect(b.spendable).toBe(10);
   });
 });
 

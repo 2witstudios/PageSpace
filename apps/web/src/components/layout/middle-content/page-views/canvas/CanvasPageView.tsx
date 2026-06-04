@@ -1,19 +1,15 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
-import { useRouter } from 'next/navigation';
-import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
+import { CanvasFrame } from '@/components/canvas/CanvasFrame';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { useDocument } from '@/hooks/useDocument';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
-import { openExternalUrl } from '@/lib/navigation/app-navigation';
 import { useFindStore } from '@/stores/useFindStore';
 import CanvasPublishControls from './CanvasPublishControls';
 
@@ -28,8 +24,6 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
   const isDirtyRef = useRef(false);
-  const router = useRouter();
-  const { user } = useAuth();
   const socket = useSocket();
 
   const {
@@ -162,50 +156,6 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     };
   }, []);
 
-  const handleNavigation = useCallback(async (url: string, isExternal: boolean) => {
-    if (!url) return;
-
-    if (isExternal) {
-      const confirmed = window.confirm(`Navigate to external site?\n\n${url}`);
-      if (confirmed) {
-        await openExternalUrl(url);
-      }
-      return;
-    }
-
-    const dashboardMatch = url.match(/^\/dashboard\/([^\/]+)\/([^\/]+)$/);
-    if (dashboardMatch) {
-      const [, , targetPageId] = dashboardMatch;
-      if (user && targetPageId) {
-        try {
-          const response = await fetchWithAuth(`/api/pages/${targetPageId}/permissions/check`);
-          if (response.ok) {
-            const permissions = await response.json();
-            if (!permissions.canView) {
-              toast.error('You do not have permission to view this page');
-              return;
-            }
-          } else {
-            toast.error('Failed to verify page permissions');
-            return;
-          }
-        } catch (error) {
-          console.error('Error checking permissions:', error);
-          toast.error('Failed to verify page permissions');
-          return;
-        }
-      }
-      router.push(url);
-      return;
-    }
-
-    if (url.startsWith('/')) {
-      router.push(url);
-    } else {
-      toast.error('Invalid navigation URL');
-    }
-  }, [router, user]);
-
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
       <div className="relative flex items-center border-b">
@@ -237,7 +187,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
       {activeTab === 'view' && (
         <div className="flex-1 w-full bg-background text-foreground">
           <ErrorBoundary>
-            <ShadowCanvas html={content} onNavigate={handleNavigation} />
+            <CanvasFrame html={content} />
           </ErrorBoundary>
         </div>
       )}

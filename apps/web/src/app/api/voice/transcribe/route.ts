@@ -197,6 +197,7 @@ export async function POST(request: Request) {
       userId,
       provider: 'openai_voice',
       model: 'whisper-1',
+      source: 'voice',
       providerCostDollars: costDollars,
       // Request latency (ms), matching the chat route — NOT the audio length, which
       // would pollute response-time analytics. Audio seconds (the billing quantity)

@@ -1,0 +1,133 @@
+/**
+ * Pure aggregation for the user-facing "where my credits go" breakdown.
+ *
+ * Input is one row per billed AI call (credit_ledger usage row joined to its
+ * aiUsageLogs row); output groups customer-facing spend by feature (`source`) and by
+ * model. No I/O — the DB read lives in `usage-breakdown-query.ts`, which calls this.
+ *
+ * Spend is the LEDGER's charged amount (post-markup, what the user actually paid in
+ * credits), carried as `chargeMillicents` (1 cent = 1000 millicents) for sub-cent
+ * precision; never the raw provider `cost` on aiUsageLogs.
+ */
+
+import {
+  normalizeUsageSource,
+  USAGE_SOURCE_LABELS,
+  type AIUsageSource,
+} from '@pagespace/lib/monitoring/usage-source';
+
+export interface UsageLedgerRow {
+  source: string | null;
+  model: string | null;
+  provider: string | null;
+  chargeMillicents: number | null;
+  totalTokens: number | null;
+}
+
+export interface UsageBreakdownPeriod {
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
+export interface UsageFeatureRow {
+  source: AIUsageSource;
+  label: string;
+  spendCents: number;
+  tokens: number;
+  calls: number;
+  sharePct: number;
+}
+
+export interface UsageModelRow {
+  model: string;
+  provider: string;
+  spendCents: number;
+  tokens: number;
+  calls: number;
+  sharePct: number;
+}
+
+export interface UsageBreakdown extends UsageBreakdownPeriod {
+  totalSpendCents: number;
+  byFeature: UsageFeatureRow[];
+  byModel: UsageModelRow[];
+}
+
+/** Internal accumulator (spend tracked in millicents for precision). */
+interface Bucket {
+  millicents: number;
+  tokens: number;
+  calls: number;
+}
+
+const millicentsToCents = (millicents: number): number =>
+  Math.round((millicents / 1000) * 100) / 100;
+
+// Share of total spend, 0–100. A row with real (nonzero) spend never rounds down to a
+// bare "0%" with an empty bar — it floors at 1% so the UI reflects that it cost something.
+const sharePct = (millicents: number, totalMillicents: number): number => {
+  if (totalMillicents <= 0 || millicents <= 0) return 0;
+  return Math.max(1, Math.round((millicents / totalMillicents) * 100));
+};
+
+export function aggregateUsageBreakdown(
+  rows: UsageLedgerRow[],
+  period: UsageBreakdownPeriod,
+): UsageBreakdown {
+  const featureBuckets = new Map<AIUsageSource, Bucket>();
+  const modelBuckets = new Map<string, Bucket & { model: string; provider: string }>();
+  let totalMillicents = 0;
+
+  for (const r of rows) {
+    const charge = r.chargeMillicents ?? 0;
+    const tokens = r.totalTokens ?? 0;
+    totalMillicents += charge;
+
+    const source = normalizeUsageSource(r.source);
+    const fb = featureBuckets.get(source) ?? { millicents: 0, tokens: 0, calls: 0 };
+    fb.millicents += charge;
+    fb.tokens += tokens;
+    fb.calls += 1;
+    featureBuckets.set(source, fb);
+
+    const model = r.model ?? 'unknown';
+    const provider = r.provider ?? 'unknown';
+    // JSON-tuple key: collision-proof regardless of characters in model/provider.
+    const key = JSON.stringify([model, provider]);
+    const mb = modelBuckets.get(key) ?? { millicents: 0, tokens: 0, calls: 0, model, provider };
+    mb.millicents += charge;
+    mb.tokens += tokens;
+    mb.calls += 1;
+    modelBuckets.set(key, mb);
+  }
+
+  const byFeature: UsageFeatureRow[] = Array.from(featureBuckets.entries())
+    .map(([source, b]) => ({
+      source,
+      label: USAGE_SOURCE_LABELS[source],
+      spendCents: millicentsToCents(b.millicents),
+      tokens: b.tokens,
+      calls: b.calls,
+      sharePct: sharePct(b.millicents, totalMillicents),
+    }))
+    .sort((a, b) => b.spendCents - a.spendCents);
+
+  const byModel: UsageModelRow[] = Array.from(modelBuckets.values())
+    .map((b) => ({
+      model: b.model,
+      provider: b.provider,
+      spendCents: millicentsToCents(b.millicents),
+      tokens: b.tokens,
+      calls: b.calls,
+      sharePct: sharePct(b.millicents, totalMillicents),
+    }))
+    .sort((a, b) => b.spendCents - a.spendCents);
+
+  return {
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    totalSpendCents: millicentsToCents(totalMillicents),
+    byFeature,
+    byModel,
+  };
+}

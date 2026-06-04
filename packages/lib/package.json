@@ -87,6 +87,11 @@
       "import": "./dist/billing/credit-emit.js",
       "require": "./dist/billing/credit-emit.js"
     },
+    "./billing/automation-preferences": {
+      "types": "./dist/billing/automation-preferences.d.ts",
+      "import": "./dist/billing/automation-preferences.js",
+      "require": "./dist/billing/automation-preferences.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -107,10 +112,20 @@
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
     },
+    "./monitoring/usage-source": {
+      "types": "./dist/monitoring/usage-source.d.ts",
+      "import": "./dist/monitoring/usage-source.js",
+      "require": "./dist/monitoring/usage-source.js"
+    },
     "./monitoring/voice-pricing": {
       "types": "./dist/monitoring/voice-pricing.d.ts",
       "import": "./dist/monitoring/voice-pricing.js",
       "require": "./dist/monitoring/voice-pricing.js"
+    },
+    "./monitoring/chat-pricing": {
+      "types": "./dist/monitoring/chat-pricing.d.ts",
+      "import": "./dist/monitoring/chat-pricing.js",
+      "require": "./dist/monitoring/chat-pricing.js"
     },
     "./monitoring/ai-context-calculator": {
       "types": "./dist/monitoring/ai-context-calculator.d.ts",
@@ -337,6 +352,11 @@
       "import": "./dist/services/attachment-upload.js",
       "require": "./dist/services/attachment-upload.js"
     },
+    "./services/attachment-upload-core": {
+      "types": "./dist/services/attachment-upload-core.d.ts",
+      "import": "./dist/services/attachment-upload-core.js",
+      "require": "./dist/services/attachment-upload-core.js"
+    },
     "./services/attachment-upload-repository": {
       "types": "./dist/services/attachment-upload-repository.d.ts",
       "import": "./dist/services/attachment-upload-repository.js",
@@ -531,6 +551,11 @@
       "types": "./dist/canvas/sanitize-css.d.ts",
       "import": "./dist/canvas/sanitize-css.js",
       "require": "./dist/canvas/sanitize-css.js"
+    },
+    "./canvas/render-document": {
+      "types": "./dist/canvas/render-document.d.ts",
+      "import": "./dist/canvas/render-document.js",
+      "require": "./dist/canvas/render-document.js"
     },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
@@ -918,6 +943,9 @@
       "billing/credit-emit": [
         "./dist/billing/credit-emit.d.ts"
       ],
+      "billing/automation-preferences": [
+        "./dist/billing/automation-preferences.d.ts"
+      ],
       "billing/credit-pricing": [
         "./dist/billing/credit-pricing.d.ts"
       ],
@@ -941,6 +969,9 @@
       ],
       "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
+      ],
+      "monitoring/usage-source": [
+        "./dist/monitoring/usage-source.d.ts"
       ],
       "monitoring/ai-context-calculator": [
         "./dist/monitoring/ai-context-calculator.d.ts"
@@ -1056,6 +1087,9 @@
       "services/attachment-upload": [
         "./dist/services/attachment-upload.d.ts"
       ],
+      "services/attachment-upload-core": [
+        "./dist/services/attachment-upload-core.d.ts"
+      ],
       "services/attachment-upload-repository": [
         "./dist/services/attachment-upload-repository.d.ts"
       ],
@@ -1166,6 +1200,9 @@
       ],
       "canvas/sanitize-css": [
         "./dist/canvas/sanitize-css.d.ts"
+      ],
+      "canvas/render-document": [
+        "./dist/canvas/render-document.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

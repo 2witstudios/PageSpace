@@ -250,6 +250,37 @@ describe('ContentStore', () => {
     });
   });
 
+  describe('headOriginalSize', () => {
+    it('returns the ContentLength when HeadObject succeeds', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({ ContentLength: 2048 });
+      expect(await store.headOriginalSize(VALID_HASH)).toBe(2048);
+    });
+
+    it('returns null when HeadObject reports a missing ContentLength', async () => {
+      const { store, send } = createStore();
+      send.mockResolvedValueOnce({});
+      expect(await store.headOriginalSize(VALID_HASH)).toBeNull();
+    });
+
+    it('returns null when the object is not found', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(NOT_FOUND);
+      expect(await store.headOriginalSize(VALID_HASH)).toBeNull();
+    });
+
+    it('returns null for an invalid hash', async () => {
+      const { store } = createStore();
+      expect(await store.headOriginalSize('invalid')).toBeNull();
+    });
+
+    it('re-throws genuine infra errors instead of masking them as not-found', async () => {
+      const { store, send } = createStore();
+      send.mockRejectedValueOnce(Object.assign(new Error('connection reset'), { name: 'TimeoutError' }));
+      await expect(store.headOriginalSize(VALID_HASH)).rejects.toThrow('connection reset');
+    });
+  });
+
   describe('getOriginal', () => {
     it('returns buffer when object exists', async () => {
       const { store, send } = createStore();

@@ -137,9 +137,10 @@ describe('canConsumeAI', () => {
     // The hold reserves this call's estimate and is scoped to the user.
     expect(sink.holdValues).toMatchObject({ userId: 'u1', estCents: EST });
     expect(sink.holdValues?.expiresAt).toBeInstanceOf(Date);
-    // Placing the hold shrank spendable -> push the fresh balance so the navbar
-    // drops the instant the call starts (not just when it settles).
-    expect(mockEmitCreditsUpdated).toHaveBeenCalledWith('u1');
+    // Placing the hold must NOT push a balance update: holds are hidden from the
+    // displayed balance, and the navbar updates only when the call settles (real
+    // cost) via consumeCredits. Emitting here would make the headline dip-then-pop.
+    expect(mockEmitCreditsUpdated).not.toHaveBeenCalled();
   });
 
   it('caps a PAID user via opts.maxInFlight (voice concurrency bound) even with ample credit', async () => {

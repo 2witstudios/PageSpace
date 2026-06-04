@@ -37,6 +37,8 @@ import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -114,7 +116,10 @@ export async function POST(request: Request): Promise<Response> {
     .select({ subscriptionTier: users.subscriptionTier })
     .from(users)
     .where(eq(users.id, authResult.userId));
-  const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier);
+  const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+    estCostCents: estimateChatHoldCentsForModel(page.aiModel ?? undefined),
+    maxInFlight: MAX_CHAT_INFLIGHT,
+  });
   if (!creditGate.allowed) {
     auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: creditGate.reason }, riskScore: 0 });
     return creditGateErrorResponse(creditGate.reason);
@@ -240,6 +245,7 @@ export async function POST(request: Request): Promise<Response> {
       userId: authResult.userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'chat',
       inputTokens: totalUsage?.inputTokens,
       outputTokens: totalUsage?.outputTokens,
       providerCostDollars: extractOpenRouterCostDollars(steps as Parameters<typeof extractOpenRouterCostDollars>[0]),
