@@ -229,6 +229,7 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
+  extractOpenRouterGenerationIds: vi.fn(() => []),
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-context-calculator', () => ({

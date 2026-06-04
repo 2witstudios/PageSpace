@@ -62,6 +62,27 @@ interface SubscriptionTierRow {
   count: number;
 }
 
+interface BalanceDriftRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  expectedSpendableCents: number;
+  materializedSpendableCents: number;
+  driftCents: number;
+  debtCents: number;
+}
+
+interface NegativeMarginRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  realCostCents: number;
+  chargedCents: number;
+  marginCents: number;
+  marginPct: number | null;
+  requestCount: number;
+}
+
 interface Enforcement {
   enabled: boolean;
   markupBps: number;
@@ -96,6 +117,10 @@ interface AiBillingResponse {
   holds: {
     holdCount: number;
     heldCents: number;
+  };
+  alerts: {
+    balanceDrift: BalanceDriftRow[];
+    negativeMargin: NegativeMarginRow[];
   };
 }
 
@@ -226,7 +251,7 @@ export default function AdminAiBillingPage() {
     );
   }
 
-  const { enforcement, tokens, revenue, liability, holds } = data;
+  const { enforcement, tokens, revenue, liability, holds, alerts } = data;
   const markupMultiplier = (enforcement.markupBps / 10000).toFixed(2);
 
   return (
@@ -304,6 +329,85 @@ export default function AdminAiBillingPage() {
           )}
         </AlertDescription>
       </Alert>
+
+      {/* Account-level alerts: balance drift + negative margin */}
+      {(alerts.balanceDrift.length > 0 || alerts.negativeMargin.length > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-red-600 dark:text-red-400" />
+              Account alerts
+            </CardTitle>
+            <CardDescription>
+              Accounts to review: balance drift (materialized buckets diverge from the
+              ledger — a smell detector; resets/forgiveness make it approximate) and
+              negative margin (charged credits don&apos;t cover real provider cost).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {alerts.balanceDrift.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold">Balance drift ({alerts.balanceDrift.length})</h3>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User</TableHead>
+                      <TableHead className="text-right">Expected</TableHead>
+                      <TableHead className="text-right">Materialized</TableHead>
+                      <TableHead className="text-right">Drift</TableHead>
+                      <TableHead className="text-right">Debt</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {alerts.balanceDrift.map((r) => (
+                      <TableRow key={r.userId}>
+                        <TableCell>{userLabel(r)}</TableCell>
+                        <TableCell className="text-right">{usd(r.expectedSpendableCents)}</TableCell>
+                        <TableCell className="text-right">{usd(r.materializedSpendableCents)}</TableCell>
+                        <TableCell className={`text-right font-medium ${marginClass(-Math.abs(r.driftCents) || 0)}`}>
+                          {usd(r.driftCents)}
+                        </TableCell>
+                        <TableCell className="text-right">{usd(r.debtCents)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {alerts.negativeMargin.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold">Negative margin ({alerts.negativeMargin.length})</h3>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>User</TableHead>
+                      <TableHead className="text-right">Real cost</TableHead>
+                      <TableHead className="text-right">Charged</TableHead>
+                      <TableHead className="text-right">Margin</TableHead>
+                      <TableHead className="text-right">Margin %</TableHead>
+                      <TableHead className="text-right">Requests</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {alerts.negativeMargin.map((r) => (
+                      <TableRow key={r.userId}>
+                        <TableCell>{userLabel(r)}</TableCell>
+                        <TableCell className="text-right">{usd(r.realCostCents)}</TableCell>
+                        <TableCell className="text-right">{usd(r.chargedCents)}</TableCell>
+                        <TableCell className={`text-right font-medium ${marginClass(r.marginCents)}`}>
+                          {usd(r.marginCents)}
+                        </TableCell>
+                        <TableCell className={`text-right ${marginClass(r.marginPct)}`}>{pct(r.marginPct)}</TableCell>
+                        <TableCell className="text-right">{num(r.requestCount)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Summary cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">

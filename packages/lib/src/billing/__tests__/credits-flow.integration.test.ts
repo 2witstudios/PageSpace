@@ -29,6 +29,8 @@ type Pred =
   | { kind: 'eq'; col: Col; val: unknown }
   | { kind: 'lt'; col: Col; val: unknown }
   | { kind: 'gt'; col: Col; val: unknown }
+  | { kind: 'gte'; col: Col; val: unknown }
+  | { kind: 'inArray'; col: Col; vals: unknown[] }
   | { kind: 'isNull'; col: Col }
   | { kind: 'and'; parts: Pred[] }
   | { kind: 'or'; parts: Pred[] }
@@ -51,16 +53,22 @@ const H = vi.hoisted(() => {
   ]);
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
-    'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'consumeStatus', 'createdAt',
+    'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'consumeStatus',
+    'reconcileGenerationKey', 'createdAt',
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
-  const aiUsageLogs = cols('aiUsageLogs', ['id', 'userId', 'cost', 'timestamp', 'success']);
+  const aiUsageLogs = cols('aiUsageLogs', [
+    'id', 'userId', 'cost', 'timestamp', 'success',
+    'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
+  ]);
 
   // ── operators ───────────────────────────────────────────────────────────────
   const eq = (col: Col, val: unknown): Pred => ({ kind: 'eq', col, val });
   const lt = (col: Col, val: unknown): Pred => ({ kind: 'lt', col, val });
   const gt = (col: Col, val: unknown): Pred => ({ kind: 'gt', col, val });
+  const gte = (col: Col, val: unknown): Pred => ({ kind: 'gte', col, val });
+  const inArray = (col: Col, vals: unknown[]): Pred => ({ kind: 'inArray', col, vals });
   const isNull = (col: Col): Pred => ({ kind: 'isNull', col });
   const and = (...parts: Pred[]): Pred => ({ kind: 'and', parts });
   const or = (...parts: Pred[]): Pred => ({ kind: 'or', parts });
@@ -85,6 +93,8 @@ const H = vi.hoisted(() => {
       case 'eq': return resolve(p.col, ctx) === operand(p.val, ctx);
       case 'lt': { const a = resolve(p.col, ctx); const b = operand(p.val, ctx); return a != null && b != null && num(a) < num(b); }
       case 'gt': { const a = resolve(p.col, ctx); const b = operand(p.val, ctx); return a != null && b != null && num(a) > num(b); }
+      case 'gte': { const a = resolve(p.col, ctx); const b = operand(p.val, ctx); return a != null && b != null && num(a) >= num(b); }
+      case 'inArray': return p.vals.includes(resolve(p.col, ctx));
       case 'isNull': return resolve(p.col, ctx) == null;
       case 'and': return p.parts.every((q) => evalPred(q, ctx));
       case 'or': return p.parts.some((q) => evalPred(q, ctx));
@@ -111,7 +121,7 @@ const H = vi.hoisted(() => {
     if (table === 'creditLedger') {
       return {
         appliedCents: null, chargeMillicents: null, aiUsageLogId: null, realCostCents: null,
-        stripeRef: null, markupBps: 15000, consumeStatus: 'pending',
+        stripeRef: null, reconcileGenerationKey: null, markupBps: 15000, consumeStatus: 'pending',
         id: nextId('led'), createdAt: new Date(),
         ...v,
       };
@@ -145,6 +155,11 @@ const H = vi.hoisted(() => {
       return row.aiUsageLogId == null
         ? undefined
         : store.creditLedger.find((r) => r.aiUsageLogId === row.aiUsageLogId && r.entryType === 'usage');
+    }
+    if (table === 'creditLedger' && target.name === 'reconcileGenerationKey') {
+      return row.reconcileGenerationKey == null
+        ? undefined
+        : store.creditLedger.find((r) => r.reconcileGenerationKey === row.reconcileGenerationKey);
     }
     return undefined;
   };
@@ -192,8 +207,13 @@ const H = vi.hoisted(() => {
         }
       }
       const filtered = contexts.filter((c) => evalPred(wherePred, c.ctx));
-      // The gate's hold tally: coalesce(sum(estCents),0) AS reserved, count(*) AS inFlight.
       if (isAggregate(proj)) {
+        // The daily-cap query: coalesce(sum(chargeMillicents),0) AS chargedMc.
+        if (proj && 'chargedMc' in proj) {
+          const chargedMc = filtered.reduce((s, c) => s + ((c.primary.chargeMillicents as number) ?? 0), 0);
+          return [{ chargedMc }];
+        }
+        // The gate's hold tally: coalesce(sum(estCents),0) AS reserved, count(*) AS inFlight.
         const reserved = filtered.reduce((s, c) => s + ((c.primary.estCents as number) ?? 0), 0);
         return [{ reserved, inFlight: filtered.length }];
       }
@@ -362,7 +382,7 @@ const H = vi.hoisted(() => {
   return {
     store, db, isBillingEnabled, logger,
     schema: { creditBalances, creditLedger, creditHolds, users, aiUsageLogs },
-    ops: { eq, lt, gt, isNull, and, or, sql: sqlTag },
+    ops: { eq, lt, gt, gte, inArray, isNull, and, or, sql: sqlTag },
   };
 });
 
@@ -382,6 +402,7 @@ import { applyStripeFunding } from '../credit-funding';
 import { canConsumeAI } from '../credit-gate';
 import { consumeCredits } from '../credit-consume';
 import { backfillCredits } from '../credit-backfill';
+import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconcile';
 import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
   RESERVE_FLOOR_CENTS,
@@ -840,5 +861,203 @@ describe('credits flow — billing disabled (tenant/onprem)', () => {
     expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
     expect(store.creditLedger).toHaveLength(0);
     expect(store.creditBalances).toHaveLength(0);
+  });
+});
+
+describe('credits flow — async cost reconcile (/generation drift correction)', () => {
+  const TEN_MIN_AGO = () => new Date(Date.now() - 10 * 60 * 1000);
+
+  function seedBalance(userId: string, partial: Partial<{ monthly: number; topup: number; debt: number }> = {}) {
+    store.creditBalances.push({
+      userId,
+      monthlyRemainingCents: partial.monthly ?? 1000,
+      monthlyAllowanceCents: 1000,
+      topupRemainingCents: partial.topup ?? 0,
+      pendingMillicents: 0,
+      debtCents: partial.debt ?? 0,
+      monthlyPeriodStart: null,
+      monthlyPeriodEnd: null,
+      updatedAt: new Date(),
+    });
+  }
+
+  function seedPendingUsage(id: string, userId: string, costDollars: number, generationIds: string[] | null, attempts = 0) {
+    store.aiUsageLogs.push({
+      id,
+      userId,
+      cost: costDollars,
+      timestamp: TEN_MIN_AGO(),
+      success: true,
+      metadata: generationIds === null ? {} : { generationIds },
+      reconcileStatus: 'pending',
+      reconcileAttempts: attempts,
+      reconciledAt: null,
+    });
+  }
+
+  // Reconcile only CORRECTS an already-billed call, so a base `usage` ledger row must
+  // exist for the aiUsageLogId or the row is deferred (see hasUsageLedgerRow). Seed one.
+  function seedUsageLedger(aiUsageLogId: string, userId: string) {
+    store.creditLedger.push({
+      id: `led_${aiUsageLogId}`, userId, entryType: 'usage', bucket: 'monthly',
+      amountCents: -150, appliedCents: -150, chargeMillicents: 150_000, aiUsageLogId,
+      realCostCents: 100, markupBps: 15000, stripeRef: null, reconcileGenerationKey: null,
+      consumeStatus: 'applied', createdAt: new Date(),
+    });
+  }
+
+  const usageRow = (id: string) => store.aiUsageLogs.find((r) => r.id === id) as
+    | { reconcileStatus: string; reconcileAttempts: number }
+    | undefined;
+  const adjustments = (userId: string) => ledgerOf(userId).filter((r) => r.entryType === 'adjustment');
+
+  it('corrects an undercharge: authoritative cost > billed → adjustment + extra debit', async () => {
+    seedBalance('u1', { monthly: 1000 });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']); // billed 100¢ real
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => ({ totalCost: 1.1 }); // authoritative $1.10
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 1, corrected: 1, unavailable: 0, skipped: 0 });
+    expect(usageRow('log_1')!.reconcileStatus).toBe('reconciled');
+    // 10¢ real delta × 1.5 = 15¢ extra charge → monthly 1000 − 15 = 985.
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(985);
+    const adj = adjustments('u1');
+    expect(adj).toHaveLength(1);
+    expect(adj[0]).toMatchObject({ aiUsageLogId: 'log_1', reconcileGenerationKey: 'gen-1', appliedCents: -15 });
+  });
+
+  it('corrects an overcharge: authoritative cost < billed → refund pays down debt first', async () => {
+    seedBalance('u1', { monthly: 1000, debt: 50 });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']); // billed 100¢
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => ({ totalCost: 0.8 }); // authoritative $0.80
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r.corrected).toBe(1);
+    // 20¢ delta × 1.5 = 30¢ refund → pays down 50¢ debt to 20¢ (topup stays 0).
+    expect(balanceOf('u1')!.debtCents).toBe(20);
+    expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
+  });
+
+  it('leaves a within-tolerance row reconciled with no adjustment', async () => {
+    seedBalance('u1', { monthly: 1000 });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']); // billed 100¢
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => ({ totalCost: 1.02 }); // 2¢ drift < 5% band
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 1, corrected: 0 });
+    expect(usageRow('log_1')!.reconcileStatus).toBe('reconciled');
+    expect(adjustments('u1')).toHaveLength(0);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1000);
+  });
+
+  it('keeps a not-yet-available generation pending and bumps its attempt count', async () => {
+    seedBalance('u1');
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1'], 0);
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => 'not_found';
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 0, corrected: 0, unavailable: 0 });
+    expect(usageRow('log_1')!.reconcileStatus).toBe('pending');
+    expect(usageRow('log_1')!.reconcileAttempts).toBe(1);
+  });
+
+  it('gives up after the attempt budget is exhausted → unavailable', async () => {
+    seedBalance('u1');
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1'], 5); // COST_RECONCILE_MAX_ATTEMPTS = 6
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => 'not_found';
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r.unavailable).toBe(1);
+    expect(usageRow('log_1')!.reconcileStatus).toBe('unavailable');
+  });
+
+  it('is idempotent: a re-run over the same generation set inserts no second adjustment', async () => {
+    seedBalance('u1', { monthly: 1000 });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']);
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => ({ totalCost: 1.1 });
+
+    await reconcileOpenRouterCosts({ fetcher });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(985);
+    expect(adjustments('u1')).toHaveLength(1);
+
+    // Simulate a lost status update (row back to 'pending') and re-run: the reconcile-key
+    // unique arbiter makes the claim a no-op, so the balance is NOT debited twice.
+    usageRow('log_1')!.reconcileStatus = 'pending';
+    await reconcileOpenRouterCosts({ fetcher });
+
+    expect(adjustments('u1')).toHaveLength(1);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(985);
+  });
+
+  it('marks a row with no generation ids skipped (never fetches)', async () => {
+    seedBalance('u1');
+    seedPendingUsage('log_1', 'u1', 1.0, null); // metadata has no generationIds
+    let called = false;
+    const fetcher: GenerationFetcher = async () => { called = true; return 'not_found'; };
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r.skipped).toBe(1);
+    expect(called).toBe(false);
+    expect(usageRow('log_1')!.reconcileStatus).toBe('skipped');
+  });
+
+  it('defers (no adjustment, no fetch) when the base usage charge has not been billed yet', async () => {
+    // No usage ledger row for log_1 → consumeCredits hasn't run. Correcting now would
+    // leave the base charge unbilled AND mask it from credit-backfill's orphan sweep.
+    seedBalance('u1', { monthly: 1000 });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']);
+    let called = false;
+    const fetcher: GenerationFetcher = async () => { called = true; return { totalCost: 1.1 }; };
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 0, corrected: 0 });
+    expect(called).toBe(false); // no /generation fetch spent on a not-yet-billed row
+    expect(adjustments('u1')).toHaveLength(0); // nothing inserted to mask the orphan
+    expect(usageRow('log_1')!.reconcileStatus).toBe('pending'); // deferred for a later run
+    expect(usageRow('log_1')!.reconcileAttempts).toBe(1);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1000); // balance untouched
+  });
+});
+
+describe('credits flow — per-user/day exposure cap (fund → consume past the cap → denied)', () => {
+  afterEach(() => {
+    delete process.env.DAILY_USER_EXPOSURE_CAP_CENTS;
+  });
+
+  it('denies the next call once the day\'s charged spend would exceed the cap, while credits remain', async () => {
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '200'; // 200¢/day ceiling
+    seedUser('u1', 'cus_1', 'pro'); // pro = 1500¢ monthly — far above the daily cap
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+
+    // CALL 1: $1 real → 150¢ charged. day total 0 + EST(25) < 200 → allowed.
+    let g = await canConsumeAI('u1', 'pro');
+    expect(g).toMatchObject({ allowed: true, reason: 'ok' });
+    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 1, holdId: g.holdId });
+
+    // CALL 2: day total 150¢ + EST(25) = 175 < 200 → still allowed.
+    g = await canConsumeAI('u1', 'pro');
+    expect(g.allowed).toBe(true);
+    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1, holdId: g.holdId });
+
+    // CALL 3: day total now 300¢ — already over the 200¢ cap → denied by the backstop,
+    // NOT by credits (monthly still has 1200¢). No hold is reserved on the denial.
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200);
+    g = await canConsumeAI('u1', 'pro');
+    expect(g).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(store.creditHolds).toHaveLength(0);
   });
 });

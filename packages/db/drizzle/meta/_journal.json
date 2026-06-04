@@ -1058,6 +1058,13 @@
       "when": 1780540802111,
       "tag": "0150_rapid_mauler",
       "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1780577998876,
+      "tag": "0151_lame_tyrannus",
+      "breakpoints": true
     }
   ]
 }

@@ -151,6 +151,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({ trackFeature: vi.
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
+  extractOpenRouterGenerationIds: vi.fn(() => []),
 }));
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
 vi.mock('@/services/api/page-mutation-service', () => ({

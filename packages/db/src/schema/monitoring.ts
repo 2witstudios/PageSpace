@@ -199,6 +199,16 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   messageCount: integer('message_count'), // Number of messages in context
   wasTruncated: boolean('was_truncated').default(false), // Whether context was truncated
   truncationStrategy: text('truncation_strategy'), // 'none' | 'oldest_first' | 'smart'
+
+  // Async cost reconcile (OpenRouter only). Set to 'pending' at write time when the row
+  // carries OpenRouter generation id(s) in metadata.generationIds and was billed on the
+  // returned cost; the reconcile cron fetches the authoritative /generation cost, corrects
+  // billing drift, and marks the row 'reconciled' / 'unavailable' (generation never
+  // resolved) / 'skipped'. NULL = not an OpenRouter row, never reconciled. The other rows
+  // stay NULL so the partial index below only tracks the small reconcile backlog.
+  reconcileStatus: text('reconcile_status'), // null | 'pending' | 'reconciled' | 'unavailable' | 'skipped'
+  reconcileAttempts: integer('reconcile_attempts').default(0).notNull(),
+  reconciledAt: timestamp('reconciled_at', { mode: 'date' }),
 }, (table) => ({
   timestampIdx: index('idx_ai_usage_timestamp').on(table.timestamp),
   userIdIdx: index('idx_ai_usage_user_id').on(table.userId, table.timestamp),
@@ -209,6 +219,11 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   conversationContextIdx: index('idx_ai_usage_context').on(table.conversationId, table.timestamp),
   contextSizeIdx: index('idx_ai_usage_context_size').on(table.contextSize),
   expiresAtIdx: index('idx_ai_usage_expires_at').on(table.expiresAt),
+  // Partial: only the small set of rows awaiting cost reconcile, so the cron's
+  // selection scan stays cheap as the table grows.
+  reconcileIdx: index('idx_ai_usage_reconcile')
+    .on(table.reconcileStatus, table.timestamp)
+    .where(sql`reconcile_status = 'pending'`),
 }));
 
 /**

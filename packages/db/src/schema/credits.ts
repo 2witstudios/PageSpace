@@ -73,6 +73,11 @@ export const creditLedger = pgTable('credit_ledger', {
   stripeRef: text('stripeRef'), // invoice id / checkout session id for grants & purchases
   consumeStatus: text('consumeStatus').default('pending').notNull(), // 'pending' | 'applied' | 'skipped'
   consumeError: text('consumeError'),
+  // Idempotency arbiter for the async cost-reconcile cron's correction rows. The usage
+  // unique index is scoped to entryType='usage', so it does NOT block a second
+  // 'adjustment' for the same aiUsageLogId; this key (the sorted-joined OpenRouter
+  // generation ids) does. Set only on reconcile adjustment rows; NULL everywhere else.
+  reconcileGenerationKey: text('reconcileGenerationKey'),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
@@ -82,6 +87,10 @@ export const creditLedger = pgTable('credit_ledger', {
   stripeRefUnique: uniqueIndex('credit_ledger_stripe_ref_unique')
     .on(table.stripeRef)
     .where(sql`${table.stripeRef} IS NOT NULL`),
+  // One reconcile correction per generation set — makes a re-run / overlapping cron a no-op.
+  reconcileKeyUnique: uniqueIndex('credit_ledger_reconcile_key_unique')
+    .on(table.reconcileGenerationKey)
+    .where(sql`${table.reconcileGenerationKey} IS NOT NULL`),
   consumeStatusIdx: index('credit_ledger_consume_status_idx').on(table.consumeStatus, table.createdAt),
 }));
 

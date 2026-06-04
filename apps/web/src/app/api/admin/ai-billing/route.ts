@@ -11,6 +11,8 @@ import {
   getActiveSubscriptionsByTier,
   getCreditLiability,
   getLiveHolds,
+  getBalanceDriftAlerts,
+  getNegativeMarginAccounts,
   type Granularity,
 } from '@/lib/monitoring';
 import {
@@ -85,6 +87,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       subscriptionsByTier,
       liability,
       holds,
+      balanceDrift,
+      negativeMargin,
     ] = await Promise.all([
       getTokenUsageSummary(startDate, endDate),
       getTokenUsageByModel(startDate, endDate, 50),
@@ -95,6 +99,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       getActiveSubscriptionsByTier(),
       getCreditLiability(),
       getLiveHolds(),
+      getBalanceDriftAlerts(),
+      getNegativeMarginAccounts(startDate, endDate),
     ]);
 
     const enforcement = {
@@ -155,6 +161,20 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       rows.push(['liability', 'total', String(liability.userCount), '', '', '', '', '', '', centsToDollars(liability.totalLiabilityCents)]);
       rows.push(['holds', 'live', String(holds.holdCount), '', '', '', '', '', '', centsToDollars(holds.heldCents)]);
 
+      for (const r of balanceDrift) {
+        rows.push([
+          'alert_balance_drift', r.userEmail ?? r.userName ?? r.userId, `drift ${centsToDollars(r.driftCents)}`,
+          '', '', '', '', '', '', centsToDollars(r.driftCents),
+        ]);
+      }
+      for (const r of negativeMargin) {
+        rows.push([
+          'alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '',
+          '', '', '', r.requestCount,
+          centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents),
+        ]);
+      }
+
       return new NextResponse(toCsv(rows), {
         status: 200,
         headers: {
@@ -180,6 +200,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       revenue: { ...revenue, subscriptionsByTier },
       liability,
       holds,
+      alerts: { balanceDrift, negativeMargin },
     });
   } catch (error) {
     loggers.api.error('Error fetching ai-billing data:', error as Error);

@@ -8,6 +8,7 @@ import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { writeAiUsage } from '../logging/logger-database';
 import { consumeCredits, releaseHold } from '../billing/credit-consume';
+import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 
@@ -602,19 +603,40 @@ export function getContextWindow(model: string): number {
 }
 
 /**
- * Calculate cost based on tokens and model
+ * Calculate cost based on tokens and model — the ESTIMATE fallback used only when
+ * OpenRouter's authoritative returned cost is absent (direct providers, or an
+ * OpenRouter call whose cost metadata went missing). Real provider cost, when present,
+ * is billed verbatim and never routes through here.
+ *
+ * `opts.cachedInputTokens` is the cached SUBSET of `inputTokens` (prompt caching):
+ * providers bill cache reads at a fraction of the fresh-input rate, so the cached
+ * portion is discounted by CACHE_READ_DISCOUNT_FACTOR_BPS. `opts.reasoningTokens`
+ * (emitted by reasoning models in addition to visible output) are billed at the OUTPUT
+ * rate — omitting them undercharged reasoning-heavy calls. Both default to 0, so
+ * existing 3-arg callers are unaffected.
  */
 export function calculateCost(
   model: string,
   inputTokens: number = 0,
-  outputTokens: number = 0
+  outputTokens: number = 0,
+  opts: { cachedInputTokens?: number; reasoningTokens?: number } = {}
 ): number {
   const pricing = AI_PRICING[model as keyof typeof AI_PRICING] || AI_PRICING.default;
-  
-  // Convert from per-million to actual cost
-  const inputCost = (inputTokens / 1_000_000) * pricing.input;
-  const outputCost = (outputTokens / 1_000_000) * pricing.output;
-  
+
+  // Cached tokens are a subset of input; clamp to [0, inputTokens] so bad metadata
+  // can't drive the cost negative or above the full-input cost. Fresh input bills at
+  // the full rate, the cached remainder at the discounted rate.
+  const cached = Math.min(Math.max(opts.cachedInputTokens ?? 0, 0), Math.max(inputTokens, 0));
+  const freshInput = Math.max(inputTokens, 0) - cached;
+  const cacheFactor = CACHE_READ_DISCOUNT_FACTOR_BPS / 10_000;
+  const inputCost =
+    (freshInput / 1_000_000) * pricing.input +
+    (cached / 1_000_000) * pricing.input * cacheFactor;
+
+  // Reasoning tokens bill at the output rate, added to the visible output count.
+  const reasoning = Math.max(opts.reasoningTokens ?? 0, 0);
+  const outputCost = ((Math.max(outputTokens, 0) + reasoning) / 1_000_000) * pricing.output;
+
   return Number((inputCost + outputCost).toFixed(6));
 }
 
@@ -680,6 +702,33 @@ export function extractOpenRouterCostDollars(
 }
 
 /**
+ * Extract OpenRouter's generation id(s) from AI-SDK steps. OpenRouter returns a stable
+ * generation id (e.g. "gen-…") under `providerMetadata.openrouter.id`; that id is the
+ * key for the authoritative `/api/v1/generation?id=` cost endpoint the async reconcile
+ * cron queries. A tool loop issues one OpenRouter request per step, so collect a
+ * de-duped, order-preserving list across every step. Returns `[]` when no step carries
+ * an id (direct providers, or metadata went missing). Read defensively — providerMetadata
+ * is opaque JSON.
+ */
+export function extractOpenRouterGenerationIds(
+  steps: ReadonlyArray<ProviderMetadataCarrier> | undefined,
+): string[] {
+  if (!steps || steps.length === 0) return [];
+
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const step of steps) {
+    const openrouter = asRecord(asRecord(step?.providerMetadata)?.openrouter);
+    const id = openrouter?.id;
+    if (typeof id === 'string' && id.length > 0 && !seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Estimate tokens from text (rough approximation)
  * Generally 1 token ≈ 4 characters for English text
  */
@@ -698,6 +747,12 @@ export interface AIUsageData {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  // Cached-input subset and reasoning tokens from the AI-SDK usage object. Used ONLY by
+  // the estimate fallback (calculateCost) to discount cache reads and bill reasoning as
+  // output; ignored when a real providerCostDollars is present. Also stamped into
+  // metadata for observability.
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
   duration?: number;
   streamingDuration?: number;
   conversationId?: string;
@@ -719,6 +774,12 @@ export interface AIUsageData {
   // static AI_PRICING estimate. Absent for direct providers (google/anthropic/
   // openai/ollama) that don't return a cost — those fall back to calculateCost().
   providerCostDollars?: number;
+
+  // OpenRouter generation id(s) for this call (one per tool-loop step), captured from
+  // providerMetadata.openrouter.id. Stamped into metadata.generationIds and used by the
+  // async cost-reconcile cron to fetch the authoritative /generation cost. Absent for
+  // direct providers and when metadata went missing.
+  openrouterGenerationIds?: string[];
 
   // The reservation placed by the credit gate (canConsumeAI) at the top of the
   // request, released when this call's real cost is billed. Threaded from the
@@ -760,7 +821,10 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     // Bill on OpenRouter's authoritative returned cost when present; otherwise
     // fall back to the static AI_PRICING estimate (direct providers, or an
     // OpenRouter call whose metadata went missing). Never drop the charge.
-    const fallbackCost = calculateCost(data.model, inputTokens, outputTokens);
+    const fallbackCost = calculateCost(data.model, inputTokens, outputTokens, {
+      cachedInputTokens: data.cachedInputTokens,
+      reasoningTokens: data.reasoningTokens,
+    });
     const hasRealCost =
       typeof data.providerCostDollars === 'number' &&
       Number.isFinite(data.providerCostDollars) &&
@@ -779,6 +843,17 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       });
     }
     const success = data.success !== false;
+
+    // Mark the row for async cost reconcile only when it was billed on a real returned
+    // cost AND carries OpenRouter generation id(s) to look up. The id presence — not the
+    // UI provider string, which post-OpenRouter-routing is often an alias like 'pagespace'
+    // — is the authoritative signal that this row went through OpenRouter and has a
+    // /generation cost to reconcile against (extractOpenRouterGenerationIds only ever
+    // reads providerMetadata.openrouter.id). Direct providers, missing metadata, and
+    // id-less rows stay NULL so the reconcile cron never picks them up.
+    const generationIds = data.openrouterGenerationIds ?? [];
+    const reconcileStatus =
+      hasRealCost && generationIds.length > 0 ? ('pending' as const) : undefined;
 
     // Persist the usage log, then debit the user's prepaid credit balance
     // (cost × markup) whenever real provider tokens were consumed — even if the
@@ -830,7 +905,12 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
           // rate) override this, since they pass a finite providerCostDollars that
           // would otherwise be mislabeled 'openrouter'.
           costSource: data.costSource ?? costSource,
+          // OpenRouter generation id(s) for the async cost-reconcile cron. Only stamped
+          // when present (OpenRouter calls); the cron reads these to fetch authoritative
+          // /generation costs and correct billing drift.
+          ...(generationIds.length > 0 ? { generationIds } : {}),
         },
+        reconcileStatus,
       });
       // Bill when real tokens were consumed, regardless of success. A token-less
       // failure (pre-generation error) carries 0 tokens and is skipped; a

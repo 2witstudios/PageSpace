@@ -15,11 +15,12 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
-import { and, eq, gt, lt, or, isNull, sql } from '@pagespace/db/operators';
+import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { and, eq, gt, gte, lt, or, isNull, inArray, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import {
   evaluateGate,
+  evaluateDailyCap,
   computeMonthlyRefill,
   reservationCents,
   holdExpiresAt,
@@ -31,6 +32,7 @@ import {
   CREDIT_HOLD_ESTIMATE_CENTS,
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
+  dailyExposureCapForTier,
   isCreditsEnforcementEnabled,
 } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
@@ -51,6 +53,15 @@ export function addOneMonth(from: Date): Date {
   const lastDayOfTarget = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
   d.setUTCDate(Math.min(day, lastDayOfTarget));
   return d;
+}
+
+/**
+ * Midnight UTC of the day containing `from`. Defines the window for the per-user/day
+ * exposure cap; UTC (not local) so the cap resets at a fixed instant regardless of where
+ * a user is. Exported for direct testing.
+ */
+export function startOfUtcDay(from: Date): Date {
+  return new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
 }
 
 interface BalanceRow {
@@ -76,6 +87,12 @@ export interface GateOptions {
    * only lands at settle). Omitted by chat, which leaves paid tiers uncapped.
    */
   maxInFlight?: number;
+  /**
+   * Skip the per-user/day exposure cap for this call. Set by internal/system callers
+   * (e.g. the scheduled pulse cron) whose spend shouldn't be bounded by a per-user daily
+   * ceiling meant for interactive runaway protection. User-driven routes omit it.
+   */
+  skipDailyCap?: boolean;
 }
 
 export async function canConsumeAI(
@@ -170,6 +187,11 @@ export async function canConsumeAI(
   const maxInFlight = caps.length > 0 ? Math.min(...caps) : null;
   const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
 
+  // Per-user/day exposure cap (null = disabled, the default). Resolved here; the day's
+  // charged total is summed inside the transaction below on the allow path.
+  const dailyCap = opts.skipDailyCap ? null : dailyExposureCapForTier(tier);
+  const dayStart = startOfUtcDay(now);
+
   // Authoritative decision + reservation, atomic under a balance row lock. The lock
   // serializes this user's concurrent requests so they observe each other's holds —
   // two simultaneous calls can't both pass a check that only one call's worth of
@@ -230,6 +252,37 @@ export async function canConsumeAI(
     });
 
     if (!result.allowed) return result;
+
+    // Per-user/day exposure cap: a runaway loop can stay within the in-flight cap yet
+    // accrue real cost all day. Checked only on the allow path (the credit gate denied
+    // otherwise) and only when a cap is configured. Sums chargeMillicents — the full
+    // intended charge, positive on usage rows and NULL elsewhere (so monthly/topup/debt
+    // rows don't count) — rather than appliedCents, so an in-debt user who keeps spending
+    // real provider money is still bounded. Same transaction → consistent read. NO hold
+    // is inserted on a cap denial. The denial still rides the enforcement flag below
+    // (soft): downgraded to enforcement_disabled while dark-launched.
+    if (dailyCap !== null) {
+      const chargedAgg = await tx
+        .select({ chargedMc: sql<number>`coalesce(sum(${creditLedger.chargeMillicents}), 0)` })
+        .from(creditLedger)
+        .where(and(
+          eq(creditLedger.userId, userId),
+          inArray(creditLedger.entryType, ['usage', 'adjustment']),
+          gte(creditLedger.createdAt, dayStart),
+        ));
+      const dailyChargedCents = Math.max(0, Math.floor(Number(chargedAgg[0]?.chargedMc ?? 0) / 1000));
+      // Add this user's still-active hold reservations (`reserved`, computed above) to the
+      // settled total: a burst of concurrent requests reserves holds that haven't reached
+      // the ledger yet, so without this each serialized gate check would see the same
+      // dailyChargedCents and up to maxInFlight estimates could blow past the cap before
+      // any settles. estCost is THIS call's reservation (not yet in `reserved`).
+      const cap = evaluateDailyCap({
+        dailyChargedCents: dailyChargedCents + reserved,
+        estCostCents: estCost,
+        capCents: dailyCap,
+      });
+      if (!cap.allowed) return { allowed: false, reason: cap.reason };
+    }
 
     // Reserve this call's estimated spend AND register it as one in-flight call.
     // consumeCredits deletes the hold at settle; a crashed stream leaves it for the

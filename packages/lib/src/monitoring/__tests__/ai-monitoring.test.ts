@@ -76,6 +76,7 @@ import {
   MODEL_CONTEXT_WINDOWS,
   AIMonitoring,
   extractOpenRouterCostDollars,
+  extractOpenRouterGenerationIds,
 } from '../ai-monitoring';
 
 // ---------------------------------------------------------------------------
@@ -177,6 +178,60 @@ describe('calculateCost', () => {
     const decimals = str.includes('.') ? str.split('.')[1]!.length : 0;
     expect(decimals).toBeLessThanOrEqual(6);
   });
+
+  // ── cache / reasoning opts (estimate fallback path only) ──────────────────
+  // CACHE_READ_DISCOUNT_FACTOR_BPS defaults to 1000 (0.10×). gpt-4o: in 2.50 / out 10.00 per 1M.
+
+  it('omitting opts == old behavior (regression guard for existing 3-arg callers)', () => {
+    expect(calculateCost('gpt-4o', 1_000_000, 1_000_000, {})).toBe(
+      calculateCost('gpt-4o', 1_000_000, 1_000_000)
+    );
+  });
+
+  it('discounts cached input tokens at the cache-read factor', () => {
+    // all 1M input cached -> 1M * 2.50 * 0.10 = 0.25 (vs 2.50 undiscounted)
+    expect(calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 1_000_000 })).toBe(
+      Number((0.25).toFixed(6))
+    );
+  });
+
+  it('bills the fresh remainder at full rate and only the cached subset at the discount', () => {
+    // 750k fresh @ 2.50/M + 250k cached @ 0.25/M = 1.875 + 0.0625 = 1.9375
+    expect(calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 250_000 })).toBe(
+      Number((1.9375).toFixed(6))
+    );
+  });
+
+  it('clamps cachedInputTokens to inputTokens (bad metadata cannot go below the all-cached cost)', () => {
+    expect(calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 5_000_000 })).toBe(
+      calculateCost('gpt-4o', 1_000_000, 0, { cachedInputTokens: 1_000_000 })
+    );
+  });
+
+  it('bills reasoning tokens at the output rate (adds to visible output)', () => {
+    // (1M output + 1M reasoning) @ 10.00/M = 20.00 (vs 10.00 ignoring reasoning)
+    expect(calculateCost('gpt-4o', 0, 1_000_000, { reasoningTokens: 1_000_000 })).toBe(
+      Number((20.0).toFixed(6))
+    );
+  });
+
+  it('a reasoning-heavy call costs more than ignoring reasoning would', () => {
+    const withReasoning = calculateCost('gpt-4o', 0, 500_000, { reasoningTokens: 500_000 });
+    const without = calculateCost('gpt-4o', 0, 500_000);
+    expect(withReasoning).toBeGreaterThan(without);
+  });
+
+  it('ignores negative opts (clamped to 0)', () => {
+    expect(
+      calculateCost('gpt-4o', 1_000_000, 1_000_000, { cachedInputTokens: -10, reasoningTokens: -10 })
+    ).toBe(calculateCost('gpt-4o', 1_000_000, 1_000_000));
+  });
+
+  it('unknown model still uses default pricing with opts', () => {
+    expect(
+      calculateCost('completely-unknown-model', 1_000_000, 0, { reasoningTokens: 1_000_000 })
+    ).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -274,6 +329,58 @@ describe('trackAIUsage', () => {
     expect(mockConsumeCredits).toHaveBeenCalledWith(
       expect.objectContaining({ aiUsageLogId: 'aul_durable', userId: 'user-1' }),
     );
+  });
+
+  it('marks an OpenRouter row with generation ids + real cost for reconcile (pending)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_or');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.01,
+      openrouterGenerationIds: ['gen-1', 'gen-2'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const arg = mockWriteAiUsage.mock.calls[0][0] as {
+      reconcileStatus?: string;
+      metadata?: { generationIds?: string[]; costSource?: string };
+    };
+    expect(arg.reconcileStatus).toBe('pending');
+    expect(arg.metadata?.generationIds).toEqual(['gen-1', 'gen-2']);
+    expect(arg.metadata?.costSource).toBe('openrouter');
+  });
+
+  it('does NOT mark for reconcile when the OpenRouter cost was missing (estimate fallback)', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_or2');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openrouter',
+      model: 'anthropic/claude-3.5-sonnet',
+      inputTokens: 1000,
+      outputTokens: 500,
+      // no providerCostDollars → estimate fallback
+      openrouterGenerationIds: ['gen-1'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const arg = mockWriteAiUsage.mock.calls[0][0] as { reconcileStatus?: string };
+    expect(arg.reconcileStatus).toBeUndefined();
+  });
+
+  it('does NOT mark for reconcile for a direct provider even with a real cost', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_direct');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.02,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const arg = mockWriteAiUsage.mock.calls[0][0] as { reconcileStatus?: string };
+    expect(arg.reconcileStatus).toBeUndefined();
   });
 
   it('does not debit credits for a token-less failure (pre-generation error, 0 tokens)', async () => {
@@ -616,6 +723,45 @@ describe('extractOpenRouterCostDollars', () => {
 
   it('counts only the steps that carry cost when some are missing', () => {
     expect(extractOpenRouterCostDollars([step(0.01), { providerMetadata: undefined }, step(0.02)])).toBeCloseTo(0.03, 10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractOpenRouterGenerationIds
+// ---------------------------------------------------------------------------
+describe('extractOpenRouterGenerationIds', () => {
+  const idStep = (id?: unknown) => ({ providerMetadata: { openrouter: id === undefined ? {} : { id } } });
+
+  it('returns the single generation id', () => {
+    expect(extractOpenRouterGenerationIds([idStep('gen-abc')])).toEqual(['gen-abc']);
+  });
+
+  it('collects distinct ids across multiple tool-loop steps in order', () => {
+    expect(extractOpenRouterGenerationIds([idStep('gen-1'), idStep('gen-2'), idStep('gen-3')]))
+      .toEqual(['gen-1', 'gen-2', 'gen-3']);
+  });
+
+  it('de-dupes a repeated id (same generation reported on multiple steps)', () => {
+    expect(extractOpenRouterGenerationIds([idStep('gen-1'), idStep('gen-1'), idStep('gen-2')]))
+      .toEqual(['gen-1', 'gen-2']);
+  });
+
+  it('returns [] when no step carries an OpenRouter id', () => {
+    expect(extractOpenRouterGenerationIds([idStep(undefined)])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([{ providerMetadata: { anthropic: {} } }])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([{ providerMetadata: undefined }])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([{}])).toEqual([]);
+  });
+
+  it('returns [] for an empty or undefined steps array', () => {
+    expect(extractOpenRouterGenerationIds([])).toEqual([]);
+    expect(extractOpenRouterGenerationIds(undefined)).toEqual([]);
+  });
+
+  it('ignores non-string / empty ids', () => {
+    expect(extractOpenRouterGenerationIds([idStep(123)])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([idStep('')])).toEqual([]);
+    expect(extractOpenRouterGenerationIds([idStep(''), idStep('gen-9')])).toEqual(['gen-9']);
   });
 });
 

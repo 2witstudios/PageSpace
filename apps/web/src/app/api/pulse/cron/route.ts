@@ -38,7 +38,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -165,7 +165,14 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
   // reservation is released on any pre-settle exit and settled by trackUsage on
   // success. Gated up front so we don't do the heavy context-gathering for a user
   // we won't bill.
-  const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier);
+  // skipDailyCap: this is a system-scheduled once-per-tick summary, not interactive
+  // user fan-out, so the per-user/day runaway backstop doesn't apply (it would block a
+  // legitimate scheduled summary once a heavy user hit their interactive ceiling). The
+  // credit balance still gates it. No maxInFlight: the cron runs one generation per user
+  // per tick, so there is no concurrency to bound.
+  const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+    skipDailyCap: true,
+  });
   if (!gate.allowed) {
     loggers.api.info('Pulse cron: skipped user (credit gate denied)', {
       userId,
@@ -863,7 +870,10 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     inputTokens: usage?.inputTokens,
     outputTokens: usage?.outputTokens,
     totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+    cachedInputTokens: usage?.cachedInputTokens,
+    reasoningTokens: usage?.reasoningTokens,
     providerCostDollars: extractOpenRouterCostDollars(result.steps),
+    openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
     holdId,
     success: true,
   });
