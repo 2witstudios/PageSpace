@@ -8,7 +8,7 @@
  *   provider returns no usage metadata, so the orphan-sweep has a row to bill.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockCreateStreamLifecycle,

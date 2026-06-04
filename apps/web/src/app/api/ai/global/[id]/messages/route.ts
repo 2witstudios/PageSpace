@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse } from '@/lib/subscription/rate-limit-middleware';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
