@@ -12,7 +12,6 @@ import {
   estimateChatHoldCents,
   holdExpiresAt,
   computeMonthlyRefill,
-  applyTopup,
   applyPaymentToDebt,
   validateTopupAmountCents,
   classifyStripeEvent,
@@ -375,13 +374,12 @@ describe('applyPaymentToDebt', () => {
     });
   });
 
-  it('credits the whole payment to top-up when there is no debt (== applyTopup)', () => {
+  it('credits the whole payment to top-up when there is no debt', () => {
     expect(applyPaymentToDebt(0, 1000, 2500)).toEqual({
       debtCents: 0,
       topupCents: 3500,
       paidDebt: 0,
     });
-    expect(applyPaymentToDebt(0, 1000, 2500).topupCents).toBe(applyTopup(1000, 2500));
   });
 
   it('throws on a negative or non-finite payment', () => {
@@ -413,17 +411,6 @@ describe('validateTopupAmountCents', () => {
     expect(validateTopupAmountCents(Number.NaN, MIN, MAX)).toBeNull();
     expect(validateTopupAmountCents(Number.POSITIVE_INFINITY, MIN, MAX)).toBeNull();
     expect(validateTopupAmountCents(-1000, MIN, MAX)).toBeNull();
-  });
-});
-
-describe('applyTopup', () => {
-  it('adds the pack amount to the existing top-up balance', () => {
-    expect(applyTopup(0, 1000)).toBe(1000);
-    expect(applyTopup(1000, 2500)).toBe(3500);
-  });
-
-  it('throws on a negative pack amount', () => {
-    expect(() => applyTopup(0, -100)).toThrow();
   });
 });
 

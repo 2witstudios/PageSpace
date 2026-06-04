@@ -1,7 +1,7 @@
 /**
  * credit-funding — imperative shell that turns a paid Stripe event into spendable
  * prepaid credit. Pure routing/arithmetic (classifyStripeEvent, computeMonthlyRefill,
- * applyTopup) comes from credit-core; this file only does I/O.
+ * applyPaymentToDebt) comes from credit-core; this file only does I/O.
  *
  * Two funding paths:
  *   - monthly_refill (invoice.paid): a subscription renewal RESETS the monthly

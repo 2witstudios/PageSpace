@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       if (cents === null) {
         return NextResponse.json(
           {
-            error: `Enter a whole-dollar amount between ${CREDIT_TOPUP_MIN_CENTS / 100} and ${CREDIT_TOPUP_MAX_CENTS / 100} USD.`,
+            error: `Enter an amount between $${CREDIT_TOPUP_MIN_CENTS / 100} and $${CREDIT_TOPUP_MAX_CENTS / 100}.`,
           },
           { status: 400 },
         );

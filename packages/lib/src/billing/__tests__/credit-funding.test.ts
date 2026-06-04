@@ -227,7 +227,8 @@ describe('applyStripeFunding', () => {
   it('credit-pack checkout for a first-time buyer (no balance row) credits the full pack, race-safe', async () => {
     // Regression guard: the path ensures a balance row exists, then reads it under
     // FOR UPDATE, so two concurrent first purchases can't both read 0 and clobber
-    // each other. Here the freshly-ensured row reads 0 -> applyTopup(0, 2500) = 2500.
+    // each other. Here the freshly-ensured row reads 0 debt / 0 top-up ->
+    // applyPaymentToDebt(0, 0, 2500) credits the full 2500 to top-up.
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {

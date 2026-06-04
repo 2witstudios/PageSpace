@@ -270,8 +270,8 @@ export interface PaymentToDebtResult {
  * Apply a purchase to a user in (or out of) debt: pay outstanding debt FIRST, then
  * credit whatever's left to the never-expiring top-up bucket. This is the within-period
  * recovery path — a negative user buys credits to get back to net-positive, and only
- * the surplus beyond what they owed becomes spendable top-up. With no debt this is just
- * {@link applyTopup}. A negative/non-finite payment is a programming error and throws.
+ * the surplus beyond what they owed becomes spendable top-up. With no debt the whole
+ * payment lands in top-up. A negative/non-finite payment is a programming error and throws.
  */
 export function applyPaymentToDebt(
   debtCents: number,
@@ -305,17 +305,6 @@ export function validateTopupAmountCents(
   if (!Number.isInteger(cents)) return null;
   if (cents < minCents || cents > maxCents) return null;
   return cents;
-}
-
-/**
- * Add a purchased credit pack to the top-up bucket. The monthly bucket is never
- * touched. A negative pack amount is a programming error and throws.
- */
-export function applyTopup(currentTopupCents: number, packCents: number): number {
-  if (!Number.isFinite(packCents) || packCents < 0) {
-    throw new Error(`applyTopup: packCents must be a non-negative number, got ${packCents}`);
-  }
-  return currentTopupCents + Math.round(packCents);
 }
 
 export type StripeAction =
