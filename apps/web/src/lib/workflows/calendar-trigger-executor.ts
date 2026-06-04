@@ -47,7 +47,7 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Cheap preflight: verify agent page still exists before consuming a usage credit
+    // 3. Cheap preflight: verify agent page still exists
     const [agentPage] = await db
       .select({ id: pages.id, isTrashed: pages.isTrashed })
       .from(pages)
@@ -63,7 +63,7 @@ export async function executeCalendarTrigger(
     //    so we don't double-inject it here.
     const promptOverride = await buildTriggerPrompt(workflow.prompt, event);
 
-    // 6. Compose execution input — the executor writes workflow_runs and
+    // 5. Compose execution input — the executor writes workflow_runs and
     //    handles per-fire bookkeeping; we just pass the source coordinates.
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,

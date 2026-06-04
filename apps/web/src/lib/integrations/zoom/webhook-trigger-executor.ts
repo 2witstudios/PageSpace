@@ -50,7 +50,7 @@ export async function executeWebhookTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Cheap preflight: verify agent page still exists before consuming a usage credit
+    // 3. Cheap preflight: verify agent page still exists
     const [agentPage] = await db
       .select({ id: pages.id, isTrashed: pages.isTrashed })
       .from(pages)
@@ -64,7 +64,7 @@ export async function executeWebhookTrigger(
     // 4. Build the prompt from the workflow's stored prompt + Zoom event context
     const promptOverride = buildWebhookTriggerPrompt(workflow.prompt, event);
 
-    // 6. Compose execution input — the executor writes workflow_runs
+    // 5. Compose execution input — the executor writes workflow_runs
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,
       workflowName: `webhook-trigger-${trigger.id}`,
