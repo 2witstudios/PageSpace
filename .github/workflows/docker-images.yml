@@ -24,6 +24,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   build-and-push:
     name: Build & Push ${{ matrix.service }}
     runs-on: ubuntu-latest
@@ -106,7 +110,7 @@ jobs:
 
   deploy-fly:
     name: Deploy to Fly.io
-    needs: build-and-push
+    needs: [build-and-push, ci]
     runs-on: ubuntu-latest
     environment: fly-production
     if: github.ref == 'refs/heads/master'
