@@ -11,6 +11,16 @@ import type { ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monit
 import { classifyAttempt } from './agent-finish-classifier';
 import { pipeUIMessageStreamStrippingStart } from './stream-pipe-utils';
 
+/**
+ * Hard cap on agent tool-loop steps per attempt. This single value carries a
+ * cross-module invariant: it MUST be both the `stepCountIs(...)` argument in each
+ * route's `stopWhen` AND the `maxSteps` passed to `runAgentWithRetry`, because the
+ * classifier distinguishes a step-budget terminal from other tool-calls finishes by
+ * comparing the step count to it. Keep it here, imported by every consumer, so the
+ * three never drift.
+ */
+export const AGENT_MAX_STEPS = 100;
+
 /** Minimal shape of a `streamText` result the retry shell consumes. */
 export type AgentStreamResult = Pick<
   StreamTextResult<ToolSet, never>,

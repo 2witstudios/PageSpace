@@ -32,9 +32,10 @@ const FRAMING_CHUNK_TYPES = new Set<string>([
 ]);
 
 /**
- * Pipes an AI result's UI message stream to a writer, stripping the inner
- * messageId from 'start' chunks so the outer createUIMessageStream's
- * generateId/idInjectedStream remains the authoritative source for message ID.
+ * Pipes an AI result's UI message stream to a writer. The inner `start` chunk is
+ * replaced with a bare `{ type: 'start' }` (its payload, incl. messageId, dropped) so
+ * the outer createUIMessageStream's generateId/idInjectedStream stays the authoritative
+ * source for the message ID.
  *
  * Write errors are swallowed so server-side processing (onFinish, DB save)
  * continues even when the client disconnects mid-stream.

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { isAdminOnlyProvider, getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
@@ -63,7 +63,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
-import { AIMonitoring, extractOpenRouterCostDollars, type ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -72,17 +72,13 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
-
-// Hard cap on agent tool-loop steps per attempt. Must match the stepCountIs() in
-// stopWhen and the maxSteps passed to runAgentWithRetry.
-const AGENT_MAX_STEPS = 100;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -920,10 +916,9 @@ MENTION PROCESSING:
       browserSessionId,
     });
 
-    let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
-    let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
-    // Outcome of the retry shell, shared from execute() to onFinish() (success flag,
-    // abort detection during inter-attempt backoff, retry observability).
+    // Outcome of the retry shell, shared from execute() to onFinish(). Carries the
+    // summed usage/steps for billing plus the success flag, abort detection, and retry
+    // observability — so no separate usage/steps promises are needed.
     let agentRun: RunAgentWithRetryResult | undefined;
 
     const stream = createUIMessageStream({
@@ -982,8 +977,6 @@ MENTION PROCESSING:
         // Billing reads the SUMMED usage / OpenRouter cost across every attempt.
         // Single onFinish → single consumeCredits → one hold settle: no double-charge,
         // but failed/partial attempts ARE billed (the provider charged us for them).
-        usagePromise = Promise.resolve(runResult.accumulatedUsage);
-        stepsPromise = Promise.resolve(runResult.accumulatedSteps);
         agentRun = runResult;
       },
       onFinish: async ({ responseMessage }) => {
@@ -1046,8 +1039,8 @@ MENTION PROCESSING:
             // so the orphan-sweep can recover/bill it. Missing tokens mean a $0 cost
             // row, not a skipped one (which would silently front the spend).
             try {
-              const usage = usagePromise ? await usagePromise : undefined;
-              const steps = stepsPromise ? await stepsPromise : undefined;
+              const usage = agentRun?.accumulatedUsage;
+              const steps = agentRun?.accumulatedSteps;
               const duration = Date.now() - startTime;
 
               await AIMonitoring.trackUsage({

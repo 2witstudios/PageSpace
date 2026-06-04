@@ -7,7 +7,6 @@ import {
   hasToolCall,
   createUIMessageStream,
   createUIMessageStreamResponse,
-  type LanguageModelUsage,
   type TextUIPart,
   type ToolSet,
 } from 'ai';
@@ -65,10 +64,6 @@ import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
-
-// Hard cap on agent tool-loop steps per attempt. Must match the stepCountIs() in
-// stopWhen and the maxSteps passed to runAgentWithRetry.
-const AGENT_MAX_STEPS = 100;
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -79,7 +74,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
-import { AIMonitoring, extractOpenRouterCostDollars, type ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -90,7 +85,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -107,10 +102,9 @@ export async function POST(request: Request) {
   let conversationId: string | undefined;
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
-  let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
-  let stepsPromise: Promise<ProviderMetadataCarrier[] | undefined> | undefined;
-  // Outcome of the retry shell, shared from execute() to onFinish() (success flag,
-  // abort detection during inter-attempt backoff, retry observability).
+  // Outcome of the retry shell, shared from execute() to onFinish(). Carries the
+  // summed usage/steps for billing plus the success flag, abort detection, and retry
+  // observability — so no separate usage/steps promises are needed.
   let agentRun: RunAgentWithRetryResult | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
@@ -989,8 +983,6 @@ export async function POST(request: Request) {
           // (steps carry per-request cost metadata). Single onFinish → single
           // consumeCredits → one hold settle: no double-charge, but failed/partial
           // attempts ARE billed because the provider charged us for those tokens.
-          usagePromise = Promise.resolve(runResult.accumulatedUsage);
-          stepsPromise = Promise.resolve(runResult.accumulatedSteps);
           agentRun = runResult;
         },
         onFinish: async ({ responseMessage }) => {
@@ -1080,8 +1072,8 @@ export async function POST(request: Request) {
               // hold and feeds unit-economics observability.
               const duration = Date.now() - startTime;
 
-              const usage = usagePromise ? await usagePromise : undefined;
-              const steps = stepsPromise ? await stepsPromise : undefined;
+              const usage = agentRun?.accumulatedUsage;
+              const steps = agentRun?.accumulatedSteps;
               const inputTokens = usage?.inputTokens ?? undefined;
               const outputTokens = usage?.outputTokens ?? undefined;
               const totalTokens =
@@ -1198,8 +1190,8 @@ export async function POST(request: Request) {
       responseTime: Date.now() - startTime
     });
 
-    const usage = usagePromise ? await usagePromise : undefined;
-    const steps = stepsPromise ? await stepsPromise : undefined;
+    const usage = agentRun?.accumulatedUsage;
+    const steps = agentRun?.accumulatedSteps;
 
     // Track AI usage even for errors using enhanced monitoring
     // Note: conversationId might not be available in error path, use chatId as fallback
