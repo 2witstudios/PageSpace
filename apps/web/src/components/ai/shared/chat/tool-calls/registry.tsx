@@ -13,6 +13,7 @@ import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 import { MemberListRenderer, type MemberInfo } from './MemberListRenderer';
 import { SheetEditRenderer } from './SheetEditRenderer';
 import { AgentConfigRenderer, type AgentConfigData } from './AgentConfigRenderer';
+import { ModelListRenderer, type ModelListProvider } from './ModelListRenderer';
 import { WebFetchRenderer } from './WebFetchRenderer';
 import { TaskStatusRenderer } from './TaskStatusRenderer';
 import { CalendarEventRenderer, type CalendarEventData } from './calendar/CalendarEventRenderer';
@@ -551,6 +552,11 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   multi_drive_list_agents: ({ parsedOutput }) => {
     if (!parsedOutput.agents) return null;
     return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} isMultiDrive />;
+  },
+
+  list_models: ({ parsedOutput }) => {
+    if (!Array.isArray(parsedOutput.providers)) return null;
+    return <ModelListRenderer providers={parsedOutput.providers as ModelListProvider[]} />;
   },
 
   update_agent_config: ({ parsedOutput }) => {
