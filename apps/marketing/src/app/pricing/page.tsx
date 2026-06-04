@@ -301,7 +301,7 @@ export default function PricingPage() {
                   <ul className="space-y-2 text-sm text-muted-foreground">
                     <li className="flex items-center gap-2">
                       <Check className="h-4 w-4 text-green-500" />
-                      Custom storage and AI limits
+                      Custom storage and AI credit allowances
                     </li>
                     <li className="flex items-center gap-2">
                       <Check className="h-4 w-4 text-green-500" />

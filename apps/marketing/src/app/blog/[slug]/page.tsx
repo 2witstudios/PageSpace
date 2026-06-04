@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogPosts, formatDate } from "./data";
 import { ShareButtons } from "./ShareButtons";
+import { MONTHLY_CREDITS } from "@/lib/credits";
 import { APP_URL, SITE_URL } from "@/lib/metadata";
 import { JsonLd, createArticleSchema } from "@/lib/schema";
 
@@ -151,7 +152,8 @@ export default async function BlogPostPage(
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-2xl font-bold mb-4">Ready to try PageSpace?</h2>
             <p className="text-muted-foreground mb-6">
-              Start free with generous limits. No credit card required.
+              Start free with {MONTHLY_CREDITS.free}/month in AI credits. No
+              credit card required.
             </p>
             <Button size="lg" asChild>
               <a href={`${APP_URL}/auth/signup`} rel="noopener">

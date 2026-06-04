@@ -12,6 +12,8 @@
 import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
   CREDIT_PACKS,
+  CREDIT_TOPUP_MIN_CENTS,
+  CREDIT_TOPUP_MAX_CENTS,
   type CreditPack,
 } from '../billing/credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
@@ -34,6 +36,7 @@ const TIER_LABELS: Record<SubscriptionTier, string> = {
   business: 'Business',
 };
 
+
 export interface TopupPackSummary {
   /** Stable pack SKU id (matches `CreditPack.id`). */
   id: string;
@@ -53,6 +56,12 @@ export interface TierCreditSummary {
   monthlyAllowanceLabel: string;
   /** Buy-more top-up packs available to every tier. */
   topupPacks: TopupPackSummary[];
+  /** Whether this tier unlocks frontier model choice (paid tiers do). */
+  unlocksPremiumModels: boolean;
+  /** Lower bound of a custom top-up, e.g. "$5". */
+  topupMinLabel: string;
+  /** Upper bound of a custom top-up, e.g. "$500". */
+  topupMaxLabel: string;
 }
 
 /**
@@ -83,5 +92,8 @@ export function getTierCreditSummary(tier: SubscriptionTier): TierCreditSummary 
     monthlyAllowanceCents,
     monthlyAllowanceLabel: formatCents(monthlyAllowanceCents),
     topupPacks,
+    unlocksPremiumModels: tier !== 'free',
+    topupMinLabel: formatCents(CREDIT_TOPUP_MIN_CENTS),
+    topupMaxLabel: formatCents(CREDIT_TOPUP_MAX_CENTS),
   };
 }
