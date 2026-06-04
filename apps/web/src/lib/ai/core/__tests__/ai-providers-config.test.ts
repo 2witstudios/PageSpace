@@ -11,6 +11,8 @@ import {
   getModelDisplayName,
   getUserFacingModelName,
   getVisibleProviders,
+  isDynamicModelProvider,
+  validateAgentModelSelection,
 } from '../ai-providers-config';
 
 describe('ai-providers-config', () => {
@@ -163,6 +165,74 @@ describe('ai-providers-config', () => {
     it('returns AI for a null/undefined model', () => {
       expect(getUserFacingModelName('openai', null)).toBe('AI');
       expect(getUserFacingModelName('openai', undefined)).toBe('AI');
+    });
+  });
+
+  describe('isDynamicModelProvider', () => {
+    it('is true for runtime-discovered providers', () => {
+      expect(isDynamicModelProvider('ollama')).toBe(true);
+      expect(isDynamicModelProvider('lmstudio')).toBe(true);
+      expect(isDynamicModelProvider('azure_openai')).toBe(true);
+    });
+
+    it('is false for static cloud providers', () => {
+      expect(isDynamicModelProvider('openai')).toBe(false);
+      expect(isDynamicModelProvider('anthropic')).toBe(false);
+    });
+  });
+
+  describe('validateAgentModelSelection', () => {
+    const origNextPublic = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE;
+    const origServer = process.env.DEPLOYMENT_MODE;
+
+    afterEach(() => {
+      process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = origNextPublic;
+      process.env.DEPLOYMENT_MODE = origServer;
+    });
+
+    it('accepts a valid (provider, model) pair', () => {
+      expect(validateAgentModelSelection('openai', 'openai/gpt-5.3-chat')).toBeNull();
+      expect(validateAgentModelSelection('anthropic', 'anthropic/claude-opus-4.8')).toBeNull();
+    });
+
+    it('rejects a hallucinated model for a real provider', () => {
+      const reason = validateAgentModelSelection('openai', 'openai/gpt-6-ultra');
+      expect(reason).toMatch(/not a valid model/i);
+    });
+
+    it('rejects an unknown provider', () => {
+      const reason = validateAgentModelSelection('acme', 'acme/whatever');
+      expect(reason).toMatch(/unknown or unavailable/i);
+    });
+
+    it('rejects a model with no provider (null/empty) — closes the bypass', () => {
+      expect(validateAgentModelSelection(null, 'openai/gpt-6-ultra')).toMatch(/provider/i);
+      expect(validateAgentModelSelection('', 'openai/whatever')).toMatch(/provider/i);
+      expect(validateAgentModelSelection(undefined, 'anything')).toMatch(/provider/i);
+    });
+
+    it('allows a provider with no model (model can default later)', () => {
+      expect(validateAgentModelSelection('openai', null)).toBeNull();
+      expect(validateAgentModelSelection('openai', '')).toBeNull();
+    });
+
+    it('allows any model for dynamic/local providers (runtime-discovered)', () => {
+      expect(validateAgentModelSelection('ollama', 'llama3.1:70b-custom')).toBeNull();
+      expect(validateAgentModelSelection('lmstudio', 'some-local-model')).toBeNull();
+      expect(validateAgentModelSelection('azure_openai', 'my-deployment')).toBeNull();
+    });
+
+    it('treats clearing (both unset) as acceptable', () => {
+      expect(validateAgentModelSelection(null, null)).toBeNull();
+      expect(validateAgentModelSelection('', '')).toBeNull();
+      expect(validateAgentModelSelection(undefined, undefined)).toBeNull();
+    });
+
+    it('respects deployment-mode visibility (cloud provider rejected on-prem)', () => {
+      process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = 'onprem';
+      process.env.DEPLOYMENT_MODE = 'onprem';
+      const reason = validateAgentModelSelection('openai', 'openai/gpt-5.3-chat');
+      expect(reason).toMatch(/unknown or unavailable/i);
     });
   });
 });

@@ -290,7 +290,7 @@ describe('agent-tools', () => {
       const updatedMockAgent = {
         ...mockAgent,
         aiProvider: 'google',
-        aiModel: 'gemini-pro',
+        aiModel: 'google/gemini-3.5-flash',
         revision: 4,
       };
       // First call returns original, second call (after mutation) returns updated
@@ -311,7 +311,7 @@ describe('agent-tools', () => {
           agentPath: '/drive/agent',
           agentId: 'agent-1',
           aiProvider: 'google',
-          aiModel: 'gemini-pro',
+          aiModel: 'google/gemini-3.5-flash',
         },
         context
       );
@@ -321,7 +321,7 @@ describe('agent-tools', () => {
         success: true,
         agentConfig: {
           aiProvider: 'google',
-          aiModel: 'gemini-pro',
+          aiModel: 'google/gemini-3.5-flash',
         },
       });
 
@@ -331,10 +331,170 @@ describe('agent-tools', () => {
           pageId: 'agent-1',
           updates: expect.objectContaining({
             aiProvider: 'google',
-            aiModel: 'gemini-pro',
+            aiModel: 'google/gemini-3.5-flash',
           }),
         })
       );
+    });
+
+    it('rejects a hallucinated model id and points to list_models', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        agentTools.update_agent_config.execute!(
+          {
+            agentPath: '/drive/agent',
+            agentId: 'agent-1',
+            aiProvider: 'openai',
+            aiModel: 'openai/gpt-6-ultra',
+          },
+          context
+        )
+      ).rejects.toThrow(/list_models/);
+
+      // No write should occur on a rejected model id
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('catches a bad model even when only aiModel is sent (uses stored provider)', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: 'openai',
+        aiModel: 'openai/gpt-5.3-chat',
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        agentTools.update_agent_config.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', aiModel: 'openai/not-real' },
+          context
+        )
+      ).rejects.toThrow(/not a valid model/);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('rejects a model set with no provider on a fresh agent (no stored provider)', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        agentTools.update_agent_config.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', aiModel: 'openai/gpt-6-ultra' },
+          context
+        )
+      ).rejects.toThrow(/provider/i);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('allows an arbitrary model for a dynamic provider (ollama)', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      const updatedMockAgent = {
+        ...mockAgent,
+        aiProvider: 'ollama',
+        aiModel: 'llama3.1:70b-custom',
+        revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(updatedMockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await agentTools.update_agent_config.execute!(
+        {
+          agentPath: '/drive/agent',
+          agentId: 'agent-1',
+          aiProvider: 'ollama',
+          aiModel: 'llama3.1:70b-custom',
+        },
+        context
+      );
+
+      expect(result).toMatchObject({ success: true });
+      expect(applyPageMutation).toHaveBeenCalled();
     });
 
     it('updates visibility and context settings', async () => {
