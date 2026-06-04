@@ -148,9 +148,7 @@ export async function POST(request: Request) {
     // malformed request never opens a hold. The reservation is computed from the
     // exact character count (cost × markup) so it accurately reflects this call —
     // tiny for a sentence chunk, up to ~18¢ for a max-length tts-1-hd request —
-    // rather than a flat estimate a long request would blow past. Blocks
-    // out-of-credit paid users only once CREDITS_ENFORCEMENT_ENABLED is on; otherwise
-    // still records spend.
+    // rather than a flat estimate a long request would blow past.
     const gate = await canConsumeAI(userId, tier, {
       estCostCents: estimateVoiceHoldCents(model, { chars: text.length }),
       maxInFlight: VOICE_MAX_INFLIGHT,

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
-import { MONTHLY_CREDITS, CREDITS_IN_TRANSITION } from "@/lib/credits";
+import { MONTHLY_CREDITS } from "@/lib/credits";
 
 export const metadata = pageMetadata.terms;
 
@@ -148,12 +148,6 @@ export default function TermsOfService() {
             <p className="mb-4">
               AI usage is metered against your plan&#39;s monthly AI-credit allowance. When your available credits are exhausted, AI features pause until you purchase additional credits or your monthly allowance is added at the next billing renewal; all non-AI features (documents, tasks, channels, and collaboration) remain available. AI-credit prices and allowances may be adjusted with reasonable notice. Storage and file-size limits also apply per plan, and exceeding them may result in service throttling or temporary suspension until your next billing cycle.
             </p>
-            {/* TRANSITION: remove when AI credits are live for all accounts */}
-            {CREDITS_IN_TRANSITION && (
-              <p className="mb-4">
-                AI-credit pricing is currently being rolled out. During this transition, some existing accounts may continue to operate under the prior daily AI-usage limits until they are migrated to the AI-credit model described above.
-              </p>
-            )}
           </section>
 
           <section className="mb-8">

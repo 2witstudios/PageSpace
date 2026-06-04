@@ -461,14 +461,6 @@ beforeEach(() => {
   reset();
   vi.clearAllMocks();
   H.isBillingEnabled.mockReturnValue(true);
-  // This suite asserts the gate BLOCKS (out_of_credits). Enforcement defaults OFF
-  // (dark launch), so enable it here; dark-launch behavior is unit-tested in
-  // credit-gate.test.ts.
-  process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
-});
-
-afterEach(() => {
-  delete process.env.CREDITS_ENFORCEMENT_ENABLED;
 });
 
 describe('credits flow — happy path (fund → gate → consume → top-up → drained)', () => {

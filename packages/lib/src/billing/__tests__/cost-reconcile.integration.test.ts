@@ -25,7 +25,6 @@ import { reconcileOpenRouterCosts, type GenerationFetcher } from '../cost-reconc
 const INT4_MAX = 2_147_483_647;
 let dbAvailable = false;
 
-const originalEnforcement = process.env.CREDITS_ENFORCEMENT_ENABLED;
 
 async function cleanup(userId: string): Promise<void> {
   await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
@@ -44,16 +43,6 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
     }
   });
 
-  beforeEach(() => {
-    // isBillingEnabled() must be true (cloud default) for reconcile to do anything; the
-    // reconcile path itself is independent of the enforcement flag, but keep it explicit.
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
-  });
-
-  afterAll(() => {
-    if (originalEnforcement === undefined) delete process.env.CREDITS_ENFORCEMENT_ENABLED;
-    else process.env.CREDITS_ENFORCEMENT_ENABLED = originalEnforcement;
-  });
 
   it('rolls back the claimed adjustment row when the balance UPDATE throws mid-transaction', async () => {
     if (!dbAvailable) return;

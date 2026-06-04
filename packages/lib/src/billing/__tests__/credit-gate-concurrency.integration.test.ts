@@ -26,7 +26,6 @@ import { RESERVE_FLOOR_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '../credit-prici
 
 let dbAvailable = false;
 
-const originalEnforcement = process.env.CREDITS_ENFORCEMENT_ENABLED;
 const originalProCap = process.env.DAILY_CAP_PRO_CENTS;
 
 /** Insert a balance row directly (bypassing the gate's lazy-init) with a live monthly window. */
@@ -62,15 +61,10 @@ describe('canConsumeAI concurrency (Postgres row lock)', () => {
   });
 
   beforeEach(() => {
-    // The gate only DENIES when enforcement is on; otherwise a would-be denial is
-    // downgraded to allowed. The double-spend property lives in the deny path.
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     delete process.env.DAILY_CAP_PRO_CENTS;
   });
 
   afterAll(() => {
-    if (originalEnforcement === undefined) delete process.env.CREDITS_ENFORCEMENT_ENABLED;
-    else process.env.CREDITS_ENFORCEMENT_ENABLED = originalEnforcement;
     if (originalProCap === undefined) delete process.env.DAILY_CAP_PRO_CENTS;
     else process.env.DAILY_CAP_PRO_CENTS = originalProCap;
   });

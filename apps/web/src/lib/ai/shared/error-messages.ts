@@ -9,18 +9,12 @@
  *                                  in-flight call to finish, then retry.
  * The thrown client error carries the status code and the JSON error body, so we
  * branch on those tokens to show the right copy and the right call to action.
- *
- * When the per-environment credits switch is OFF, the AI routes instead return the
- * LEGACY daily-quota 429 (`createRateLimitResponse` — "… AI calls limited to N per
- * day. Upgrade …"). That's classified as `daily_quota` so it shows an upgrade prompt
- * rather than the generic "service is busy" copy. Remove at the final credits cutover.
  */
 
 export type AIErrorKind =
   | 'auth'
   | 'out_of_credits'
   | 'too_many_in_flight'
-  | 'daily_quota'
   | 'rate_limit'
   | 'generic';
 
@@ -30,10 +24,6 @@ export type AIErrorKind =
 // alone would route any message merely mentioning credits to the buy-more CTA.
 const OUT_OF_CREDITS_PATTERNS = [/\bout_of_credits\b/, /\b402\b/, /\bout of ai credits\b/];
 const IN_FLIGHT_PATTERNS = [/\btoo_many_in_flight\b/, /\bin[-\s]flight\b/];
-// LEGACY daily-quota 429 (credits mode OFF) — createRateLimitResponse's phrasing.
-// Checked before the generic rate-limit patterns since that body also says "429"/"rate
-// limit". Remove at the final credits cutover.
-const DAILY_QUOTA_PATTERNS = [/\bai calls limited to\b/, /\bcalls? (?:per day|\/day)\b/];
 const RATE_LIMIT_PATTERNS = [
   /\brate limit\b/,
   /\btoo many requests\b/,
@@ -55,10 +45,6 @@ export function classifyAIError(errorMessage: string | undefined): AIErrorKind {
   // Free-tier in-flight concurrency cap (429, distinct error code).
   if (IN_FLIGHT_PATTERNS.some((p) => p.test(msg))) return 'too_many_in_flight';
 
-  // Legacy daily-quota cap (429) — checked before generic rate limits, which it'd
-  // otherwise match (its body also contains "429"/"rate limit").
-  if (DAILY_QUOTA_PATTERNS.some((p) => p.test(msg))) return 'daily_quota';
-
   // Provider/transport rate limits and transient failures.
   if (RATE_LIMIT_PATTERNS.some((p) => p.test(msg))) return 'rate_limit';
 
@@ -76,8 +62,6 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
       return "You've used up your AI credits. Buy more credits or wait for your monthly allowance to reset.";
     case 'too_many_in_flight':
       return 'Too many AI requests are running at once. Wait for one to finish, then try again.';
-    case 'daily_quota':
-      return "You've hit today's AI call limit. It resets tomorrow — or upgrade your plan for more.";
     case 'rate_limit':
       return 'The AI service is busy right now. Please try again in a few seconds.';
     default:
@@ -116,7 +100,6 @@ export function isRateLimitError(errorMessage: string | undefined): boolean {
   return (
     kind === 'rate_limit' ||
     kind === 'out_of_credits' ||
-    kind === 'too_many_in_flight' ||
-    kind === 'daily_quota'
+    kind === 'too_many_in_flight'
   );
 }

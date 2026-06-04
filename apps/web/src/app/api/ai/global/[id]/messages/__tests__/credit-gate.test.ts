@@ -111,18 +111,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { __label: 'userProfiles', userId: 'userId', displayName: 'displayName' },
 }));
 
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: vi.fn().mockResolvedValue({ currentCount: 1, limit: 100, remainingCalls: 99, success: true }),
-  getCurrentUsage: vi.fn().mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 }),
-  getUserUsageSummary: vi.fn().mockResolvedValue({
-    subscriptionTier: 'free',
-    standard: { current: 0, limit: 100, remaining: 100 },
-    pro: { current: 0, limit: 0, remaining: 0 },
-  }),
-}));
-
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
-  createRateLimitResponse: vi.fn(),
   createAdminRestrictedResponse: vi.fn(),
   requiresProSubscription: vi.fn().mockReturnValue(false),
   createSubscriptionRequiredResponse: vi.fn(),
@@ -237,8 +226,6 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { getCurrentUsage } from '@/lib/subscription/usage-service';
-import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
 
@@ -314,45 +301,6 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(response.status).not.toBe(402);
   });
 
-  // Per-environment switch (CREDITS_ENFORCEMENT_ENABLED): OFF restores the legacy
-  // daily-limit path; ON skips it (prepaid credits are the sole limiter).
-  describe('legacy daily-limit path (credits mode OFF)', () => {
-    afterEach(() => {
-      delete process.env.CREDITS_ENFORCEMENT_ENABLED;
-      // clearAllMocks() keeps implementations, so restore the permissive defaults this
-      // block overrode — otherwise the exhausted-quota mock leaks into later suites.
-      vi.mocked(getCurrentUsage).mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 });
-      vi.mocked(createRateLimitResponse).mockReset();
-    });
-
-    it('OFF: enforces the legacy daily quota (429) when calls are exhausted', async () => {
-      delete process.env.CREDITS_ENFORCEMENT_ENABLED; // OFF (default)
-      vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'enforcement_disabled' });
-      vi.mocked(getCurrentUsage).mockResolvedValue({ success: true, remainingCalls: 0, currentCount: 50, limit: 50 });
-      vi.mocked(createRateLimitResponse).mockReturnValue(
-        new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429 }) as never,
-      );
-
-      const response = await POST(makeRequest(), makeContext());
-
-      expect(getCurrentUsage).toHaveBeenCalled();
-      expect(createRateLimitResponse).toHaveBeenCalled();
-      expect(response.status).toBe(429);
-      expect(streamText).not.toHaveBeenCalled();
-    });
-
-    it('ON: skips the legacy daily quota entirely (credits are the sole limiter)', async () => {
-      process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
-      vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
-      vi.mocked(getCurrentUsage).mockResolvedValue({ success: true, remainingCalls: 0, currentCount: 50, limit: 50 });
-
-      const response = await POST(makeRequest(), makeContext());
-
-      expect(getCurrentUsage).not.toHaveBeenCalled();
-      expect(createRateLimitResponse).not.toHaveBeenCalled();
-      expect(response.status).not.toBe(429);
-    });
-  });
 });
 
 describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', () => {

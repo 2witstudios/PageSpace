@@ -83,10 +83,6 @@ vi.mock('@/lib/ai/tools/finish-tool', () => ({
   FINISH_TOOL_NAME: 'finish',
 }));
 
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-id-123'),
 }));

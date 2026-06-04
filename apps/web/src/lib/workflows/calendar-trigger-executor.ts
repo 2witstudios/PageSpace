@@ -7,7 +7,6 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
-import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -59,14 +58,7 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 4. Rate-limit check: consume one standard AI call from the scheduler's budget
-    const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
-    if (!usageResult.success) {
-      const error = 'Daily AI call limit reached for scheduling user';
-      return { success: false, durationMs: Date.now() - startTime, error };
-    }
-
-    // 5. Build the prompt from the workflow's stored prompt + event context.
+    // 4. Build the prompt from the workflow's stored prompt + event context.
     //    The instruction page is loaded by executeWorkflow (input.instructionPageId),
     //    so we don't double-inject it here.
     const promptOverride = await buildTriggerPrompt(workflow.prompt, event);

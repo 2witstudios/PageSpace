@@ -87,15 +87,8 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
 
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: vi.fn(),
-  getCurrentUsage: vi.fn().mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 }),
-  getUserUsageSummary: vi.fn(),
-}));
-
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn().mockReturnValue(false),
-  createRateLimitResponse: vi.fn(),
   createSubscriptionRequiredResponse: vi.fn(),
 }));
 

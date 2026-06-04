@@ -16,7 +16,6 @@ import {
   type Granularity,
 } from '@/lib/monitoring';
 import {
-  isCreditsEnforcementEnabled,
   MARKUP_BPS,
   TIER_MONTHLY_ALLOWANCE_CENTS,
 } from '@pagespace/lib/billing/credit-pricing';
@@ -86,7 +85,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     ]);
 
     const enforcement = {
-      enabled: isCreditsEnforcementEnabled(),
+      enabled: true,
       markupBps: MARKUP_BPS,
       tierAllowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS,
     };

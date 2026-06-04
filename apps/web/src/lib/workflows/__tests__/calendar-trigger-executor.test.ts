@@ -5,7 +5,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ============================================================================
 
 const {
-  mockIncrementUsage,
   mockExecuteWorkflow,
   mockSelect,
   mockSelectFrom,
@@ -25,7 +24,6 @@ const {
     child: vi.fn(() => makeChildLogger()),
   });
   return {
-    mockIncrementUsage: vi.fn(),
     mockExecuteWorkflow: vi.fn(),
     mockSelect: vi.fn(),
     mockSelectFrom: vi.fn(),
@@ -87,10 +85,6 @@ vi.mock('@pagespace/db/schema/workflows', () => ({
 
 vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
-}));
-
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: mockIncrementUsage,
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -187,7 +181,6 @@ describe('executeCalendarTrigger', () => {
     vi.clearAllMocks();
 
     mockIsUserDriveMember.mockResolvedValue(true);
-    mockIncrementUsage.mockResolvedValue({ success: true });
 
     // Default select chain.
     // Call order in executor: 1=workflow load, 2=agent preflight, 3=attendees
@@ -277,16 +270,6 @@ describe('executeCalendarTrigger', () => {
     expect(promptOverride).toContain('bob@test.com');
   });
 
-  it('fails when daily AI call limit is reached', async () => {
-    mockIncrementUsage.mockResolvedValue({ success: false });
-
-    const result = await executeCalendarTrigger(createTrigger(), createEvent());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('limit');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-  });
-
   it('does not write per-fire state to calendar_triggers — executor handles workflow_runs', async () => {
     await executeCalendarTrigger(createTrigger(), createEvent());
 
@@ -349,7 +332,6 @@ describe('executeCalendarTrigger', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('workflow');
-    expect(mockIncrementUsage).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
@@ -363,7 +345,6 @@ describe('executeCalendarTrigger', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('agent');
-    expect(mockIncrementUsage).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });

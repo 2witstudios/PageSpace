@@ -28,7 +28,6 @@ import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
 import { AutomationsCard } from '@/components/billing/AutomationsCard';
 import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
-import { useCreditsMode } from '@/hooks/useCreditsMode';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
@@ -58,8 +57,6 @@ interface UpcomingInvoiceData {
 export default function BillingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Per-environment switch: credit surfaces show only when credits mode is ON.
-  const creditsMode = useCreditsMode();
   // Stripe/payment sections (subscription, payment methods, invoices, address) are
   // hidden on iOS (App Store compliance). Non-payment sections — AI credits balance,
   // usage breakdown, automations, storage — stay visible on every platform (full
@@ -359,8 +356,8 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* Credit top-up result alerts (credits mode only) */}
-      {creditsMode && creditsParam === 'success' && (
+      {/* Credit top-up result alerts */}
+      {creditsParam === 'success' && (
         <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertDescription className="text-green-800 dark:text-green-200">
@@ -368,7 +365,7 @@ export default function BillingPage() {
           </AlertDescription>
         </Alert>
       )}
-      {creditsMode && creditsParam === 'canceled' && (
+      {creditsParam === 'canceled' && (
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
@@ -385,16 +382,14 @@ export default function BillingPage() {
         </Alert>
       )}
 
-      {/* Headline row: Current Subscription + AI Credits side by side (each gated independently) */}
-      {(showBillingSections || creditsMode) && (
-        <div className={creditsMode && showBillingSections ? 'grid gap-8 md:grid-cols-2' : undefined}>
-          {showBillingSections && subscriptionCard}
-          {creditsMode && <CreditBalanceCard />}
-        </div>
-      )}
+      {/* Headline row: Current Subscription + AI Credits side by side */}
+      <div className={showBillingSections ? 'grid gap-8 md:grid-cols-2' : undefined}>
+        {showBillingSections && subscriptionCard}
+        <CreditBalanceCard />
+      </div>
 
-      {/* AI usage breakdown (credits mode only; legacy daily-quota build hides this) */}
-      {creditsMode && <UsageBreakdownCard />}
+      {/* AI usage breakdown */}
+      <UsageBreakdownCard />
 
       {/* Automations — background AI that spends credits (Pulse, Memory) */}
       <AutomationsCard />

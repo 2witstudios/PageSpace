@@ -33,7 +33,6 @@ import {
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
-  isCreditsEnforcementEnabled,
 } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
@@ -261,8 +260,7 @@ export async function canConsumeAI(
     // intended charge, positive on usage rows and NULL elsewhere (so monthly/topup/debt
     // rows don't count) — rather than appliedCents, so an in-debt user who keeps spending
     // real provider money is still bounded. Same transaction → consistent read. NO hold
-    // is inserted on a cap denial. The denial still rides the enforcement flag below
-    // (soft): downgraded to enforcement_disabled while dark-launched.
+    // is inserted on a cap denial.
     if (dailyCap !== null) {
       const chargedAgg = await tx
         .select({ chargedMc: sql<number>`coalesce(sum(${creditLedger.chargeMillicents}), 0)` })
@@ -305,13 +303,5 @@ export async function canConsumeAI(
   // call leaves a dangling hold for the reconcile sweep (credit-backfill) to expire; it
   // no longer affects the displayed balance, so no gate-time push is needed.
 
-  // Dark launch: the gate did all its bookkeeping above (lazy-init, reset, balance
-  // read, and a hold on the allow path), but when enforcement is OFF we never hand
-  // the caller a denial — the request proceeds and is still metered by consumeCredits
-  // (which records real cost + charged credits, accruing debt rows for would-be
-  // overages). Flip CREDITS_ENFORCEMENT_ENABLED=true to start blocking.
-  if (!result.allowed && !isCreditsEnforcementEnabled()) {
-    return { allowed: true, reason: 'enforcement_disabled' };
-  }
   return result;
 }

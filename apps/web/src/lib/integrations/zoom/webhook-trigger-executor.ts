@@ -5,7 +5,6 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import type { ZoomConnection } from '@pagespace/db/schema/zoom';
 import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
-import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -62,14 +61,7 @@ export async function executeWebhookTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 4. Rate-limit check: consume one standard AI call from the owner's budget
-    const usageResult = await incrementUsage(connection.userId, 'standard');
-    if (!usageResult.success) {
-      const error = 'Daily AI call limit reached for connection owner';
-      return { success: false, durationMs: Date.now() - startTime, error };
-    }
-
-    // 5. Build the prompt from the workflow's stored prompt + Zoom event context
+    // 4. Build the prompt from the workflow's stored prompt + Zoom event context
     const promptOverride = buildWebhookTriggerPrompt(workflow.prompt, event);
 
     // 6. Compose execution input — the executor writes workflow_runs

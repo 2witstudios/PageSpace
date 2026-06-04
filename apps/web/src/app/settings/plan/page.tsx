@@ -15,7 +15,6 @@ import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
 import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
 import { formatCreditDollars } from '@/lib/subscription/credits';
-import { useCreditsMode } from '@/hooks/useCreditsMode';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
@@ -33,8 +32,6 @@ interface SubscriptionData {
 export default function PlanPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Per-environment switch: ON shows credit allowances, OFF shows legacy calls/day.
-  const creditsMode = useCreditsMode();
   const { resolvedTheme } = useTheme();
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -413,39 +410,14 @@ export default function PlanPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {creditsMode ? (
-                    <tr className="border-b">
-                      <td className="py-4 pr-6">Monthly AI credits</td>
-                      {plans.map((plan) => (
-                        <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                          {formatCreditDollars(plan.limits.monthlyCreditsCents)}/mo
-                        </td>
-                      ))}
-                    </tr>
-                  ) : (
-                    <>
-                      <tr className="border-b">
-                        <td className="py-4 pr-6">Standard AI calls</td>
-                        {plans.map((plan) => (
-                          <td key={plan.id} className="text-center py-4 px-4 font-semibold">
-                            {plan.limits.aiCalls}/day
-                          </td>
-                        ))}
-                      </tr>
-                      <tr className="border-b">
-                        <td className="py-4 pr-6">Pro AI calls</td>
-                        {plans.map((plan) => (
-                          <td key={plan.id} className="text-center py-4 px-4">
-                            {plan.limits.proCalls > 0 ? (
-                              <span className="font-semibold">{plan.limits.proCalls}/day</span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    </>
-                  )}
+                  <tr className="border-b">
+                    <td className="py-4 pr-6">Monthly AI credits</td>
+                    {plans.map((plan) => (
+                      <td key={plan.id} className="text-center py-4 px-4 font-semibold">
+                        {formatCreditDollars(plan.limits.monthlyCreditsCents)}/mo
+                      </td>
+                    ))}
+                  </tr>
                   <tr className="border-b">
                     <td className="py-4 pr-6">AI models</td>
                     {plans.map((plan) => (
@@ -458,16 +430,14 @@ export default function PlanPage() {
                       </td>
                     ))}
                   </tr>
-                  {creditsMode && (
-                    <tr className="border-b">
-                      <td className="py-4 pr-6">Buy more credits</td>
-                      {plans.map((plan) => (
-                        <td key={plan.id} className="text-center py-4 px-4 text-muted-foreground">
-                          Anytime
-                        </td>
-                      ))}
-                    </tr>
-                  )}
+                  <tr className="border-b">
+                    <td className="py-4 pr-6">Buy more credits</td>
+                    {plans.map((plan) => (
+                      <td key={plan.id} className="text-center py-4 px-4 text-muted-foreground">
+                        Anytime
+                      </td>
+                    ))}
+                  </tr>
                   <tr className="border-b">
                     <td className="py-4 pr-6">Storage</td>
                     {plans.map((plan) => (

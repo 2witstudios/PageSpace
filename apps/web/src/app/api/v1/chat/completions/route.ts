@@ -29,7 +29,6 @@ import {
 } from '@/lib/ai/core';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { incrementUsage } from '@/lib/subscription/usage-service';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
@@ -241,12 +240,6 @@ export async function POST(request: Request): Promise<Response> {
         content: text,
       }).catch((err: unknown) => {
         loggers.ai.error('OpenAI API: failed to save assistant message', err as Error);
-      });
-    }
-
-    if (authResult.userId) {
-      await incrementUsage(authResult.userId, providerType).catch((err: unknown) => {
-        loggers.ai.error('OpenAI API: failed to increment usage', err as Error);
       });
     }
 

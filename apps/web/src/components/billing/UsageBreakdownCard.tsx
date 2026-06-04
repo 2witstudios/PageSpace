@@ -30,7 +30,6 @@ interface ModelRow {
 }
 
 interface UsageBreakdownResponse {
-  creditsMode: boolean;
   periodStart: string | null;
   periodEnd: string | null;
   totalSpendCents: number;

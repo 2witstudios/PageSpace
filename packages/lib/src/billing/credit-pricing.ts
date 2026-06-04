@@ -27,34 +27,6 @@ function envBool(name: string, fallback: boolean): boolean {
   return fallback; // unrecognized value -> safe default
 }
 
-/**
- * Whether the prepaid credit gate actually BLOCKS out-of-credits / over-in-flight-cap
- * requests. Default OFF — the gate is dark-launched: it still does all its bookkeeping
- * and `consumeCredits` still records real cost + charged credits for unit-economics
- * observability, but the gate never returns a 402/429. This lets the cutover SHIP
- * (meter + observe) without surprising users, then flip enforcement on deliberately
- * once the placeholder allowances are validated against real spend:
- *   CREDITS_ENFORCEMENT_ENABLED=true
- * Read at CALL TIME (not module load) so it toggles via an env change + redeploy with
- * no code change, and so tests can set it per-case.
- */
-export function isCreditsEnforcementEnabled(): boolean {
-  return envBool('CREDITS_ENFORCEMENT_ENABLED', false);
-}
-
-/**
- * The ONE per-environment switch that selects the whole AI-usage experience, aliasing
- * the enforcement flag so the same image runs two ways by env alone:
- *   ON  → credits UI + credits enforcement (the new prepaid model).
- *   OFF → legacy daily-quota UI + the old per-call daily-limit path (prod stays "the old
- *         way"); credit metering still runs in the background for observability.
- * Drives: the AI-route limiter choice, the navbar widget, settings copy, and error copy.
- * Same env flag as enforcement on purpose — one lever flips presentation AND behaviour.
- */
-export function isCreditsModeEnabled(): boolean {
-  return isCreditsEnforcementEnabled();
-}
-
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 
@@ -193,10 +165,7 @@ export const CHAT_HOLD_ASSUMED_OUTPUT_TOKENS = envInt('CHAT_HOLD_ASSUMED_OUTPUT_
  * yet rack up real cost over a day). Resolved per tier: `DAILY_CAP_<TIER>_CENTS` (e.g.
  * `DAILY_CAP_BUSINESS_CENTS`) overrides the global `DAILY_USER_EXPOSURE_CAP_CENTS`; both
  * default to 0 = DISABLED (returns null → always allowed). Read at CALL TIME so it
- * toggles via env without a code change and tests can set it per-case. The cap denial
- * still rides CREDITS_ENFORCEMENT_ENABLED (soft): it's only handed to the caller when
- * enforcement is ON; while dark-launched it's downgraded like any other denial and the
- * call is metered, not blocked.
+ * toggles via env without a code change and tests can set it per-case.
  */
 export function dailyExposureCapForTier(tier: SubscriptionTier): number | null {
   const globalCap = envInt('DAILY_USER_EXPOSURE_CAP_CENTS', 0);
