@@ -5,6 +5,7 @@ import {
   extractToolCalls,
   extractToolResults,
   convertDbMessageToUIMessage,
+  sanitizeMessagesForModel,
 } from '../message-utils';
 
 /** Helper to build a UIMessage with typed parts */
@@ -181,5 +182,43 @@ describe('convertDbMessageToUIMessage — output-error round-trip', () => {
         state: 'output-available',
       },
     ]);
+  });
+});
+
+describe('sanitizeMessagesForModel', () => {
+  it('drops system-role messages (system prompt belongs in the system: option)', () => {
+    const messages: UIMessage[] = [
+      { id: 's1', role: 'system', parts: [{ type: 'text' as const, text: 'You are a helpful assistant' }] },
+      makeMessage([{ type: 'text' as const, text: 'Hi' }], 'user'),
+      makeMessage([{ type: 'text' as const, text: 'Hello!' }], 'assistant'),
+    ];
+
+    const result = sanitizeMessagesForModel(messages);
+
+    expect(result.map(m => m.role)).toEqual(['user', 'assistant']);
+    expect(result.some(m => m.role === 'system')).toBe(false);
+  });
+
+  it('preserves user/assistant messages while still filtering tool parts without results', () => {
+    const messages: UIMessage[] = [
+      makeMessage(
+        [
+          { type: 'text' as const, text: 'done' },
+          // tool part lacking output should be dropped
+          {
+            type: 'tool-list_pages',
+            toolCallId: 'tc1',
+            input: { driveId: 'd1' },
+            state: 'input-available',
+          },
+        ],
+        'assistant'
+      ),
+    ];
+
+    const result = sanitizeMessagesForModel(messages);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].parts).toEqual([{ type: 'text', text: 'done' }]);
   });
 });
