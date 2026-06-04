@@ -70,7 +70,8 @@ test('429 daily_cap_exceeded once the daily ceiling is reached; model not called
   expect(await mockCallCount(request)).toBe(modelCountBeforeDenial);
 
   // Nothing was billed beyond the cap: total charged usage stays within the ceiling.
+  // Summed in integer millicents (exact) and compared to the cap, avoiding float division.
   const usage = await getLedger(user.userId, 'usage');
-  const chargedCents = usage.reduce((sum, r) => sum + Math.abs(r.chargeMillicents ?? 0) / 1000, 0);
-  expect(chargedCents).toBeLessThanOrEqual(CAP_CENTS);
+  const chargedMillicents = usage.reduce((sum, r) => sum + Math.abs(r.chargeMillicents ?? 0), 0);
+  expect(chargedMillicents).toBeLessThanOrEqual(CAP_CENTS * 1000);
 });

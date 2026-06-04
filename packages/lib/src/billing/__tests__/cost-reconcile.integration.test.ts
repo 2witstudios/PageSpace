@@ -101,13 +101,19 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
       });
 
       // Authoritative cost $1.00 vs billed $0 → a large positive drift → undercharge debit.
-      const fetcher: GenerationFetcher = async () => ({ totalCost: 1.0 });
+      // Scoped to OUR generation id (any other pending row a shared DB might hold resolves
+      // 'not_found', so this run never corrects or asserts against foreign data).
+      const fetcher: GenerationFetcher = async (id) =>
+        id === 'gen-rollback-1' ? { totalCost: 1.0 } : 'not_found';
 
-      const result = await reconcileOpenRouterCosts({ fetcher });
+      await reconcileOpenRouterCosts({ fetcher });
 
-      // The row's correction threw and was swallowed by the cron's per-row guard, so no
-      // correction was counted and the row stays pending for a later run.
-      expect(result.corrected).toBe(0);
+      // Our row's correction threw inside applyCorrection and was swallowed by the cron's
+      // per-row guard, so it was never marked 'reconciled' — it stays 'pending' for a later
+      // run. (Scoped to our own row, not the global corrected count, so the assertion holds
+      // regardless of any other pending rows on a shared DB.)
+      const [logAfter] = await db.select().from(aiUsageLogs).where(eq(aiUsageLogs.id, log.id));
+      expect(logAfter.reconcileStatus).toBe('pending');
 
       // ATOMICITY: the claimed adjustment ledger row was rolled back — no orphan.
       const adjustments = await db
