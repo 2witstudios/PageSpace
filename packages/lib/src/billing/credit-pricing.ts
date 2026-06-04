@@ -59,6 +59,18 @@ export function isCreditsModeEnabled(): boolean {
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 
 /**
+ * Discount factor (basis points of the input rate) applied to CACHED input tokens in
+ * the ESTIMATE fallback path (calculateCost). Providers bill cache reads at a small
+ * fraction of the fresh-input rate (~10% is typical for Anthropic/OpenAI prompt
+ * caching), so charging cached tokens at the full input rate would over-estimate.
+ * Only affects the fallback estimate used when OpenRouter's authoritative cost is
+ * absent (direct providers, or metadata dropped) — real provider cost already reflects
+ * the provider's own cache pricing and is billed verbatim. 10000 = full rate (no
+ * discount); default 1000 = 0.10×.
+ */
+export const CACHE_READ_DISCOUNT_FACTOR_BPS = envInt('CACHE_READ_DISCOUNT_FACTOR_BPS', 1000);
+
+/**
  * Monthly credit allowance granted on each subscription renewal, per tier.
  * Resets every period (use-it-or-lose-it).
  */
@@ -173,6 +185,63 @@ export const CHAT_HOLD_FLOOR_CENTS = envInt('CHAT_HOLD_FLOOR_CENTS', 2);
  */
 export const CHAT_HOLD_ASSUMED_INPUT_TOKENS = envInt('CHAT_HOLD_ASSUMED_INPUT_TOKENS', 4000);
 export const CHAT_HOLD_ASSUMED_OUTPUT_TOKENS = envInt('CHAT_HOLD_ASSUMED_OUTPUT_TOKENS', 1000);
+
+/**
+ * Per-user/day charged-spend ceiling, in whole cents — a runaway-spend backstop layered
+ * on top of the credit-balance gate (a looping agent can stay within the in-flight cap
+ * yet rack up real cost over a day). Resolved per tier: `DAILY_CAP_<TIER>_CENTS` (e.g.
+ * `DAILY_CAP_BUSINESS_CENTS`) overrides the global `DAILY_USER_EXPOSURE_CAP_CENTS`; both
+ * default to 0 = DISABLED (returns null → always allowed). Read at CALL TIME so it
+ * toggles via env without a code change and tests can set it per-case. The cap denial
+ * still rides CREDITS_ENFORCEMENT_ENABLED (soft): it's only handed to the caller when
+ * enforcement is ON; while dark-launched it's downgraded like any other denial and the
+ * call is metered, not blocked.
+ */
+export function dailyExposureCapForTier(tier: SubscriptionTier): number | null {
+  const globalCap = envInt('DAILY_USER_EXPOSURE_CAP_CENTS', 0);
+  const cap = envInt(`DAILY_CAP_${tier.toUpperCase()}_CENTS`, globalCap);
+  return cap > 0 ? cap : null;
+}
+
+/**
+ * Tolerances for the async OpenRouter cost reconcile (cost-reconcile.ts). A correction
+ * fires only when the |drift| between billed and authoritative /generation cost exceeds
+ * BOTH the absolute floor and the relative band — so sub-cent noise never churns the
+ * ledger. Defaults: 1¢ floor, 5% band.
+ */
+export const COST_RECONCILE_TOLERANCE_CENTS = envInt('COST_RECONCILE_TOLERANCE_CENTS', 1);
+export const COST_RECONCILE_TOLERANCE_BPS = envInt('COST_RECONCILE_TOLERANCE_BPS', 500);
+
+/**
+ * Max times the reconcile cron re-fetches a row's /generation cost before giving up and
+ * marking it 'unavailable' (OpenRouter never resolved the generation). Bounds the retry
+ * fan-out for permanently-missing generations. Default 6.
+ */
+export const COST_RECONCILE_MAX_ATTEMPTS = envInt('COST_RECONCILE_MAX_ATTEMPTS', 6);
+
+/**
+ * Base URL for the OpenRouter API. Defaults to production; OPENROUTER_BASE_URL redirects
+ * it at a deterministic stub in e2e so the /generation reconcile can be asserted without
+ * hitting the real API (mirrors the provider-factory override). Read at call time.
+ */
+export function openRouterBaseUrl(): string {
+  return process.env.OPENROUTER_BASE_URL?.trim() || 'https://openrouter.ai/api/v1';
+}
+
+/**
+ * Tolerance (whole cents) for the account-level balance-drift detector: a user's
+ * materialized buckets may diverge from the ledger-implied amount beyond this before the
+ * admin panel flags them. Generous because monthly resets / debt-forgiveness legitimately
+ * break exact reconciliation (see computeBalanceDrift). Default 10¢.
+ */
+export const BALANCE_DRIFT_TOLERANCE_CENTS = envInt('BALANCE_DRIFT_TOLERANCE_CENTS', 10);
+
+/**
+ * Margin floor (basis points) for the negative-margin account detector: charged credits
+ * must cover real cost × (1 + floor). 0 = charged must at least equal real cost; a
+ * positive value demands headroom. Default 0.
+ */
+export const NEGATIVE_MARGIN_FLOOR_BPS = envInt('NEGATIVE_MARGIN_FLOOR_BPS', 0);
 
 export interface CreditPack {
   /** Stable SKU id, also stored in Stripe price metadata. */

@@ -13,6 +13,13 @@ describe('creditGatePayload', () => {
     expect(creditGatePayload('out_of_credits')).toMatchObject({ status: 402, error: 'out_of_credits' });
   });
 
+  it('maps the per-user/day exposure cap to a 429 daily_cap_exceeded (retry tomorrow, not buy)', () => {
+    expect(creditGatePayload('daily_cap_exceeded')).toMatchObject({
+      status: 429,
+      error: 'daily_cap_exceeded',
+    });
+  });
+
   it('maps needs_init (an unexpected uninitialized balance) to a 402, not a 429', () => {
     expect(creditGatePayload('needs_init').status).toBe(402);
   });

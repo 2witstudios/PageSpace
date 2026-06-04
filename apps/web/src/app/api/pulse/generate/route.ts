@@ -38,7 +38,7 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -695,7 +695,10 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+      cachedInputTokens: usage?.cachedInputTokens,
+      reasoningTokens: usage?.reasoningTokens,
       providerCostDollars: extractOpenRouterCostDollars(result.steps),
+      openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
       success: true,
       holdId,
     });

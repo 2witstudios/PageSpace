@@ -35,7 +35,7 @@ import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { getProviderTier } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -213,7 +213,7 @@ export async function POST(request: Request): Promise<Response> {
   const settle = async ({ aborted, text, totalUsage, steps }: {
     aborted: boolean;
     text?: string;
-    totalUsage?: { inputTokens?: number; outputTokens?: number };
+    totalUsage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; reasoningTokens?: number };
     steps?: unknown[];
   }) => {
     if (settled) return;
@@ -248,7 +248,10 @@ export async function POST(request: Request): Promise<Response> {
       source: 'chat',
       inputTokens: totalUsage?.inputTokens,
       outputTokens: totalUsage?.outputTokens,
+      cachedInputTokens: totalUsage?.cachedInputTokens,
+      reasoningTokens: totalUsage?.reasoningTokens,
       providerCostDollars: extractOpenRouterCostDollars(steps as Parameters<typeof extractOpenRouterCostDollars>[0]),
+      openrouterGenerationIds: extractOpenRouterGenerationIds(steps as Parameters<typeof extractOpenRouterGenerationIds>[0]),
       duration: Date.now() - startTime,
       conversationId,
       messageId: assistantId,

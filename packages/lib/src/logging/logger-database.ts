@@ -190,6 +190,11 @@ export async function writeAiUsage(usage: {
   messageCount?: number;
   wasTruncated?: boolean;
   truncationStrategy?: string;
+
+  // 'pending' marks an OpenRouter row for the async cost-reconcile cron (it reads the
+  // generation ids from metadata). Omitted/undefined leaves the column NULL (never
+  // reconciled — direct providers, or OpenRouter rows that carried no generation id).
+  reconcileStatus?: 'pending';
 }): Promise<string | null> {
   const id = createId();
   try {
@@ -222,6 +227,9 @@ export async function writeAiUsage(usage: {
       messageCount: usage.messageCount,
       wasTruncated: usage.wasTruncated,
       truncationStrategy: usage.truncationStrategy,
+
+      // Async cost-reconcile marker (OpenRouter rows with generation ids only).
+      reconcileStatus: usage.reconcileStatus,
 
       // On-prem: set retention expiry for HIPAA compliance (default 90 days)
       ...(isOnPrem() ? {

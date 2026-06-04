@@ -63,7 +63,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
-import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -1051,7 +1051,10 @@ MENTION PROCESSING:
                 inputTokens: usage?.inputTokens,
                 outputTokens: usage?.outputTokens,
                 totalTokens: usage?.totalTokens,
+                cachedInputTokens: usage?.cachedInputTokens,
+                reasoningTokens: usage?.reasoningTokens,
                 providerCostDollars: extractOpenRouterCostDollars(steps),
+                openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
                 duration,
                 conversationId,
                 messageId,

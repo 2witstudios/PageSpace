@@ -119,10 +119,44 @@ export type GateReason =
   | 'out_of_credits'
   | 'needs_init'
   | 'too_many_in_flight'
+  // Per-user/day runaway-spend backstop tripped: today's charged spend plus this
+  // call's reservation would exceed the configured daily ceiling. Independent of the
+  // credit-balance math (evaluateDailyCap, not evaluateGate). Maps to HTTP 429.
+  | 'daily_cap_exceeded'
   // Allowed reason: the gate computed a denial but enforcement is dark-launched
   // (CREDITS_ENFORCEMENT_ENABLED=false), so the request proceeds and is still
   // metered. The shell — not evaluateGate — produces this reason.
   | 'enforcement_disabled';
+
+export interface DailyCapInput {
+  /** This user's charged spend (whole cents) since the start of the current UTC day. */
+  dailyChargedCents: number;
+  /** This call's reservation (whole cents), counted against the cap up front. */
+  estCostCents: number;
+  /** The per-day ceiling in whole cents. `null` disables the cap (always allowed). */
+  capCents: number | null;
+}
+
+export interface DailyCapResult {
+  allowed: boolean;
+  reason: 'ok' | 'daily_cap_exceeded';
+}
+
+/**
+ * Per-user/day runaway-spend backstop, independent of the credit-balance decision in
+ * {@link evaluateGate}. Denies when the day's already-charged spend plus this call's
+ * reservation would exceed the cap. `capCents === null` (cap disabled) always allows.
+ * Pure — the shell supplies the day's charged total (summed from the ledger) and owns
+ * the clock that defines "today". Inputs are clamped to non-negative integers.
+ */
+export function evaluateDailyCap(input: DailyCapInput): DailyCapResult {
+  if (input.capCents === null) return { allowed: true, reason: 'ok' };
+  const cap = Math.max(0, Math.round(input.capCents));
+  const spent = Math.max(0, Math.round(input.dailyChargedCents));
+  const est = Math.max(0, Math.round(input.estCostCents));
+  if (spent + est > cap) return { allowed: false, reason: 'daily_cap_exceeded' };
+  return { allowed: true, reason: 'ok' };
+}
 
 export interface GateInput {
   billingEnabled: boolean;
@@ -393,4 +427,101 @@ export function computeBackfillActions(
       costDollars: row.costDollars,
     })),
   ];
+}
+
+export interface CostDriftInput {
+  /** What we already billed this call's real cost at: round(aiUsageLogs.cost * 100). */
+  billedRealCostCents: number;
+  /** Authoritative real cost from OpenRouter's /generation (summed across ids), in dollars. */
+  authoritativeRealCostDollars: number;
+  /** Absolute floor: never correct a drift at/under this many cents. */
+  toleranceCents: number;
+  /** Relative band (basis points of the billed cost): drift must exceed this too. */
+  toleranceBps: number;
+}
+
+export interface CostDriftResult {
+  /** True when the |drift| exceeds BOTH the absolute and relative tolerance. */
+  shouldCorrect: boolean;
+  /** Signed real-cost delta in cents (authoritative − billed): + = undercharged, − = overcharged. */
+  deltaRealCostCents: number;
+  /** The signed customer charge (millicents) to apply for the delta, markup included. */
+  deltaChargeMillicents: number;
+}
+
+/**
+ * Compare a call's already-billed real cost against OpenRouter's authoritative
+ * /generation cost and decide whether to write a correcting adjustment. Correction
+ * fires only when the absolute drift exceeds BOTH a fixed floor (toleranceCents) and a
+ * relative band (toleranceBps of the billed cost) — so sub-cent noise and tiny
+ * proportional wobble never churn the ledger. The signed delta drives the correction:
+ * positive = we undercharged (additional debit), negative = we overcharged (refund). The
+ * customer-facing charge delta carries the markup, computed on the magnitude via
+ * {@link chargeMillicents} (which rejects negatives) and re-signed. Pure.
+ */
+export function computeCostDrift(input: CostDriftInput, markupBps: number): CostDriftResult {
+  const authCents = Math.round(Math.max(0, input.authoritativeRealCostDollars) * 100);
+  const billed = Math.round(input.billedRealCostCents);
+  const delta = authCents - billed;
+  const absDelta = Math.abs(delta);
+
+  const relTol = Math.round((Math.max(0, billed) * Math.max(0, input.toleranceBps)) / 10000);
+  const tol = Math.max(Math.max(0, input.toleranceCents), relTol);
+  const shouldCorrect = absDelta > tol;
+
+  const deltaChargeMillicents =
+    Math.sign(delta) * chargeMillicents(Math.abs(delta) / 100, markupBps);
+
+  return { shouldCorrect, deltaRealCostCents: delta, deltaChargeMillicents };
+}
+
+export interface LedgerDerivedInput {
+  /** SUM(amountCents) of grant/purchase rows — credits added to buckets. */
+  grantCents: number;
+  /** SUM(|appliedCents|) of usage rows — what spend drew out of the buckets. */
+  appliedUsageCents: number;
+  /** SUM(appliedCents) of adjustment rows (signed): reconcile corrections that moved buckets. */
+  adjustmentCents: number;
+  /** The materialized creditBalances buckets: monthlyRemaining + topupRemaining. */
+  materializedSpendableCents: number;
+  /** The materialized debt (reported alongside; not part of the bucket equation). */
+  debtCents: number;
+}
+
+export interface BalanceDriftResult {
+  /** Buckets implied by the ledger: grants − spend + applied corrections. */
+  expectedSpendableCents: number;
+  /** materialized − expected. Non-zero beyond tolerance flags a divergence. */
+  driftCents: number;
+  flagged: boolean;
+}
+
+/**
+ * Compare a user's MATERIALIZED spendable buckets against what the ledger implies
+ * (grants − usage drawn from buckets + applied reconcile corrections). This is a
+ * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: monthly use-it-or-lose-it
+ * resets drop unspent allowance with no ledger row, and renewal debt-forgiveness zeroes
+ * debt — both legitimately break expected = materialized at period boundaries. So the
+ * tolerance is generous and a flag means "look at this account", not "the books are
+ * wrong". Pure; the shell supplies the SQL aggregates.
+ */
+export function computeBalanceDrift(input: LedgerDerivedInput, toleranceCents: number): BalanceDriftResult {
+  const expectedSpendableCents =
+    Math.round(input.grantCents) - Math.round(input.appliedUsageCents) + Math.round(input.adjustmentCents);
+  const driftCents = Math.round(input.materializedSpendableCents) - expectedSpendableCents;
+  const flagged = Math.abs(driftCents) > Math.max(0, Math.round(toleranceCents));
+  return { expectedSpendableCents, driftCents, flagged };
+}
+
+/**
+ * True when the credits charged for some usage fail to cover its real provider cost by
+ * the required margin floor — i.e. we're (near-)losing money on that account. With no
+ * real cost the margin is undefined, so it is never flagged. `marginFloorBps` of 0 means
+ * "charged must at least equal real cost"; a positive floor demands headroom above it.
+ * Pure.
+ */
+export function isNegativeMargin(realCostCents: number, chargedCents: number, marginFloorBps: number): boolean {
+  if (!(realCostCents > 0)) return false;
+  const required = realCostCents * (1 + Math.max(0, marginFloorBps) / 10000);
+  return chargedCents < required;
 }

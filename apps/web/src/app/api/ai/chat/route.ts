@@ -74,7 +74,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { trackFeature } from '@pagespace/lib/monitoring/activity-tracker';
-import { AIMonitoring, extractOpenRouterCostDollars } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
@@ -1089,7 +1089,10 @@ export async function POST(request: Request) {
                 inputTokens,
                 outputTokens,
                 totalTokens,
+                cachedInputTokens: usage?.cachedInputTokens,
+                reasoningTokens: usage?.reasoningTokens,
                 providerCostDollars: extractOpenRouterCostDollars(steps),
+                openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
                 duration,
                 conversationId, // Use actual conversation ID instead of pageId
                 messageId,
@@ -1205,7 +1208,10 @@ export async function POST(request: Request) {
       totalTokens:
         usage?.totalTokens ??
         ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
+      cachedInputTokens: usage?.cachedInputTokens,
+      reasoningTokens: usage?.reasoningTokens,
       providerCostDollars: extractOpenRouterCostDollars(steps),
+      openrouterGenerationIds: extractOpenRouterGenerationIds(steps),
       duration: Date.now() - startTime,
       conversationId: conversationId || chatId, // Use conversationId if available, fallback to chatId
       pageId: chatId,

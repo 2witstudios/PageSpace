@@ -3,12 +3,14 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { sql, eq, and, or, gt, gte, lte, desc, count, inArray } from '@pagespace/db/operators'
+import { sql, eq, and, or, gt, gte, lte, asc, desc, count, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
 import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
+import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
+import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@/lib/subscription/plans';
 
@@ -738,6 +740,130 @@ export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRo
     userEmail: r.userEmail,
     debtCents: r.debtCents,
   }));
+}
+
+export interface BalanceDriftRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  expectedSpendableCents: number;
+  materializedSpendableCents: number;
+  driftCents: number;
+  debtCents: number;
+}
+
+/**
+ * Accounts whose MATERIALIZED spendable buckets diverge from the ledger-implied amount
+ * beyond tolerance — a drift smell detector for the admin panel (see computeBalanceDrift;
+ * monthly resets / debt-forgiveness make this approximate, hence a generous tolerance).
+ * Aggregates the whole ledger per user (drift is a stock, not a period flow), joins the
+ * live balance, and returns only flagged rows, worst drift first.
+ */
+export async function getBalanceDriftAlerts(
+  toleranceCents: number = BALANCE_DRIFT_TOLERANCE_CENTS,
+  limit = 50,
+): Promise<BalanceDriftRow[]> {
+  const rows = await db
+    .select({
+      userId: creditBalances.userId,
+      userName: users.name,
+      userEmail: users.email,
+      materializedSpendableCents: sql<number>`(${creditBalances.monthlyRemainingCents} + ${creditBalances.topupRemainingCents})::int`,
+      debtCents: creditBalances.debtCents,
+      grantCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} IN ('monthly_grant', 'topup_purchase') THEN ${creditLedger.amountCents} ELSE 0 END), 0)::int`,
+      appliedUsageCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'usage' THEN ABS(${creditLedger.appliedCents}) ELSE 0 END), 0)::int`,
+      adjustmentCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'adjustment' THEN COALESCE(${creditLedger.appliedCents}, 0) ELSE 0 END), 0)::int`,
+    })
+    .from(creditBalances)
+    .innerJoin(users, eq(creditBalances.userId, users.id))
+    .leftJoin(creditLedger, eq(creditLedger.userId, creditBalances.userId))
+    .groupBy(
+      creditBalances.userId,
+      users.name,
+      users.email,
+      creditBalances.monthlyRemainingCents,
+      creditBalances.topupRemainingCents,
+      creditBalances.debtCents,
+    );
+
+  return rows
+    .map((r) => {
+      const drift = computeBalanceDrift(
+        {
+          grantCents: r.grantCents,
+          appliedUsageCents: r.appliedUsageCents,
+          adjustmentCents: r.adjustmentCents,
+          materializedSpendableCents: r.materializedSpendableCents,
+          debtCents: r.debtCents,
+        },
+        toleranceCents,
+      );
+      return {
+        userId: r.userId,
+        userName: r.userName,
+        userEmail: r.userEmail,
+        expectedSpendableCents: drift.expectedSpendableCents,
+        materializedSpendableCents: r.materializedSpendableCents,
+        driftCents: drift.driftCents,
+        debtCents: r.debtCents,
+        flagged: drift.flagged,
+      };
+    })
+    .filter((r) => r.flagged)
+    .sort((a, b) => Math.abs(b.driftCents) - Math.abs(a.driftCents))
+    .slice(0, limit)
+    .map(({ flagged: _flagged, ...row }) => row);
+}
+
+export interface NegativeMarginRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  realCostCents: number;
+  chargedCents: number;
+  marginCents: number;
+  marginPct: number | null;
+  requestCount: number;
+}
+
+/**
+ * Accounts where charged credits fail to cover real provider cost by the margin floor —
+ * i.e. we're (near-)losing money on them. Per-user usage aggregates over the window,
+ * filtered by isNegativeMargin, worst (most negative) margin first.
+ */
+export async function getNegativeMarginAccounts(
+  startDate?: Date,
+  endDate?: Date,
+  marginFloorBps: number = NEGATIVE_MARGIN_FLOOR_BPS,
+  limit = 50,
+): Promise<NegativeMarginRow[]> {
+  const rows = await db
+    .select({
+      userId: creditLedger.userId,
+      userName: users.name,
+      userEmail: users.email,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(creditLedger.userId, users.name, users.email)
+    .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${marginFloorBps}::numeric / 10000)`)
+    .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
+    .limit(limit);
+
+  // Re-assert the predicate with the shared pure helper so the panel and the SQL filter
+  // can never silently disagree.
+  return rows
+    .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, marginFloorBps))
+    .map((r) => ({
+      ...r,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+    }));
 }
 
 /**

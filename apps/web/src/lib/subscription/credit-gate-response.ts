@@ -7,6 +7,8 @@ import type { GateResult } from '@pagespace/lib/billing/credit-core';
  * apart:
  *   - too_many_in_flight -> 429: the free-tier concurrency cap (too many AI calls
  *     running at once); the user should wait for one to finish, not buy credits.
+ *   - daily_cap_exceeded -> 429: the per-user/day exposure backstop; the user has hit
+ *     their daily spend ceiling and should retry tomorrow, not buy credits.
  *   - everything else (out_of_credits / needs_init) -> 402: the prepaid balance is
  *     exhausted; the user must add credits or wait for the monthly reset.
  */
@@ -20,6 +22,13 @@ export function creditGatePayload(reason: GateResult['reason']): {
       status: 429,
       error: 'too_many_in_flight',
       message: 'Too many AI requests in flight at once. Wait for one to finish, then try again.',
+    };
+  }
+  if (reason === 'daily_cap_exceeded') {
+    return {
+      status: 429,
+      error: 'daily_cap_exceeded',
+      message: 'You\'ve reached your daily AI usage limit. Try again tomorrow.',
     };
   }
   return {

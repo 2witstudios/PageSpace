@@ -8,6 +8,7 @@ import {
   accrueCharge,
   allocateSpend,
   evaluateGate,
+  evaluateDailyCap,
   reservationCents,
   estimateChatHoldCents,
   holdExpiresAt,
@@ -16,6 +17,9 @@ import {
   validateTopupAmountCents,
   classifyStripeEvent,
   computeBackfillActions,
+  computeCostDrift,
+  computeBalanceDrift,
+  isNegativeMargin,
 } from '../credit-core';
 import type { SubscriptionTier } from '../../services/subscription-utils';
 
@@ -292,6 +296,38 @@ describe('reservationCents', () => {
   });
 });
 
+describe('evaluateDailyCap', () => {
+  it('always allows when the cap is disabled (null), regardless of spend', () => {
+    expect(evaluateDailyCap({ dailyChargedCents: 1_000_000, estCostCents: 25, capCents: null }))
+      .toEqual({ allowed: true, reason: 'ok' });
+  });
+
+  it('allows when day spend + this call stays under the cap', () => {
+    expect(evaluateDailyCap({ dailyChargedCents: 100, estCostCents: 25, capCents: 500 }))
+      .toEqual({ allowed: true, reason: 'ok' });
+  });
+
+  it('allows exactly at the cap (spent + est === cap)', () => {
+    expect(evaluateDailyCap({ dailyChargedCents: 475, estCostCents: 25, capCents: 500 }).allowed)
+      .toBe(true);
+  });
+
+  it('denies when day spend + this call would exceed the cap', () => {
+    expect(evaluateDailyCap({ dailyChargedCents: 480, estCostCents: 25, capCents: 500 }))
+      .toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+  });
+
+  it('denies when prior spend alone is already over the cap', () => {
+    expect(evaluateDailyCap({ dailyChargedCents: 600, estCostCents: 0, capCents: 500 }).allowed)
+      .toBe(false);
+  });
+
+  it('clamps negative inputs to 0 before comparing', () => {
+    expect(evaluateDailyCap({ dailyChargedCents: -100, estCostCents: -5, capCents: 500 }))
+      .toEqual({ allowed: true, reason: 'ok' });
+  });
+});
+
 describe('estimateChatHoldCents', () => {
   // markupBps 15000 = 1.5×. floor 2¢, ceiling 25¢ throughout.
   it('applies the markup to the real-cost estimate and rounds to whole cents', () => {
@@ -552,6 +588,102 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
       // A fractional amount is always rejected, in or out of band.
       expect(validateTopupAmountCents(cents + 0.5, MIN, MAX)).toBeNull();
     }
+  });
+});
+
+describe('computeCostDrift', () => {
+  // markupBps 15000 = 1.5×. tolerance: 1¢ absolute floor, 500 bps (5%) relative band.
+  const TOL = { toleranceCents: 1, toleranceBps: 500 };
+
+  it('does not correct a zero / within-tolerance drift', () => {
+    expect(computeCostDrift({ billedRealCostCents: 100, authoritativeRealCostDollars: 1.0, ...TOL }, 15000).shouldCorrect)
+      .toBe(false);
+    // delta 3¢ on a 100¢ bill: under the 5% (5¢) band.
+    expect(computeCostDrift({ billedRealCostCents: 100, authoritativeRealCostDollars: 1.03, ...TOL }, 15000).shouldCorrect)
+      .toBe(false);
+  });
+
+  it('corrects when drift exceeds the relative band (undercharge → positive delta + debit)', () => {
+    const r = computeCostDrift({ billedRealCostCents: 100, authoritativeRealCostDollars: 1.10, ...TOL }, 15000);
+    expect(r.shouldCorrect).toBe(true);
+    expect(r.deltaRealCostCents).toBe(10);
+    // markup applied to the 10¢ delta: 0.10 × 1.5 × 100_000 = 15_000 millicents.
+    expect(r.deltaChargeMillicents).toBe(15_000);
+  });
+
+  it('corrects when drift exceeds the absolute floor even on a tiny bill', () => {
+    // billed 2¢ → relative band rounds to 0¢, so the 1¢ absolute floor governs.
+    const r = computeCostDrift({ billedRealCostCents: 2, authoritativeRealCostDollars: 0.05, ...TOL }, 15000);
+    expect(r.shouldCorrect).toBe(true);
+    expect(r.deltaRealCostCents).toBe(3);
+  });
+
+  it('produces a negative (refund) delta when we overcharged', () => {
+    const r = computeCostDrift({ billedRealCostCents: 100, authoritativeRealCostDollars: 0.80, ...TOL }, 15000);
+    expect(r.shouldCorrect).toBe(true);
+    expect(r.deltaRealCostCents).toBe(-20);
+    // refund charge: −(0.20 × 1.5 × 100_000) = −30_000 millicents.
+    expect(r.deltaChargeMillicents).toBe(-30_000);
+  });
+});
+
+describe('computeBalanceDrift', () => {
+  it('does not flag when materialized buckets match the ledger-implied amount', () => {
+    // grants 1000 − usage 300 + adjustments 0 = 700 expected; materialized 700.
+    const r = computeBalanceDrift(
+      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 700, debtCents: 0 },
+      10,
+    );
+    expect(r).toEqual({ expectedSpendableCents: 700, driftCents: 0, flagged: false });
+  });
+
+  it('does not flag a divergence within tolerance', () => {
+    const r = computeBalanceDrift(
+      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 705, debtCents: 0 },
+      10,
+    );
+    expect(r.driftCents).toBe(5);
+    expect(r.flagged).toBe(false);
+  });
+
+  it('flags a divergence beyond tolerance (either sign)', () => {
+    expect(computeBalanceDrift(
+      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 800, debtCents: 0 },
+      10,
+    ).flagged).toBe(true);
+    expect(computeBalanceDrift(
+      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 600, debtCents: 0 },
+      10,
+    ).flagged).toBe(true);
+  });
+
+  it('folds applied adjustments into the expected amount', () => {
+    // grants 1000 − usage 300 + adjustments −15 (a reconcile debit) = 685 expected.
+    const r = computeBalanceDrift(
+      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: -15, materializedSpendableCents: 685, debtCents: 0 },
+      10,
+    );
+    expect(r.expectedSpendableCents).toBe(685);
+    expect(r.flagged).toBe(false);
+  });
+});
+
+describe('isNegativeMargin', () => {
+  it('is not flagged when there is no real cost (margin undefined)', () => {
+    expect(isNegativeMargin(0, 0, 0)).toBe(false);
+    expect(isNegativeMargin(0, 100, 0)).toBe(false);
+  });
+
+  it('flags when charged is below real cost (floor 0)', () => {
+    expect(isNegativeMargin(100, 90, 0)).toBe(true);
+    expect(isNegativeMargin(100, 100, 0)).toBe(false); // exactly covers → ok
+    expect(isNegativeMargin(100, 150, 0)).toBe(false);
+  });
+
+  it('requires headroom above the floor when one is set', () => {
+    // floor 5000 bps = require charged >= real × 1.5.
+    expect(isNegativeMargin(100, 140, 5000)).toBe(true);
+    expect(isNegativeMargin(100, 150, 5000)).toBe(false);
   });
 });
 

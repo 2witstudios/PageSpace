@@ -67,6 +67,11 @@
       "import": "./dist/billing/credit-funding.js",
       "require": "./dist/billing/credit-funding.js"
     },
+    "./billing/cost-reconcile": {
+      "types": "./dist/billing/cost-reconcile.d.ts",
+      "import": "./dist/billing/cost-reconcile.js",
+      "require": "./dist/billing/cost-reconcile.js"
+    },
     "./billing/credit-core": {
       "types": "./dist/billing/credit-core.d.ts",
       "import": "./dist/billing/credit-core.js",
