@@ -205,6 +205,17 @@ describe('ai-providers-config', () => {
       expect(reason).toMatch(/unknown or unavailable/i);
     });
 
+    it('rejects a model with no provider (null/empty) — closes the bypass', () => {
+      expect(validateAgentModelSelection(null, 'openai/gpt-6-ultra')).toMatch(/provider/i);
+      expect(validateAgentModelSelection('', 'openai/whatever')).toMatch(/provider/i);
+      expect(validateAgentModelSelection(undefined, 'anything')).toMatch(/provider/i);
+    });
+
+    it('allows a provider with no model (model can default later)', () => {
+      expect(validateAgentModelSelection('openai', null)).toBeNull();
+      expect(validateAgentModelSelection('openai', '')).toBeNull();
+    });
+
     it('allows any model for dynamic/local providers (runtime-discovered)', () => {
       expect(validateAgentModelSelection('ollama', 'llama3.1:70b-custom')).toBeNull();
       expect(validateAgentModelSelection('lmstudio', 'some-local-model')).toBeNull();

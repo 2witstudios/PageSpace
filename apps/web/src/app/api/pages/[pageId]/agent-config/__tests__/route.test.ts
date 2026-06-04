@@ -533,13 +533,16 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       );
     });
 
-    it('nullifies empty aiProvider after trim', async () => {
-      await PATCH(createPatchRequest({ aiProvider: '' }), mockParams);
+    it('nullifies empty aiProvider after trim (provider+model cleared together)', async () => {
+      // A model can't be stored without a provider, so clearing the provider clears
+      // the model too — the UI always sends both fields together.
+      await PATCH(createPatchRequest({ aiProvider: '', aiModel: '' }), mockParams);
 
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           updates: expect.objectContaining({
             aiProvider: null,
+            aiModel: null,
           }),
         })
       );
@@ -752,6 +755,18 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toMatch(/not a valid model/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a model set without a provider (no provider to validate against)', async () => {
+      const response = await PATCH(
+        createPatchRequest({ aiProvider: '', aiModel: 'openai/gpt-6-ultra' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/provider/i);
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
   });

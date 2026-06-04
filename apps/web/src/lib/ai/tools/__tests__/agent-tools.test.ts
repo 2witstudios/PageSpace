@@ -414,6 +414,41 @@ describe('agent-tools', () => {
       expect(applyPageMutation).not.toHaveBeenCalled();
     });
 
+    it('rejects a model set with no provider on a fresh agent (no stored provider)', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        revision: 1,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        agentTools.update_agent_config.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', aiModel: 'openai/gpt-6-ultra' },
+          context
+        )
+      ).rejects.toThrow(/provider/i);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
     it('allows an arbitrary model for a dynamic provider (ollama)', async () => {
       const mockAgent = {
         id: 'agent-1',

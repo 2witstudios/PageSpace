@@ -12,6 +12,12 @@ import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-conf
  * This is distinct from the OpenAI-compatible `/api/v1/models`, which lists
  * PageSpace *agents* as models for SDK inference — leave that one untouched.
  */
+
+// The payload depends on the runtime DEPLOYMENT_MODE (via getVisibleProviders), so
+// it must be computed per-request — never statically prerendered at build time with
+// a frozen mode. Downstream caching is still handled by the Cache-Control header.
+export const dynamic = 'force-dynamic';
+
 export async function GET(): Promise<Response> {
   return Response.json(
     {

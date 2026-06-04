@@ -416,6 +416,12 @@ export function validateAgentModelSelection(
   model: string | null | undefined,
 ): string | null {
   if (!provider && !model) return null; // clearing/unset is fine
+  // A model can't be stored without a provider — the pair is what gets validated
+  // and routed. Without a provider there's nothing to check the model against, so
+  // a hallucinated id would otherwise slip through.
+  if (model && !provider) {
+    return `Set an AI provider alongside model "${model}".`;
+  }
   const visible = getVisibleProviders();
   if (provider && !(provider in visible)) {
     return `Unknown or unavailable AI provider "${provider}".`;
