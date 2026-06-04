@@ -1150,10 +1150,10 @@ export async function POST(request: Request) {
             loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
           }
 
-          // Reflect a user stop that landed during inter-attempt backoff (onAbort, which
-          // also calls finish(true), only fires while a streamText is live). finish() is
-          // idempotent, so this is a no-op if onAbort already ran.
-          lifecycle!.finish(agentRun?.terminalReason === 'aborted');
+          // Reflect a user stop, including one that landed during inter-attempt backoff or
+          // raced in after the loop broke (onAbort only fires while a streamText is live).
+          // finish() is idempotent, so this is a no-op if onAbort already ran.
+          lifecycle!.finish(agentRun?.terminalReason === 'aborted' || abortSignal.aborted);
         },
       });
 

@@ -123,7 +123,7 @@ describe('classifyAttempt', () => {
     });
   });
 
-  it('tool-calls without finish but at the step cap is terminal', () => {
+  it('tool-calls without finish at the step cap is terminal:step-budget', () => {
     assert({
       given: 'a tool-calls finish with no finish tool and step budget exhausted',
       should: 'be terminal:step-budget (retry would not help)',
@@ -139,10 +139,10 @@ describe('classifyAttempt', () => {
     });
   });
 
-  it('tool-calls without finish and budget remaining is retryable', () => {
+  it('tool-calls without finish below the cap is terminal (anomalous, not retried)', () => {
     assert({
-      given: 'a tool-calls finish cut short before the finish tool, budget left',
-      should: 'retry as tool-calls-no-finish',
+      given: 'a tool-calls finish with no finish tool, budget left (unreachable under normal stopWhen)',
+      should: 'be terminal:tool-calls-no-finish — the SDK auto-continues tool steps, so a retry cannot help',
       actual: classifyAttempt(
         base({
           finishReason: 'tool-calls',
@@ -151,7 +151,7 @@ describe('classifyAttempt', () => {
           maxSteps: 100,
         }),
       ),
-      expected: { kind: 'retry', reason: 'tool-calls-no-finish' },
+      expected: { kind: 'terminal', reason: 'tool-calls-no-finish' },
     });
   });
 

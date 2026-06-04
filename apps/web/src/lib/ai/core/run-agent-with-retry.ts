@@ -9,7 +9,6 @@ import type {
 } from 'ai';
 import type { ProviderMetadataCarrier } from '@pagespace/lib/monitoring/ai-monitoring';
 import { classifyAttempt } from './agent-finish-classifier';
-import { reconcileInterruptedToolCalls } from './reconcile-interrupted-tool-calls';
 import { pipeUIMessageStreamStrippingStart } from './stream-pipe-utils';
 
 /** Minimal shape of a `streamText` result the retry shell consumes. */
@@ -117,7 +116,6 @@ export async function runAgentWithRetry(
     }
   };
 
-  let messages = baseMessages;
   const accumulatedSteps: ProviderMetadataCarrier[] = [];
   let accumulatedUsage: LanguageModelUsage | undefined;
   let attempts = 0;
@@ -129,7 +127,10 @@ export async function runAgentWithRetry(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     attempts = attempt + 1;
-    const aiResult = buildStreamText(messages);
+    // We only ever retry attempts that streamed NO content (see classifyAttempt:
+    // emittedContent), which means no tool ran and nothing was committed — so each
+    // attempt safely re-runs from the original baseMessages with no re-feed needed.
+    const aiResult = buildStreamText(baseMessages);
 
     let caughtError: unknown;
     let emittedContent = false;
@@ -209,10 +210,6 @@ export async function runAgentWithRetry(
       reason: outcome.reason,
       elapsedMs: elapsed,
     });
-
-    // Re-feed: append this attempt's turn, injecting synthetic results for any
-    // interrupted tool-calls so the next attempt does not re-run mutating tools.
-    messages = reconcileInterruptedToolCalls([...messages, ...responseMessages]);
 
     await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
     if (abortSignal.aborted) {

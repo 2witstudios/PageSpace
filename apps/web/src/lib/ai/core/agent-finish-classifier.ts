@@ -11,11 +11,12 @@ import type { FinishReason, ModelMessage } from 'ai';
  * performs the streaming side effects and just asks this function what to do.
  */
 
-export type RetryReason = 'provider-error' | 'tool-calls-no-finish' | 'ambiguous';
+export type RetryReason = 'provider-error' | 'ambiguous';
 export type TerminalReason =
   | 'length'
   | 'content-filter'
   | 'step-budget'
+  | 'tool-calls-no-finish'
   | 'aborted'
   | 'provider-error'
   | 'ambiguous';
@@ -102,14 +103,14 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
       if (calledFinishTool(args.responseMessages, args.finishToolName)) {
         return { kind: 'clean' };
       }
-      if (args.stepCount >= args.maxSteps) {
-        // Ran out of step budget mid-tool-loop — retrying just burns more steps.
-        return { kind: 'terminal', reason: 'step-budget' };
-      }
-      // Ended cleanly on a tool-call step without finish (budget left). The emitted
-      // parts are complete/valid, so we re-feed them and CONTINUE — the next attempt
-      // appends only new content and won't re-run completed tools (no duplication).
-      return { kind: 'retry', reason: 'tool-calls-no-finish' };
+      // A multi-step loop with stopWhen [hasToolCall(finish), stepCountIs(N)] only
+      // surfaces a top-level 'tool-calls' finish when stopWhen matched — i.e. the finish
+      // tool was called (handled above) or the step cap was hit. The SDK auto-continues
+      // every other tool step, so neither sub-case is retryable (more steps won't help).
+      return {
+        kind: 'terminal',
+        reason: args.stepCount >= args.maxSteps ? 'step-budget' : 'tool-calls-no-finish',
+      };
     }
 
     case 'length':
