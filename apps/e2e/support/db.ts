@@ -3,6 +3,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
@@ -137,6 +138,54 @@ export async function createGlobalConversation(userId: string): Promise<string> 
     .values({ userId, type: 'global', title: 'e2e' })
     .returning();
   return row.id;
+}
+
+/**
+ * Seed a billed OpenRouter chat call that is still awaiting cost reconcile: an
+ * `ai_usage_logs` row (provider=openrouter, reconcileStatus='pending', carrying the
+ * generation id in metadata.generationIds, timestamped past the reconcile grace window)
+ * plus its base `usage` credit_ledger row (reconcile only CORRECTS an already-billed
+ * call). `billedCostDollars` is what we charged inline; the cron will fetch the
+ * authoritative `/generation` cost and correct any drift. Returns the row ids.
+ */
+export async function seedPendingReconcileCall(
+  userId: string,
+  opts: { generationId: string; billedCostDollars: number; chargedCents: number },
+): Promise<{ aiUsageLogId: string; generationId: string }> {
+  // Older than cost-reconcile's 2-minute grace window so it's eligible immediately.
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+  const [log] = await db
+    .insert(aiUsageLogs)
+    .values({
+      userId,
+      provider: 'openrouter',
+      model: 'e2e/stub-model',
+      cost: opts.billedCostDollars,
+      timestamp: tenMinAgo,
+      reconcileStatus: 'pending',
+      reconcileAttempts: 0,
+      metadata: { generationIds: [opts.generationId] },
+    })
+    .returning({ id: aiUsageLogs.id });
+
+  await db.insert(creditLedger).values({
+    userId,
+    entryType: 'usage',
+    bucket: 'monthly',
+    amountCents: -opts.chargedCents,
+    appliedCents: -opts.chargedCents,
+    chargeMillicents: opts.chargedCents * 1000,
+    realCostCents: Math.round(opts.billedCostDollars * 100),
+    aiUsageLogId: log.id,
+  });
+
+  return { aiUsageLogId: log.id, generationId: opts.generationId };
+}
+
+/** Read the ai_usage_logs row for a given id (to assert reconcileStatus transitions). */
+export async function getAiUsageLog(id: string) {
+  const [row] = await db.select().from(aiUsageLogs).where(eq(aiUsageLogs.id, id));
+  return row ?? null;
 }
 
 /** Insert an MCP bearer token for the user; returns the raw `mcp_...` token. */
