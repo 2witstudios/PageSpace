@@ -5,8 +5,9 @@
  * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
  * the monthly reset live in `./credit-gate` (the imperative shell that owns the clock
  * and the row lock). Here we only mirror the gate's semantics for presentation:
- *   - free tier whose monthly window has lapsed is shown its full allowance (the gate
- *     will reset it on the next call) rather than a stale, pessimistic remainder;
+ *   - free tier whose monthly window has lapsed is shown its full allowance with
+ *     renewal-equivalent debt forgiveness (the gate will reset it on the next call)
+ *     rather than stale, pessimistic balances;
  *   - paid tier whose window has lapsed is shown 0 monthly (use-it-or-lose-it — the
  *     gate excludes the expired allowance until the renewal invoice refills it);
  *   - spendable is the FUNDED balance (monthly + top-up remaining) MINUS outstanding
@@ -146,7 +147,7 @@ export async function getCreditBalance(
   }
 
   const topupRemaining = row.topupRemainingCents;
-  const debt = row.debtCents ?? 0;
+  const debt = tier === 'free' && expired ? 0 : row.debtCents ?? 0;
   // GROSS of in-flight holds (master semantics: `reserved` is surfaced separately, not
   // netted out, so the headline doesn't dip-then-pop across a call). Clamped at 0 ONLY
   // when there's no debt — outstanding overage pulls spendable negative so the widget

@@ -87,6 +87,7 @@ Funding shell (`credit-funding.ts`) + webhook dispatch via `classifyStripeEvent`
 - Given a user with no spendable credits, the AI route should return 402 with a buy-credits CTA instead of a 429 rate-limit error.
 - Given tenant/onprem deployment, the AI route should never gate on credits.
 - Given a user with no balance row, the first AI request should lazy-init the row from tier defaults before deciding.
+- Given a free user's period has expired with outstanding debt, the balance display should show the renewal-equivalent forgiven debt and refreshed allowance.
 - Given the credits model, per-day call counting (`incrementUsage`, `rate-limit-cache` wiring) should be removed from the AI path and `plans.ts` copy should advertise monthly credits.
 - Given an unrecognized subscription tier, premium-model gating should deny (require upgrade) rather than grant access — gate on a positive allowlist of paid tiers, not by excluding `free`.
 

@@ -111,6 +111,22 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(500);
   });
 
+  it('mirrors gate forgiveness for expired free-period debt', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 0,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        debtCents: 300,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    expect(b.monthly.remaining).toBe(500);
+    expect(b.debt).toBe(0);
+    expect(b.spendable).toBe(500);
+  });
+
   it('zeroes the expired monthly bucket for a paid tier (use-it-or-lose-it)', async () => {
     balanceRows = [
       {
