@@ -17,10 +17,21 @@ import http from 'http';
  *   GET  /__health  → { ok: true }
  *   GET  /__calls   → { count, requests: [{ model, stream, messages }] }
  *   POST /__reset   → zeroes the recorder
+ *
+ * It also serves OpenRouter's authoritative cost-reconcile endpoint:
+ *   GET  /generation?id=<id> → { data: { total_cost: <number> } }
+ * so the reconcile cron (cost-reconcile.ts) can fetch a FINAL cost that differs from the
+ * inline completion cost and induce a billing drift. The reported cost defaults to
+ * MOCK_GENERATION_COST_DOLLARS and is overridable per-id (and globally) via POST /__set-generation-cost.
  */
 
 /** Real provider cost in US dollars returned for every completion. 0.02 → 2¢ real → 3¢ charged at 1.5×. */
 export const MOCK_COST_DOLLARS = 0.02;
+/**
+ * Default authoritative `/generation` total_cost (dollars) returned to the reconcile cron.
+ * Higher than MOCK_COST_DOLLARS so, left at the default, the cron sees an undercharge drift.
+ */
+export const MOCK_GENERATION_COST_DOLLARS = 0.05;
 export const MOCK_PROMPT_TOKENS = 12;
 export const MOCK_COMPLETION_TOKENS = 4;
 
@@ -32,6 +43,11 @@ interface RecordedRequest {
 
 export function createMockOpenRouter() {
   const requests: RecordedRequest[] = [];
+  // Authoritative /generation cost (dollars) the reconcile cron reads, keyed by generation
+  // id. A test sets these via POST /__set-generation-cost; unknown ids fall back to the
+  // default so a plain reconcile run still produces a deterministic drift.
+  const generationCosts = new Map<string, number>();
+  let defaultGenerationCost = MOCK_GENERATION_COST_DOLLARS;
 
   const completionUsage = {
     prompt_tokens: MOCK_PROMPT_TOKENS,
@@ -68,7 +84,32 @@ export function createMockOpenRouter() {
     }
     if (method === 'POST' && url.startsWith('/__reset')) {
       requests.length = 0;
+      generationCosts.clear();
+      defaultGenerationCost = MOCK_GENERATION_COST_DOLLARS;
       return writeJson(res, 200, { ok: true });
+    }
+    // Override the authoritative /generation cost. Body: { id?, totalCost } — with `id`
+    // sets that generation's cost, without it sets the default for all unknown ids.
+    if (method === 'POST' && url.startsWith('/__set-generation-cost')) {
+      const raw = await readBody(req);
+      let body: { id?: string; totalCost?: number } = {};
+      try {
+        body = JSON.parse(raw) as typeof body;
+      } catch {
+        /* ignore */
+      }
+      if (typeof body.totalCost === 'number') {
+        if (typeof body.id === 'string' && body.id.length > 0) generationCosts.set(body.id, body.totalCost);
+        else defaultGenerationCost = body.totalCost;
+      }
+      return writeJson(res, 200, { ok: true });
+    }
+    // OpenRouter's authoritative cost endpoint, polled by the reconcile cron. Matched by
+    // `includes` because the cron hits it under the /api/v1 base path.
+    if (method === 'GET' && url.includes('/generation')) {
+      const id = new URL(url, 'http://127.0.0.1').searchParams.get('id') ?? '';
+      const totalCost = generationCosts.has(id) ? generationCosts.get(id)! : defaultGenerationCost;
+      return writeJson(res, 200, { data: { total_cost: totalCost } });
     }
 
     if (method === 'POST' && url.includes('/chat/completions')) {
