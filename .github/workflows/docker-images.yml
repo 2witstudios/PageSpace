@@ -198,12 +198,12 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-processor:latest
           docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
           docker push registry.fly.io/pagespace-processor:latest
-          # strategy=immediate (set in fly.processor.toml): just restart in-place, no two-phase
-          # rolling swap. Rolling caused 5-min deploys (health check fires before 14s startup
-          # completes) and a machine-list race that produced false-negative CI failures.
+          # strategy=immediate (fly.processor.toml): restarts in-place, no two-phase rolling swap.
+          # flyctl deploy with immediate strategy completes in ~3s (updates config + restart) and
+          # returns "good state" only after the machine is up. No post-deploy machine wait needed —
+          # flyctl machine wait against an immediate-strategy machine hits a transient "replacing"
+          # state and produces false-negative CI failures.
           flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
-          MACHINE_ID=$(flyctl machines list --app pagespace-processor --json | jq -r '.[0].id')
-          flyctl machine wait "$MACHINE_ID" --app pagespace-processor --state started --wait-timeout 60s
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
