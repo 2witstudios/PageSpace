@@ -453,7 +453,7 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                               )}
                             </Button>
                           ) : (
-                            // Paid subscription - show link to Stripe
+                            // Paid subscription - show link to Stripe + force revoke
                             <div className="space-y-2">
                               <div className="p-2 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded text-xs">
                                 <div className="flex items-center gap-1 text-blue-800 dark:text-blue-200">
@@ -472,6 +472,34 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                                   Open in Stripe
                                 </Button>
                               )}
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => {
+                                  if (confirm('Revoke this paid subscription? The user will be downgraded to free tier immediately.')) {
+                                    revokeGiftSubscription(user.id);
+                                  }
+                                }}
+                                disabled={updatingUsers[user.id]}
+                                className="w-full"
+                              >
+                                {updatingUsers[user.id] ? (
+                                  <div className="flex items-center space-x-2">
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                    <span>Revoking...</span>
+                                  </div>
+                                ) : recentlyUpdated[user.id] ? (
+                                  <div className="flex items-center space-x-2">
+                                    <CheckCircle className="h-4 w-4" />
+                                    <span>Revoked!</span>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <XCircle className="h-4 w-4 mr-2" />
+                                    Force Revoke Subscription
+                                  </>
+                                )}
+                              </Button>
                             </div>
                           )}
                         </div>

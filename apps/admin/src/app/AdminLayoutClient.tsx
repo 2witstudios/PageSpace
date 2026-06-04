@@ -15,6 +15,8 @@ export default function AdminLayoutClient({
                      pathname.includes('/monitoring') ? 'monitoring' :
                      pathname.includes('/tables') ? 'tables' :
                      pathname.includes('/global-prompt') ? 'global-prompt' :
+                     pathname.includes('/unit-economics') ? 'unit-economics' :
+                     pathname.includes('/ai-billing') ? 'ai-billing' :
                      pathname.includes('/audit-logs') ? 'audit-logs' :
                      pathname.includes('/support') ? 'support' : 'users';
 
@@ -43,6 +45,12 @@ export default function AdminLayoutClient({
             </TabsTrigger>
             <TabsTrigger value="global-prompt" asChild>
               <Link href="/global-prompt">Global Prompt</Link>
+            </TabsTrigger>
+            <TabsTrigger value="unit-economics" asChild>
+              <Link href="/unit-economics">Unit Economics</Link>
+            </TabsTrigger>
+            <TabsTrigger value="ai-billing" asChild>
+              <Link href="/ai-billing">AI Billing</Link>
             </TabsTrigger>
             <TabsTrigger value="users" asChild>
               <Link href="/users">User Management</Link>
