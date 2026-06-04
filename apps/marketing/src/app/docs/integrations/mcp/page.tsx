@@ -87,9 +87,9 @@ The same MCP token also unlocks an **OpenAI-compatible API**, so any tool that s
 - **Model** — \`ps-agent://<pageId>\`, the id of the AI Chat page you want to run. Copy it from the agent's settings tab.
 
 \`\`\`bash
-curl https://pagespace.ai/api/v1/chat/completions \\\\
-  -H "Authorization: Bearer mcp_your_token_here" \\\\
-  -H "Content-Type: application/json" \\\\
+curl https://pagespace.ai/api/v1/chat/completions \\
+  -H "Authorization: Bearer mcp_your_token_here" \\
+  -H "Content-Type: application/json" \\
   -d '{
     "model": "ps-agent://<pageId>",
     "stream": true,
