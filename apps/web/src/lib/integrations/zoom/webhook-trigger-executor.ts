@@ -1,11 +1,15 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { workflows } from '@pagespace/db/schema/workflows';
 import type { ZoomConnection } from '@pagespace/db/schema/zoom';
 import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const logger = loggers.api.child({ module: 'webhook-trigger-executor' });
@@ -61,10 +65,30 @@ export async function executeWebhookTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 4. Build the prompt from the workflow's stored prompt + Zoom event context
+    // 4. Credit gate — blocks out-of-credits users before the model is invoked.
+    //    skipDailyCap: server-triggered, not interactive fan-out.
+    const [connectionOwner] = await db
+      .select({ subscriptionTier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.id, connection.userId));
+    const gate = await canConsumeAI(
+      connection.userId,
+      (connectionOwner?.subscriptionTier ?? 'free') as SubscriptionTier,
+      { skipDailyCap: true },
+    );
+    if (!gate.allowed) {
+      logger.info('Webhook trigger: skipped (credit gate denied)', {
+        triggerId: trigger.id,
+        reason: gate.reason,
+      });
+      return { success: false, durationMs: Date.now() - startTime, error: `AI credit gate denied: ${gate.reason}` };
+    }
+    const holdId = gate.holdId;
+
+    // 5. Build the prompt from the workflow's stored prompt + Zoom event context
     const promptOverride = buildWebhookTriggerPrompt(workflow.prompt, event);
 
-    // 5. Compose execution input — the executor writes workflow_runs
+    // 6. Compose execution input — the executor writes workflow_runs
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,
       workflowName: `webhook-trigger-${trigger.id}`,
@@ -79,7 +103,14 @@ export async function executeWebhookTrigger(
       eventContext: { promptOverride },
     };
 
-    const result = await executeWorkflow(input);
+    // executeWorkflow calls AIMonitoring.trackUsage → consumeCredits internally.
+    // Release the hold here so the user's spendable balance is accurate after execution.
+    let result: WorkflowExecutionResult;
+    try {
+      result = await executeWorkflow(input);
+    } finally {
+      if (holdId) void releaseHold(holdId).catch(() => {});
+    }
 
     logger.info('Webhook trigger executed', {
       triggerId: trigger.id,
