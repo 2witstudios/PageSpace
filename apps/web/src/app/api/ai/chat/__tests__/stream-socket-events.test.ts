@@ -213,7 +213,6 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getProviderTier: vi.fn().mockReturnValue('standard'),
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
   ONPREM_ALLOWED_PROVIDERS: new Set<string>(['ollama', 'lmstudio', 'azure_openai']),
   DYNAMIC_MODEL_PROVIDERS: new Set<string>(['ollama', 'lmstudio']),

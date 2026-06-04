@@ -264,7 +264,6 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getProviderTier: vi.fn().mockReturnValue('standard'),
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
 }));
 

@@ -213,7 +213,6 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 }));
 vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn().mockReturnValue(true) }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getProviderTier: vi.fn().mockReturnValue('standard'),
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
 }));
 vi.mock('@/lib/ai/core/tool-utils', () => ({
