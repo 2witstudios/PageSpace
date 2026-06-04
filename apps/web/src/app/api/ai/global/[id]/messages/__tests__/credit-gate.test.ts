@@ -413,4 +413,41 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     expect(settled).toBe(true);
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
   });
+
+  it('settles the hold (trackUsage) even when no responseMessage is produced', async () => {
+    // Exhausted/no-content run: the retry shell gave up without a message. Settlement
+    // must still run — it's the only thing that releases the gate's hold. Skipping it
+    // here (the old `if (responseMessage)` gate) silently leaked the hold.
+    // (saveGlobalAssistantMessageToDatabase also persists the user message during POST,
+    // so we assert the *assistant* save is skipped by comparing counts across onFinish.)
+    captured.totalUsage = { inputTokens: 3, outputTokens: 0, totalTokens: 3 };
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+    const savesBeforeFinish = mockSaveGlobalAssistantMessageToDatabase.mock.calls.length;
+    await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
+
+    // No assistant-message save (nothing to persist), but the hold is still settled.
+    expect(mockSaveGlobalAssistantMessageToDatabase.mock.calls.length).toBe(savesBeforeFinish);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect(call.model).toBe('glm-4.5-air');
+  });
+
+  it('settles the hold (trackUsage) even when persisting the assistant message throws', async () => {
+    // A save failure must not skip settlement — otherwise a transient DB error leaks the
+    // hold. Settlement lives outside the save try/catch, so it runs regardless.
+    // Arm the rejection AFTER the user-message save in POST so only the assistant save
+    // (in onFinish) throws.
+    captured.totalUsage = { inputTokens: 4, outputTokens: 6, totalTokens: 10 };
+
+    await POST(makeRequest(), makeContext());
+    await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+    mockSaveGlobalAssistantMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+    await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
+    expect(call.totalTokens).toBe(10);
+  });
 });
