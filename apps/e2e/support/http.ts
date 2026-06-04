@@ -56,3 +56,19 @@ export async function mockCallCount(request: APIRequestContext): Promise<number>
   const json = (await res.json()) as { count: number };
   return json.count;
 }
+
+/**
+ * Override the authoritative `/generation` cost the reconcile cron will read. With `id`
+ * set, only that generation's cost changes; without it, the default for all unknown ids.
+ * `totalCost` is in US dollars (OpenRouter's `data.total_cost` shape).
+ */
+export async function setGenerationCost(
+  request: APIRequestContext,
+  totalCost: number,
+  id?: string,
+): Promise<void> {
+  await request.post(`${MOCK_BASE}/__set-generation-cost`, {
+    headers: { 'content-type': 'application/json' },
+    data: JSON.stringify({ totalCost, id }),
+  });
+}

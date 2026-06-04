@@ -267,7 +267,7 @@ export function getCreditPack(id: string): CreditPack | undefined {
  * Bounds (whole cents) for a CUSTOM top-up amount, alongside the fixed packs. The min
  * keeps dust purchases above Stripe's per-transaction fee; the max caps single-charge
  * fraud/chargeback exposure. Validated by `validateTopupAmountCents` in credit-core,
- * shared by the checkout route and the client. Default $5–$200; tune via env.
+ * shared by the checkout route and the client. Default $5–$500; tune via env.
  */
 export const CREDIT_TOPUP_MIN_CENTS = envInt('CREDIT_TOPUP_MIN_CENTS', 500);
-export const CREDIT_TOPUP_MAX_CENTS = envInt('CREDIT_TOPUP_MAX_CENTS', 20000);
+export const CREDIT_TOPUP_MAX_CENTS = envInt('CREDIT_TOPUP_MAX_CENTS', 50000);

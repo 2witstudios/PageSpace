@@ -102,4 +102,51 @@ describe('CreditsChangeEmail', () => {
     );
     expect(html).not.toContain('Unsubscribe from product update emails');
   });
+
+  it('shows the custom top-up range from the summary', async () => {
+    const summary = getTierCreditSummary('pro');
+    const html = await render(
+      CreditsChangeEmail({
+        userName: 'Ada',
+        summary,
+        manageUrl: 'https://app.pagespace.ai/settings/plan',
+      }),
+    );
+    expect(html).toContain(summary.topupMinLabel);
+    expect(html).toContain(summary.topupMaxLabel);
+  });
+
+  it('promotes frontier model choice for paid tiers but not Free', async () => {
+    const proHtml = await render(
+      CreditsChangeEmail({
+        userName: 'Ada',
+        summary: getTierCreditSummary('pro'),
+        manageUrl: 'https://app.pagespace.ai/settings/plan',
+      }),
+    );
+    expect(proHtml).toContain('Opus');
+
+    const freeHtml = await render(
+      CreditsChangeEmail({
+        userName: 'Grace',
+        summary: getTierCreditSummary('free'),
+        manageUrl: 'https://app.pagespace.ai/settings/plan',
+      }),
+    );
+    expect(freeHtml).not.toContain('Opus');
+    expect(freeHtml.toLowerCase()).toContain('standard models');
+  });
+
+  it('renders the announcement link when a blog URL is provided', async () => {
+    const html = await render(
+      CreditsChangeEmail({
+        userName: 'Ada',
+        summary: getTierCreditSummary('founder'),
+        manageUrl: 'https://app.pagespace.ai/settings/plan',
+        blogUrl: 'https://pagespace.ai/blog/usage-based-pricing-and-built-for-scale',
+      }),
+    );
+    expect(html).toContain('https://pagespace.ai/blog/usage-based-pricing-and-built-for-scale');
+    expect(html).toContain('Read the full announcement');
+  });
 });

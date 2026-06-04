@@ -21,6 +21,79 @@ export function formatDate(dateString: string): string {
 }
 
 export const blogPosts: Record<string, BlogPost> = {
+  "usage-based-pricing-and-built-for-scale": {
+    slug: "usage-based-pricing-and-built-for-scale",
+    title:
+      "AI Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
+    description:
+      "PageSpace AI is now usage-based. Every plan gets a monthly pool of AI credits you spend however you like, paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
+    image: "/blog/usage-based-pricing-and-built-for-scale.png",
+    content: `
+## Daily limits were a stopgap. We outgrew them.
+
+When PageSpace was small, the simplest way to meter AI was a daily call count. Free got 50 calls a day, Pro got 200. Cross the line and you were done until midnight, even if every call that day was a one-line throwaway. It shipped fast and it was easy to understand. It was also a blunt instrument that didn't really scale, for you or for us.
+
+A quick yes/no question and a ten-step research agent counted the same: one call. The number on the wall had nothing to do with the cost behind it. And we kept leaning into longer, more agentic work: agents that plan, call tools, and run for many steps on your behalf, where a single task can do the work of a hundred old "calls." Stack that on top of better, more expensive models and the call-count math fell apart. We could cap you harder or quietly eat costs we couldn't sustain, and neither is how you build something meant to last.
+
+So we put our big-boy pants on. AI in PageSpace is now usage-based: a monthly pool of credits you spend on exactly what you use, priced on what each model actually costs. It's the model we should have started with. It's what lets us scale, and it's what lets us hand you genuinely better models instead of holding them back.
+
+## Credits, not call counts
+
+Every plan comes with a monthly pool of AI credits:
+
+- **Free:** $5/month in credits
+- **Pro:** $15/month in credits
+- **Founder:** $50/month in credits
+- **Business:** $100/month in credits
+
+Your pool refreshes at the start of every billing period. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
+
+Each call draws from your balance at **our cost for that model, plus a flat 1.5×**. We pass the model's price straight through with one simple markup. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more, and keeping the math that simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
+
+That's the whole point of usage-based pricing: what you pay tracks what you actually do.
+
+## Pick the model that fits the job
+
+Here's the part daily limits could never give you: when billing is usage-based, model choice opens up.
+
+**Free** runs on fast, capable standard models: GPT-5.3 Chat by default, plus Claude Haiku 4.5, Gemini 3.5 Flash, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your $5 stretches a long way across them.
+
+**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
+
+## When you run low
+
+If your balance runs out before the period resets, you're not locked out until tomorrow. Top up.
+
+You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack of $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
+
+Run low, top up, keep going. No more waiting out a daily reset.
+
+## Built to scale
+
+Pricing is only half of this. PageSpace now runs on scalable, modern infrastructure built to grow:
+
+- **Built to scale out.** Storage and request handling are stateless, so PageSpace can spread across many machines and bring more online as demand rises. Capacity grows with usage instead of capping it.
+- **Faster file delivery.** Your uploads and attachments serve straight from object storage instead of round-tripping through a single app server. Less waiting, more consistent speed.
+- **Bigger uploads, including video.** With files on object storage instead of one machine's disk, upload limits go up and video is in.
+
+This is the foundation the credit model needs. Usage-based pricing only works if the platform can actually absorb the usage, and now it can.
+
+## What's next
+
+**Agents that run real code.** AI agents will execute code in isolated, sandboxed containers right inside your workspace. Not "here's a snippet to copy," but the agent actually running it in a throwaway sandbox. More on that as it lands.
+
+## What doesn't change
+
+Credits only meter AI. Your documents, tasks, channels, files, and collaboration cost nothing and work exactly as before. Nothing about how you and your team work together is changing.
+
+Open your plan to see your balance, pick your models, and top up when you want. Pay for what you use, run what you need.
+    `,
+    author: "Jono",
+    date: "2026-06-03",
+    readTime: "6 min read",
+    category: "Product",
+    featured: true,
+  },
   "managed-provider-keys": {
     slug: "managed-provider-keys",
     title: "PageSpace now manages AI provider keys for you",
@@ -203,7 +276,7 @@ Your workspace is the context. Make it a good one.
     date: "2026-02-17",
     readTime: "9 min read",
     category: "Product",
-    featured: true,
+    featured: false,
   },
   "pagespace-as-memory-for-coding-agents": {
     slug: "pagespace-as-memory-for-coding-agents",
