@@ -161,6 +161,8 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     'web_fetch',
     // Agent communication
     'ask_agent',
+    // Model catalog (read-only)
+    'list_models',
     // Workflow read
     'list_workflows',
     // Write tools

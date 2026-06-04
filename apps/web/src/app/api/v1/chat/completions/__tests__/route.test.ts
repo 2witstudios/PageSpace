@@ -134,7 +134,8 @@ import { db } from '@pagespace/db/db';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel } from '@/lib/ai/core';
+import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core';
+import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 
 const mcpAuth = {
@@ -423,6 +424,30 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'pass 3 messages to sanitizeMessagesForModel (2 history + 1 new)',
       actual: sanitizeCalls[0]?.[0]?.length,
       expected: 3,
+    });
+  });
+
+  test('openai mode: caller-supplied system message is hoisted into the system prompt', async () => {
+    // Extract real part text so the assertion can distinguish the caller's system content.
+    vi.mocked(extractMessageContent).mockImplementation((m: UIMessage) =>
+      (m.parts ?? [])
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map(p => p.text)
+        .join('')
+    );
+    await POST(makeRequest({
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'system', id: 'sys-1', content: 'Answer only JSON', parts: [{ type: 'text', text: 'Answer only JSON' }] },
+        { role: 'user', id: 'msg-1', content: 'Hi', parts: [{ type: 'text', text: 'Hi' }] },
+      ],
+    }));
+    const systemArg = vi.mocked(streamText).mock.calls[0]?.[0]?.system;
+    assert({
+      given: 'an OpenAI-style request carrying a caller system message',
+      should: 'hoist the caller system content into the system: option instead of silently dropping it',
+      actual: typeof systemArg === 'string' && systemArg.includes('Answer only JSON'),
+      expected: true,
     });
   });
 

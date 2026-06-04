@@ -383,3 +383,52 @@ export function getVisibleProviders(): Partial<typeof AI_PROVIDERS> {
     Object.entries(AI_PROVIDERS).filter(([key]) => ONPREM_ALLOWED_PROVIDERS.has(key))
   ) as Partial<typeof AI_PROVIDERS>;
 }
+
+/**
+ * Providers whose model catalog is empty in `AI_PROVIDERS` because their models
+ * are discovered at runtime (local Ollama/LM Studio instances, Azure deployment
+ * names). Model-id validation must short-circuit to "allow" for these — there is
+ * no static list to check a selection against. Supersets `DYNAMIC_MODEL_PROVIDERS`
+ * with `azure_openai` (also deployment-name driven).
+ */
+const DYNAMIC_CATALOG_PROVIDERS = new Set<string>([...DYNAMIC_MODEL_PROVIDERS, 'azure_openai']);
+
+/**
+ * Whether the provider's models are discovered at runtime (so the static catalog
+ * has no entries to validate against).
+ */
+export function isDynamicModelProvider(provider: string): boolean {
+  return DYNAMIC_CATALOG_PROVIDERS.has(provider);
+}
+
+/**
+ * Validate an agent's (provider, model) selection against the real catalog so a
+ * hallucinated model id can never be stored. Returns `null` when the selection is
+ * acceptable, otherwise a human-readable reason string.
+ *
+ * This is the anti-hallucination gate, NOT a tier gate — subscription-tier access
+ * is enforced where the call is made (`isModelAllowedForTier`). Clearing the config
+ * (both unset) is allowed, dynamic/local providers are allowed (runtime-discovered
+ * models), and deployment-mode visibility is respected via `getVisibleProviders`.
+ */
+export function validateAgentModelSelection(
+  provider: string | null | undefined,
+  model: string | null | undefined,
+): string | null {
+  if (!provider && !model) return null; // clearing/unset is fine
+  // A model can't be stored without a provider — the pair is what gets validated
+  // and routed. Without a provider there's nothing to check the model against, so
+  // a hallucinated id would otherwise slip through.
+  if (model && !provider) {
+    return `Set an AI provider alongside model "${model}".`;
+  }
+  const visible = getVisibleProviders();
+  if (provider && !(provider in visible)) {
+    return `Unknown or unavailable AI provider "${provider}".`;
+  }
+  if (isDynamicModelProvider(provider ?? '')) return null; // ollama/lmstudio/azure: runtime-discovered
+  if (model && provider && !isValidModel(provider, model)) {
+    return `Model "${model}" is not a valid model for provider "${provider}".`;
+  }
+  return null;
+}

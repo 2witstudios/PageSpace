@@ -85,7 +85,8 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['notifications/[id]/read', 'Notification read receipt, low-risk'],
   ['notifications/read-all', 'Bulk notification read receipt, low-risk'],
 
-  // --- Local model discovery (no user data, no external calls) ---
+  // --- Model discovery (no user data, no external calls) ---
+  ['ai/models', 'Public model-catalog discovery, unauthenticated, no user data or resource access'],
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 

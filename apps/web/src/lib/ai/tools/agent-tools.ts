@@ -7,6 +7,7 @@ import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { type ToolExecutionContext, pageSpaceTools } from '../core';
+import { validateAgentModelSelection } from '../core/ai-providers-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 const agentLogger = loggers.ai.child({ module: 'agent-tools' });
@@ -57,6 +58,19 @@ export const agentTools = {
           const invalidTools = enabledTools.filter(toolName => !availableToolNames.includes(toolName));
           if (invalidTools.length > 0) {
             throw new Error(`Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}`);
+          }
+        }
+
+        // Validate the model selection against the real catalog so a hallucinated
+        // model id can't be stored. Fall back to the agent's stored provider/model
+        // so a bad aiModel is caught even when aiProvider isn't sent.
+        if (aiProvider !== undefined || aiModel !== undefined) {
+          const reason = validateAgentModelSelection(
+            aiProvider ?? agent.aiProvider,
+            aiModel ?? agent.aiModel,
+          );
+          if (reason) {
+            throw new Error(`${reason} Call list_models to see valid providers and models.`);
           }
         }
 
