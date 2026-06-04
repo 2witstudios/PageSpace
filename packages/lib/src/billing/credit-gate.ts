@@ -271,7 +271,16 @@ export async function canConsumeAI(
           gte(creditLedger.createdAt, dayStart),
         ));
       const dailyChargedCents = Math.max(0, Math.floor(Number(chargedAgg[0]?.chargedMc ?? 0) / 1000));
-      const cap = evaluateDailyCap({ dailyChargedCents, estCostCents: estCost, capCents: dailyCap });
+      // Add this user's still-active hold reservations (`reserved`, computed above) to the
+      // settled total: a burst of concurrent requests reserves holds that haven't reached
+      // the ledger yet, so without this each serialized gate check would see the same
+      // dailyChargedCents and up to maxInFlight estimates could blow past the cap before
+      // any settles. estCost is THIS call's reservation (not yet in `reserved`).
+      const cap = evaluateDailyCap({
+        dailyChargedCents: dailyChargedCents + reserved,
+        estCostCents: estCost,
+        capCents: dailyCap,
+      });
       if (!cap.allowed) return { allowed: false, reason: cap.reason };
     }
 

@@ -491,6 +491,20 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     expect(sink.insertCalled).toBeFalsy(); // still no hold on the (downgraded) denial
   });
 
+  it('counts active in-flight hold reservations toward the cap (burst cannot exceed it)', async () => {
+    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
+    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
+    // Settled 100¢ today, but 450¢ of holds are still in flight (not yet in the ledger):
+    // 100 + 450 + EST(25) = 575 > 500 → deny, even though settled alone (125) is under.
+    const sink: { insertCalled?: boolean } = {};
+    mockTransactionWithDailyCharge(BAL, { reserved: 450, inFlight: 3 }, 100_000, sink);
+
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
   it('respects a per-tier override (DAILY_CAP_BUSINESS_CENTS) above the global cap', async () => {
     process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';

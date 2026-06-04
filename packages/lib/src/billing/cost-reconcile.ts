@@ -110,6 +110,24 @@ async function bumpAttempts(aiUsageLogId: string): Promise<void> {
 }
 
 /**
+ * Whether the base `usage` ledger row for this call has been written yet. Reconcile only
+ * CORRECTS an existing charge; it must never run before the base charge exists. If
+ * consumeCredits hasn't run (or died) there is no usage row, and inserting an adjustment
+ * keyed to the same aiUsageLogId would also mask the row from credit-backfill's orphan
+ * sweep (which left-joins creditLedger by aiUsageLogId), leaving the BASE charge unbilled.
+ * So we defer until a usage row exists (any status — a 'pending' one is settled by the
+ * backfill pending sweep, an absent one is billed by its orphan sweep).
+ */
+async function hasUsageLedgerRow(aiUsageLogId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: creditLedger.id })
+    .from(creditLedger)
+    .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
  * Apply the drift correction in one transaction: claim an adjustment row keyed by the
  * generation set (idempotent), then — only if the claim was fresh — lock the balance and
  * move the signed delta. Positive delta (we undercharged) debits monthly-first and accrues
@@ -216,6 +234,19 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
   if (ids.length === 0) {
     await markStatus(row.id, 'skipped', now);
     return 'skipped';
+  }
+
+  // Defer until the base usage charge exists: correcting drift before the base is billed
+  // would leave it unbilled AND mask the orphan from credit-backfill (see hasUsageLedgerRow).
+  // Bump attempts so a row whose base never materializes eventually drops to 'unavailable'
+  // rather than retrying forever. No /generation fetch is spent while deferred.
+  if (!(await hasUsageLedgerRow(row.id))) {
+    if (row.reconcileAttempts + 1 >= COST_RECONCILE_MAX_ATTEMPTS) {
+      await markStatus(row.id, 'unavailable', now);
+      return 'unavailable';
+    }
+    await bumpAttempts(row.id);
+    return 'pending';
   }
 
   let total = 0;

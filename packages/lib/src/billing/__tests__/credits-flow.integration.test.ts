@@ -895,6 +895,17 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
     });
   }
 
+  // Reconcile only CORRECTS an already-billed call, so a base `usage` ledger row must
+  // exist for the aiUsageLogId or the row is deferred (see hasUsageLedgerRow). Seed one.
+  function seedUsageLedger(aiUsageLogId: string, userId: string) {
+    store.creditLedger.push({
+      id: `led_${aiUsageLogId}`, userId, entryType: 'usage', bucket: 'monthly',
+      amountCents: -150, appliedCents: -150, chargeMillicents: 150_000, aiUsageLogId,
+      realCostCents: 100, markupBps: 15000, stripeRef: null, reconcileGenerationKey: null,
+      consumeStatus: 'applied', createdAt: new Date(),
+    });
+  }
+
   const usageRow = (id: string) => store.aiUsageLogs.find((r) => r.id === id) as
     | { reconcileStatus: string; reconcileAttempts: number }
     | undefined;
@@ -903,6 +914,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   it('corrects an undercharge: authoritative cost > billed → adjustment + extra debit', async () => {
     seedBalance('u1', { monthly: 1000 });
     seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']); // billed 100¢ real
+    seedUsageLedger('log_1', 'u1');
     const fetcher: GenerationFetcher = async () => ({ totalCost: 1.1 }); // authoritative $1.10
 
     const r = await reconcileOpenRouterCosts({ fetcher });
@@ -919,6 +931,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   it('corrects an overcharge: authoritative cost < billed → refund pays down debt first', async () => {
     seedBalance('u1', { monthly: 1000, debt: 50 });
     seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']); // billed 100¢
+    seedUsageLedger('log_1', 'u1');
     const fetcher: GenerationFetcher = async () => ({ totalCost: 0.8 }); // authoritative $0.80
 
     const r = await reconcileOpenRouterCosts({ fetcher });
@@ -932,6 +945,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   it('leaves a within-tolerance row reconciled with no adjustment', async () => {
     seedBalance('u1', { monthly: 1000 });
     seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']); // billed 100¢
+    seedUsageLedger('log_1', 'u1');
     const fetcher: GenerationFetcher = async () => ({ totalCost: 1.02 }); // 2¢ drift < 5% band
 
     const r = await reconcileOpenRouterCosts({ fetcher });
@@ -945,6 +959,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   it('keeps a not-yet-available generation pending and bumps its attempt count', async () => {
     seedBalance('u1');
     seedPendingUsage('log_1', 'u1', 1.0, ['gen-1'], 0);
+    seedUsageLedger('log_1', 'u1');
     const fetcher: GenerationFetcher = async () => 'not_found';
 
     const r = await reconcileOpenRouterCosts({ fetcher });
@@ -957,6 +972,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   it('gives up after the attempt budget is exhausted → unavailable', async () => {
     seedBalance('u1');
     seedPendingUsage('log_1', 'u1', 1.0, ['gen-1'], 5); // COST_RECONCILE_MAX_ATTEMPTS = 6
+    seedUsageLedger('log_1', 'u1');
     const fetcher: GenerationFetcher = async () => 'not_found';
 
     const r = await reconcileOpenRouterCosts({ fetcher });
@@ -968,6 +984,7 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
   it('is idempotent: a re-run over the same generation set inserts no second adjustment', async () => {
     seedBalance('u1', { monthly: 1000 });
     seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']);
+    seedUsageLedger('log_1', 'u1');
     const fetcher: GenerationFetcher = async () => ({ totalCost: 1.1 });
 
     await reconcileOpenRouterCosts({ fetcher });
@@ -994,6 +1011,24 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
     expect(r.skipped).toBe(1);
     expect(called).toBe(false);
     expect(usageRow('log_1')!.reconcileStatus).toBe('skipped');
+  });
+
+  it('defers (no adjustment, no fetch) when the base usage charge has not been billed yet', async () => {
+    // No usage ledger row for log_1 → consumeCredits hasn't run. Correcting now would
+    // leave the base charge unbilled AND mask it from credit-backfill's orphan sweep.
+    seedBalance('u1', { monthly: 1000 });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-1']);
+    let called = false;
+    const fetcher: GenerationFetcher = async () => { called = true; return { totalCost: 1.1 }; };
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 0, corrected: 0 });
+    expect(called).toBe(false); // no /generation fetch spent on a not-yet-billed row
+    expect(adjustments('u1')).toHaveLength(0); // nothing inserted to mask the orphan
+    expect(usageRow('log_1')!.reconcileStatus).toBe('pending'); // deferred for a later run
+    expect(usageRow('log_1')!.reconcileAttempts).toBe(1);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1000); // balance untouched
   });
 });
 
