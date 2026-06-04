@@ -706,10 +706,14 @@ export function sanitizeContent(content: string): string {
 
 /**
  * Sanitize messages before passing to convertToModelMessages
- * Filters out tool parts without results to prevent "input-available" state errors
+ * - Drops system-role messages: the authoritative system prompt is always supplied via the
+ *   `system:` option at every call site, so a system-role message in the array is never needed
+ *   and trips the AI SDK's prompt-injection warning ("System messages in the prompt or messages
+ *   fields can be a security risk..."), which floods logs inside agent retry loops.
+ * - Filters out tool parts without results to prevent "input-available" state errors.
  */
 export function sanitizeMessagesForModel(msgs: UIMessage[]): UIMessage[] {
-  return msgs.map(message => ({
+  return msgs.filter(message => message.role !== 'system').map(message => ({
     ...message,
     parts: message.parts?.filter(part => {
       // Keep text parts
