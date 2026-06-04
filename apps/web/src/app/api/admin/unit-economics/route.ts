@@ -72,7 +72,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       getMarginByPeriod(startDate, endDate, granularity),
       getMarginByModel(startDate, endDate),
       getTopSpendersByMargin(startDate, endDate, 10),
-      getOutstandingDebtByUser(startDate, endDate, 10),
+      getOutstandingDebtByUser(10),
     ]);
 
     if (format === 'csv') {

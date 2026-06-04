@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
 
 const mockEq = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })));
+const mockGt = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'gt', col, val })));
 const mockGte = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })));
 const mockLte = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'lte', col, val })));
 const mockAnd = vi.hoisted(() => vi.fn((...args: unknown[]) => ({ type: 'and', args })));
@@ -71,6 +72,10 @@ vi.mock('@pagespace/db/schema/credits', () => ({
     aiUsageLogId: 'CREDIT_LEDGER_AI_USAGE_LOG_ID',
     createdAt: 'CREDIT_LEDGER_CREATED_AT',
   },
+  creditBalances: {
+    userId: 'CREDIT_BALANCES_USER_ID',
+    debtCents: 'CREDIT_BALANCES_DEBT_CENTS',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -80,6 +85,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   sql: mockSql,
   eq: mockEq,
+  gt: mockGt,
   gte: mockGte,
   lte: mockLte,
   and: mockAnd,
@@ -150,14 +156,16 @@ describe('getUnitEconomicsSummary', () => {
     });
   });
 
-  it('filters the usage aggregate to entryType = usage', async () => {
+  it('filters the usage aggregate to entryType = usage; debt comes from the balances snapshot, not adjustment rows', async () => {
     resetQueue([{ realCostCents: 0, chargedCents: 0, appliedCents: 0, requestCount: 0 }], [{ debtCents: 0 }]);
 
     await getUnitEconomicsSummary();
 
     const eqArgs = mockEq.mock.calls.map((c) => [c[0], c[1]]);
     expect(eqArgs).toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'usage']);
-    expect(eqArgs).toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'adjustment']);
+    // Outstanding debt is now the live credit_balances.debtCents snapshot (repaid/forgiven
+    // debt is cleared there), NOT a historical sum of 'adjustment' ledger rows.
+    expect(eqArgs).not.toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'adjustment']);
   });
 
   it('handles empty result sets by defaulting to zero', async () => {
@@ -180,8 +188,9 @@ describe('getUnitEconomicsSummary', () => {
 
     const gteCols = mockGte.mock.calls.map((c) => c[0]);
     const lteCols = mockLte.mock.calls.map((c) => c[0]);
-    // Both the usage aggregate and the debt aggregate filter on the ledger's own
-    // createdAt so a ledger row whose aiUsageLog was reaped still counts.
+    // The usage aggregate filters on the ledger's own createdAt so a ledger row whose
+    // aiUsageLog was reaped still counts. (Outstanding debt is a point-in-time snapshot
+    // and is intentionally NOT window-filtered.)
     expect(gteCols).toContain('CREDIT_LEDGER_CREATED_AT');
     expect(lteCols).toContain('CREDIT_LEDGER_CREATED_AT');
     // The purgeable usage-log timestamp is never used as the window filter.
@@ -236,7 +245,7 @@ describe('getTopSpendersByMargin', () => {
 });
 
 describe('getOutstandingDebtByUser', () => {
-  it('returns per user uncovered debt from adjustment rows', async () => {
+  it('returns per-user CURRENT outstanding debt from the balances snapshot (debtCents > 0)', async () => {
     resetQueue([
       { userId: 'u1', userName: 'Alice', userEmail: 'a@x.com', debtCents: 25 },
     ]);
@@ -244,7 +253,11 @@ describe('getOutstandingDebtByUser', () => {
     const rows = await getOutstandingDebtByUser();
 
     expect(rows[0]).toMatchObject({ userId: 'u1', debtCents: 25 });
+    // Sourced from live credit_balances.debtCents (not historical 'adjustment' rows),
+    // filtered to users who currently owe (debtCents > 0).
     const eqArgs = mockEq.mock.calls.map((c) => [c[0], c[1]]);
-    expect(eqArgs).toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'adjustment']);
+    expect(eqArgs).not.toContainEqual(['CREDIT_LEDGER_ENTRY_TYPE', 'adjustment']);
+    const gtArgs = mockGt.mock.calls.map((c) => [c[0], c[1]]);
+    expect(gtArgs).toContainEqual(['CREDIT_BALANCES_DEBT_CENTS', 0]);
   });
 });

@@ -378,7 +378,7 @@ export default function AdminUnitEconomicsPage() {
         </CardHeader>
         <CardContent>
           {data.debtByUser.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No outstanding debt in this range.</p>
+            <p className="text-sm text-muted-foreground">No outstanding debt.</p>
           ) : (
             <Table>
               <TableHeader>

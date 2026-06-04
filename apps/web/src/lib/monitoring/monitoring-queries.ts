@@ -3,7 +3,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { sql, eq, and, or, gte, lte, desc, count, inArray } from '@pagespace/db/operators'
+import { sql, eq, and, or, gt, gte, lte, desc, count, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
 import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
@@ -451,7 +451,10 @@ export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
 //   - creditLedger.realCostCents   — our REAL provider cost, pre-markup (cents)
 //   - creditLedger.amountCents      — full intended charge to the user (signed)
 //   - creditLedger.appliedCents     — actually debited from the balance (signed)
-//   - 'adjustment' rows             — uncovered debt (charge we couldn't collect)
+//   - credit_balances.debtCents     — CURRENT outstanding overage (point-in-time). NOT
+//                                     the historical 'adjustment' ledger rows: debt is
+//                                     repaid by top-ups and forgiven at renewal directly
+//                                     on debtCents, so only the live balance is accurate.
 // Each AI call has exactly one entryType='usage' ledger row, soft-linked to its
 // aiUsageLogs row via aiUsageLogId, so a join reaches provider/model/timestamp.
 // All magnitudes are taken as ABS() because usage/debt rows store negative values.
@@ -543,9 +546,6 @@ const realCostSum = sql<number>`ROUND(COALESCE(SUM(
 ), 0))::int`;
 const chargedSum = sql<number>`ROUND(COALESCE(SUM(COALESCE(${creditLedger.chargeMillicents}, ABS(${creditLedger.amountCents}) * 1000)), 0) / 1000.0)::int`;
 const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 0)::int`;
-// Debt comes from 'adjustment' rows, which carry only the whole-cent shortfall in
-// `amountCents` (no chargeMillicents) — so debt is summed from amountCents.
-const debtSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.amountCents})), 0)::int`;
 
 // Usage-row conditions: entryType='usage' plus optional time range.
 //
@@ -581,17 +581,15 @@ export async function getUnitEconomicsSummary(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .where(and(...usageConditions(startDate, endDate)));
 
-  // Debt is summed directly from adjustment rows (no join): an adjustment can
-  // outlive its aiUsageLog after retention purges, and we never want to
-  // under-report outstanding debt. Filter on the ledger's own createdAt.
-  const debtConditions: SQL[] = [eq(creditLedger.entryType, 'adjustment')];
-  if (startDate) debtConditions.push(gte(creditLedger.createdAt, startDate));
-  if (endDate) debtConditions.push(lte(creditLedger.createdAt, endDate));
-
+  // Outstanding debt is the CURRENT liability — a point-in-time snapshot of the live
+  // credit_balances.debtCents, NOT a sum of historical 'adjustment' incurrence rows.
+  // Debt is paid down by top-ups and forgiven at renewal directly on debtCents without
+  // offsetting ledger rows, so summing adjustment history would keep counting overage
+  // the user has already repaid or had forgiven. Period-independent (like the prepaid
+  // liability metric); the start/end window scopes the usage flows above, not this stock.
   const debt = await db
-    .select({ debtCents: debtSum })
-    .from(creditLedger)
-    .where(and(...debtConditions));
+    .select({ debtCents: sql<number>`COALESCE(SUM(${creditBalances.debtCents}), 0)::int` })
+    .from(creditBalances);
 
   const realCostCents = usage[0]?.realCostCents ?? 0;
   const chargedCents = usage[0]?.chargedCents ?? 0;
@@ -716,29 +714,22 @@ export async function getTopSpendersByMargin(
 }
 
 /**
- * Users carrying the most uncovered debt (sum of 'adjustment' rows).
+ * Users currently carrying outstanding overage — a point-in-time snapshot of the live
+ * credit_balances.debtCents (NOT historical 'adjustment' rows, which would still count
+ * debt already repaid by a top-up or forgiven at renewal). Period-independent.
  */
-export async function getOutstandingDebtByUser(
-  startDate?: Date,
-  endDate?: Date,
-  limit = 10,
-): Promise<DebtByUserRow[]> {
-  const conditions: SQL[] = [eq(creditLedger.entryType, 'adjustment')];
-  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
-  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
-
+export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      userId: creditBalances.userId,
       userName: users.name,
       userEmail: users.email,
-      debtCents: debtSum,
+      debtCents: creditBalances.debtCents,
     })
-    .from(creditLedger)
-    .innerJoin(users, eq(creditLedger.userId, users.id))
-    .where(and(...conditions))
-    .groupBy(creditLedger.userId, users.name, users.email)
-    .orderBy(desc(debtSum))
+    .from(creditBalances)
+    .innerJoin(users, eq(creditBalances.userId, users.id))
+    .where(gt(creditBalances.debtCents, 0))
+    .orderBy(desc(creditBalances.debtCents))
     .limit(limit);
 
   return rows.map((r) => ({
