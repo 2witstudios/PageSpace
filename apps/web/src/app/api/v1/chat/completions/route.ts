@@ -32,7 +32,6 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
-import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
