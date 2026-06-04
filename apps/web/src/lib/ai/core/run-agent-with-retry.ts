@@ -127,14 +127,17 @@ export async function runAgentWithRetry(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     attempts = attempt + 1;
-    // We only ever retry attempts that streamed NO content (see classifyAttempt:
-    // emittedContent), which means no tool ran and nothing was committed — so each
-    // attempt safely re-runs from the original baseMessages with no re-feed needed.
-    const aiResult = buildStreamText(baseMessages);
 
     let caughtError: unknown;
     let emittedContent = false;
+    // We only ever retry attempts that streamed NO content (see classifyAttempt:
+    // emittedContent), which means no tool ran and nothing was committed — so each
+    // attempt safely re-runs from the original baseMessages with no re-feed needed.
+    // buildStreamText is invoked INSIDE the try so a synchronous factory throw (bad
+    // config) is caught and classified, not allowed to escape the single envelope.
+    let aiResult: AgentStreamResult | undefined;
     try {
+      aiResult = buildStreamText(baseMessages);
       await pipeUIMessageStreamStrippingStart(aiResult, writer, {
         suppressStart: true,
         suppressFinish: true,
@@ -149,18 +152,18 @@ export async function runAgentWithRetry(
       caughtError = error;
     }
 
-    // The stream may have errored mid-flight; default each field defensively so a
-    // failed attempt is classified, not thrown.
-    const finishReason: FinishReason | undefined = await aiResult.finishReason.catch(
-      () => undefined,
-    );
-    const responseMessages: ModelMessage[] = await aiResult.response
-      .then((r) => r.messages)
-      .catch(() => []);
-    const steps: ProviderMetadataCarrier[] = await aiResult.steps
-      .then((s) => s as ProviderMetadataCarrier[])
-      .catch(() => []);
-    const usage = await aiResult.totalUsage.catch(() => undefined);
+    // The stream may have errored mid-flight (or buildStreamText threw, leaving aiResult
+    // undefined); default each field defensively so a failed attempt is classified.
+    const finishReason: FinishReason | undefined = aiResult
+      ? await aiResult.finishReason.catch(() => undefined)
+      : undefined;
+    const responseMessages: ModelMessage[] = aiResult
+      ? await aiResult.response.then((r) => r.messages).catch(() => [])
+      : [];
+    const steps: ProviderMetadataCarrier[] = aiResult
+      ? await aiResult.steps.then((s) => s as ProviderMetadataCarrier[]).catch(() => [])
+      : [];
+    const usage = aiResult ? await aiResult.totalUsage.catch(() => undefined) : undefined;
 
     accumulatedSteps.push(...steps);
     accumulatedUsage = mergeUsage(accumulatedUsage, usage);
@@ -211,7 +214,19 @@ export async function runAgentWithRetry(
       elapsedMs: elapsed,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
+    // Abort-aware backoff: resolve immediately if the user stops mid-wait, so we don't
+    // keep the request alive for the full delay after a cancellation.
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        abortSignal.removeEventListener('abort', onAbort);
+        resolve();
+      }, backoffMs(attempt));
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+    });
     if (abortSignal.aborted) {
       finalOutcome = 'terminal';
       terminalReason = 'aborted';

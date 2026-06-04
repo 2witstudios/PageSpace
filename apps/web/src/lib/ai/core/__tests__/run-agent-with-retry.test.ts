@@ -14,6 +14,8 @@ interface FakeAttempt {
   throwAfterContent?: boolean;
   /** Emit no content at all (e.g. a clean-but-empty finish). */
   noContent?: boolean;
+  /** buildStreamText throws synchronously for this attempt (bad config / factory failure). */
+  throwSync?: boolean;
 }
 
 const fakeResult = (a: FakeAttempt): AgentStreamResult =>
@@ -47,7 +49,11 @@ const run = (attempts: FakeAttempt[], maxRetries = 2) => {
     writer,
     abortSignal: new AbortController().signal,
     baseMessages: [{ role: 'user', content: 'hi' }],
-    buildStreamText: () => fakeResult(attempts[Math.min(i++, attempts.length - 1)]),
+    buildStreamText: () => {
+      const a = attempts[Math.min(i++, attempts.length - 1)];
+      if (a.throwSync) throw new Error('synchronous factory failure');
+      return fakeResult(a);
+    },
     finishToolName: 'finish',
     maxSteps: 100,
     maxRetries,
@@ -73,6 +79,24 @@ describe('runAgentWithRetry', () => {
         stepCount: result.accumulatedSteps.length,
       },
       expected: { attempts: 2, finalOutcome: 'clean', stepCount: 3 },
+    });
+  });
+
+  it('catches a synchronous buildStreamText throw and retries under one envelope', async () => {
+    const { result, chunks } = await run([
+      { finishReason: 'error', throwSync: true },
+      { finishReason: 'stop' },
+    ]);
+    assert({
+      given: 'the streamText factory throws synchronously on the first attempt',
+      should: 'catch it, retry, finish cleanly, and keep a single start/finish envelope',
+      actual: {
+        attempts: result.attempts,
+        finalOutcome: result.finalOutcome,
+        starts: chunks.filter((c) => c.type === 'start').length,
+        finishes: chunks.filter((c) => c.type === 'finish').length,
+      },
+      expected: { attempts: 2, finalOutcome: 'clean', starts: 1, finishes: 1 },
     });
   });
 
