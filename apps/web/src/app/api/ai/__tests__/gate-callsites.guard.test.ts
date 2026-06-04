@@ -6,17 +6,22 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 // vitest runs with cwd = apps/web; the AI routes live under src/app/api.
 const API_DIR = join(process.cwd(), 'src/app/api');
+
+// Next route handlers are route.ts OR route.tsx.
+const isRouteFile = (name: string) => name === 'route.ts' || name === 'route.tsx';
+/** Path relative to API_DIR, normalized to forward slashes (separator-agnostic). */
+const apiRelPath = (file: string) => `/api/${relative(API_DIR, file).split(sep).join('/')}`;
 
 function allRouteFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...allRouteFiles(full));
-    else if (entry.name === 'route.ts') out.push(full);
+    else if (isRouteFile(entry.name)) out.push(full);
   }
   return out;
 }
@@ -39,19 +44,20 @@ describe('AI gate call-site guards', () => {
   it('found the route files (guard is actually scanning something)', () => {
     expect(ROUTE_FILES.length).toBeGreaterThan(0);
     // sanity: the chat route is in the set
-    expect(ROUTE_FILES.some((f) => f.endsWith('/ai/chat/route.ts'))).toBe(true);
+    expect(ROUTE_FILES.some((f) => apiRelPath(f).endsWith('/ai/chat/route.ts'))).toBe(true);
   });
 
   it('every interactive canConsumeAI caller passes maxInFlight', () => {
     const offenders: string[] = [];
     for (const file of ROUTE_FILES) {
+      const rel = apiRelPath(file);
       // Cron routes are system-scheduled (one invocation per tick, no user fan-out), so
       // the concurrency cap doesn't apply — they're exempt by design.
-      if (file.includes('/cron/')) continue;
+      if (rel.includes('/cron/')) continue;
       const src = readFileSync(file, 'utf8');
       for (const slice of gateCallSlices(src)) {
         if (!slice.includes('maxInFlight')) {
-          offenders.push(file.slice(file.indexOf('/api/')));
+          offenders.push(rel);
         }
       }
     }
@@ -63,7 +69,7 @@ describe('AI gate call-site guards', () => {
     for (const file of ROUTE_FILES) {
       const src = readFileSync(file, 'utf8');
       if (src.includes('extractOpenRouterCostDollars') && !src.includes('extractOpenRouterGenerationIds')) {
-        offenders.push(file.slice(file.indexOf('/api/')));
+        offenders.push(apiRelPath(file));
       }
     }
     // A row billed on OpenRouter cost but missing its generation id can never be

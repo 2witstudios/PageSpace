@@ -838,6 +838,10 @@ export async function getNegativeMarginAccounts(
   marginFloorBps: number = NEGATIVE_MARGIN_FLOOR_BPS,
   limit = 50,
 ): Promise<NegativeMarginRow[]> {
+  // Clamp once so the SQL HAVING and the JS isNegativeMargin re-check agree. isNegativeMargin
+  // floors negative bps to 0; if the raw value reached the SQL filter, a negative override
+  // could drop rows the JS check would still flag (silent false negatives).
+  const floorBps = Math.max(0, marginFloorBps);
   const rows = await db
     .select({
       userId: creditLedger.userId,
@@ -852,14 +856,14 @@ export async function getNegativeMarginAccounts(
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
     .groupBy(creditLedger.userId, users.name, users.email)
-    .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${marginFloorBps}::numeric / 10000)`)
+    .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${floorBps}::numeric / 10000)`)
     .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
     .limit(limit);
 
   // Re-assert the predicate with the shared pure helper so the panel and the SQL filter
   // can never silently disagree.
   return rows
-    .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, marginFloorBps))
+    .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, floorBps))
     .map((r) => ({
       ...r,
       marginCents: r.chargedCents - r.realCostCents,

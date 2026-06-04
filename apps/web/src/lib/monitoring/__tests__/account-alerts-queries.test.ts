@@ -110,4 +110,15 @@ describe('getNegativeMarginAccounts', () => {
     expect(rows.map((r) => r.userId)).toEqual(['a']);
     expect(rows[0]).toMatchObject({ marginCents: -10, marginPct: -10 });
   });
+
+  it('clamps a negative margin floor to 0 (SQL and JS filters stay in agreement)', async () => {
+    resetQueue([
+      { userId: 'a', userName: null, userEmail: 'a@x', realCostCents: 100, chargedCents: 90, requestCount: 1 },
+    ]);
+
+    // A negative override must behave like 0 — charged<real still flags, no silent drop.
+    const rows = await getNegativeMarginAccounts(undefined, undefined, -5000);
+
+    expect(rows.map((r) => r.userId)).toEqual(['a']);
+  });
 });
