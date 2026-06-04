@@ -192,11 +192,22 @@ jobs:
           # The processor has no [http_service], so Fly has no autostart for it and a
           # `flyctl deploy` against an already-stopped machine re-images it but leaves it
           # STOPPED. Web reaches it over pagespace-processor.internal:3003 (no auto-start),
-          # so a stopped machine = file uploads silently fail. Guarantee every machine ends
-          # started; already-running machines no-op.
+          # so a stopped machine = file uploads silently fail. Start every machine
+          # (`|| true` only swallows the benign "already started" error), then VERIFY the
+          # recovery worked — a real Fly start failure must fail the deploy, not pass silently
+          # and leave uploads down.
           for id in $(flyctl machines list --app pagespace-processor --json | jq -r '.[].id'); do
             flyctl machine start "$id" --app pagespace-processor 2>/dev/null || true
           done
+          procs=$(flyctl machines list --app pagespace-processor --json)
+          total=$(echo "$procs" | jq 'length')
+          started=$(echo "$procs" | jq '[.[] | select(.state == "started")] | length')
+          if [ "$total" -eq 0 ] || [ "$started" -ne "$total" ]; then
+            echo "ERROR: processor not fully started ($started/$total)"
+            echo "$procs" | jq -r '.[] | "  \(.id) \(.state)"'
+            exit 1
+          fi
+          echo "processor: $started/$total machines started"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -217,8 +228,21 @@ jobs:
           flyctl deploy --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
 
           # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
-          # (memory/pulse crons) double-fire. Reconcile to a single started machine — never
-          # "start all" like the processor guard. scale count 1 keeps it a singleton.
-          flyctl scale count 1 --app pagespace-cron --yes 2>/dev/null || true
+          # (memory/pulse crons) double-fire. Reconcile to one machine, ensure it's started,
+          # then VERIFY the invariant — if it can't be enforced, fail the deploy rather than
+          # silently leave duplicate (double-firing) or stopped (non-firing) cron machines.
+          flyctl scale count 1 --app pagespace-cron --yes
+          for id in $(flyctl machines list --app pagespace-cron --json | jq -r '.[].id'); do
+            flyctl machine start "$id" --app pagespace-cron 2>/dev/null || true
+          done
+          crons=$(flyctl machines list --app pagespace-cron --json)
+          count=$(echo "$crons" | jq 'length')
+          started=$(echo "$crons" | jq '[.[] | select(.state == "started")] | length')
+          if [ "$count" -ne 1 ] || [ "$started" -ne 1 ]; then
+            echo "ERROR: cron must be exactly 1 started machine (count=$count started=$started)"
+            echo "$crons" | jq -r '.[] | "  \(.id) \(.state)"'
+            exit 1
+          fi
+          echo "cron: 1/1 machine started"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
