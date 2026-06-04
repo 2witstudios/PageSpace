@@ -5,6 +5,7 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { pageSpaceTools } from '@/lib/ai/core';
+import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -155,6 +156,18 @@ export async function PATCH(
           { error: `Invalid tools: ${invalidTools.join(', ')}` },
           { status: 400 }
         );
+      }
+    }
+
+    // Validate the model selection against the real catalog (anti-hallucination).
+    // Fall back to the stored provider/model so a bad aiModel is caught even when
+    // only one of the two fields is sent.
+    if (aiProvider !== undefined || aiModel !== undefined) {
+      const nextProvider = aiProvider !== undefined ? String(aiProvider).trim() : page.aiProvider;
+      const nextModel = aiModel !== undefined ? String(aiModel).trim() : page.aiModel;
+      const reason = validateAgentModelSelection(nextProvider, nextModel);
+      if (reason) {
+        return NextResponse.json({ error: reason }, { status: 400 });
       }
     }
 

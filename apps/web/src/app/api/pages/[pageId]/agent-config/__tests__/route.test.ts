@@ -149,7 +149,7 @@ const mockPage = {
   systemPrompt: 'You are helpful',
   enabledTools: ['read_page'],
   aiProvider: 'anthropic',
-  aiModel: 'claude-3',
+  aiModel: 'anthropic/claude-haiku-4.5',
   includeDrivePrompt: true,
   agentDefinition: 'Agent definition text',
   visibleToGlobalAssistant: true,
@@ -273,7 +273,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.systemPrompt).toBe('You are helpful');
       expect(body.enabledTools).toEqual(['read_page']);
       expect(body.aiProvider).toBe('anthropic');
-      expect(body.aiModel).toBe('claude-3');
+      expect(body.aiModel).toBe('anthropic/claude-haiku-4.5');
       expect(body.includeDrivePrompt).toBe(true);
       expect(body.drivePrompt).toBe('Drive system prompt');
       expect(body.agentDefinition).toBe('Agent definition text');
@@ -546,12 +546,12 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
 
     it('updates aiModel (trims whitespace)', async () => {
-      await PATCH(createPatchRequest({ aiModel: '  claude-3  ' }), mockParams);
+      await PATCH(createPatchRequest({ aiModel: '  anthropic/claude-haiku-4.5  ' }), mockParams);
 
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           updates: expect.objectContaining({
-            aiModel: 'claude-3',
+            aiModel: 'anthropic/claude-haiku-4.5',
           }),
         })
       );
@@ -716,6 +716,43 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
           expectedRevision: undefined,
         })
       );
+    });
+  });
+
+  describe('model validation', () => {
+    it('returns 400 for a hallucinated model id', async () => {
+      const response = await PATCH(
+        createPatchRequest({ aiProvider: 'openai', aiModel: 'openai/gpt-6-ultra' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not a valid model/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('accepts a valid catalog model id', async () => {
+      const response = await PATCH(
+        createPatchRequest({ aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalled();
+    });
+
+    it('returns 400 when only a bad aiModel is sent (validated against stored provider)', async () => {
+      // mockPage.aiProvider is "anthropic"; the bad model resolves against it.
+      const response = await PATCH(
+        createPatchRequest({ aiModel: 'anthropic/not-real' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not a valid model/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
   });
 
