@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 
-const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL ?? 'http://localhost:3005';
+const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
 interface SettingsSection {
   title: string;
