@@ -85,7 +85,7 @@ const plans: Plan[] = [
     price: "$100",
     period: "/month",
     description: "For teams that need maximum capacity and priority support",
-    cta: "Contact Sales",
+    cta: "Upgrade to Business",
     ctaVariant: "outline",
     features: {
       storage: "50 GB",
@@ -204,11 +204,7 @@ export default function PricingPage() {
                   variant={plan.ctaVariant}
                   asChild
                 >
-                  {plan.name === "Business" ? (
-                    <Link href="#enterprise">{plan.cta}</Link>
-                  ) : (
-                    <a href={`${APP_URL}/auth/signup`}>{plan.cta}</a>
-                  )}
+                  <a href={`${APP_URL}/auth/signup`}>{plan.cta}</a>
                 </Button>
               </div>
             ))}

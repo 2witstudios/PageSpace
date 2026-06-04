@@ -37,7 +37,7 @@ This section documents PageSpace's authentication system, permission model, and 
 
 ### Data Protection
 
-- **Encrypted secrets** — OAuth tokens for connected integrations and other application-layer secrets are encrypted at rest with AES-256-GCM (scrypt KDF, unique salt+IV per write). AI provider credentials are held by the deployment operator, not stored per user.
+- **Encrypted secrets** — OAuth tokens for connected integrations and other application-layer secrets are encrypted at rest with AES-256-GCM (scrypt KDF, unique salt+IV per write). AI provider credentials are held by PageSpace at the infrastructure layer, not stored per user.
 - **HTTP-only cookies** — session cookies are inaccessible to JavaScript.
 - **SameSite cookies** — \`strict\` by default; relaxed to \`lax\` only for multi-subdomain deployments.
 - **CSRF tokens** — HMAC-signed, bound to the session, required on state-changing requests.

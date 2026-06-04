@@ -25,8 +25,8 @@ Tokens authenticate as your user. Every operation runs with your permissions; dr
 
 1. Open **Settings > MCP** in PageSpace.
 2. Click **Create Token** and give it a name.
-3. Copy the token. It starts with \`mcp_\` and is shown **once** — only the SHA-256 hash is stored server-side.
-4. Optionally scope the token to specific drives. Scoped tokens cannot create new drives.
+3. Copy the token. It starts with \`mcp_\` and is shown **once** — only a SHA3-256 hash is stored server-side.
+4. Optionally scope the token to specific drives, and give it a role. A scoped token joins those drives as an **app** — it appears on each drive's member list, and its access is governed by the role you give it there. Scoped tokens cannot create new drives.
 
 ## Step 2: Configure your AI tool
 
@@ -78,12 +78,33 @@ At a minimum the server covers:
 
 Every tool respects the caller's permissions. If you cannot view a page in the web UI, the MCP server cannot see it either.
 
+## Use an agent as an OpenAI-compatible model
+
+The same MCP token also unlocks an **OpenAI-compatible API**, so any tool that speaks the OpenAI Chat Completions format can talk to one of your PageSpace agents as if it were a model.
+
+- **Base URL** — \`https://pagespace.ai/api/v1\`
+- **API key** — your MCP token (\`mcp_...\`)
+- **Model** — \`ps-agent://<pageId>\`, the id of the AI Chat page you want to run. Copy it from the agent's settings tab.
+
+\`\`\`bash
+curl https://pagespace.ai/api/v1/chat/completions \\
+  -H "Authorization: Bearer mcp_your_token_here" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "ps-agent://<pageId>",
+    "stream": true,
+    "messages": [{ "role": "user", "content": "Summarize the latest notes in this drive." }]
+  }'
+\`\`\`
+
+The agent replies with its own system prompt and tools, and runs those tools server-side under the same permissions you'd have in the app — it can search the drive, read pages, and write back, all within the token's scope. Responses are **streamed**, so set \`stream: true\` (non-streaming requests are rejected). Pass an optional \`conversation_id\` to continue a thread across calls, and \`GET /api/v1/models\` lists the agents a token can reach.
+
 ## Token security
 
 - **Scoped access** — restrict a token to specific drives at creation.
 - **Instant revocation** — revoke from **Settings > MCP** to cut a token off immediately.
 - **Audit logging** — token create/revoke/use events land in the audit log with the token identifier.
-- **Hash-only storage** — the database stores a SHA-256 hash, never the raw token. Losing a token means creating a new one.
+- **Hash-only storage** — the database stores a SHA3-256 hash, never the raw token. Losing a token means creating a new one.
 - **No automatic expiry** — tokens live until revoked. Rotate on whatever cadence fits your risk model.
 
 ## Troubleshooting

@@ -211,7 +211,6 @@ export const pageMetadata = {
       "questions",
       "AI agents",
       "permissions",
-      "self-hosting",
       "MCP",
     ],
   }),

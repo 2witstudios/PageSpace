@@ -22,7 +22,7 @@ A Code page is a dedicated editor for code and other plain-text formats. It uses
 - Save with **Cmd/Ctrl + S** for an immediate write, or keep typing and let autosave handle it — the page also saves on its own when the window loses focus.
 - Open the page's **Version History** panel to see past saves, diff any two points, and roll back.
 - Share a Code page to a specific teammate at view, edit, share, or delete level, separate from their drive access; viewers without edit rights see a read-only banner.
-- Ask a workspace AI agent to drop a script into your tree — Code is one of the page types agents can create for you.
+- Ask a workspace AI agent to create a Code page in your tree, or to read and edit one line-by-line — agents work on code the same way they edit your documents.
 
 ## How it works
 

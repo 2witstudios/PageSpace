@@ -38,13 +38,13 @@ The tree hierarchy isn't just organization — it's **semantics**. Moving a page
 
 This spatial-semantic model drives three systems:
 
-- **Permissions**: Drive owners have full access; page permissions are per-user on specific pages
+- **Permissions**: Drive members see the drive's non-private pages by default; owners and admins see everything, and per-page grants or privacy handle the exceptions
 - **AI context**: An AI agent inside a project folder understands that project
 - **Navigation**: Breadcrumbs, tree views, and search all operate on the hierarchy
 
 ## 3. Context Flows Through the Tree
 
-**Drive ownership grants access to every page in the drive.** Page-level grants are per-page only — there is no automatic inheritance from a parent page to its children. If you want a teammate to see a whole subtree, grant each page in it.
+**Drive membership is open by default.** Members see every page in the drive that isn't marked private, so a teammate added to the drive can already navigate the whole tree — no per-page grants required. Mark a page private to drop it from that baseline. Explicit per-page grants (for private pages, or for people who aren't drive members) are per-page only and don't inherit from a parent to its children.
 
 **AI agents are location-aware.** An agent's system prompt is automatically populated with its drive, its breadcrumb path, and the page it lives on.
 

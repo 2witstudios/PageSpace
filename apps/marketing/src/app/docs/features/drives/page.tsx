@@ -16,7 +16,8 @@ A drive is a PageSpace workspace — the top-level container that holds a page t
 ## What you can do
 
 - Create a new drive for a team, project, or client, and build its page tree from scratch.
-- Invite people by email and pick what they land on — full drive access, admin rights, or access to specific pages.
+- Invite people by email — even before they have an account — as a member or an admin, or share specific pages with someone who isn't on the drive at all.
+- Share a drive with a link that lets anyone who opens it join, with the role you choose, and revoke that link at any time.
 - Define custom roles like "Editor" or "Reviewer" with preset view, edit, and share permissions, then hand out that role when inviting people.
 - Attach [integrations](/docs/integrations) to a drive so agents working inside it can reach external tools.
 - Write a drive prompt — custom AI instructions that AI Chat pages in the drive can opt into.
@@ -28,11 +29,12 @@ A drive is a PageSpace workspace — the top-level container that holds a page t
 
 A drive owns a tree of pages and a list of members. When you create a drive you become its owner. The drive has its own URL slug, its own trash, its own [search](/docs/features/search), its own integrations list, and its own history feed.
 
-There are four distinct ways to have access to a drive, and the difference matters:
+There are a few distinct ways to have access to a drive, and the difference matters:
 
 - **Owner** — the account that created the drive. Exactly one per drive. Automatic full access to every page, and some drive-level operations are owner-only.
 - **Admin** — a member with the admin role. Automatic full access to every page, can invite and remove members, can run backups.
-- **Member** — listed on the drive's member roster with the member role or a custom role. Can be assigned tasks. Which specific pages they can see and edit is chosen when they're invited — you pick the pages they get. Unlike admins, members don't automatically see every page in the tree.
+- **Member** — listed on the drive's member roster with the member role or a custom role. Can be assigned tasks. A member sees every page in the drive that isn't marked private, and can post in its channels, without anyone granting each page one by one. Mark a page private to keep it off the member baseline.
+- **Agents and apps** — AI agent pages and connected apps (MCP tokens) also appear on the member roster, each with its own role. Their access follows that role just like a person's — a member-level agent or app sees the drive's non-private pages; give it a narrower role to limit what it can reach.
 - **Page-level collaborator** — someone who was granted access to specific pages but not added to the drive itself. They can navigate to those pages, but they aren't on the member list, can't be selected as a task assignee, and can't be used as a scope for a drive-level service token. They have a keyhole into the drive, not a key to the whole building.
 
 Invitations are a two-step handshake. When someone is invited, a pending membership is created — they appear on the member list but their access isn't active until they accept. Until then, permission checks treat them as if they're not there.
@@ -41,7 +43,7 @@ Backups are point-in-time snapshots of the drive — every page, every permissio
 
 ## Good to know
 
-- **The member role sees only what's granted.** Unlike owners and admins, a plain member doesn't automatically see every page in the drive — they see the pages they were explicitly added to when invited. Invite someone as an admin if you want them to have full tree access.
+- **Members see the drive by default; lock pages down by exception.** A plain member sees every page that isn't marked private — no per-page setup. When something shouldn't be visible to the whole drive, mark that page private so only the owner, admins, and explicitly-added people can reach it.
 - **Deleting a drive goes to trash first.** A deleted drive sits in the drive trash with all its pages intact, and stays there until you restore or purge it.
 
 ## Related

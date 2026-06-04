@@ -25,7 +25,7 @@ import type { SubscriptionTier } from "@pagespace/lib/services/subscription-util
  * treatment) once AI credits are live for all accounts. Marketing is one global SSG site,
  * so this is a deliberate constant — NOT the app's per-deploy flag.
  */
-export const CREDITS_IN_TRANSITION = true;
+export const CREDITS_IN_TRANSITION = false;
 
 /** Format whole cents as a plain dollar string, dropping a trailing ".00". */
 function formatDollars(cents: number): string {

@@ -76,7 +76,7 @@ export default function TermsOfService() {
             </p>
             <ul className="list-disc pl-6 mb-4">
               <li>AI processing is performed using third-party AI services</li>
-              <li>Third-party AI services (OpenRouter, Google AI, Anthropic, etc.) have their own terms</li>
+              <li>Third-party AI services (such as OpenAI, Anthropic, Google, and model-routing providers) have their own terms</li>
               <li>We may send your content to AI providers to process your requests</li>
               <li>AI-generated content should be reviewed for accuracy and appropriateness</li>
               <li>You retain ownership of content you create, including AI-assisted content</li>
