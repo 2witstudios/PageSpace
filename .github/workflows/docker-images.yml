@@ -198,27 +198,12 @@ jobs:
           docker pull ghcr.io/2witstudios/pagespace-processor:latest
           docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
           docker push registry.fly.io/pagespace-processor:latest
-          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 300
-
-          # The processor has no [http_service], so Fly has no autostart for it and a
-          # `flyctl deploy` against an already-stopped machine re-images it but leaves it
-          # STOPPED. Web reaches it over pagespace-processor.internal:3003 (no auto-start),
-          # so a stopped machine = file uploads silently fail. Start every machine
-          # (`|| true` only swallows the benign "already started" error), then VERIFY the
-          # recovery worked — a real Fly start failure must fail the deploy, not pass silently
-          # and leave uploads down.
-          for id in $(flyctl machines list --app pagespace-processor --json | jq -r '.[].id'); do
-            flyctl machine start "$id" --app pagespace-processor 2>/dev/null || true
-          done
-          procs=$(flyctl machines list --app pagespace-processor --json)
-          total=$(echo "$procs" | jq 'length')
-          started=$(echo "$procs" | jq '[.[] | select(.state == "started")] | length')
-          if [ "$total" -eq 0 ] || [ "$started" -ne "$total" ]; then
-            echo "ERROR: processor not fully started ($started/$total)"
-            echo "$procs" | jq -r '.[] | "  \(.id) \(.state)"'
-            exit 1
-          fi
-          echo "processor: $started/$total machines started"
+          # strategy=immediate (set in fly.processor.toml): just restart in-place, no two-phase
+          # rolling swap. Rolling caused 5-min deploys (health check fires before 14s startup
+          # completes) and a machine-list race that produced false-negative CI failures.
+          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          MACHINE_ID=$(flyctl machines list --app pagespace-processor --json | jq -r '.[0].id')
+          flyctl machine wait "$MACHINE_ID" --app pagespace-processor --state started --wait-timeout 60s
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
