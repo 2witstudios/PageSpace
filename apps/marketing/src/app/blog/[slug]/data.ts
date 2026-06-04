@@ -280,7 +280,7 @@ Your workspace is the context. Make it a good one.
     date: "2026-02-17",
     readTime: "9 min read",
     category: "Product",
-    featured: true,
+    featured: false,
   },
   "pagespace-as-memory-for-coding-agents": {
     slug: "pagespace-as-memory-for-coding-agents",

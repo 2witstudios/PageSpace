@@ -204,6 +204,25 @@ function resolveBaseUrl(): string {
   return chosen.replace(/\/+$/, '');
 }
 
+/**
+ * Resolve and validate the marketing base URL for the announcement blog link.
+ * MARKETING_BASE_URL is operator-set; a malformed value (missing protocol, stray
+ * path, trailing slash) would otherwise produce a broken link in a mass email.
+ * Returns the scheme+host origin only, falling back to the public site.
+ */
+function resolveMarketingBase(): string {
+  const fallback = 'https://pagespace.ai';
+  const raw = process.env.MARKETING_BASE_URL?.trim();
+  if (!raw) return fallback;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return fallback;
+    return url.origin;
+  } catch {
+    return fallback;
+  }
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   const baseUrl = resolveBaseUrl();
@@ -212,8 +231,7 @@ async function main(): Promise<void> {
 
   // Public marketing blog post backing the announcement. Lives on the marketing
   // site (not the app), so it resolves independently of the app base URL.
-  const marketingBase = (process.env.MARKETING_BASE_URL || 'https://pagespace.ai').replace(/\/+$/, '');
-  const blogUrl = `${marketingBase}/blog/usage-based-pricing-and-built-for-scale`;
+  const blogUrl = `${resolveMarketingBase()}/blog/usage-based-pricing-and-built-for-scale`;
 
   console.log('📢 Metered AI-credits announcement broadcast');
   console.log(`  Mode:          ${opts.dryRun ? 'DRY RUN (no sends)' : 'LIVE SEND'}`);
