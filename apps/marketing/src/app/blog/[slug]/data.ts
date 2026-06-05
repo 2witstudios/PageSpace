@@ -26,7 +26,7 @@ export const blogPosts: Record<string, BlogPost> = {
     title:
       "AI Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
     description:
-      "PageSpace AI is now usage-based. Every plan gets a monthly pool of AI credits you spend however you like, paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
+      "PageSpace AI is now usage-based. Every plan gets a monthly pool of credits you spend however you like, paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
     image: "/blog/usage-based-pricing-and-built-for-scale.png",
     content: `
 ## Daily limits were a stopgap. We outgrew them.
@@ -39,16 +39,16 @@ So we put our big-boy pants on. AI in PageSpace is now usage-based: a monthly po
 
 ## Credits, not call counts
 
-Every plan comes with a monthly pool of AI credits:
+Every plan comes with a monthly pool of credits:
 
-- **Free:** $5/month in credits
-- **Pro:** $15/month in credits
-- **Founder:** $50/month in credits
-- **Business:** $100/month in credits
+- **Free:** 5/month in credits
+- **Pro:** 15/month in credits
+- **Founder:** 50/month in credits
+- **Business:** 100/month in credits
 
-Your pool refreshes at the start of every billing period. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
+Each period adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
 
-Each call draws from your balance at **our cost for that model, plus a flat 1.5×**. We pass the model's price straight through with one simple markup. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more, and keeping the math that simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
+Each call draws from your balance based on what that model actually costs. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more — keeping the math simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
 
 That's the whole point of usage-based pricing: what you pay tracks what you actually do.
 
@@ -56,7 +56,7 @@ That's the whole point of usage-based pricing: what you pay tracks what you actu
 
 Here's the part daily limits could never give you: when billing is usage-based, model choice opens up.
 
-**Free** runs on fast, capable standard models: GPT-5.3 Chat by default, plus Claude Haiku 4.5, Gemini 3.5 Flash, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your $5 stretches a long way across them.
+**Free** runs on fast, capable standard models: GPT-5.3 Chat by default, plus Claude Haiku 4.5, Gemini 3.5 Flash, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your credits stretch a long way across them.
 
 **Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
 
@@ -114,7 +114,7 @@ In practice nothing breaks. Open an AI Chat, pick a model, send a message. The m
 
 ## Which models you can reach
 
-The picker is one catalogue spanning OpenAI, Anthropic, Google, xAI, and more, grouped by vendor. AI usage is metered against a monthly AI-credit allowance, and how much of the catalogue you can reach depends on your plan:
+The picker is one catalogue spanning OpenAI, Anthropic, Google, xAI, and more, grouped by vendor. AI usage is metered against a monthly credit allowance, and how much of the catalogue you can reach depends on your plan:
 
 - **Free** plans use a curated allowlist of fast, capable models — GPT-5.3 Chat (the default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family.
 - **Paid** plans unlock the full catalogue, including frontier flagships like Claude Opus, the full GPT-5 family, and Gemini Pro.
@@ -476,7 +476,7 @@ Practical example: create a recurring event, "Weekly Metrics Review," every Mond
 
 Another one. Project deadline is Friday. Create an event, "Pre-deadline check," Thursday at 4pm. Attach a project agent with instructions to review the open tasks and post a status summary. Thursday afternoon, the agent runs a check for you while you're still in meetings.
 
-The trigger system checks drive access, agent page existence, and your available AI credits before executing. If any check fails, nothing runs and nothing breaks.
+The trigger system checks drive access, agent page existence, and your available credits before executing. If any check fails, nothing runs and nothing breaks.
 
 The calendar becomes a scheduler for AI work.
 
