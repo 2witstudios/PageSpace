@@ -72,6 +72,15 @@ jobs:
             context: .
             build_args: |
               NEXT_PUBLIC_WEB_APP_URL=https://pagespace.ai
+          - service: marketing
+            dockerfile: apps/marketing/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_MARKETING_URL=https://pagespace.ai
+              NEXT_PUBLIC_APP_URL=https://pagespace.ai
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
+              NEXT_PUBLIC_GOOGLE_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
+              NEXT_PUBLIC_ENABLE_ONE_TAP=true
 
     steps:
       - uses: actions/checkout@v4
@@ -240,5 +249,14 @@ jobs:
             exit 1
           fi
           echo "cron: 1/1 machine started"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy marketing
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-marketing:latest
+          docker tag ghcr.io/2witstudios/pagespace-marketing:latest registry.fly.io/pagespace-marketing:latest
+          docker push registry.fly.io/pagespace-marketing:latest
+          flyctl deploy --app pagespace-marketing --image registry.fly.io/pagespace-marketing:latest --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
