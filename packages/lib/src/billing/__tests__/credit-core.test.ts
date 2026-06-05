@@ -366,6 +366,9 @@ describe('holdExpiresAt', () => {
   });
 });
 
+// 500¢-per-tier fixture used by debt-netting tests so the arithmetic is readable.
+const FLAT_ALLOWANCE: Record<SubscriptionTier, number> = { free: 500, pro: 500, founder: 500, business: 500 };
+
 describe('computeMonthlyRefill', () => {
   it('with no prior balance (default 0) returns the full tier allowance — backward compat', () => {
     expect(computeMonthlyRefill('pro', ALLOWANCE)).toEqual({
@@ -394,12 +397,51 @@ describe('computeMonthlyRefill', () => {
     });
   });
 
-  it('debt is always 0 regardless of currentRemainingCents', () => {
+  it('debtCents is 0 in the return — debt is netted into monthlyRemainingCents', () => {
     expect(computeMonthlyRefill('pro', ALLOWANCE, 600).debtCents).toBe(0);
     expect(computeMonthlyRefill('pro', ALLOWANCE, 9999).debtCents).toBe(0);
   });
 
-  it('falls back to the free allowance for an unknown tier (debt still forgiven)', () => {
+  it('nets debt against carried balance: 100¢ remaining, 200¢ debt, 500¢ allowance → 400¢', () => {
+    // netCarried = 100 − 200 = −100; monthly = −100 + 500 = 400
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 200)).toEqual({
+      monthlyRemainingCents: 400,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+  });
+
+  it('nets debt against carried balance: 100¢ remaining, 300¢ debt, 500¢ allowance → 300¢', () => {
+    // netCarried = 100 − 300 = −200; monthly = −200 + 500 = 300
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 300)).toEqual({
+      monthlyRemainingCents: 300,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+  });
+
+  it('clamps to 0 when debt exceeds remaining + allowance (DB constraint: monthlyRemainingCents >= 0)', () => {
+    // 100¢ remaining, 700¢ debt, 500¢ allowance → net = 100 − 700 + 500 = −100 → clamped to 0
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 700)).toEqual({
+      monthlyRemainingCents: 0,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+    // 0 remaining, 1000¢ debt, 500¢ allowance → −500 → 0
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 0, 1000)).toEqual({
+      monthlyRemainingCents: 0,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+  });
+
+  it('backward compat: omitting currentDebtCents is identical to passing 0 (no debt = pure rollover)', () => {
+    const withDefault = computeMonthlyRefill('pro', ALLOWANCE, 600);
+    const withZero = computeMonthlyRefill('pro', ALLOWANCE, 600, 0);
+    expect(withDefault).toEqual(withZero);
+  });
+
+  it('falls back to the free allowance for an unknown tier', () => {
     expect(computeMonthlyRefill('enterprise' as SubscriptionTier, ALLOWANCE))
       .toEqual({ monthlyRemainingCents: 50, monthlyAllowanceCents: 50, debtCents: 0 });
   });
@@ -581,8 +623,8 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
         // (debt shrinks, top-up grows, dollar-for-dollar — nothing vanishes).
         expect(debt + topup).toBe(before + payment);
       } else {
-        // REFILL (renewal): allowance ADDED to carried balance, debt forgiven.
-        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW, monthly);
+        // REFILL (renewal): debt netted against carry, allowance added, monthly clamped >= 0.
+        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW, monthly, debt);
         monthly = refill.monthlyRemainingCents;
         debt = refill.debtCents;
       }

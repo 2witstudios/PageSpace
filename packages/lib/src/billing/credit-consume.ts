@@ -59,7 +59,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  *     monthly + topup − debt, goes negative and the gate blocks further AI) AND written
  *     as an 'adjustment' ledger row (the per-overage incurrence history). The buckets
  *     themselves stay >= 0; the negative lives in `debtCents`, which a purchase pays
- *     down and the next renewal forgives (zeroes).
+ *     down or is netted against carry at the next renewal.
  * If no balance row exists yet, the ledger row is left untouched ('pending') so the
  * reconcile cron settles it once a balance is created. Shared by consumeCredits and
  * settlePendingLedgerRow.
@@ -115,7 +115,7 @@ async function decrementAndSettle(
       pendingMillicents: accrual.newPending,
       // Uncovered cost becomes debt: the net balance (monthly + topup − debt) goes
       // negative and the gate blocks further AI until it's paid down by a purchase or
-      // forgiven at the next renewal. Buckets still floor at 0 (above); debt carries
+      // netted against carry at the next renewal. Buckets still floor at 0 (above); debt carries
       // the overage. No-op when the call was fully covered (shortfallCents === 0).
       ...(spend.shortfallCents > 0
         ? { debtCents: sql`${creditBalances.debtCents} + ${spend.shortfallCents}` }

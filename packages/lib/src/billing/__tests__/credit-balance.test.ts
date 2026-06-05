@@ -127,7 +127,10 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(700);
   });
 
-  it('mirrors gate forgiveness for expired free-period debt', async () => {
+  it('shows actual debt for expired free-period; spendable reflects debt that will be netted at reset', async () => {
+    // 0¢ remaining, 300¢ debt, expired period. Gate will apply: max(0, 0−300+500)=200 on next call.
+    // Balance display anticipates the allowance (monthly.remaining = 0+500=500) and shows
+    // actual stored debt (300), so spendable = 500−300 = 200 — the real post-reset outcome.
     balanceRows = [
       {
         monthlyRemainingCents: 0,
@@ -139,8 +142,8 @@ describe('getCreditBalance', () => {
     ];
     const b = await getCreditBalance('u1', 'free');
     expect(b.monthly.remaining).toBe(500);
-    expect(b.debt).toBe(0);
-    expect(b.spendable).toBe(500);
+    expect(b.debt).toBe(300);
+    expect(b.spendable).toBe(200);
   });
 
   it('shows the stored monthly remaining for a paid tier whose period has lapsed (rollover: credits carry forward)', async () => {
