@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import path from "path";
 import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
+import { withSentryConfig } from "@sentry/nextjs";
 
 // Guard: only externalize workspace packages when running in production AND
 // their dist directories exist. The production check prevents stale dist/
@@ -105,4 +106,12 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+const sentryBuildOptions = {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  silent: !process.env.CI,
+  tunnelRoute: "/sentry-tunnel",
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  widenClientFileUpload: true,
+};
+export default withSentryConfig(nextConfig, sentryBuildOptions);
