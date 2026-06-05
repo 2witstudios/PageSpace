@@ -48,7 +48,7 @@ export interface CreditBalanceSummary {
   };
   /**
    * Outstanding overage owed (a non-negative magnitude). Accrues when a call's cost
-   * exceeds the buckets; paid down by a purchase; forgiven at the next renewal. When
+   * exceeds the buckets; paid down by a purchase; netted against carry at the next renewal. When
    * > 0 the net `spendable` is dragged down (and can be negative).
    */
   debt: number;

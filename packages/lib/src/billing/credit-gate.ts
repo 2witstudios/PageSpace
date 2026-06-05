@@ -239,8 +239,8 @@ export async function canConsumeAI(
             monthlyCents: bal.monthlyRemainingCents,
             topupCents: bal.topupRemainingCents,
             // Outstanding overage drags net spendable down: a user in the red must get
-            // back to net-positive (buy credits, or wait for the renewal that forgives
-            // it) before the gate allows again.
+            // back to net-positive (buy credits, or wait for the renewal that nets
+            // the debt against carry) before the gate allows again.
             debtCents: bal.debtCents,
           }
         : null,

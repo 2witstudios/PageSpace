@@ -22,7 +22,7 @@ export interface Balance {
   /**
    * Outstanding overage owed, stored as a NON-NEGATIVE magnitude. Net spendable is
    * `monthly + topup − debt`, so debt drags the net below zero (and the gate denies)
-   * until it's paid down by a purchase or forgiven at the next renewal. Defaults to 0.
+   * until it's paid down by a purchase or netted against carry at the next renewal. Defaults to 0.
    */
   debtCents?: number;
 }
@@ -503,8 +503,8 @@ export interface BalanceDriftResult {
  * Compare a user's MATERIALIZED spendable buckets against what the ledger implies
  * (grants − usage drawn from buckets + applied reconcile corrections). This is a
  * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: with rollover, monthly
- * credits carry forward with no ledger row at the boundary, and renewal debt-forgiveness
- * zeroes debt — both legitimately break expected = materialized at period boundaries.
+ * credits carry forward with no ledger row at the boundary, and renewal debt-netting
+ * absorbs debt into monthly — both legitimately break expected = materialized at period boundaries.
  * So the tolerance is generous and a flag means "look at this account", not "the books
  * are wrong". Pure; the shell supplies the SQL aggregates.
  */
