@@ -7,7 +7,7 @@ import { Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
-import { formatCreditUnits, formatCreditUnitsSigned } from '@/lib/subscription/credits';
+import { formatCreditCount, formatCreditCountSigned } from '@/lib/subscription/credits';
 
 /**
  * Settings card showing the user's prepaid AI-credit balance on a 0–100 scale,
@@ -33,7 +33,7 @@ export function CreditBalanceCard() {
           AI Credits
         </CardTitle>
         <CardDescription>
-          Credits power AI features. Your plan includes 100 credits per billing period.
+          Credits power AI features. Your monthly allowance renews each billing period; purchased top-up credits never expire.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -55,8 +55,10 @@ export function CreditBalanceCard() {
                   balance.spendable < 0 ? 'text-red-600 dark:text-red-400' : ''
                 }`}
               >
-                {formatCreditUnitsSigned(balance.spendable, balance.monthly.allowance)}
-                <span className="ml-2 text-sm font-normal text-muted-foreground">/ 100 credits</span>
+                {formatCreditCountSigned(balance.spendable)}
+                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  / {formatCreditCount(balance.monthly.allowance)} credits
+                </span>
               </div>
               {balance.monthly.allowance > 0 && (
                 <Progress
@@ -80,12 +82,12 @@ export function CreditBalanceCard() {
                 )}
                 {balance.topup.remaining > 0 && (
                   <div>
-                    +{formatCreditUnits(balance.topup.remaining, balance.monthly.allowance)} bonus credits from top-ups
+                    +{formatCreditCount(balance.topup.remaining)} bonus credits from top-ups
                   </div>
                 )}
                 {balance.reserved > 0 && (
                   <div>
-                    ~{formatCreditUnits(balance.reserved, balance.monthly.allowance)} reserved on in-flight calls
+                    ~{formatCreditCount(balance.reserved)} reserved on in-flight calls
                   </div>
                 )}
                 {renewDate && (

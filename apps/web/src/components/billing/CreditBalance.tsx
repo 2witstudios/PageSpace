@@ -13,7 +13,7 @@ import { AlertCircle, Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
-import { formatCreditUnits, toDisplayCredits } from '@/lib/subscription/credits';
+import { centsToCredits, formatCreditCount } from '@/lib/subscription/credits';
 
 /** Percentage of monthly allowance remaining below which we warn the user. */
 const LOW_BALANCE_THRESHOLD_PCT = 15;
@@ -46,10 +46,11 @@ export function CreditBalance() {
 
   const { spendable, monthly, topup, reserved, debt } = balance;
   const inDebt = spendable < 0;
-  const remainingPct = monthly.allowance > 0 ? (monthly.remaining / monthly.allowance) * 100 : 0;
-  const isLow = inDebt || remainingPct <= LOW_BALANCE_THRESHOLD_PCT;
-  const monthlyStr = toDisplayCredits(spendable - topup.remaining, monthly.allowance).toFixed(1);
-  const topupUnits = Math.round(toDisplayCredits(topup.remaining, monthly.allowance));
+  const isLow = inDebt || (monthly.allowance > 0 && monthly.remaining / monthly.allowance <= LOW_BALANCE_THRESHOLD_PCT / 100);
+  const monthlyStr = formatCreditCount(monthly.remaining);
+  const allowanceStr = formatCreditCount(monthly.allowance);
+  const topupCredits = centsToCredits(topup.remaining);
+  const topupStr = formatCreditCount(topup.remaining);
   // Surface in-flight reservations as a quiet signal, not in the headline number.
   const hasInFlight = reserved > 0;
   const renewDate = monthly.periodEnd ? new Date(monthly.periodEnd) : null;
@@ -80,29 +81,37 @@ export function CreditBalance() {
                 variant={isLow ? 'destructive' : 'secondary'}
                 className="text-xs font-medium tabular-nums"
               >
-                {`${monthlyStr}/100${topupUnits > 0 ? ` +${topupUnits}` : ''}`}
+                {monthlyStr}/{allowanceStr}
               </Badge>
+              {topupCredits > 0 && (
+                <>
+                  <span className="text-xs text-muted-foreground font-medium">+</span>
+                  <Badge variant="secondary" className="text-xs font-medium tabular-nums">
+                    {topupStr}
+                  </Badge>
+                </>
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent>
             <p className="font-medium">
               {inDebt
                 ? 'In the red — add credits to keep using AI'
-                : `${formatCreditUnits(spendable, monthly.allowance)} / 100 credits remaining`}
+                : `${monthlyStr} / ${allowanceStr} credits remaining`}
             </p>
             {debt > 0 && (
               <p className="text-xs text-primary-foreground/80">
                 Overage clears at your next renewal or with a top-up
               </p>
             )}
-            {topup.remaining > 0 && (
+            {topupCredits > 0 && (
               <p className="text-xs text-primary-foreground/80">
-                +{formatCreditUnits(topup.remaining, monthly.allowance)} bonus credits from top-ups
+                +{topupStr} bonus credits from top-ups
               </p>
             )}
             {hasInFlight && (
               <p className="text-xs text-primary-foreground/80">
-                ~{formatCreditUnits(reserved, monthly.allowance)} credits reserved on in-flight calls
+                ~{formatCreditCount(reserved)} credits reserved on in-flight calls
               </p>
             )}
             {renewDate && (

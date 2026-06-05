@@ -7,9 +7,8 @@ import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { formatCreditUnits } from '@/lib/subscription/credits';
+import { formatCreditCount } from '@/lib/subscription/credits';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { useCreditBalance } from '@/hooks/useCreditBalance';
 
 interface FeatureRow {
   source: string;
@@ -58,9 +57,6 @@ const formatTokens = (tokens: number): string => {
 export function UsageBreakdownCard() {
   const socket = useSocketStore((state) => state.socket);
   const connect = useSocketStore((state) => state.connect);
-  // SWR-deduped alongside CreditBalance/CreditBalanceCard — no extra fetch.
-  const { balance } = useCreditBalance();
-  const allowanceCents = balance?.monthly.allowance ?? 0;
 
   const { data, error, isLoading, mutate } = useSWR<UsageBreakdownResponse>(
     '/api/credits/breakdown',
@@ -111,22 +107,18 @@ export function UsageBreakdownCard() {
           </p>
         ) : (
           <div className="space-y-6">
-            {allowanceCents > 0 && (
-              <div className="text-2xl font-bold tabular-nums">
-                {formatCreditUnits(data.totalSpendCents, allowanceCents)}
-                <span className="ml-2 text-sm font-normal text-muted-foreground">credits used</span>
-              </div>
-            )}
+            <div className="text-2xl font-bold tabular-nums">
+              {formatCreditCount(data.totalSpendCents)}
+              <span className="ml-2 text-sm font-normal text-muted-foreground">credits used</span>
+            </div>
 
             <UsageList
               title="By feature"
               rows={data.byFeature.map(featureToRow)}
-              allowanceCents={allowanceCents}
             />
             <UsageList
               title="By model"
               rows={data.byModel.map(modelToRow)}
-              allowanceCents={allowanceCents}
               formatTokens={formatTokens}
             />
           </div>
@@ -168,12 +160,10 @@ const modelToRow = (m: ModelRow): DisplayRow => ({
 function UsageList({
   title,
   rows,
-  allowanceCents,
   formatTokens: fmtTokens,
 }: {
   title: string;
   rows: DisplayRow[];
-  allowanceCents: number;
   formatTokens?: (t: number) => string;
 }) {
   if (rows.length === 0) return null;
@@ -190,11 +180,9 @@ function UsageList({
                   <span className="ml-1.5 text-xs font-normal text-muted-foreground">{row.sublabel}</span>
                 )}
               </span>
-              {allowanceCents > 0 && (
-                <span className="shrink-0 tabular-nums">
-                  {formatCreditUnits(row.spendCents, allowanceCents)} cr
-                </span>
-              )}
+              <span className="shrink-0 tabular-nums">
+                {formatCreditCount(row.spendCents)} cr
+              </span>
             </div>
             <Progress value={row.sharePct} className="h-2" />
             <div className="text-xs text-muted-foreground tabular-nums">

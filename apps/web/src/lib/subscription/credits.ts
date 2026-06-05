@@ -58,6 +58,26 @@ export function formatCreditUnitsSigned(cents: number, allowanceCents: number): 
   return formatCreditUnits(cents, allowanceCents);
 }
 
+/** Convert whole cents to credit units (1 credit = $1 = 100 cents). */
+export function centsToCredits(cents: number): number {
+  return cents / 100;
+}
+
+/**
+ * Format cents as a credit count. Whole credits show as integers ("5", "15");
+ * fractions use one decimal place ("4.7").
+ */
+export function formatCreditCount(cents: number): string {
+  const units = cents / 100;
+  return Number.isInteger(units) ? `${units}` : units.toFixed(1);
+}
+
+/** Like {@link formatCreditCount} but prefixes negative values with a minus sign. */
+export function formatCreditCountSigned(cents: number): string {
+  if (cents < 0) return `-${formatCreditCount(-cents)}`;
+  return formatCreditCount(cents);
+}
+
 /** Bounds (whole cents) for a custom top-up amount, from the canonical billing config. */
 export const TOPUP_MIN_CENTS = CREDIT_TOPUP_MIN_CENTS;
 export const TOPUP_MAX_CENTS = CREDIT_TOPUP_MAX_CENTS;
@@ -70,17 +90,17 @@ export const MONTHLY_CREDIT_CENTS: Record<SubscriptionTier, number> = {
   business: TIER_MONTHLY_ALLOWANCE_CENTS.business,
 };
 
-/** Monthly included AI-credit allowance per tier, as display strings (e.g. "$5"). */
+/** Monthly included AI-credit allowance per tier, as credit unit strings (e.g. "5", "15"). */
 export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = {
-  free: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.free),
-  pro: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.pro),
-  founder: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.founder),
-  business: formatCreditDollars(TIER_MONTHLY_ALLOWANCE_CENTS.business),
+  free: formatCreditCount(TIER_MONTHLY_ALLOWANCE_CENTS.free),
+  pro: formatCreditCount(TIER_MONTHLY_ALLOWANCE_CENTS.pro),
+  founder: formatCreditCount(TIER_MONTHLY_ALLOWANCE_CENTS.founder),
+  business: formatCreditCount(TIER_MONTHLY_ALLOWANCE_CENTS.business),
 };
 
-/** "$5/month in AI credits" style phrase for a tier. */
+/** "5 credits/month" style phrase for a tier. */
 export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
-  return `${MONTHLY_CREDITS[tier]}/month in AI credits`;
+  return `${MONTHLY_CREDITS[tier]} credits/month`;
 }
 
 /** Buyable top-up packs, sorted by ascending credit value. */
