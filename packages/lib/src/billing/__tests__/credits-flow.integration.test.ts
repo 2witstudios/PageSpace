@@ -763,7 +763,7 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // not refilled by the gate
   });
 
-  it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice refills it', async () => {
+  it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice rolls over (adds allowance to remaining)', async () => {
     seedUser('u2', 'cus_2', 'pro');
 
     // No balance row yet → gate lazy-inits from the tier allowance and allows.
@@ -772,12 +772,12 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
     expect(balanceOf('u2')!.monthlyPeriodEnd).not.toBeNull();
 
-    // Spend some, then invoice.paid refills to the full allowance and sets the invoice period.
+    // Spend some, then invoice.paid ADDS the allowance to the remaining balance (rollover).
     await consumeCredits({ aiUsageLogId: 'log_x', userId: 'u2', costDollars: 1 }); // 150¢
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350);
 
     await applyStripeFunding(invoicePaid('in_2', 'cus_2', PERIOD_START, PERIOD_END));
-    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // rollover: carry 1350 + new 1500 = 2850
     expect(balanceOf('u2')!.monthlyPeriodEnd!.getTime()).toBe(PERIOD_END * 1000);
   });
 });
