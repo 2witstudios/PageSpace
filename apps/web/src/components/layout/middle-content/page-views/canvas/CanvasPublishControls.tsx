@@ -128,26 +128,28 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
   }
 
   return (
-    <div className="flex items-center gap-2 px-2">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1 max-w-full">
       <a
         href={state.url}
         target="_blank"
         rel="noreferrer"
-        className="max-w-[16rem] truncate text-sm text-blue-500 hover:underline"
+        className="min-w-0 max-w-[10rem] sm:max-w-[16rem] truncate text-sm text-blue-500 hover:underline"
         title={state.url}
       >
         {state.url}
       </a>
-      <button className="px-2 py-2 text-sm" onClick={handleCopy}>
-        Copy link
-      </button>
-      <button
-        className="px-2 py-2 text-sm text-red-500 disabled:opacity-50"
-        onClick={handleUnpublish}
-        disabled={isBusy}
-      >
-        {isBusy ? 'Unpublishing…' : 'Unpublish'}
-      </button>
+      <div className="flex items-center gap-2">
+        <button className="px-2 py-2 text-sm whitespace-nowrap" onClick={handleCopy}>
+          Copy link
+        </button>
+        <button
+          className="px-2 py-2 text-sm whitespace-nowrap text-red-500 disabled:opacity-50"
+          onClick={handleUnpublish}
+          disabled={isBusy}
+        >
+          {isBusy ? 'Unpublishing…' : 'Unpublish'}
+        </button>
+      </div>
     </div>
   );
 };
