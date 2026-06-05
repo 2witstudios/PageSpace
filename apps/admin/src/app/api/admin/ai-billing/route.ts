@@ -36,18 +36,11 @@ function centsToDollars(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-/**
- * Neutralize spreadsheet formula injection: a cell starting with =, +, -, or @
- * is evaluated as a formula by Excel/Sheets. Prefix attacker-controlled text
- * (names/emails/model ids) with a single quote so it renders literally — but
- * EXEMPT plain numbers so legitimate negative exports stay numeric.
- */
 function sanitizeSpreadsheetCell(value: string): string {
-  if (/^-?\d+(\.\d+)?$/.test(value)) return value; // plain (possibly negative) number — safe
+  if (/^-?\d+(\.\d+)?$/.test(value)) return value;
   return /^[=+\-@]/.test(value) ? `'${value}` : value;
 }
 
-/** Escape a CSV field per RFC 4180 (quote if it contains comma, quote, or newline). */
 function csvField(value: string | number | null): string {
   const s = sanitizeSpreadsheetCell(value === null ? '' : String(value));
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -57,17 +50,6 @@ function toCsv(rows: (string | number | null)[][]): string {
   return rows.map((row) => row.map(csvField).join(',')).join('\r\n');
 }
 
-/**
- * GET /api/admin/ai-billing
- * Comprehensive AI-billing snapshot: token volume, provider cost (real vs
- * estimated), Stripe credit revenue, outstanding liability + live holds, and the
- * enforcement-status banner. ADMIN ONLY — exposes revenue/cost internals.
- *
- * Query params:
- *   - range:       24h | 7d | 30d (default) | all  — windows token/cost/revenue
- *   - granularity: day (default) | month            — token time-series bucketing
- *   - format:      json (default) | csv             — flat multi-section export
- */
 export const GET = withAdminAuth(async (_adminUser, request) => {
   try {
     const { searchParams } = new URL(request.url);
@@ -116,40 +98,19 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
       rows.push(['enforcement', 'enabled', String(enforcement.enabled), '', '', '', '', '', '', '']);
       rows.push(['enforcement', 'markupBps', String(enforcement.markupBps), '', '', '', '', '', '', '']);
-
-      rows.push([
-        'tokens_summary', range, '',
-        tokenSummary.inputTokens, tokenSummary.outputTokens, tokenSummary.totalTokens,
-        tokenSummary.requestCount, '', '', '',
-      ]);
+      rows.push(['tokens_summary', range, '', tokenSummary.inputTokens, tokenSummary.outputTokens, tokenSummary.totalTokens, tokenSummary.requestCount, '', '', '']);
 
       for (const r of tokensByModel) {
-        rows.push([
-          'tokens_model', r.provider, r.model,
-          r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '',
-        ]);
+        rows.push(['tokens_model', r.provider, r.model, r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '']);
       }
-
       for (const r of tokensByPeriod) {
-        rows.push([
-          'tokens_period', typeof r.period === 'string' ? r.period : String(r.period), '',
-          r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '',
-        ]);
+        rows.push(['tokens_period', typeof r.period === 'string' ? r.period : String(r.period), '', r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '']);
       }
-
       for (const r of tokensByUser) {
-        rows.push([
-          'tokens_user', r.userEmail ?? r.userName ?? r.userId, '',
-          r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '',
-        ]);
+        rows.push(['tokens_user', r.userEmail ?? r.userName ?? r.userId, '', r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '']);
       }
-
       for (const r of providerCost) {
-        rows.push([
-          'provider_cost', `${r.provider}/${r.model}`, r.coverage,
-          '', '', '', r.requestCount,
-          centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), '',
-        ]);
+        rows.push(['provider_cost', `${r.provider}/${r.model}`, r.coverage, '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), '']);
       }
 
       rows.push(['revenue', 'topup_purchase', String(revenue.topupCount), '', '', '', '', '', '', centsToDollars(revenue.topupCents)]);
@@ -157,22 +118,14 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       for (const r of subscriptionsByTier) {
         rows.push(['subscriptions', r.tier, String(r.count), '', '', '', '', '', '', '']);
       }
-
       rows.push(['liability', 'total', String(liability.userCount), '', '', '', '', '', '', centsToDollars(liability.totalLiabilityCents)]);
       rows.push(['holds', 'live', String(holds.holdCount), '', '', '', '', '', '', centsToDollars(holds.heldCents)]);
 
       for (const r of balanceDrift) {
-        rows.push([
-          'alert_balance_drift', r.userEmail ?? r.userName ?? r.userId, `drift ${centsToDollars(r.driftCents)}`,
-          '', '', '', '', '', '', centsToDollars(r.driftCents),
-        ]);
+        rows.push(['alert_balance_drift', r.userEmail ?? r.userName ?? r.userId, `drift ${centsToDollars(r.driftCents)}`, '', '', '', '', '', '', centsToDollars(r.driftCents)]);
       }
       for (const r of negativeMargin) {
-        rows.push([
-          'alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '',
-          '', '', '', r.requestCount,
-          centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents),
-        ]);
+        rows.push(['alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents)]);
       }
 
       return new NextResponse(toCsv(rows), {
@@ -204,9 +157,6 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     });
   } catch (error) {
     loggers.api.error('Error fetching ai-billing data:', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to fetch ai-billing data' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Failed to fetch ai-billing data' }, { status: 500 });
   }
 });
