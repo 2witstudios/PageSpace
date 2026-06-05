@@ -89,6 +89,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
     return NextResponse.json({ range, granularity, startDate, endDate, summary, byPeriod, byModel, topSpenders, debtByUser });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('[unit-economics] route error:', msg, error instanceof Error ? error.stack : '');
     loggers.api.error('Error fetching unit-economics data:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch unit-economics data' }, { status: 500 });
   }
