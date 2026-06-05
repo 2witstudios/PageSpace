@@ -141,6 +141,33 @@ export const chatMessageRepository = {
   },
 
   /**
+   * Get all active messages for a conversation by conversationId alone (no pageId filter).
+   * Used by the client-managed conversations API to retrieve full thread history.
+   */
+  async getMessagesByConversationId(conversationId: string): Promise<ChatMessage[]> {
+    const result = await db
+      .select({
+        id: chatMessages.id,
+        pageId: chatMessages.pageId,
+        conversationId: chatMessages.conversationId,
+        userId: chatMessages.userId,
+        role: chatMessages.role,
+        content: chatMessages.content,
+        messageType: chatMessages.messageType,
+        isActive: chatMessages.isActive,
+        createdAt: chatMessages.createdAt,
+        editedAt: chatMessages.editedAt,
+        toolCalls: chatMessages.toolCalls,
+        toolResults: chatMessages.toolResults,
+      })
+      .from(chatMessages)
+      .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.isActive, true)))
+      .orderBy(chatMessages.createdAt);
+
+    return result as ChatMessage[];
+  },
+
+  /**
    * Purge soft-deleted messages older than the cutoff date.
    * Returns the number of rows removed.
    */

@@ -14,13 +14,29 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([]),
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([]),
+        }),
       }),
     }),
     insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
     query: {
       chatMessages: { findMany: vi.fn().mockResolvedValue([]) },
     },
+  },
+}));
+
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    getConversation: vi.fn().mockResolvedValue({
+      id: 'conv-abc',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }),
   },
 }));
 
@@ -130,9 +146,10 @@ import { db } from '@pagespace/db/db';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core';
+import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -554,6 +571,142 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'pass an already-aborted abortSignal to streamText so no tokens are burned',
       actual: capturedSignalAborted,
       expected: true,
+    });
+  });
+
+  test('conversation ownership: returns 404 when conversation_id points to a non-existent conversation', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce(null);
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'no-such-conv' }));
+    assert({
+      given: 'a conversation_id that has no matching conversations row',
+      should: 'return 404 before starting inference',
+      actual: response.status,
+      expected: 404,
+    });
+  });
+
+  test('conversation ownership: returns 403 when conversation belongs to a different user', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-other',
+      userId: 'other-user',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'client',
+      lastMessageAt: null,
+    });
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-other' }));
+    assert({
+      given: 'a conversation_id belonging to a different user',
+      should: 'return 403 before starting inference',
+      actual: response.status,
+      expected: 403,
+    });
+  });
+
+  test('conversation ownership: proceeds when conversation_id is absent', async () => {
+    const response = await POST(makeRequest(validBody));
+    assert({
+      given: 'a request with no conversation_id',
+      should: 'skip the ownership check and return 200',
+      actual: response.status,
+      expected: 200,
+    });
+  });
+
+  test('tool call persistence: saves tool calls and results from steps with assistant message', async () => {
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 10 }),
+      steps: Promise.resolve([
+        {
+          toolCalls: [{ toolCallId: 'call-1', toolName: 'read_page', input: { pageId: 'p-1' } }],
+          toolResults: [{ toolCallId: 'call-1', toolName: 'read_page', output: 'page content' }],
+        },
+      ]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', delta: 'Result text' };
+        yield { type: 'finish' };
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+
+    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
+    assert({
+      given: 'a stream with a step containing tool calls and results',
+      should: 'save the assistant message with toolCalls and toolResults populated',
+      actual: {
+        hasToolCalls: Array.isArray(assistantSave?.[0]?.toolCalls) && (assistantSave![0].toolCalls as unknown[]).length > 0,
+        hasToolResults: Array.isArray(assistantSave?.[0]?.toolResults) && (assistantSave![0].toolResults as unknown[]).length > 0,
+      },
+      expected: { hasToolCalls: true, hasToolResults: true },
+    });
+  });
+
+  test('tool call persistence: no tool calls in steps means no toolCalls persisted', async () => {
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 10 }),
+      steps: Promise.resolve([
+        { toolCalls: [], toolResults: [] },
+      ]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', delta: 'Just text' };
+        yield { type: 'finish' };
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+
+    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
+    assert({
+      given: 'a stream with steps but no tool calls',
+      should: 'save the assistant message without toolCalls or toolResults',
+      actual: {
+        toolCalls: assistantSave?.[0]?.toolCalls,
+        toolResults: assistantSave?.[0]?.toolResults,
+      },
+      expected: { toolCalls: undefined, toolResults: undefined },
+    });
+  });
+
+  test('tool call persistence: saves tool-only turn when no text but steps have tool calls', async () => {
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 3 }),
+      steps: Promise.resolve([
+        {
+          toolCalls: [{ toolCallId: 'call-only', toolName: 'create_page', input: { title: 'New' } }],
+          toolResults: [{ toolCallId: 'call-only', toolName: 'create_page', output: { id: 'p-2' } }],
+        },
+      ]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        // No text-delta — tool-only turn
+        yield { type: 'finish' };
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    await response.text();
+
+    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
+    assert({
+      given: 'a tool-only turn with no text output but steps containing tool calls',
+      should: 'save the assistant message with tool calls persisted',
+      actual: {
+        saved: assistantSave !== undefined,
+        hasToolCalls: Array.isArray(assistantSave?.[0]?.toolCalls) && (assistantSave![0].toolCalls as unknown[]).length > 0,
+      },
+      expected: { saved: true, hasToolCalls: true },
     });
   });
 });
