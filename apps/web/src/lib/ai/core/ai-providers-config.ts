@@ -66,31 +66,6 @@ export function isModelAllowedForTier(model: string | undefined, tier: string | 
   return !!model && FREE_TIER_MODELS.has(model);
 }
 
-/**
- * Classify a (provider, model) pair into the daily-quota tier the call counts
- * against (legacy daily-limit path; credits enforcement is the primary gate). Pro
- * tier covers frontier flagship models (Claude Opus, GPT-5, OpenAI o3). Smaller
- * variants (mini/nano/flash/haiku/lite/small) are always demoted to standard.
- *
- * Free-tier-allowlisted models are ALWAYS standard: they're the models free users
- * are permitted to select, so they must never count against the (zero) pro daily
- * quota — otherwise a free user passes the subscription gate on, e.g., the default
- * `openai/gpt-5.3-chat` and then immediately 429s in the legacy daily-limit path.
- */
-export function getProviderTier(_provider: string, model: string | undefined): 'standard' | 'pro' {
-  if (!model) return 'standard';
-  if (FREE_TIER_MODELS.has(model)) return 'standard';
-
-  const m = model.toLowerCase();
-
-  if (/\b(mini|nano|flash|haiku|lite|small)\b/.test(m)) return 'standard';
-  if (m.includes('opus')) return 'pro';
-  if (/\bgpt-?5(\.|-|$|\/)/.test(m)) return 'pro';
-  if (/\bo3([\s-]|$|\/)/.test(m)) return 'pro';
-
-  return 'standard';
-}
-
 export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',

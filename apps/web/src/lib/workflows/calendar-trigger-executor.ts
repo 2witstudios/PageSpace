@@ -7,8 +7,10 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
-import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
@@ -48,7 +50,7 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Cheap preflight: verify agent page still exists before consuming a usage credit
+    // 3. Cheap preflight: verify agent page still exists
     const [agentPage] = await db
       .select({ id: pages.id, isTrashed: pages.isTrashed })
       .from(pages)
@@ -59,12 +61,27 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 4. Rate-limit check: consume one standard AI call from the scheduler's budget
-    const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
-    if (!usageResult.success) {
-      const error = 'Daily AI call limit reached for scheduling user';
-      return { success: false, durationMs: Date.now() - startTime, error };
+    // 4. Credit gate — blocks out-of-credits users before the model is invoked.
+    //    Looks up the scheduling user's tier for accurate allowance comparison.
+    //    skipDailyCap: server-scheduled triggers are not interactive fan-out, so the
+    //    per-user/day runaway backstop does not apply here.
+    const [schedulingUser] = await db
+      .select({ subscriptionTier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.id, trigger.scheduledById));
+    const gate = await canConsumeAI(
+      trigger.scheduledById,
+      (schedulingUser?.subscriptionTier ?? 'free') as SubscriptionTier,
+      { skipDailyCap: true },
+    );
+    if (!gate.allowed) {
+      logger.info('Calendar trigger: skipped (credit gate denied)', {
+        triggerId: trigger.id,
+        reason: gate.reason,
+      });
+      return { success: false, durationMs: Date.now() - startTime, error: `AI credit gate denied: ${gate.reason}` };
     }
+    const holdId = gate.holdId;
 
     // 5. Build the prompt from the workflow's stored prompt + event context.
     //    The instruction page is loaded by executeWorkflow (input.instructionPageId),
@@ -87,7 +104,15 @@ export async function executeCalendarTrigger(
       eventContext: { promptOverride },
     };
 
-    const result = await executeWorkflow(input);
+    // executeWorkflow calls AIMonitoring.trackUsage → consumeCredits internally,
+    // which debits the balance directly (no holdId). Release the reservation here
+    // so the user's spendable balance is accurate immediately after execution.
+    let result: WorkflowExecutionResult;
+    try {
+      result = await executeWorkflow(input);
+    } finally {
+      if (holdId) void releaseHold(holdId).catch(() => {});
+    }
 
     logger.info('Calendar trigger executed', {
       triggerId: trigger.id,

@@ -8,7 +8,7 @@
  * - Document editing (DocumentView)
  * - AI streaming (AiChatView, GlobalAssistantView, SidebarChatTab)
  * - Auth refresh protection (auth-store)
- * - SWR isPaused() conditions (UsageCounter, UserDropdown)
+ * - SWR isPaused() conditions (UserDropdown)
  */
 
 import { create } from 'zustand';

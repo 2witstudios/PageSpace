@@ -122,11 +122,7 @@ export type GateReason =
   // Per-user/day runaway-spend backstop tripped: today's charged spend plus this
   // call's reservation would exceed the configured daily ceiling. Independent of the
   // credit-balance math (evaluateDailyCap, not evaluateGate). Maps to HTTP 429.
-  | 'daily_cap_exceeded'
-  // Allowed reason: the gate computed a denial but enforcement is dark-launched
-  // (CREDITS_ENFORCEMENT_ENABLED=false), so the request proceeds and is still
-  // metered. The shell — not evaluateGate — produces this reason.
-  | 'enforcement_disabled';
+  | 'daily_cap_exceeded';
 
 export interface DailyCapInput {
   /** This user's charged spend (whole cents) since the start of the current UTC day. */

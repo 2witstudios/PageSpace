@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
@@ -44,22 +44,11 @@ beforeEach(() => {
   mockGetCreditBalance.mockResolvedValue(summary);
 });
 
-afterEach(() => {
-  delete process.env.CREDITS_ENFORCEMENT_ENABLED;
-});
-
 describe('GET /api/credits', () => {
-  it('returns the user balance summary plus the per-environment creditsMode flag', async () => {
+  it('returns the user balance summary', async () => {
     const res = await GET(createMockRequest('https://example.com/api/credits'));
     expect(res.status).toBe(200);
-    // Default env (unset) → credits mode OFF; the client renders the legacy quota UI.
-    expect(await res.json()).toEqual({ ...summary, creditsMode: false });
-  });
-
-  it('reports creditsMode:true when CREDITS_ENFORCEMENT_ENABLED is set', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
-    const res = await GET(createMockRequest('https://example.com/api/credits'));
-    expect(await res.json()).toMatchObject({ creditsMode: true });
+    expect(await res.json()).toEqual(summary);
   });
 
   it("resolves the user's tier and passes it to getCreditBalance", async () => {

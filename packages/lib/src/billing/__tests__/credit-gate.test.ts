@@ -147,14 +147,6 @@ describe('canConsumeAI', () => {
     vi.clearAllMocks();
     mockIsBillingEnabled.mockReturnValue(true);
     mockDb.insert.mockReturnValue(insertChain());
-    // These assertions exercise ENFORCEMENT (the 402/429 blocking). The flag
-    // defaults OFF (dark launch), so turn it on for the enforcement suite; the
-    // dark-launch behavior is covered in its own describe block below.
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
-  });
-
-  afterEach(() => {
-    delete process.env.CREDITS_ENFORCEMENT_ENABLED;
   });
 
   it('allows unconditionally when billing is disabled (tenant/onprem)', async () => {
@@ -407,48 +399,6 @@ describe('canConsumeAI', () => {
   });
 });
 
-describe('canConsumeAI — dark launch (CREDITS_ENFORCEMENT_ENABLED off, the default)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockIsBillingEnabled.mockReturnValue(true);
-    mockDb.insert.mockReturnValue(insertChain());
-    delete process.env.CREDITS_ENFORCEMENT_ENABLED; // default OFF — meter, don't block
-  });
-
-  it('does NOT block an out-of-credits user — overrides the denial to allowed:enforcement_disabled', async () => {
-    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    // The gate still did its bookkeeping (the locked transaction ran) — dark launch
-    // is NOT a short-circuit — but the would-be out_of_credits denial is suppressed.
-    expect(mockDb.transaction).toHaveBeenCalled();
-    expect(r).toEqual({ allowed: true, reason: 'enforcement_disabled' });
-  });
-
-  it('does NOT enforce the free in-flight cap — overrides too_many_in_flight to allowed', async () => {
-    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    // 2 holds in flight == MAX_FREE_INFLIGHT -> would be too_many_in_flight when enforced.
-    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 2 });
-
-    const r = await canConsumeAI('u1', 'free');
-
-    expect(r).toEqual({ allowed: true, reason: 'enforcement_disabled' });
-  });
-
-  it('leaves a credit-having user UNCHANGED — normal allow + hold, not the dark-launch override', async () => {
-    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
-    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    expect(r.allowed).toBe(true);
-    expect(r.reason).toBe('ok'); // not 'enforcement_disabled' — the override only flips denials
-    expect(r.holdId).toBe('hold_1');
-  });
-});
-
 describe('canConsumeAI — per-user/day exposure cap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -462,7 +412,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   });
 
   afterEach(() => {
-    delete process.env.CREDITS_ENFORCEMENT_ENABLED;
     delete process.env.DAILY_USER_EXPOSURE_CAP_CENTS;
     delete process.env.DAILY_CAP_BUSINESS_CENTS;
   });
@@ -470,7 +419,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   const BAL = { monthlyRemainingCents: 100_000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE };
 
   it('denies (429-mapped) when the day spend + this call exceeds the cap, with enforcement ON', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     // 480¢ already charged today (480_000 millicents) + EST(25) = 505 > 500 → deny.
     const sink: { insertCalled?: boolean } = {};
@@ -484,7 +432,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   });
 
   it('allows + reserves a hold when the day spend stays under the cap', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     const sink: { insertCalled?: boolean } = {};
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000, sink); // 100¢ + 25 < 500
@@ -496,20 +443,7 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
     expect(sink.insertCalled).toBe(true);
   });
 
-  it('is SOFT: a cap denial is downgraded to enforcement_disabled while dark-launched (OFF)', async () => {
-    // enforcement OFF (deleted in afterEach / unset here)
-    process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
-    const sink: { insertCalled?: boolean } = {};
-    mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 480_000, sink);
-
-    const r = await canConsumeAI('u1', 'pro');
-
-    expect(r).toEqual({ allowed: true, reason: 'enforcement_disabled' });
-    expect(sink.insertCalled).toBeFalsy(); // still no hold on the (downgraded) denial
-  });
-
   it('counts active in-flight hold reservations toward the cap (burst cannot exceed it)', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     // Settled 100¢ today, but 450¢ of holds are still in flight (not yet in the ledger):
     // 100 + 450 + EST(25) = 575 > 500 → deny, even though settled alone (125) is under.
@@ -523,7 +457,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   });
 
   it('respects a per-tier override (DAILY_CAP_BUSINESS_CENTS) above the global cap', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     process.env.DAILY_CAP_BUSINESS_CENTS = '1000';
     // 600¢ today + 25 = 625: over the global 500 but under the business 1000 → allowed.
@@ -537,7 +470,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   });
 
   it('counts the full intended charge (chargeMillicents, usage+adjustment) — query shape locked', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     mockTransactionWithDailyCharge(BAL, { reserved: 0, inFlight: 0 }, 100_000);
 
@@ -550,7 +482,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   });
 
   it('bypasses the cap entirely when skipDailyCap is set (system caller)', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '500';
     // Even with a charged total that WOULD exceed the cap, skipDailyCap skips the check.
     const sink: { insertCalled?: boolean } = {};
@@ -564,7 +495,6 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
   });
 
   it('no cap configured (default) → never runs the daily-cap query, allows normally', async () => {
-    process.env.CREDITS_ENFORCEMENT_ENABLED = 'true';
     // DAILY_USER_EXPOSURE_CAP_CENTS unset → cap disabled. Use the 2-select transaction;
     // a 3rd select would throw if the cap path ran.
     const sink: { insertCalled?: boolean } = {};

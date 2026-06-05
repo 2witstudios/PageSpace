@@ -25,18 +25,6 @@ describe('classifyAIError', () => {
     expect(classifyAIError('Too many AI requests in flight at once.')).toBe('too_many_in_flight');
   });
 
-  it('classifies the legacy daily-quota 429 (credits mode OFF) as daily_quota', () => {
-    // createRateLimitResponse's body message (the dark-launch / OFF path).
-    expect(
-      classifyAIError('Standard AI calls limited to 50 per day. Upgrade to Pro (200/day) or Business.'),
-    ).toBe('daily_quota');
-    expect(
-      classifyAIError('Pro AI calls limited to 50 per day. Upgrade to Pro or Business for more access.'),
-    ).toBe('daily_quota');
-    // Must win over the generic rate-limit patterns even when the body also says 429.
-    expect(classifyAIError('429: Standard AI calls limited to 50 per day.')).toBe('daily_quota');
-  });
-
   it('classifies provider rate limits / transient failures', () => {
     expect(classifyAIError('rate limit exceeded')).toBe('rate_limit');
     expect(classifyAIError('Provider returned error')).toBe('rate_limit');
@@ -55,7 +43,6 @@ describe('getAIErrorMessage', () => {
     expect(getAIErrorMessage('too_many_in_flight')).toMatch(/wait/i);
     expect(getAIErrorMessage('401')).toMatch(/authentication/i);
     expect(getAIErrorMessage('rate limit')).toMatch(/busy|try again/i);
-    expect(getAIErrorMessage('Standard AI calls limited to 50 per day.')).toMatch(/limit|upgrade|resets/i);
     expect(getAIErrorMessage(undefined)).toMatch(/something went wrong/i);
   });
 
@@ -84,7 +71,6 @@ describe('predicate helpers', () => {
     expect(isRateLimitError('rate limit')).toBe(true);
     expect(isRateLimitError('out_of_credits')).toBe(true);
     expect(isRateLimitError('too_many_in_flight')).toBe(true);
-    expect(isRateLimitError('Standard AI calls limited to 50 per day.')).toBe(true);
     expect(isRateLimitError('boom')).toBe(false);
   });
 });

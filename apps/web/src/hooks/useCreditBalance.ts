@@ -24,12 +24,6 @@ export interface CreditBalance {
   debt: number;
   spendable: number;
   reserved: number;
-  /**
-   * Per-environment switch: true → show the new credits UI; false → show the legacy
-   * daily-quota UI. Constant for the process, so it's preserved across `credits:updated`
-   * socket pushes (whose payload carries only the per-user balance, not the mode).
-   */
-  creditsMode: boolean;
 }
 
 const fetcher = async (url: string): Promise<CreditBalance> => {
@@ -43,12 +37,10 @@ const fetcher = async (url: string): Promise<CreditBalance> => {
 /**
  * Pure: fold an authoritative `credits:updated` payload into the cached balance. The
  * payload carries the full server-computed balance, so we replace the per-user fields
- * wholesale. `creditsMode` is a process-level flag absent from the payload, so we keep
- * whatever the initial fetch established (default OFF until it resolves).
+ * wholesale.
  */
 export function applyCreditsPayload(
   payload: CreditsEventPayload,
-  current: CreditBalance | undefined,
 ): CreditBalance {
   return {
     billingEnabled: payload.billingEnabled,
@@ -57,7 +49,6 @@ export function applyCreditsPayload(
     debt: payload.debt,
     spendable: payload.spendable,
     reserved: payload.reserved,
-    creditsMode: current?.creditsMode ?? false,
   };
 }
 
@@ -101,7 +92,7 @@ export function useCreditBalance() {
     if (!socket) return;
 
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
-      mutate((current) => applyCreditsPayload(payload, current), CREDITS_PUSH_MUTATE_OPTIONS);
+      mutate(() => applyCreditsPayload(payload), CREDITS_PUSH_MUTATE_OPTIONS);
     };
 
     socket.on('credits:updated', handleCreditsUpdated);

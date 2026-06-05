@@ -16,7 +16,6 @@ export default defineConfig({
   },
   // The metering specs need the web app to be running with its AI provider pointed at
   // the mock below. Start the app separately with (at least):
-  //   CREDITS_ENFORCEMENT_ENABLED=true (OFF by default — the enforcement specs need it ON)
   //   OPENROUTER_DEFAULT_API_KEY=sk-e2e
   //   OPENROUTER_BASE_URL=http://127.0.0.1:4998/api/v1
   //   CRON_SECRET / STRIPE_WEBHOOK_SECRET / CSRF_SECRET shared with this process's env

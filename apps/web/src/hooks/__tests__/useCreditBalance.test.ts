@@ -14,7 +14,7 @@ vi.mock('swr', () => ({ default: vi.fn(() => ({ data: undefined, error: undefine
 vi.mock('@/stores/useSocketStore', () => ({ useSocketStore: vi.fn(() => undefined) }));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: vi.fn() }));
 
-import { applyCreditsPayload, CREDITS_PUSH_MUTATE_OPTIONS, type CreditBalance } from '../useCreditBalance';
+import { applyCreditsPayload, CREDITS_PUSH_MUTATE_OPTIONS } from '../useCreditBalance';
 import type { CreditsEventPayload } from '@/lib/websocket';
 
 const payload = {
@@ -29,7 +29,7 @@ const payload = {
 
 describe('applyCreditsPayload', () => {
   it('maps the authoritative socket payload into the cached balance', () => {
-    const next = applyCreditsPayload(payload, undefined);
+    const next = applyCreditsPayload(payload);
     expect(next).toMatchObject({
       billingEnabled: true,
       spendable: 400,
@@ -37,15 +37,6 @@ describe('applyCreditsPayload', () => {
       monthly: payload.monthly,
       topup: payload.topup,
     });
-  });
-
-  it('preserves the process-level creditsMode from the current cache (payload omits it)', () => {
-    const current = { creditsMode: true } as CreditBalance;
-    expect(applyCreditsPayload(payload, current).creditsMode).toBe(true);
-  });
-
-  it('defaults creditsMode to false when there is no current cache', () => {
-    expect(applyCreditsPayload(payload, undefined).creditsMode).toBe(false);
   });
 });
 

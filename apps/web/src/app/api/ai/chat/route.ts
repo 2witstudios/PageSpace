@@ -10,15 +10,13 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, getProviderTier, DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-// LEGACY: daily-quota path, active only when isCreditsModeEnabled() is OFF. Remove at final credits cutover.
-import { getCurrentUsage, incrementUsage } from '@/lib/subscription/usage-service';
-import { isCreditsModeEnabled, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -539,28 +537,6 @@ export async function POST(request: Request) {
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
-    // LEGACY daily-quota path (credits mode OFF): prod's "old way". The credit gate
-    // above already metered (and, when enforcement is ON, blocked); here we layer the
-    // legacy per-tier daily limit so a dark-launch environment behaves exactly as before.
-    // getCurrentUsage returns unlimited when !isBillingEnabled(), so onprem/tenant bypass.
-    // Remove at final credits cutover.
-    if (!isCreditsModeEnabled()) {
-      const providerType = getProviderTier(currentProvider, currentModel);
-      const currentUsage = await getCurrentUsage(userId, providerType);
-      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.ai.warn('AI Chat API: Legacy daily rate limit exceeded', {
-          userId: maskIdentifier(userId),
-          providerType,
-          limit: currentUsage.limit,
-          remaining: currentUsage.remainingCalls,
-        });
-        // The gate placed a hold above (it runs even in OFF mode, for metering); this
-        // early return never streams, so release it now rather than wait for the sweep.
-        if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
-        return createRateLimitResponse(providerType, currentUsage.limit);
-      }
-    }
-
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
     // Parse web search mode (defaults to false - disabled)
@@ -1062,19 +1038,6 @@ export async function POST(request: Request) {
           // observability; skipping it on exhausted/no-content runs or save failures would
           // leak the hold (the route already set holdHandedOff = true).
           try {
-            // LEGACY daily-quota counting (credits mode OFF): keep the old per-tier
-            // counter moving so the restored UsageCounter is accurate on prod during
-            // dark launch. Best-effort — never fail the chat. Remove at final cutover.
-            if (!isCreditsModeEnabled()) {
-              try {
-                await incrementUsage(userId!, getProviderTier(currentProvider, currentModel));
-              } catch (usageError) {
-                loggers.ai.error('AI Chat API: legacy usage increment failed', usageError as Error, {
-                  userId: maskIdentifier(userId!),
-                });
-              }
-            }
-
             // Track enhanced AI usage with token counting and cost calculation.
             // Prepaid credit metering ALWAYS runs (both modes) — it settles the gate's
             // hold and feeds unit-economics observability.

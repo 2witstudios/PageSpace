@@ -135,18 +135,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { __label: 'userProfiles', userId: 'userId', displayName: 'displayName' },
 }));
 
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: vi.fn().mockResolvedValue({ currentCount: 1, limit: 100, remainingCalls: 99, success: true }),
-  getCurrentUsage: vi.fn().mockResolvedValue({ success: true, remainingCalls: 100, currentCount: 0, limit: 100 }),
-  getUserUsageSummary: vi.fn().mockResolvedValue({
-    subscriptionTier: 'free',
-    standard: { current: 0, limit: 100, remaining: 100 },
-    pro: { current: 0, limit: 0, remaining: 0 },
-  }),
-}));
-
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
-  createRateLimitResponse: vi.fn(),
   createAdminRestrictedResponse: vi.fn(),
   requiresProSubscription: vi.fn().mockReturnValue(false),
   createSubscriptionRequiredResponse: vi.fn(),
@@ -275,7 +264,6 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
-  getProviderTier: vi.fn().mockReturnValue('standard'),
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
 }));
 
