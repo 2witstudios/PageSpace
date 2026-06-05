@@ -38,6 +38,26 @@ export function formatCreditDollarsSigned(cents: number): string {
   return cents < 0 ? `-${formatCreditDollars(-cents)}` : formatCreditDollars(cents);
 }
 
+/**
+ * Convert whole cents to a 0–100 display-credit scale where `allowanceCents` = 100.
+ * Positive top-up balances can push the result above 100.
+ */
+export function toDisplayCredits(cents: number, allowanceCents: number): number {
+  if (allowanceCents <= 0) return cents;
+  return (cents / allowanceCents) * 100;
+}
+
+/** Format cents as a display credit amount on the 0–100 scale (2 decimal places). */
+export function formatCreditUnits(cents: number, allowanceCents: number): string {
+  return toDisplayCredits(cents, allowanceCents).toFixed(2);
+}
+
+/** Like {@link formatCreditUnits} but prefixes negative values with a minus sign. */
+export function formatCreditUnitsSigned(cents: number, allowanceCents: number): string {
+  if (cents < 0) return `-${formatCreditUnits(-cents, allowanceCents)}`;
+  return formatCreditUnits(cents, allowanceCents);
+}
+
 /** Bounds (whole cents) for a custom top-up amount, from the canonical billing config. */
 export const TOPUP_MIN_CENTS = CREDIT_TOPUP_MIN_CENTS;
 export const TOPUP_MAX_CENTS = CREDIT_TOPUP_MAX_CENTS;

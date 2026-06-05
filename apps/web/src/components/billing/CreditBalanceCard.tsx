@@ -1,29 +1,29 @@
 'use client';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
-import { formatCreditDollars, formatCreditDollarsSigned } from '@/lib/subscription/credits';
+import { formatCreditUnits, formatCreditUnitsSigned } from '@/lib/subscription/credits';
 
 /**
- * Settings card showing the user's prepaid AI-credit balance: the monthly allowance
- * bucket (resets each period), the never-expiring top-up bucket, and a "Buy credits"
- * action. Live-updates via `useCreditBalance`. Renders nothing when billing is
- * disabled; hides the buy action on iOS (App Store policy).
+ * Settings card showing the user's prepaid AI-credit balance on a 0–100 scale,
+ * with a progress bar for monthly consumption and a "Buy credits" action.
+ * Live-updates via `useCreditBalance`. Renders nothing when billing is disabled;
+ * hides the buy action on iOS (App Store policy).
  */
 export function CreditBalanceCard() {
   const { showBilling } = useBillingVisibility();
   const { balance, isLoading, isError } = useCreditBalance();
 
-  // Hidden on billing-disabled deployments.
   if (!isLoading && (!balance || !balance.billingEnabled)) {
     return null;
   }
 
-  const resetDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
+  const renewDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
 
   return (
     <Card>
@@ -33,14 +33,14 @@ export function CreditBalanceCard() {
           AI Credits
         </CardTitle>
         <CardDescription>
-          Credits power AI features and are billed at usage. Your monthly allowance
-          resets each period; purchased top-up credits never expire.
+          Credits power AI features. Your plan includes 100 credits per billing period.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <div className="space-y-3">
             <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-2 w-full" />
             <Skeleton className="h-4 w-48" />
           </div>
         ) : isError ? (
@@ -49,30 +49,47 @@ export function CreditBalanceCard() {
           </p>
         ) : balance ? (
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div className="space-y-2">
+            <div className="space-y-3 flex-1">
               <div
                 className={`text-3xl font-bold tabular-nums ${
                   balance.spendable < 0 ? 'text-red-600 dark:text-red-400' : ''
                 }`}
               >
-                {formatCreditDollarsSigned(balance.spendable)}
-                <span className="ml-2 text-sm font-normal text-muted-foreground">available</span>
+                {formatCreditUnitsSigned(balance.spendable, balance.monthly.allowance)}
+                <span className="ml-2 text-sm font-normal text-muted-foreground">/ 100 credits</span>
               </div>
+              {balance.monthly.allowance > 0 && (
+                <Progress
+                  value={Math.min(
+                    100,
+                    Math.max(
+                      0,
+                      ((balance.monthly.allowance - balance.monthly.remaining) /
+                        balance.monthly.allowance) *
+                        100,
+                    ),
+                  )}
+                  className="h-2"
+                />
+              )}
               <div className="text-sm text-muted-foreground space-y-0.5">
                 {balance.debt > 0 && (
                   <div className="text-red-600 dark:text-red-400">
-                    You owe {formatCreditDollars(balance.debt)} in overage — add credits to keep
-                    using AI (or it clears at your next reset).
+                    In the red — add credits to keep using AI (or it clears at your next renewal).
                   </div>
                 )}
-                <div>
-                  Monthly allowance: {formatCreditDollars(balance.monthly.remaining)} of{' '}
-                  {formatCreditDollars(balance.monthly.allowance)}
-                  {resetDate && <> · resets {resetDate.toLocaleDateString()}</>}
-                </div>
-                <div>Top-up balance: {formatCreditDollars(balance.topup.remaining)}</div>
+                {balance.topup.remaining > 0 && (
+                  <div>
+                    +{formatCreditUnits(balance.topup.remaining, balance.monthly.allowance)} bonus credits from top-ups
+                  </div>
+                )}
                 {balance.reserved > 0 && (
-                  <div>Reserved (in-flight): {formatCreditDollars(balance.reserved)}</div>
+                  <div>
+                    ~{formatCreditUnits(balance.reserved, balance.monthly.allowance)} reserved on in-flight calls
+                  </div>
+                )}
+                {renewDate && (
+                  <div>Renews {renewDate.toLocaleDateString()}</div>
                 )}
               </div>
             </div>
