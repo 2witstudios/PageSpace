@@ -1,9 +1,7 @@
 export interface SentryEnv {
   nodeEnv?: string;
   dsn?: string;
-  // Set to true only when explicitly opted in (e.g. SENTRY_SEND_DEFAULT_PII=true).
-  // Defaults to false to avoid capturing IP addresses, cookies, and user context
-  // without an explicit decision — important for GDPR/CCPA compliance.
+  // Opt in via SENTRY_SEND_DEFAULT_PII=true; defaults false to avoid sending IPs/cookies (GDPR/CCPA).
   sendDefaultPii?: boolean;
 }
 
