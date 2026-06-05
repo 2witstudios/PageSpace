@@ -136,14 +136,14 @@ export async function getCreditBalance(
   const expired = periodEnd === null || periodEnd < now;
 
   // Rollover: credits never expire. The carry balance is always spendable (both
-  // in the gate and here) — the renewal just adds the new allowance on top.
+  // in the gate and here) — the renewal adds the allowance and nets outstanding debt.
   // Free tiers without a Stripe subscription get their reset via the gate's addOneMonth
-  // path (which adds the allowance to the carry), so for a free user with a lapsed
-  // period we show stored + upcoming allowance (what the gate will write on next call).
-  // For paid tiers the period window has no bearing on spendability — show stored as-is.
+  // path, so for a free user with a lapsed period we surface stored + upcoming allowance
+  // (what the gate will apply on next call). Debt is shown as-is — the gate will net it
+  // against the carry at reset. For paid tiers the period window doesn't affect display.
   let monthlyRemaining: number;
   if (tier === 'free' && expired) {
-    // Gate will ADD the allowance to the carry on next call; surface that total.
+    // Gate will net debt against carry and add the allowance on next call; surface the total.
     monthlyRemaining = row.monthlyRemainingCents + allowance;
   } else {
     monthlyRemaining = row.monthlyRemainingCents;

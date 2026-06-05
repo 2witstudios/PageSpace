@@ -623,8 +623,8 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
         // (debt shrinks, top-up grows, dollar-for-dollar — nothing vanishes).
         expect(debt + topup).toBe(before + payment);
       } else {
-        // REFILL (renewal): allowance ADDED to carried balance, debt forgiven.
-        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW, monthly);
+        // REFILL (renewal): debt netted against carry, allowance added, monthly clamped >= 0.
+        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW, monthly, debt);
         monthly = refill.monthlyRemainingCents;
         debt = refill.debtCents;
       }
