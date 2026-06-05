@@ -6,6 +6,7 @@ import { chatMessages } from '@pagespace/db/schema/core';
 import {
   authenticateRequestWithOptions,
   isAuthError,
+  getAllowedDriveIds,
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -29,6 +30,14 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   const access = validateConversationAccess(conversation, authResult.userId);
   if (!access.ok) {
     return NextResponse.json({ error: access.message }, { status: access.status });
+  }
+
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+  if (allowedDriveIds.length > 0) {
+    const contextId = conversation!.contextId;
+    if (contextId === null || !allowedDriveIds.includes(contextId)) {
+      return NextResponse.json({ error: 'Conversation not accessible with this token' }, { status: 403 });
+    }
   }
 
   const messages = await chatMessageRepository.getMessagesByConversationId(id);
@@ -56,6 +65,14 @@ export async function DELETE(request: Request, context: RouteContext): Promise<R
   const access = validateConversationAccess(conversation, authResult.userId);
   if (!access.ok) {
     return NextResponse.json({ error: access.message }, { status: access.status });
+  }
+
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+  if (allowedDriveIds.length > 0) {
+    const contextId = conversation!.contextId;
+    if (contextId === null || !allowedDriveIds.includes(contextId)) {
+      return NextResponse.json({ error: 'Conversation not accessible with this token' }, { status: 403 });
+    }
   }
 
   await db

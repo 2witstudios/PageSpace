@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, and, desc } from '@pagespace/db/operators';
+import { eq, and, desc, inArray } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import {
   authenticateRequestWithOptions,
@@ -69,10 +69,18 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const { userId, limit, offset, driveId } = queryResult.data;
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+
+  // Enforce MCP drive scope on listing
+  if (allowedDriveIds.length > 0 && driveId !== undefined && !allowedDriveIds.includes(driveId)) {
+    return NextResponse.json({ error: 'Drive not accessible with this token' }, { status: 403 });
+  }
 
   const conditions = [eq(conversations.userId, userId), eq(conversations.isActive, true)];
   if (driveId !== undefined) {
     conditions.push(eq(conversations.contextId, driveId));
+  } else if (allowedDriveIds.length > 0) {
+    conditions.push(inArray(conversations.contextId, allowedDriveIds));
   }
 
   const rows = await db

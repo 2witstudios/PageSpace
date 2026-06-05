@@ -243,15 +243,16 @@ export async function POST(request: Request): Promise<Response> {
     settled = true;
 
     const assistantId = createId();
-    if (text !== undefined) {
-      const extracted = extractToolCallsFromSteps(steps ?? []);
+    const extracted = extractToolCallsFromSteps(steps ?? []);
+    const hasContent = text !== undefined || extracted.toolCalls.length > 0;
+    if (hasContent) {
       await saveMessageToDatabase({
         messageId: assistantId,
         pageId,
         conversationId,
         userId: null,
         role: 'assistant',
-        content: text || '',
+        content: text ?? '',
         toolCalls: extracted.toolCalls.length > 0 ? extracted.toolCalls : undefined,
         toolResults: extracted.toolResults.length > 0 ? extracted.toolResults : undefined,
       }).catch((err: unknown) => {

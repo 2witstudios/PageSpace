@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_col, val) => ({ __eq: val })),
   and: vi.fn((...args) => ({ __and: args })),
   desc: vi.fn((col) => ({ __desc: col })),
+  inArray: vi.fn((_col, vals) => ({ __inArray: vals })),
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
@@ -229,6 +230,7 @@ describe('GET /api/v1/conversations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
+    vi.mocked(getAllowedDriveIds).mockReturnValue([]);
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
@@ -277,7 +279,6 @@ describe('GET /api/v1/conversations', () => {
   });
 
   test('returns conversations with correct shape', async () => {
-    const convDate = new Date('2024-01-15T10:00:00.000Z');
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
@@ -299,12 +300,24 @@ describe('GET /api/v1/conversations', () => {
       expected: { id: 'conv-1', object: 'conversation', userId: 'user-1' },
     });
   });
+
+  test('returns 403 when scoped token requests a drive outside its allowed drives', async () => {
+    vi.mocked(getAllowedDriveIds).mockReturnValue(['drive-allowed']);
+    const response = await GET(makeGetRequest('http://localhost/api/v1/conversations?drive_id=drive-other'));
+    assert({
+      given: 'a scoped MCP token with drive_id outside its allowed drives',
+      should: 'return 403',
+      actual: response.status,
+      expected: 403,
+    });
+  });
 });
 
 describe('GET /api/v1/conversations/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
+    vi.mocked(getAllowedDriveIds).mockReturnValue([]);
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(null);
     vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValue([]);
   });
@@ -391,12 +404,28 @@ describe('GET /api/v1/conversations/[id]', () => {
       expected: { status: 200, messages: [] },
     });
   });
+
+  test('returns 403 when scoped token accesses conversation outside its allowed drives', async () => {
+    vi.mocked(getAllowedDriveIds).mockReturnValue(['drive-allowed']);
+    vi.mocked(conversationRepository.getConversation).mockResolvedValue({
+      ...existingConversation,
+      contextId: 'drive-other',
+    });
+    const response = await getById(makeGetRequest(), { params: Promise.resolve({ id: 'conv-1' }) });
+    assert({
+      given: 'a scoped MCP token reading a conversation tied to a different drive',
+      should: 'return 403',
+      actual: response.status,
+      expected: 403,
+    });
+  });
 });
 
 describe('DELETE /api/v1/conversations/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
+    vi.mocked(getAllowedDriveIds).mockReturnValue([]);
     vi.mocked(conversationRepository.getConversation).mockResolvedValue(null);
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
@@ -461,6 +490,21 @@ describe('DELETE /api/v1/conversations/[id]', () => {
       should: 'call db.update at least once (to soft-delete the conversations row)',
       actual: vi.mocked(db.update).mock.calls.length >= 1,
       expected: true,
+    });
+  });
+
+  test('returns 403 when scoped token deletes conversation outside its allowed drives', async () => {
+    vi.mocked(getAllowedDriveIds).mockReturnValue(['drive-allowed']);
+    vi.mocked(conversationRepository.getConversation).mockResolvedValue({
+      ...existingConversation,
+      contextId: 'drive-other',
+    });
+    const response = await DELETE(makeDeleteRequest(), { params: Promise.resolve({ id: 'conv-1' }) });
+    assert({
+      given: 'a scoped MCP token deleting a conversation tied to a different drive',
+      should: 'return 403',
+      actual: response.status,
+      expected: 403,
     });
   });
 });

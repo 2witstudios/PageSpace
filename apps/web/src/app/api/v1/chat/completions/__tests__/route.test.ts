@@ -677,4 +677,36 @@ describe('POST /api/v1/chat/completions', () => {
       expected: { toolCalls: undefined, toolResults: undefined },
     });
   });
+
+  test('tool call persistence: saves tool-only turn when no text but steps have tool calls', async () => {
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 3 }),
+      steps: Promise.resolve([
+        {
+          toolCalls: [{ toolCallId: 'call-only', toolName: 'create_page', input: { title: 'New' } }],
+          toolResults: [{ toolCallId: 'call-only', toolName: 'create_page', output: { id: 'p-2' } }],
+        },
+      ]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        // No text-delta — tool-only turn
+        yield { type: 'finish' };
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    await response.text();
+
+    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
+    assert({
+      given: 'a tool-only turn with no text output but steps containing tool calls',
+      should: 'save the assistant message with tool calls persisted',
+      actual: {
+        saved: assistantSave !== undefined,
+        hasToolCalls: Array.isArray(assistantSave?.[0]?.toolCalls) && (assistantSave![0].toolCalls as unknown[]).length > 0,
+      },
+      expected: { saved: true, hasToolCalls: true },
+    });
+  });
 });
