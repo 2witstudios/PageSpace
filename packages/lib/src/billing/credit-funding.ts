@@ -185,14 +185,18 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     // the balance was already updated for this period. Do not refill again.
     if (inserted.length === 0) return;
 
-    // Read the current balance INSIDE the same transaction so the rollover addition
-    // is atomic: two concurrent renewal events (redelivery race) can't both read the
-    // same prior balance and double-add. The ON CONFLICT guard above serialises them —
-    // only the first insert succeeds and reaches this point.
+    // Read the current balance INSIDE the same transaction, locked FOR UPDATE, so the
+    // rollover addition is atomic. The ON CONFLICT guard serialises redelivery of the
+    // SAME invoice, but two DISTINCT invoices for the same user (e.g. rapid plan change
+    // triggering two consecutive renewals) would both pass the insert check and could
+    // race here: without the lock both reads see the same carried balance and each
+    // writes carried + allowance, the second overwriting the first and losing a grant.
+    // The row lock serialises them so both increments apply.
     const [currentRow] = await tx
       .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents })
       .from(creditBalances)
       .where(eq(creditBalances.userId, user.id))
+      .for('update')
       .limit(1);
     carriedCents = currentRow?.monthlyRemainingCents ?? 0;
     const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, carriedCents);

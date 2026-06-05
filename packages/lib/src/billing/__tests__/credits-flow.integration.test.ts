@@ -226,7 +226,7 @@ const H = vi.hoisted(() => {
       leftJoin(tbl: { __table: TableKey }, on: Pred) { joinKey = tbl.__table; joinPred = on; return api; },
       where(p: Pred) { wherePred = p; return api; },
       limit(n: number) { return Promise.resolve(run(n)); },
-      for(_mode: string) { return Promise.resolve(run()); },
+      for(_mode: string) { return api; }, // return api so .for('update').limit(n) chains
       // Awaitable terminal: `await select(...).from(...).where(...)` (the gate's hold
       // aggregate ends at .where with no .limit/.for) resolves the rows here.
       then(res: (v: Row[]) => void, rej?: (e: unknown) => void) {

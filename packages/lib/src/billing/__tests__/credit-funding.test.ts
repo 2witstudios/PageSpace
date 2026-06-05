@@ -66,8 +66,10 @@ function balanceUpsert(cap: Captured) {
 }
 
 // Build a select chain for reading the current creditBalances row inside the tx.
+// Includes the .for('update') call that locks the row before the rollover write.
 function balanceSelectReturning(monthlyRemainingCents: number) {
-  return { from: () => ({ where: () => ({ limit: () => Promise.resolve([{ monthlyRemainingCents }]) }) }) };
+  const result = Promise.resolve([{ monthlyRemainingCents }]);
+  return { from: () => ({ where: () => ({ for: () => ({ limit: () => result }), limit: () => result }) }) };
 }
 
 // tx for the monthly refill path: ledger insert -> select current balance -> balance upsert.
