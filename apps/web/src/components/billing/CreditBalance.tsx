@@ -13,7 +13,7 @@ import { AlertCircle, Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
-import { formatCreditUnits, formatCreditUnitsSigned } from '@/lib/subscription/credits';
+import { formatCreditUnits, toDisplayCredits } from '@/lib/subscription/credits';
 
 /** Percentage of monthly allowance remaining below which we warn the user. */
 const LOW_BALANCE_THRESHOLD_PCT = 15;
@@ -46,8 +46,10 @@ export function CreditBalance() {
 
   const { spendable, monthly, topup, reserved, debt } = balance;
   const inDebt = spendable < 0;
-  const remainingPct = monthly.allowance > 0 ? (spendable / monthly.allowance) * 100 : 0;
+  const remainingPct = monthly.allowance > 0 ? (monthly.remaining / monthly.allowance) * 100 : 0;
   const isLow = inDebt || remainingPct <= LOW_BALANCE_THRESHOLD_PCT;
+  const monthlyStr = toDisplayCredits(spendable - topup.remaining, monthly.allowance).toFixed(1);
+  const topupUnits = Math.round(toDisplayCredits(topup.remaining, monthly.allowance));
   // Surface in-flight reservations as a quiet signal, not in the headline number.
   const hasInFlight = reserved > 0;
   const renewDate = monthly.periodEnd ? new Date(monthly.periodEnd) : null;
@@ -78,7 +80,7 @@ export function CreditBalance() {
                 variant={isLow ? 'destructive' : 'secondary'}
                 className="text-xs font-medium tabular-nums"
               >
-                {formatCreditUnitsSigned(spendable, monthly.allowance)}
+                {`${monthlyStr}/100${topupUnits > 0 ? ` +${topupUnits}` : ''}`}
               </Badge>
             </button>
           </TooltipTrigger>
