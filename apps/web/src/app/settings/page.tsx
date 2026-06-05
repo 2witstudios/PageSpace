@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 
+const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
+
 interface SettingsSection {
   title: string;
   items: SettingsItem[];
@@ -138,10 +140,10 @@ export default function SettingsPage() {
     ...(isAdmin ? [{
       title: "Administration",
       items: [{
-        title: "Admin",
-        description: "System administration and debugging tools",
+        title: "Admin Console",
+        description: "System administration, monitoring, and debugging tools",
         icon: Shield,
-        href: "/admin",
+        href: ADMIN_APP_URL,
         available: true,
       }],
     }] : []),
@@ -174,9 +176,15 @@ export default function SettingsPage() {
             <div className="rounded-lg border bg-card overflow-hidden">
               {section.items.map((item, index) =>
                 item.available ? (
-                  <Link key={item.href} href={item.href}>
-                    <SettingsRow item={item} index={index} />
-                  </Link>
+                  item.href.startsWith('http') ? (
+                    <a key={item.href} href={item.href} target="_blank" rel="noopener noreferrer">
+                      <SettingsRow item={item} index={index} />
+                    </a>
+                  ) : (
+                    <Link key={item.href} href={item.href}>
+                      <SettingsRow item={item} index={index} />
+                    </Link>
+                  )
                 ) : (
                   <div
                     key={item.href}

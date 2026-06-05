@@ -85,12 +85,6 @@ function usd(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
-/**
- * Label a period bucket from the server's DATE_TRUNC timestamp string directly.
- * Never reparse through `new Date(...)`: that shifts plain YYYY-MM-DD buckets for
- * clients west of UTC and turns a monthly bucket into an arbitrary day. We slice
- * the ISO date parts instead — YYYY-MM for month granularity, YYYY-MM-DD for day.
- */
 function formatPeriodLabel(period: string, granularity: Granularity): string {
   const datePart = String(period).slice(0, 10);
   return granularity === "month" ? datePart.slice(0, 7) : datePart;
@@ -122,9 +116,7 @@ export default function AdminUnitEconomicsPage() {
       setLoading(true);
       const params = new URLSearchParams({ range: r, granularity: g });
       const response = await fetchWithAuth(`/api/admin/unit-economics?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch unit-economics data");
-      }
+      if (!response.ok) throw new Error("Failed to fetch unit-economics data");
       const json = (await response.json()) as UnitEconomicsResponse;
       setData(json);
       setError(null);
@@ -135,9 +127,7 @@ export default function AdminUnitEconomicsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchData(range, granularity);
-  }, [fetchData, range, granularity]);
+  useEffect(() => { fetchData(range, granularity); }, [fetchData, range, granularity]);
 
   const downloadCsv = useCallback(async () => {
     const params = new URLSearchParams({ range, granularity, format: "csv" });
@@ -157,20 +147,10 @@ export default function AdminUnitEconomicsPage() {
   if (loading && !data) {
     return (
       <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <Skeleton className="h-8 w-64" />
-            <Skeleton className="h-4 w-96" />
-          </CardHeader>
-        </Card>
+        <Card><CardHeader><Skeleton className="h-8 w-64" /><Skeleton className="h-4 w-96" /></CardHeader></Card>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[...Array(4)].map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-8 w-32" />
-              </CardHeader>
-            </Card>
+            <Card key={i}><CardHeader><Skeleton className="h-4 w-24" /><Skeleton className="h-8 w-32" /></CardHeader></Card>
           ))}
         </div>
       </div>
@@ -178,21 +158,11 @@ export default function AdminUnitEconomicsPage() {
   }
 
   if (error && !data) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>Error loading unit economics: {error}</AlertDescription>
-      </Alert>
-    );
+    return <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>Error loading unit economics: {error}</AlertDescription></Alert>;
   }
 
   if (!data) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>No data received</AlertDescription>
-      </Alert>
-    );
+    return <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>No data received</AlertDescription></Alert>;
   }
 
   const { summary } = data;
@@ -201,23 +171,15 @@ export default function AdminUnitEconomicsPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            AI Unit Economics
-          </CardTitle>
-          <CardDescription>
-            Real provider cost vs charged credits and gross margin, per period, model, and user.
-            All figures are in USD.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5" />AI Unit Economics</CardTitle>
+          <CardDescription>Real provider cost vs charged credits and gross margin, per period, model, and user. All figures are in USD.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">Range</Label>
               <Select value={range} onValueChange={(v) => setRange(v as Range)}>
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="24h">Last 24 hours</SelectItem>
                   <SelectItem value="7d">Last 7 days</SelectItem>
@@ -229,9 +191,7 @@ export default function AdminUnitEconomicsPage() {
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">Granularity</Label>
               <Select value={granularity} onValueChange={(v) => setGranularity(v as Granularity)}>
-                <SelectTrigger className="w-[120px]">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="day">Daily</SelectItem>
                   <SelectItem value="month">Monthly</SelectItem>
@@ -239,57 +199,23 @@ export default function AdminUnitEconomicsPage() {
               </Select>
             </div>
             <Button variant="outline" size="sm" onClick={downloadCsv} className="gap-2">
-              <Download className="h-4 w-4" />
-              Export CSV
+              <Download className="h-4 w-4" />Export CSV
             </Button>
             {loading && <span className="text-sm text-muted-foreground">Loading…</span>}
           </div>
         </CardContent>
       </Card>
 
-      {/* Summary cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Real cost</CardDescription>
-            <CardTitle className="text-2xl">{usd(summary.realCostCents)}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Charged credits</CardDescription>
-            <CardTitle className="text-2xl">{usd(summary.chargedCents)}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Gross margin</CardDescription>
-            <CardTitle className={`text-2xl ${marginClass(summary.marginPct)}`}>
-              {usd(summary.marginCents)}
-              <span className="ml-2 text-base">({pct(summary.marginPct)})</span>
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Outstanding debt</CardDescription>
-            <CardTitle className="text-2xl">{usd(summary.debtCents)}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Requests</CardDescription>
-            <CardTitle className="text-2xl">{summary.requestCount.toLocaleString()}</CardTitle>
-          </CardHeader>
-        </Card>
+        <Card><CardHeader className="pb-2"><CardDescription>Real cost</CardDescription><CardTitle className="text-2xl">{usd(summary.realCostCents)}</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="pb-2"><CardDescription>Charged credits</CardDescription><CardTitle className="text-2xl">{usd(summary.chargedCents)}</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="pb-2"><CardDescription>Gross margin</CardDescription><CardTitle className={`text-2xl ${marginClass(summary.marginPct)}`}>{usd(summary.marginCents)}<span className="ml-2 text-base">({pct(summary.marginPct)})</span></CardTitle></CardHeader></Card>
+        <Card><CardHeader className="pb-2"><CardDescription>Outstanding debt</CardDescription><CardTitle className="text-2xl">{usd(summary.debtCents)}</CardTitle></CardHeader></Card>
+        <Card><CardHeader className="pb-2"><CardDescription>Requests</CardDescription><CardTitle className="text-2xl">{summary.requestCount.toLocaleString()}</CardTitle></CardHeader></Card>
       </div>
 
-      {/* Margin by model/provider */}
       <Card>
-        <CardHeader>
-          <CardTitle>Margin by model</CardTitle>
-          <CardDescription>Which providers and models earn or lose money.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>Margin by model</CardTitle><CardDescription>Which providers and models earn or lose money.</CardDescription></CardHeader>
         <CardContent>
           {data.byModel.length === 0 ? (
             <p className="text-sm text-muted-foreground">No billed AI usage in this range.</p>
@@ -297,12 +223,9 @@ export default function AdminUnitEconomicsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead className="text-right">Real cost</TableHead>
-                  <TableHead className="text-right">Charged</TableHead>
-                  <TableHead className="text-right">Margin</TableHead>
-                  <TableHead className="text-right">Margin %</TableHead>
+                  <TableHead>Provider</TableHead><TableHead>Model</TableHead>
+                  <TableHead className="text-right">Real cost</TableHead><TableHead className="text-right">Charged</TableHead>
+                  <TableHead className="text-right">Margin</TableHead><TableHead className="text-right">Margin %</TableHead>
                   <TableHead className="text-right">Requests</TableHead>
                 </TableRow>
               </TableHeader>
@@ -313,12 +236,8 @@ export default function AdminUnitEconomicsPage() {
                     <TableCell className="font-mono text-xs">{row.model}</TableCell>
                     <TableCell className="text-right">{usd(row.realCostCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.chargedCents)}</TableCell>
-                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>
-                      {usd(row.marginCents)}
-                    </TableCell>
-                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>
-                      {pct(row.marginPct)}
-                    </TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{usd(row.marginCents)}</TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{pct(row.marginPct)}</TableCell>
                     <TableCell className="text-right">{row.requestCount.toLocaleString()}</TableCell>
                   </TableRow>
                 ))}
@@ -328,12 +247,8 @@ export default function AdminUnitEconomicsPage() {
         </CardContent>
       </Card>
 
-      {/* Top spenders */}
       <Card>
-        <CardHeader>
-          <CardTitle>Top spenders</CardTitle>
-          <CardDescription>Users by charged credits, with our real cost and margin.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>Top spenders</CardTitle><CardDescription>Users by charged credits, with our real cost and margin.</CardDescription></CardHeader>
         <CardContent>
           {data.topSpenders.length === 0 ? (
             <p className="text-sm text-muted-foreground">No billed AI usage in this range.</p>
@@ -341,12 +256,9 @@ export default function AdminUnitEconomicsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead className="text-right">Real cost</TableHead>
-                  <TableHead className="text-right">Charged</TableHead>
-                  <TableHead className="text-right">Margin</TableHead>
-                  <TableHead className="text-right">Margin %</TableHead>
-                  <TableHead className="text-right">Requests</TableHead>
+                  <TableHead>User</TableHead><TableHead className="text-right">Real cost</TableHead>
+                  <TableHead className="text-right">Charged</TableHead><TableHead className="text-right">Margin</TableHead>
+                  <TableHead className="text-right">Margin %</TableHead><TableHead className="text-right">Requests</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -355,12 +267,8 @@ export default function AdminUnitEconomicsPage() {
                     <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
                     <TableCell className="text-right">{usd(row.realCostCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.chargedCents)}</TableCell>
-                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>
-                      {usd(row.marginCents)}
-                    </TableCell>
-                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>
-                      {pct(row.marginPct)}
-                    </TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{usd(row.marginCents)}</TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{pct(row.marginPct)}</TableCell>
                     <TableCell className="text-right">{row.requestCount.toLocaleString()}</TableCell>
                   </TableRow>
                 ))}
@@ -370,30 +278,19 @@ export default function AdminUnitEconomicsPage() {
         </CardContent>
       </Card>
 
-      {/* Outstanding debt */}
       <Card>
-        <CardHeader>
-          <CardTitle>Outstanding debt</CardTitle>
-          <CardDescription>Uncovered AI cost we couldn&apos;t collect, by user.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>Outstanding debt</CardTitle><CardDescription>Uncovered AI cost we couldn&apos;t collect, by user.</CardDescription></CardHeader>
         <CardContent>
           {data.debtByUser.length === 0 ? (
             <p className="text-sm text-muted-foreground">No outstanding debt.</p>
           ) : (
             <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead className="text-right">Debt</TableHead>
-                </TableRow>
-              </TableHeader>
+              <TableHeader><TableRow><TableHead>User</TableHead><TableHead className="text-right">Debt</TableHead></TableRow></TableHeader>
               <TableBody>
                 {data.debtByUser.map((row) => (
                   <TableRow key={row.userId}>
                     <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
-                    <TableCell className="text-right text-red-600 dark:text-red-400">
-                      {usd(row.debtCents)}
-                    </TableCell>
+                    <TableCell className="text-right text-red-600 dark:text-red-400">{usd(row.debtCents)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -402,12 +299,8 @@ export default function AdminUnitEconomicsPage() {
         </CardContent>
       </Card>
 
-      {/* Margin over time */}
       <Card>
-        <CardHeader>
-          <CardTitle>Margin over time</CardTitle>
-          <CardDescription>Real cost vs charged credits per {granularity === "month" ? "month" : "day"}.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>Margin over time</CardTitle><CardDescription>Real cost vs charged credits per {granularity === "month" ? "month" : "day"}.</CardDescription></CardHeader>
         <CardContent>
           {data.byPeriod.length === 0 ? (
             <p className="text-sm text-muted-foreground">No billed AI usage in this range.</p>
@@ -415,28 +308,19 @@ export default function AdminUnitEconomicsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Period</TableHead>
-                  <TableHead className="text-right">Real cost</TableHead>
-                  <TableHead className="text-right">Charged</TableHead>
-                  <TableHead className="text-right">Margin</TableHead>
-                  <TableHead className="text-right">Margin %</TableHead>
-                  <TableHead className="text-right">Requests</TableHead>
+                  <TableHead>Period</TableHead><TableHead className="text-right">Real cost</TableHead>
+                  <TableHead className="text-right">Charged</TableHead><TableHead className="text-right">Margin</TableHead>
+                  <TableHead className="text-right">Margin %</TableHead><TableHead className="text-right">Requests</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.byPeriod.map((row) => (
                   <TableRow key={row.period}>
-                    <TableCell className="font-mono text-xs">
-                      {formatPeriodLabel(row.period, data.granularity)}
-                    </TableCell>
+                    <TableCell className="font-mono text-xs">{formatPeriodLabel(row.period, data.granularity)}</TableCell>
                     <TableCell className="text-right">{usd(row.realCostCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.chargedCents)}</TableCell>
-                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>
-                      {usd(row.marginCents)}
-                    </TableCell>
-                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>
-                      {pct(row.marginPct)}
-                    </TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{usd(row.marginCents)}</TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{pct(row.marginPct)}</TableCell>
                     <TableCell className="text-right">{row.requestCount.toLocaleString()}</TableCell>
                   </TableRow>
                 ))}
