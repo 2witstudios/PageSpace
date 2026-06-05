@@ -51,10 +51,6 @@ jobs:
               NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=1024
               NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
               NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
-              NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
-              SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
-              SENTRY_ORG=${{ secrets.SENTRY_ORG }}
-              SENTRY_PROJECT=${{ secrets.SENTRY_PROJECT }}
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
@@ -119,7 +115,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: ${{ matrix.build_args }}
+          # Secrets cannot be referenced in strategy.matrix — inject them here
+          # for the web service only; empty strings are ignored by buildx.
+          build-args: |
+            ${{ matrix.build_args }}
+            ${{ matrix.service == 'web' && format('NEXT_PUBLIC_SENTRY_DSN={0}', secrets.NEXT_PUBLIC_SENTRY_DSN) || '' }}
+            ${{ matrix.service == 'web' && format('SENTRY_AUTH_TOKEN={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
+            ${{ matrix.service == 'web' && format('SENTRY_ORG={0}', secrets.SENTRY_ORG) || '' }}
+            ${{ matrix.service == 'web' && format('SENTRY_PROJECT={0}', secrets.SENTRY_PROJECT) || '' }}
 
   deploy-fly:
     name: Deploy to Fly.io
