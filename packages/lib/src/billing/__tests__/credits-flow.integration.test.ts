@@ -625,7 +625,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(debtRows.map((r) => r.amountCents).sort((a, b) => Number(a) - Number(b))).toEqual([-600, -300]);
     expect(store.creditHolds).toHaveLength(0); // both holds released at settle
 
-    // Net = 0 − 900 < floor → blocked until paid down or forgiven.
+    // Net = 0 − 900 < floor → blocked until paid down (or renewal nets debt below allowance).
     expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false);
   });
 });
