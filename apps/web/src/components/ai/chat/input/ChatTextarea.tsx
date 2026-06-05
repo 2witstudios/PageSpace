@@ -161,6 +161,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           disabled={disabled}
           className={cn(
             'min-h-[36px] max-h-48 resize-none break-words',
+            'text-base md:text-sm leading-relaxed',
             // Context-aware background:
             // - main: transparent to blend with InputCard, no shadow in light mode for flush look
             // - sidebar: white in light mode for contrast, slight gray lift in dark mode
@@ -184,7 +185,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
             value={displayText}
             mentions={mentions}
             className={cn(
-              'px-3 py-2 text-base md:text-sm',
+              'px-3 py-2 text-base md:text-sm leading-relaxed',
               'text-foreground',
               'min-h-[36px] max-h-48'
             )}
