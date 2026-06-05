@@ -748,7 +748,7 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
   });
 
-  it('does NOT gate-reset a paid user with an expired window (invoice.paid is authoritative)', async () => {
+  it('paid user with expired window and ZERO carry is blocked (no credits, not because of expiry)', async () => {
     seedUser('u3', 'cus_3', 'pro');
     store.creditBalances.push({
       userId: 'u3', monthlyRemainingCents: 0, monthlyAllowanceCents: 1500,
@@ -759,8 +759,30 @@ describe('credits flow — monthly reset', () => {
     });
 
     const gate = await canConsumeAI('u3', 'pro');
-    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' }); // blocked until renewal lands
-    expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // not refilled by the gate
+    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' });
+    expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // gate does NOT refill; invoice.paid does
+  });
+
+  it('paid user with expired window and carry credits CAN spend (rollover — carry is always spendable)', async () => {
+    seedUser('u4', 'cus_4', 'pro');
+    store.creditBalances.push({
+      userId: 'u4', monthlyRemainingCents: 400, monthlyAllowanceCents: 1500,
+      topupRemainingCents: 0, pendingMillicents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      updatedAt: new Date(),
+    });
+
+    const gate = await canConsumeAI('u4', 'pro');
+    expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
+
+    // Spend 150¢ ($1) from carry during the expiry gap — should draw monthly.
+    await consumeCredits({ aiUsageLogId: 'log_gap', userId: 'u4', costDollars: 1 });
+    expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250); // 400 - 150 = 250 carry remaining
+
+    // Renewal fires: adds full allowance to whatever remains.
+    await applyStripeFunding(invoicePaid('in_4', 'cus_4', PERIOD_START, PERIOD_END));
+    expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // 250 + 1500 = 1750
   });
 
   it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice rolls over (adds allowance to remaining)', async () => {
