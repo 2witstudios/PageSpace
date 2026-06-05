@@ -9,6 +9,7 @@ import {
   formatCreditCount,
   formatCreditCountSigned,
   MONTHLY_CREDITS,
+  monthlyCreditsPhrase,
 } from '../credits';
 
 describe('toDisplayCredits', () => {
@@ -179,5 +180,36 @@ describe('MONTHLY_CREDITS (credit unit strings — regression guard)', () => {
 
   it('business tier shows 100 credits', () => {
     expect(MONTHLY_CREDITS.business).toBe('100');
+  });
+});
+
+describe('monthlyCreditsPhrase', () => {
+  it('free tier phrase contains the credit count and the word "credits"', () => {
+    expect(monthlyCreditsPhrase('free')).toContain(MONTHLY_CREDITS.free);
+    expect(monthlyCreditsPhrase('free')).toContain('credits');
+  });
+
+  it('pro tier phrase contains the credit count and the word "credits"', () => {
+    expect(monthlyCreditsPhrase('pro')).toContain(MONTHLY_CREDITS.pro);
+    expect(monthlyCreditsPhrase('pro')).toContain('credits');
+  });
+
+  it('founder tier phrase contains the credit count and the word "credits"', () => {
+    expect(monthlyCreditsPhrase('founder')).toContain(MONTHLY_CREDITS.founder);
+    expect(monthlyCreditsPhrase('founder')).toContain('credits');
+  });
+
+  it('business tier phrase contains the credit count and the word "credits"', () => {
+    expect(monthlyCreditsPhrase('business')).toContain(MONTHLY_CREDITS.business);
+    expect(monthlyCreditsPhrase('business')).toContain('credits');
+  });
+
+  it('all non-free tiers produce a phrase with a multi-digit credit count', () => {
+    for (const tier of ['pro', 'founder', 'business'] as const) {
+      const phrase = monthlyCreditsPhrase(tier);
+      const count = Number(MONTHLY_CREDITS[tier]);
+      expect(count).toBeGreaterThan(1);
+      expect(phrase).toContain(String(count));
+    }
   });
 });

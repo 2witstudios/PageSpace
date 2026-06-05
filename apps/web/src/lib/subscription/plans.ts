@@ -1,7 +1,7 @@
 import { Crown, Zap, Shield, Star } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { stripeConfig } from '../stripe-config';
-import { MONTHLY_CREDIT_CENTS, MONTHLY_CREDITS } from './credits';
+import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase } from './credits';
 
 export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
 
@@ -92,7 +92,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: `${MONTHLY_CREDITS.free} credits/month`, included: true },
+      { name: monthlyCreditsPhrase('free'), included: true },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard AI models', included: true },
       { name: '500MB storage', included: true },
@@ -138,7 +138,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: `${MONTHLY_CREDITS.pro} credits/month`, included: true, description: '3x more than Free' },
+      { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: '2GB storage', included: true, description: '4x more than Free' },
@@ -181,7 +181,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: `${MONTHLY_CREDITS.founder} credits/month`, included: true, description: '10x more than Free' },
+      { name: monthlyCreditsPhrase('founder'), included: true, description: '10x more than Free' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
       { name: '10GB storage', included: true, description: '20x more than Free' },
@@ -219,7 +219,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       },
     },
     features: [
-      { name: `${MONTHLY_CREDITS.business} credits/month`, included: true, description: '20x more than Free' },
+      { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
       { name: '50GB storage', included: true, description: '100x more than Free' },

@@ -119,7 +119,6 @@ export function UsageBreakdownCard() {
             <UsageList
               title="By model"
               rows={data.byModel.map(modelToRow)}
-              formatTokens={formatTokens}
             />
           </div>
         )}
@@ -187,6 +186,7 @@ function UsageList({
             <Progress value={row.sharePct} className="h-2" />
             <div className="text-xs text-muted-foreground tabular-nums">
               {row.sharePct}% · {row.calls} {row.calls === 1 ? 'call' : 'calls'}
+              {/* fmtTokens falls back to the module-level formatTokens when the prop is omitted */}
               {row.tokens > 0 && <> · {(fmtTokens ?? formatTokens)(row.tokens)} tokens</>}
             </div>
           </div>
