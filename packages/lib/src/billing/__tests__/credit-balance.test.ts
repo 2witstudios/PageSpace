@@ -97,7 +97,7 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(320 + 1000);
   });
 
-  it('shows the full allowance for a free tier whose period has lapsed (gate will reset)', async () => {
+  it('shows the full allowance for a free tier whose period has lapsed with zero carry (gate will add allowance)', async () => {
     balanceRows = [
       {
         monthlyRemainingCents: 0,
@@ -107,8 +107,24 @@ describe('getCreditBalance', () => {
       },
     ];
     const b = await getCreditBalance('u1', 'free');
+    // 0 carried + 500 allowance = 500
     expect(b.monthly.remaining).toBe(500);
     expect(b.spendable).toBe(500);
+  });
+
+  it('shows stored remaining + allowance for a free tier with a non-zero carried balance (rollover)', async () => {
+    balanceRows = [
+      {
+        monthlyRemainingCents: 200,
+        monthlyAllowanceCents: 500,
+        topupRemainingCents: 0,
+        monthlyPeriodEnd: past,
+      },
+    ];
+    const b = await getCreditBalance('u1', 'free');
+    // 200 carried + 500 allowance = 700
+    expect(b.monthly.remaining).toBe(700);
+    expect(b.spendable).toBe(700);
   });
 
   it('mirrors gate forgiveness for expired free-period debt', async () => {
@@ -127,7 +143,7 @@ describe('getCreditBalance', () => {
     expect(b.spendable).toBe(500);
   });
 
-  it('zeroes the expired monthly bucket for a paid tier (use-it-or-lose-it)', async () => {
+  it('shows the stored monthly remaining for a paid tier whose period has lapsed (rollover: credits carry forward)', async () => {
     balanceRows = [
       {
         monthlyRemainingCents: 900,
@@ -137,8 +153,10 @@ describe('getCreditBalance', () => {
       },
     ];
     const b = await getCreditBalance('u1', 'pro');
-    expect(b.monthly.remaining).toBe(0);
-    expect(b.spendable).toBe(250); // only top-up survives
+    // Rollover: credits never expire — show the stored remaining; the renewal will add
+    // the new allowance when invoice.paid fires.
+    expect(b.monthly.remaining).toBe(900);
+    expect(b.spendable).toBe(900 + 250);
   });
 
   it('surfaces a NEGATIVE spendable and the debt when the user is in the red', async () => {

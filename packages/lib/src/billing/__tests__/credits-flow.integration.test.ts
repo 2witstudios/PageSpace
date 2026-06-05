@@ -226,7 +226,7 @@ const H = vi.hoisted(() => {
       leftJoin(tbl: { __table: TableKey }, on: Pred) { joinKey = tbl.__table; joinPred = on; return api; },
       where(p: Pred) { wherePred = p; return api; },
       limit(n: number) { return Promise.resolve(run(n)); },
-      for(_mode: string) { return Promise.resolve(run()); },
+      for(_mode: string) { return api; }, // return api so .for('update').limit(n) chains
       // Awaitable terminal: `await select(...).from(...).where(...)` (the gate's hold
       // aggregate ends at .where with no .limit/.for) resolves the rows here.
       then(res: (v: Row[]) => void, rej?: (e: unknown) => void) {
@@ -748,7 +748,7 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
   });
 
-  it('does NOT gate-reset a paid user with an expired window (invoice.paid is authoritative)', async () => {
+  it('paid user with expired window and ZERO carry is blocked (no credits, not because of expiry)', async () => {
     seedUser('u3', 'cus_3', 'pro');
     store.creditBalances.push({
       userId: 'u3', monthlyRemainingCents: 0, monthlyAllowanceCents: 1500,
@@ -759,11 +759,33 @@ describe('credits flow — monthly reset', () => {
     });
 
     const gate = await canConsumeAI('u3', 'pro');
-    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' }); // blocked until renewal lands
-    expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // not refilled by the gate
+    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' });
+    expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // gate does NOT refill; invoice.paid does
   });
 
-  it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice refills it', async () => {
+  it('paid user with expired window and carry credits CAN spend (rollover — carry is always spendable)', async () => {
+    seedUser('u4', 'cus_4', 'pro');
+    store.creditBalances.push({
+      userId: 'u4', monthlyRemainingCents: 400, monthlyAllowanceCents: 1500,
+      topupRemainingCents: 0, pendingMillicents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      updatedAt: new Date(),
+    });
+
+    const gate = await canConsumeAI('u4', 'pro');
+    expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
+
+    // Spend 150¢ ($1) from carry during the expiry gap — should draw monthly.
+    await consumeCredits({ aiUsageLogId: 'log_gap', userId: 'u4', costDollars: 1 });
+    expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250); // 400 - 150 = 250 carry remaining
+
+    // Renewal fires: adds full allowance to whatever remains.
+    await applyStripeFunding(invoicePaid('in_4', 'cus_4', PERIOD_START, PERIOD_END));
+    expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // 250 + 1500 = 1750
+  });
+
+  it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice rolls over (adds allowance to remaining)', async () => {
     seedUser('u2', 'cus_2', 'pro');
 
     // No balance row yet → gate lazy-inits from the tier allowance and allows.
@@ -772,12 +794,12 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
     expect(balanceOf('u2')!.monthlyPeriodEnd).not.toBeNull();
 
-    // Spend some, then invoice.paid refills to the full allowance and sets the invoice period.
+    // Spend some, then invoice.paid ADDS the allowance to the remaining balance (rollover).
     await consumeCredits({ aiUsageLogId: 'log_x', userId: 'u2', costDollars: 1 }); // 150¢
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350);
 
     await applyStripeFunding(invoicePaid('in_2', 'cus_2', PERIOD_START, PERIOD_END));
-    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
+    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // rollover: carry 1350 + new 1500 = 2850
     expect(balanceOf('u2')!.monthlyPeriodEnd!.getTime()).toBe(PERIOD_END * 1000);
   });
 });
@@ -1029,6 +1051,29 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
     expect(usageRow('log_1')!.reconcileStatus).toBe('pending'); // deferred for a later run
     expect(usageRow('log_1')!.reconcileAttempts).toBe(1);
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1000); // balance untouched
+  });
+
+  it('draws from monthly carry even when the billing period has expired (rollover: no use-it-or-lose-it)', async () => {
+    // Balance row with a period that ended yesterday — rollover means carry is still spendable.
+    store.creditBalances.push({
+      userId: 'u1', monthlyRemainingCents: 1000, monthlyAllowanceCents: 1000,
+      topupRemainingCents: 0, pendingMillicents: 0, debtCents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000), // expired yesterday
+      updatedAt: new Date(),
+    });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-exp']); // billed 100¢
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => ({ totalCost: 1.1 }); // authoritative $1.10
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 1, corrected: 1 });
+    // 10¢ real delta × 1.5 markup = 15¢ extra debit; drawn from monthly carry (not blocked by expiry).
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(985);
+    const adj = adjustments('u1');
+    expect(adj).toHaveLength(1);
+    expect(adj[0]).toMatchObject({ aiUsageLogId: 'log_1', appliedCents: -15 });
   });
 });
 

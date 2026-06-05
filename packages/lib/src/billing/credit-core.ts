@@ -9,9 +9,9 @@
  * the result. The purity invariant is enforced by a test in __tests__.
  *
  * Money is always whole cents of customer-facing credit value. Two buckets:
- *   - monthly: the subscription allowance; RESETS each period (use-it-or-lose-it)
+ *   - monthly: the subscription allowance; ACCUMULATES across periods (rollover)
  *   - topup:   one-time purchased packs; NEVER expires
- * Spend always draws monthly first (it's the one that expires).
+ * Spend always draws monthly first.
  */
 
 import type { SubscriptionTier } from '../services/subscription-utils';
@@ -269,26 +269,27 @@ export interface MonthlyRefill {
   monthlyRemainingCents: number;
   monthlyAllowanceCents: number;
   /**
-   * Always 0: a renewal FORGIVES any outstanding overage. The fresh allowance is the
-   * full tier amount, never reduced by last period's debt, and the debt itself is
-   * wiped. Encoding it here keeps "renewal forgives debt" a pure, tested invariant the
-   * funding/gate shells simply persist, rather than a magic 0 buried in each shell.
+   * Always 0: a renewal FORGIVES any outstanding overage. The new allowance is added
+   * on top of the carried balance, debt is wiped. Encoding it here keeps "renewal
+   * forgives debt" a pure, tested invariant the funding/gate shells simply persist,
+   * rather than a magic 0 buried in each shell.
    */
   debtCents: 0;
 }
 
 /**
- * Compute the reset state for a new billing period: remaining is reset to the
- * full tier allowance (unspent prior credits are dropped — use-it-or-lose-it) and
- * any outstanding debt is forgiven (debtCents: 0). Unknown tiers fall back to the
- * free allowance.
+ * Compute the rollover state for a new billing period: the tier allowance is ADDED
+ * to `currentRemainingCents` (credits accumulate across periods — rollover) and any
+ * outstanding debt is forgiven (debtCents: 0). Defaults to 0 for backward compat
+ * when no prior balance exists. Unknown tiers fall back to the free allowance.
  */
 export function computeMonthlyRefill(
   tier: SubscriptionTier,
   allowanceTable: Record<SubscriptionTier, number>,
+  currentRemainingCents: number = 0,
 ): MonthlyRefill {
   const allowance = allowanceTable[tier] ?? allowanceTable.free;
-  return { monthlyRemainingCents: allowance, monthlyAllowanceCents: allowance, debtCents: 0 };
+  return { monthlyRemainingCents: currentRemainingCents + allowance, monthlyAllowanceCents: allowance, debtCents: 0 };
 }
 
 export interface PaymentToDebtResult {
@@ -499,11 +500,11 @@ export interface BalanceDriftResult {
 /**
  * Compare a user's MATERIALIZED spendable buckets against what the ledger implies
  * (grants − usage drawn from buckets + applied reconcile corrections). This is a
- * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: monthly use-it-or-lose-it
- * resets drop unspent allowance with no ledger row, and renewal debt-forgiveness zeroes
- * debt — both legitimately break expected = materialized at period boundaries. So the
- * tolerance is generous and a flag means "look at this account", not "the books are
- * wrong". Pure; the shell supplies the SQL aggregates.
+ * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: with rollover, monthly
+ * credits carry forward with no ledger row at the boundary, and renewal debt-forgiveness
+ * zeroes debt — both legitimately break expected = materialized at period boundaries.
+ * So the tolerance is generous and a flag means "look at this account", not "the books
+ * are wrong". Pure; the shell supplies the SQL aggregates.
  */
 export function computeBalanceDrift(input: LedgerDerivedInput, toleranceCents: number): BalanceDriftResult {
   const expectedSpendableCents =

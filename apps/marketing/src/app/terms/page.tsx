@@ -131,7 +131,7 @@ export default function TermsOfService() {
               <li><strong>Business Plan ($100/month):</strong> {MONTHLY_CREDITS.business}/month in AI credits, standard and Pro models, 50GB storage, priority support</li>
             </ul>
             <p className="mb-4">
-              Each plan&#39;s monthly AI-credit allowance meters AI usage and resets at the start of each billing period; unused monthly credits do not roll over. Additional credits may be purchased at any time as one-time top-ups, which do not expire at the monthly reset. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.
+              Each plan&#39;s monthly AI-credit allowance meters AI usage; unused credits roll over and accumulate — they never expire. Additional credits may be purchased at any time as one-time top-ups, which also never expire. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.
             </p>
 
             <h3 className="text-xl font-semibold mb-3">11.2 Billing and Payment</h3>
@@ -146,7 +146,7 @@ export default function TermsOfService() {
 
             <h3 className="text-xl font-semibold mb-3">11.3 AI Credits and Usage Limits</h3>
             <p className="mb-4">
-              AI usage is metered against your plan&#39;s monthly AI-credit allowance. When your available credits are exhausted, AI features pause until you purchase additional credits or your monthly allowance resets at the start of the next billing period; all non-AI features (documents, tasks, channels, and collaboration) remain available. AI-credit prices and allowances may be adjusted with reasonable notice. Storage and file-size limits also apply per plan, and exceeding them may result in service throttling or temporary suspension until your next billing cycle.
+              AI usage is metered against your plan&#39;s monthly AI-credit allowance. When your available credits are exhausted, AI features pause until you purchase additional credits or your monthly allowance is added at the next billing renewal; all non-AI features (documents, tasks, channels, and collaboration) remain available. AI-credit prices and allowances may be adjusted with reasonable notice. Storage and file-size limits also apply per plan, and exceeding them may result in service throttling or temporary suspension until your next billing cycle.
             </p>
             {/* TRANSITION: remove when AI credits are live for all accounts */}
             {CREDITS_IN_TRANSITION && (

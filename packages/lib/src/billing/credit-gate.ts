@@ -7,11 +7,11 @@
  * (this is how a brand-new free user gets their trial allowance without a Stripe
  * subscription) and then re-evaluated.
  *
- * Free / no-subscription users also get their monthly reset HERE: there's no
- * invoice.paid to drive a refill, so when the period has expired the gate resets
- * the monthly bucket to the tier allowance and rolls the window forward. This is
+ * Free / no-subscription users get their periodic top-up HERE: there's no
+ * invoice.paid to drive a refill, so when the period has expired the gate ADDS the
+ * tier allowance to the carry balance (rollover) and rolls the window forward. This is
  * the imperative shell, so it owns the real clock; the period math stays trivial
- * and the bucket reset itself comes from the pure computeMonthlyRefill.
+ * and the rollover itself comes from the pure computeMonthlyRefill.
  */
 
 import { db } from '@pagespace/db/db';
@@ -133,16 +133,19 @@ export async function canConsumeAI(
   // the same predicate in its WHERE, so a concurrent reset/refill that rolled the
   // window forward between our read and write matches zero rows and we re-read.
   if (tier === 'free' && row && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now)) {
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
+    // Pass the current remaining so unspent credits roll over into the new period
+    // (matching the paid invoice.paid path). The WHERE re-checks the predicate to
+    // handle a concurrent reset that already rolled the window forward.
+    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, row.monthlyRemainingCents ?? 0);
     const newEnd = addOneMonth(now);
     await db
       .update(creditBalances)
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // The renewal-equivalent for free/no-sub users: restore the FULL allowance and
-        // FORGIVE any outstanding overage (refill.debtCents === 0), so last period's
-        // debt never reduces this period — matching the paid invoice.paid refill.
+        // The renewal-equivalent for free/no-sub users: add the allowance to carried
+        // balance and FORGIVE any outstanding overage (refill.debtCents === 0), so
+        // last period's debt never reduces this period — matching the paid refill.
         debtCents: refill.debtCents,
         monthlyPeriodStart: now,
         monthlyPeriodEnd: newEnd,
@@ -223,20 +226,19 @@ export async function canConsumeAI(
     const reserved = Number(holdAgg[0]?.reserved ?? 0);
     const inFlight = Number(holdAgg[0]?.inFlight ?? 0);
 
-    // Use-it-or-lose-it for paid tiers: a paid user's monthly bucket is only spendable
-    // within its window. The gate never resets paid tiers (invoice.paid is authoritative),
-    // so once the window has expired we EXCLUDE the leftover monthly — otherwise a delayed
-    // renewal would let last period's allowance keep funding calls. Only the never-expiring
-    // top-up bucket survives. A NULL period is treated as not-yet-expired; free users were
-    // handled by the reset above and never reach this exclusion.
-    const paidMonthlyExpired =
-      tier !== 'free' && bal !== null && bal.monthlyPeriodEnd !== null && bal.monthlyPeriodEnd < now;
-
+    // Rollover: the monthly bucket is always spendable — credits never expire. A paid user
+    // whose window has lapsed continues to spend from their carried balance; the renewal
+    // invoice.paid will then add the new allowance on top of whatever remains (not reset).
+    // Free users were handled by the addOneMonth reset above and never reach here with an
+    // expired window. The gate still does NOT refill paid tiers — invoice.paid is
+    // authoritative for that — so there is no double-grant risk: the refill reads the
+    // current DB balance inside its own transaction and adds the allowance to whatever is
+    // there, exactly accounting for any spend that happened during the gap.
     const result = evaluateGate({
       billingEnabled: true,
       balance: bal
         ? {
-            monthlyCents: paidMonthlyExpired ? 0 : bal.monthlyRemainingCents,
+            monthlyCents: bal.monthlyRemainingCents,
             topupCents: bal.topupRemainingCents,
             // Outstanding overage drags net spendable down: a user in the red must get
             // back to net-positive (buy credits, or wait for the renewal that forgives

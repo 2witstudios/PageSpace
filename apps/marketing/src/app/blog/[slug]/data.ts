@@ -62,7 +62,7 @@ Here's the part daily limits could never give you: when billing is usage-based, 
 
 ## When you run low
 
-If your balance runs out before the period resets, you're not locked out until tomorrow. Top up.
+If your balance runs out before your next renewal, you're not locked out until tomorrow. Top up.
 
 You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack of $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
 
@@ -119,7 +119,7 @@ The picker is one catalogue spanning OpenAI, Anthropic, Google, xAI, and more, g
 - **Free** plans use a curated allowlist of fast, capable models — GPT-5.3 Chat (the default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family.
 - **Paid** plans unlock the full catalogue, including frontier flagships like Claude Opus, the full GPT-5 family, and Gemini Pro.
 
-Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime or wait for your monthly allowance to reset — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
+Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime — unused credits roll over, so your balance accumulates month to month — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
 
 ## Why we did this
 

@@ -3,13 +3,12 @@
  * dashboard widget and the `GET /api/credits` endpoint.
  *
  * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
- * the monthly reset live in `./credit-gate` (the imperative shell that owns the clock
- * and the row lock). Here we only mirror the gate's semantics for presentation:
- *   - free tier whose monthly window has lapsed is shown its full allowance with
- *     renewal-equivalent debt forgiveness (the gate will reset it on the next call)
- *     rather than stale, pessimistic balances;
- *   - paid tier whose window has lapsed is shown 0 monthly (use-it-or-lose-it — the
- *     gate excludes the expired allowance until the renewal invoice refills it);
+ * the free-tier periodic rollover live in `./credit-gate` (the imperative shell that
+ * owns the clock and the row lock). Here we only mirror the gate's semantics for presentation:
+ *   - free tier whose monthly window has lapsed is shown its stored remaining PLUS the
+ *     tier allowance (the gate will add it on the next call — rollover semantics);
+ *   - paid tier whose window has lapsed is shown its stored remaining (credits carry
+ *     forward — the renewal invoice will add the new allowance via invoice.paid);
  *   - spendable is the FUNDED balance (monthly + top-up remaining) MINUS outstanding
  *     debt, and is deliberately GROSS of in-flight holds. We surface the sum of
  *     still-active holds separately as `reserved` (for an optional "call running"
@@ -136,12 +135,16 @@ export async function getCreditBalance(
   const periodEnd = row.monthlyPeriodEnd;
   const expired = periodEnd === null || periodEnd < now;
 
-  // Mirror the gate's window semantics for display (see file header).
+  // Rollover: credits never expire. The carry balance is always spendable (both
+  // in the gate and here) — the renewal just adds the new allowance on top.
+  // Free tiers without a Stripe subscription get their reset via the gate's addOneMonth
+  // path (which adds the allowance to the carry), so for a free user with a lapsed
+  // period we show stored + upcoming allowance (what the gate will write on next call).
+  // For paid tiers the period window has no bearing on spendability — show stored as-is.
   let monthlyRemaining: number;
   if (tier === 'free' && expired) {
-    monthlyRemaining = allowance; // gate resets free tiers on next call
-  } else if (tier !== 'free' && expired && periodEnd !== null) {
-    monthlyRemaining = 0; // paid use-it-or-lose-it: expired allowance is forfeit
+    // Gate will ADD the allowance to the carry on next call; surface that total.
+    monthlyRemaining = row.monthlyRemainingCents + allowance;
   } else {
     monthlyRemaining = row.monthlyRemainingCents;
   }

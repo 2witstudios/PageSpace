@@ -92,16 +92,13 @@ async function decrementAndSettle(
   // silently drop the charge and hide it from both backfill sweeps.
   if (!bal) return;
 
-  // Use-it-or-lose-it must hold at SETTLE too, not just at the gate. The gate
-  // excludes an expired monthly window from the spend decision (a paid user past
-  // their period can only spend top-up); settlement must match, or allocateSpend —
-  // which always draws monthly first — would silently consume that expired
-  // allowance. So treat an expired monthly bucket as 0 here: the call draws top-up
-  // only and the stale monthly is dropped (it was forfeit anyway; a renewal's
-  // invoice.paid overwrites it). A NULL period is treated as not-yet-expired; free
-  // users are rolled forward by the gate so their window is never expired at settle.
-  const monthlyExpired = bal.monthlyPeriodEnd != null && bal.monthlyPeriodEnd < new Date();
-  const spendableMonthly = monthlyExpired ? 0 : bal.monthlyRemainingCents;
+  // Rollover: the carry balance is always spendable, even after the monthly period
+  // ends. The gate no longer zeroes expired paid monthly, and settle must match:
+  // allocateSpend draws monthly-first, so if we excluded the monthly here a call
+  // approved via carry credits would draw from top-up instead, misattributing the
+  // spend bucket. The renewal invoice.paid adds the new allowance on top of whatever
+  // remains at the time it fires, so spending during the gap is correctly accounted.
+  const spendableMonthly = bal.monthlyRemainingCents;
 
   // Fold the sub-cent charge into the carried remainder, then spend the whole cents.
   const accrual = accruePending(bal.pendingMillicents ?? 0, chargeMc);

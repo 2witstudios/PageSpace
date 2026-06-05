@@ -125,15 +125,15 @@ const faqEntries: SearchEntry[] = [
   {
     title: "How do AI credits work?",
     description:
-      "Every plan includes a monthly AI-credit allowance. Each AI action draws down credits based on the model's real cost; unused monthly credits reset each billing period.",
+      "Every plan includes a monthly AI-credit allowance. Each AI action draws down credits based on the model's real cost; unused credits roll over and accumulate — they never expire.",
     href: "/faq#how-ai-credits-work",
     category: "FAQ",
-    keywords: "ai credits metered usage allowance reset monthly billing",
+    keywords: "ai credits metered usage allowance rollover monthly billing",
   },
   {
     title: "What happens when I run out of AI credits?",
     description:
-      "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits or your monthly allowance resets.",
+      "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits or your next monthly allowance is added at your billing renewal.",
     href: "/faq#hit-daily-ai-limit",
     category: "FAQ",
     keywords: "out of credits ai limit reset buy more top up quota",

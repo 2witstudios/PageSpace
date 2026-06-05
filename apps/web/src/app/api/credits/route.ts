@@ -14,7 +14,7 @@ const isSubscriptionTier = (value: string): value is SubscriptionTier =>
 /**
  * GET /api/credits — the authenticated user's prepaid AI-credit balance.
  *
- * Returns the monthly allowance bucket (resets each period), the never-expiring
+ * Returns the monthly allowance bucket (rolls over each period), the never-expiring
  * top-up bucket, the spendable total (net of in-flight reservations), and the
  * reserved amount. Drives the credit-balance widget and the buy-credits surfaces.
  *

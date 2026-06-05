@@ -4,8 +4,8 @@
  * applyPaymentToDebt) comes from credit-core; this file only does I/O.
  *
  * Two funding paths:
- *   - monthly_refill (invoice.paid): a subscription renewal RESETS the monthly
- *     bucket to the tier allowance and rolls the billing window forward.
+ *   - monthly_refill (invoice.paid): a subscription renewal ADDS the tier allowance
+ *     to the current monthly balance (rollover) and rolls the billing window forward.
  *   - topup (checkout.session.completed, credit_pack): a one-time purchase ADDS to
  *     the never-expiring top-up bucket.
  *
@@ -131,9 +131,9 @@ async function resolveTopupUser(obj: FundingEventObject): Promise<{ id: string }
 }
 
 /**
- * invoice.paid — reset the monthly bucket to the tier allowance and roll the
- * billing window forward, recording a monthly_grant ledger row keyed on the
- * invoice id. The balance write only runs if the grant row was newly inserted.
+ * invoice.paid — add the tier allowance to the current monthly balance (rollover)
+ * and roll the billing window forward, recording a monthly_grant ledger row keyed
+ * on the invoice id. The balance write only runs if the grant row was newly inserted.
  */
 async function applyMonthlyRefill(event: FundingEvent, tierOverride?: SubscriptionTier): Promise<void> {
   const obj = event.data.object;
@@ -158,8 +158,8 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // stored tier (user.tier) may be stale ('free'); the invoice reflects what was actually
   // billed. Fall back to the stored tier only when the caller couldn't resolve one.
   const tier = tierOverride ?? user.tier;
-  const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS);
   const { start, end } = invoicePeriod(obj);
+  let carriedCents = 0;
 
   await db.transaction(async (tx) => {
     const inserted = await tx
@@ -168,7 +168,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         userId: user.id,
         entryType: 'monthly_grant',
         bucket: 'monthly',
-        amountCents: refill.monthlyAllowanceCents,
+        amountCents: (TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free),
         stripeRef,
         // Settled on insert. consumeStatus defaults to 'pending', but the backfill
         // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
@@ -182,8 +182,34 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
       .returning({ id: creditLedger.id });
 
     // Redelivered invoice.paid (or one already refilled): the grant row exists, so
-    // the balance was already reset for this period. Do not refill again.
+    // the balance was already updated for this period. Do not refill again.
     if (inserted.length === 0) return;
+
+    // Ensure the balance row exists before we try to lock it. FOR UPDATE only locks
+    // existing rows: if two distinct invoices race for a brand-new user, both would
+    // read "no row" → carriedCents = 0 → each writes allowance, the second
+    // overwriting the first and losing a grant. The stub insert guarantees a row is
+    // present so the FOR UPDATE below can serialise concurrent refills correctly.
+    await tx
+      .insert(creditBalances)
+      .values({ userId: user.id })
+      .onConflictDoNothing({ target: creditBalances.userId });
+
+    // Read the current balance INSIDE the same transaction, locked FOR UPDATE, so the
+    // rollover addition is atomic. The ON CONFLICT guard serialises redelivery of the
+    // SAME invoice, but two DISTINCT invoices for the same user (e.g. rapid plan change
+    // triggering two consecutive renewals) would both pass the insert check and could
+    // race here: without the lock both reads see the same carried balance and each
+    // writes carried + allowance, the second overwriting the first and losing a grant.
+    // The row lock serialises them so both increments apply.
+    const [currentRow] = await tx
+      .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents })
+      .from(creditBalances)
+      .where(eq(creditBalances.userId, user.id))
+      .for('update')
+      .limit(1);
+    carriedCents = currentRow?.monthlyRemainingCents ?? 0;
+    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, carriedCents);
 
     await tx
       .insert(creditBalances)
@@ -191,8 +217,8 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         userId: user.id,
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // Renewal restores the FULL allowance and FORGIVES outstanding overage
-        // (refill.debtCents === 0): last period's debt never reduces this period.
+        // Renewal ADDS the allowance to carried balance and FORGIVES outstanding
+        // overage (refill.debtCents === 0): last period's debt never reduces this period.
         debtCents: refill.debtCents,
         monthlyPeriodStart: start,
         monthlyPeriodEnd: end,
@@ -212,7 +238,8 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   loggers.api.info('credit funding: monthly refill applied', {
     userId: user.id,
     tier,
-    allowanceCents: refill.monthlyAllowanceCents,
+    allowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free,
+    carried: carriedCents,
     stripeRef,
   });
 }

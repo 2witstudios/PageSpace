@@ -79,13 +79,13 @@ const faqs: FAQItem[] = [
   {
     id: "how-ai-credits-work",
     question: "How do AI credits work?",
-    answer: `Every plan includes a monthly allowance of AI credits — ${MONTHLY_CREDITS.free}/month on Free, more on paid plans. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Unused monthly credits don't roll over; your allowance resets at the start of each billing period.`,
+    answer: `Every plan includes a monthly allowance of AI credits — ${MONTHLY_CREDITS.free}/month on Free, more on paid plans. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Unused credits roll over and accumulate — they never expire.`,
     category: "Pricing and plans",
   },
   {
     id: "hit-daily-ai-limit",
     question: "What happens when I run out of AI credits?",
-    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you either buy more credits (top-up packs come in ${creditPacksPhrase()}) or your monthly allowance resets at the start of the next billing period.`,
+    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}) or your next monthly allowance is added at your billing renewal.`,
     category: "Pricing and plans",
   },
   // TRANSITION: remove when AI credits are live for all accounts

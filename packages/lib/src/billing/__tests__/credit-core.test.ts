@@ -367,15 +367,36 @@ describe('holdExpiresAt', () => {
 });
 
 describe('computeMonthlyRefill', () => {
-  it('resets remaining to the full tier allowance and forgives debt (debtCents: 0)', () => {
+  it('with no prior balance (default 0) returns the full tier allowance — backward compat', () => {
     expect(computeMonthlyRefill('pro', ALLOWANCE)).toEqual({
       monthlyRemainingCents: 1500,
       monthlyAllowanceCents: 1500,
       debtCents: 0,
     });
     expect(computeMonthlyRefill('business', ALLOWANCE).monthlyAllowanceCents).toBe(10000);
-    // The renewal always wipes debt — last period's overage never carries forward.
     expect(computeMonthlyRefill('business', ALLOWANCE).debtCents).toBe(0);
+  });
+
+  it('with explicit 0 remaining returns just the tier allowance — backward compat explicit 0', () => {
+    expect(computeMonthlyRefill('pro', ALLOWANCE, 0)).toEqual({
+      monthlyRemainingCents: 1500,
+      monthlyAllowanceCents: 1500,
+      debtCents: 0,
+    });
+  });
+
+  it('accumulates: adds the tier allowance to the current remaining balance (rollover)', () => {
+    // 600 carried forward + 1500 pro allowance = 2100
+    expect(computeMonthlyRefill('pro', ALLOWANCE, 600)).toEqual({
+      monthlyRemainingCents: 2100,
+      monthlyAllowanceCents: 1500,
+      debtCents: 0,
+    });
+  });
+
+  it('debt is always 0 regardless of currentRemainingCents', () => {
+    expect(computeMonthlyRefill('pro', ALLOWANCE, 600).debtCents).toBe(0);
+    expect(computeMonthlyRefill('pro', ALLOWANCE, 9999).debtCents).toBe(0);
   });
 
   it('falls back to the free allowance for an unknown tier (debt still forgiven)', () => {
@@ -560,8 +581,8 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
         // (debt shrinks, top-up grows, dollar-for-dollar — nothing vanishes).
         expect(debt + topup).toBe(before + payment);
       } else {
-        // REFILL (renewal): full allowance restored, debt forgiven.
-        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW);
+        // REFILL (renewal): allowance ADDED to carried balance, debt forgiven.
+        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW, monthly);
         monthly = refill.monthlyRemainingCents;
         debt = refill.debtCents;
       }

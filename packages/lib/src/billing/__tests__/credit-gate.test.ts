@@ -337,6 +337,22 @@ describe('canConsumeAI', () => {
     expect(r.reason).toBe('ok');
   });
 
+  it('accumulates: carries the remaining balance into the new period when resetting (free, gate-driven rollover)', async () => {
+    // 200 remaining when the period expired → 200 carried + 500 allowance = 700.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 700, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown> } = {};
+    mockDb.update.mockReturnValue(updateCapturing(sink));
+    mockTransaction({ monthlyRemainingCents: 700, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 700, monthlyAllowanceCents: 500 });
+    expect(r.allowed).toBe(true);
+  });
+
   it('grants the monthly allowance and stamps a window when a top-up created the row without a period', async () => {
     mockDb.select
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
@@ -361,18 +377,19 @@ describe('canConsumeAI', () => {
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
   });
 
-  it('does NOT count a paid user\'s leftover monthly as spendable once the window has expired', async () => {
+  it('counts a paid user\'s carried monthly balance as spendable even after the window expires (rollover)', async () => {
     mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
     mockTransaction({ monthlyRemainingCents: 300, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'pro');
     expect(mockDb.update).not.toHaveBeenCalled();
-    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
   });
 
   it('still counts a paid user\'s top-up bucket when the monthly window has expired', async () => {
-    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 300, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }]));
-    mockTransaction({ monthlyRemainingCents: 300, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 1000, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'pro');
     expect(mockDb.update).not.toHaveBeenCalled();
