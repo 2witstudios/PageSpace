@@ -203,13 +203,13 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     // writes carried + allowance, the second overwriting the first and losing a grant.
     // The row lock serialises them so both increments apply.
     const [currentRow] = await tx
-      .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents })
+      .select({ monthlyRemainingCents: creditBalances.monthlyRemainingCents, debtCents: creditBalances.debtCents })
       .from(creditBalances)
       .where(eq(creditBalances.userId, user.id))
       .for('update')
       .limit(1);
     carriedCents = currentRow?.monthlyRemainingCents ?? 0;
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, carriedCents);
+    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, carriedCents, currentRow?.debtCents ?? 0);
 
     await tx
       .insert(creditBalances)
@@ -217,8 +217,8 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         userId: user.id,
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // Renewal ADDS the allowance to carried balance and FORGIVES outstanding
-        // overage (refill.debtCents === 0): last period's debt never reduces this period.
+        // Renewal nets outstanding debt against the carried balance before adding the
+        // allowance (refill.debtCents === 0 — debt absorbed, not forwarded).
         debtCents: refill.debtCents,
         monthlyPeriodStart: start,
         monthlyPeriodEnd: end,

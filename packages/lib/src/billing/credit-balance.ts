@@ -150,7 +150,7 @@ export async function getCreditBalance(
   }
 
   const topupRemaining = row.topupRemainingCents;
-  const debt = tier === 'free' && expired ? 0 : row.debtCents ?? 0;
+  const debt = row.debtCents ?? 0;
   // GROSS of in-flight holds (master semantics: `reserved` is surfaced separately, not
   // netted out, so the headline doesn't dip-then-pop across a call). Clamped at 0 ONLY
   // when there's no debt — outstanding overage pulls spendable negative so the widget

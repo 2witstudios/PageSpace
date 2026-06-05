@@ -265,27 +265,28 @@ export interface MonthlyRefill {
   monthlyRemainingCents: number;
   monthlyAllowanceCents: number;
   /**
-   * Always 0: a renewal FORGIVES any outstanding overage. The new allowance is added
-   * on top of the carried balance, debt is wiped. Encoding it here keeps "renewal
-   * forgives debt" a pure, tested invariant the funding/gate shells simply persist,
-   * rather than a magic 0 buried in each shell.
+   * Always 0: debt is netted against the carried balance before the new allowance is
+   * added (see `computeMonthlyRefill`), so it is fully absorbed — never forwarded.
    */
   debtCents: 0;
 }
 
 /**
- * Compute the rollover state for a new billing period: the tier allowance is ADDED
- * to `currentRemainingCents` (credits accumulate across periods — rollover) and any
- * outstanding debt is forgiven (debtCents: 0). Defaults to 0 for backward compat
- * when no prior balance exists. Unknown tiers fall back to the free allowance.
+ * Compute the rollover state for a new billing period: outstanding debt is netted
+ * against the carried balance, then the tier allowance is added. Credits accumulate
+ * across periods (rollover); debt is absorbed into `monthlyRemainingCents`, not
+ * forwarded as a field. Defaults to 0 for backward compat when no prior balance or
+ * debt exists. Unknown tiers fall back to the free allowance.
  */
 export function computeMonthlyRefill(
   tier: SubscriptionTier,
   allowanceTable: Record<SubscriptionTier, number>,
   currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
 ): MonthlyRefill {
   const allowance = allowanceTable[tier] ?? allowanceTable.free;
-  return { monthlyRemainingCents: currentRemainingCents + allowance, monthlyAllowanceCents: allowance, debtCents: 0 };
+  const netCarried = currentRemainingCents - Math.max(0, currentDebtCents);
+  return { monthlyRemainingCents: netCarried + allowance, monthlyAllowanceCents: allowance, debtCents: 0 };
 }
 
 export interface PaymentToDebtResult {

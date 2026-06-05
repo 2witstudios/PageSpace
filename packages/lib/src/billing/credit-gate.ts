@@ -135,16 +135,15 @@ export async function canConsumeAI(
     // Pass the current remaining so unspent credits roll over into the new period
     // (matching the paid invoice.paid path). The WHERE re-checks the predicate to
     // handle a concurrent reset that already rolled the window forward.
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, row.monthlyRemainingCents ?? 0);
+    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, row.monthlyRemainingCents ?? 0, row.debtCents ?? 0);
     const newEnd = addOneMonth(now);
     await db
       .update(creditBalances)
       .set({
         monthlyRemainingCents: refill.monthlyRemainingCents,
         monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // The renewal-equivalent for free/no-sub users: add the allowance to carried
-        // balance and FORGIVE any outstanding overage (refill.debtCents === 0), so
-        // last period's debt never reduces this period — matching the paid refill.
+        // The renewal-equivalent for free/no-sub users: debt is netted against the
+        // carried balance before the allowance is added (refill.debtCents === 0).
         debtCents: refill.debtCents,
         monthlyPeriodStart: now,
         monthlyPeriodEnd: newEnd,
