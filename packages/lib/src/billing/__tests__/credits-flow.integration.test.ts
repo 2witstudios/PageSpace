@@ -1052,6 +1052,29 @@ describe('credits flow — async cost reconcile (/generation drift correction)',
     expect(usageRow('log_1')!.reconcileAttempts).toBe(1);
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1000); // balance untouched
   });
+
+  it('draws from monthly carry even when the billing period has expired (rollover: no use-it-or-lose-it)', async () => {
+    // Balance row with a period that ended yesterday — rollover means carry is still spendable.
+    store.creditBalances.push({
+      userId: 'u1', monthlyRemainingCents: 1000, monthlyAllowanceCents: 1000,
+      topupRemainingCents: 0, pendingMillicents: 0, debtCents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000), // expired yesterday
+      updatedAt: new Date(),
+    });
+    seedPendingUsage('log_1', 'u1', 1.0, ['gen-exp']); // billed 100¢
+    seedUsageLedger('log_1', 'u1');
+    const fetcher: GenerationFetcher = async () => ({ totalCost: 1.1 }); // authoritative $1.10
+
+    const r = await reconcileOpenRouterCosts({ fetcher });
+
+    expect(r).toMatchObject({ fetched: 1, corrected: 1 });
+    // 10¢ real delta × 1.5 markup = 15¢ extra debit; drawn from monthly carry (not blocked by expiry).
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(985);
+    const adj = adjustments('u1');
+    expect(adj).toHaveLength(1);
+    expect(adj[0]).toMatchObject({ aiUsageLogId: 'log_1', appliedCents: -15 });
+  });
 });
 
 describe('credits flow — per-user/day exposure cap (fund → consume past the cap → denied)', () => {

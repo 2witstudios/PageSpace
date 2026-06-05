@@ -62,7 +62,7 @@ Here's the part daily limits could never give you: when billing is usage-based, 
 
 ## When you run low
 
-If your balance runs out before the period resets, you're not locked out until tomorrow. Top up.
+If your balance runs out before your next renewal, you're not locked out until tomorrow. Top up.
 
 You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack of $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
 
