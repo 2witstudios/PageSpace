@@ -33,6 +33,9 @@ import { chatMessageRepository } from '@/lib/repositories/chat-message-repositor
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
 import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
+import { validateConversationAccess } from '@/lib/ai/openai-api/v1-conversations';
+import { extractToolCallsFromSteps } from '@/lib/ai/openai-api/extract-tool-calls-from-steps';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -98,6 +101,17 @@ export async function POST(request: Request): Promise<Response> {
   if (!canEdit) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+
+  // 5b. Conversation ownership check — if a conversation_id is provided the caller
+  // must own the conversations row. This prevents one user from appending messages
+  // into another user's thread.
+  if (incomingConversationId) {
+    const conv = await conversationRepository.getConversation(incomingConversationId);
+    const convAccess = validateConversationAccess(conv, authResult.userId);
+    if (!convAccess.ok) {
+      return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
+    }
   }
 
   // 6. Create AI provider from agent page config
@@ -229,14 +243,17 @@ export async function POST(request: Request): Promise<Response> {
     settled = true;
 
     const assistantId = createId();
-    if (text) {
+    if (text !== undefined) {
+      const extracted = extractToolCallsFromSteps(steps ?? []);
       await saveMessageToDatabase({
         messageId: assistantId,
         pageId,
         conversationId,
         userId: null,
         role: 'assistant',
-        content: text,
+        content: text || '',
+        toolCalls: extracted.toolCalls.length > 0 ? extracted.toolCalls : undefined,
+        toolResults: extracted.toolResults.length > 0 ? extracted.toolResults : undefined,
       }).catch((err: unknown) => {
         loggers.ai.error('OpenAI API: failed to save assistant message', err as Error);
       });

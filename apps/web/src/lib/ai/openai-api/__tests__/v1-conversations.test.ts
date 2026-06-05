@@ -1,0 +1,408 @@
+import { describe, test } from 'vitest';
+import { assert } from './riteway';
+import {
+  buildCreateConversationPayload,
+  buildConversationListQuery,
+  validateConversationAccess,
+  serializeMessageToOpenAI,
+  type ConversationRow,
+  type MessageRow,
+} from '../v1-conversations';
+
+const FIXED_DATE = new Date('2024-01-15T10:00:00.000Z');
+const FIXED_UNIX = Math.floor(FIXED_DATE.getTime() / 1000);
+
+// ─── buildCreateConversationPayload ───────────────────────────────────────────
+
+describe('buildCreateConversationPayload', () => {
+  test('null body returns 400', () => {
+    const result = buildCreateConversationPayload(null, 'user-1', [], 'id-1');
+    assert({
+      given: 'null as the body',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('non-object body returns 400', () => {
+    const result = buildCreateConversationPayload('a string', 'user-1', [], 'id-1');
+    assert({
+      given: 'a primitive string as the body',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('empty body creates conversation with defaults', () => {
+    const result = buildCreateConversationPayload({}, 'user-1', [], 'cuid-123');
+    assert({
+      given: 'an empty body object',
+      should: 'return ok:true with id, userId, null title, client type, null contextId',
+      actual: result.ok ? { id: result.data.id, userId: result.data.userId, title: result.data.title, type: result.data.type, contextId: result.data.contextId } : 'error',
+      expected: { id: 'cuid-123', userId: 'user-1', title: null, type: 'client', contextId: null },
+    });
+  });
+
+  test('body with title trims and preserves it', () => {
+    const result = buildCreateConversationPayload({ title: '  My Chat  ' }, 'user-1', [], 'id-1');
+    assert({
+      given: 'a body with a padded title',
+      should: 'return ok:true with the title trimmed',
+      actual: result.ok ? result.data.title : 'error',
+      expected: 'My Chat',
+    });
+  });
+
+  test('title trimming to empty string becomes null', () => {
+    const result = buildCreateConversationPayload({ title: '   ' }, 'user-1', [], 'id-1');
+    assert({
+      given: 'a title containing only whitespace',
+      should: 'set title to null',
+      actual: result.ok ? result.data.title : 'error',
+      expected: null,
+    });
+  });
+
+  test('title longer than 255 chars is truncated', () => {
+    const longTitle = 'a'.repeat(300);
+    const result = buildCreateConversationPayload({ title: longTitle }, 'user-1', [], 'id-1');
+    assert({
+      given: 'a title with 300 characters',
+      should: 'truncate to 255 characters',
+      actual: result.ok ? result.data.title?.length : 'error',
+      expected: 255,
+    });
+  });
+
+  test('non-string title returns 400', () => {
+    const result = buildCreateConversationPayload({ title: 42 }, 'user-1', [], 'id-1');
+    assert({
+      given: 'a numeric title',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('drive_id sets contextId', () => {
+    const result = buildCreateConversationPayload({ drive_id: 'drive-abc' }, 'user-1', [], 'id-1');
+    assert({
+      given: 'a body with drive_id and an unscoped token (empty allowedDriveIds)',
+      should: 'return ok:true with contextId set to the drive_id',
+      actual: result.ok ? result.data.contextId : 'error',
+      expected: 'drive-abc',
+    });
+  });
+
+  test('drive_id in allowedDriveIds is accepted', () => {
+    const result = buildCreateConversationPayload({ drive_id: 'drive-abc' }, 'user-1', ['drive-abc', 'drive-xyz'], 'id-1');
+    assert({
+      given: 'a drive_id that appears in the token\'s allowedDriveIds',
+      should: 'return ok:true',
+      actual: result.ok,
+      expected: true,
+    });
+  });
+
+  test('drive_id not in allowedDriveIds returns 403', () => {
+    const result = buildCreateConversationPayload({ drive_id: 'drive-other' }, 'user-1', ['drive-abc'], 'id-1');
+    assert({
+      given: 'a drive_id that is not in the scoped token\'s allowedDriveIds',
+      should: 'return ok:false with status 403',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 403 },
+    });
+  });
+
+  test('empty allowedDriveIds (unscoped token) allows any drive_id', () => {
+    const result = buildCreateConversationPayload({ drive_id: 'any-drive' }, 'user-1', [], 'id-1');
+    assert({
+      given: 'an unscoped token (empty allowedDriveIds array) with any drive_id',
+      should: 'return ok:true — unscoped tokens have access to all drives',
+      actual: result.ok,
+      expected: true,
+    });
+  });
+
+  test('empty string drive_id returns 400', () => {
+    const result = buildCreateConversationPayload({ drive_id: '' }, 'user-1', [], 'id-1');
+    assert({
+      given: 'an empty string drive_id',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('non-string drive_id returns 400', () => {
+    const result = buildCreateConversationPayload({ drive_id: 123 }, 'user-1', [], 'id-1');
+    assert({
+      given: 'a numeric drive_id',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+});
+
+// ─── buildConversationListQuery ───────────────────────────────────────────────
+
+describe('buildConversationListQuery', () => {
+  test('no params returns defaults', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams());
+    assert({
+      given: 'no query params',
+      should: 'return ok:true with limit:20, offset:0, driveId:undefined',
+      actual: result.ok ? result.data : 'error',
+      expected: { userId: 'user-1', limit: 20, offset: 0, driveId: undefined },
+    });
+  });
+
+  test('custom limit and offset are parsed', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('limit=10&offset=5'));
+    assert({
+      given: 'limit=10&offset=5',
+      should: 'return ok:true with limit:10 and offset:5',
+      actual: result.ok ? { limit: result.data.limit, offset: result.data.offset } : 'error',
+      expected: { limit: 10, offset: 5 },
+    });
+  });
+
+  test('limit over 100 returns 400', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('limit=101'));
+    assert({
+      given: 'limit=101',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('limit 0 returns 400', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('limit=0'));
+    assert({
+      given: 'limit=0',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('negative offset returns 400', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('offset=-1'));
+    assert({
+      given: 'offset=-1',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('non-numeric limit returns 400', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('limit=abc'));
+    assert({
+      given: 'limit=abc',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('drive_id param is forwarded as driveId', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('drive_id=drive-xyz'));
+    assert({
+      given: 'drive_id=drive-xyz',
+      should: 'return ok:true with driveId set',
+      actual: result.ok ? result.data.driveId : 'error',
+      expected: 'drive-xyz',
+    });
+  });
+
+  test('missing drive_id param yields undefined driveId', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('limit=5'));
+    assert({
+      given: 'no drive_id param',
+      should: 'return driveId as undefined',
+      actual: result.ok ? result.data.driveId : 'error',
+      expected: undefined,
+    });
+  });
+
+  test('limit exactly 100 is accepted', () => {
+    const result = buildConversationListQuery('user-1', new URLSearchParams('limit=100'));
+    assert({
+      given: 'limit=100',
+      should: 'return ok:true (boundary value)',
+      actual: result.ok,
+      expected: true,
+    });
+  });
+});
+
+// ─── validateConversationAccess ───────────────────────────────────────────────
+
+describe('validateConversationAccess', () => {
+  const makeConversation = (overrides: Partial<ConversationRow> = {}): ConversationRow => ({
+    id: 'conv-1',
+    userId: 'user-1',
+    isActive: true,
+    title: null,
+    contextId: null,
+    createdAt: FIXED_DATE,
+    updatedAt: FIXED_DATE,
+    ...overrides,
+  });
+
+  test('null conversation returns 404', () => {
+    const result = validateConversationAccess(null, 'user-1');
+    assert({
+      given: 'null conversation',
+      should: 'return ok:false with status 404',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 404 },
+    });
+  });
+
+  test('inactive conversation returns 404', () => {
+    const result = validateConversationAccess(makeConversation({ isActive: false }), 'user-1');
+    assert({
+      given: 'an inactive conversation (isActive:false)',
+      should: 'return ok:false with status 404',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 404 },
+    });
+  });
+
+  test('conversation belonging to a different user returns 403', () => {
+    const result = validateConversationAccess(makeConversation({ userId: 'other-user' }), 'user-1');
+    assert({
+      given: 'a conversation owned by a different user',
+      should: 'return ok:false with status 403',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 403 },
+    });
+  });
+
+  test('conversation owned by the requesting user returns ok:true', () => {
+    const result = validateConversationAccess(makeConversation({ userId: 'user-1' }), 'user-1');
+    assert({
+      given: 'an active conversation owned by the requesting user',
+      should: 'return ok:true',
+      actual: result.ok,
+      expected: true,
+    });
+  });
+});
+
+// ─── serializeMessageToOpenAI ─────────────────────────────────────────────────
+
+describe('serializeMessageToOpenAI', () => {
+  const makeRow = (overrides: Partial<MessageRow> = {}): MessageRow => ({
+    id: 'msg-1',
+    role: 'user',
+    content: 'Hello',
+    toolCalls: null,
+    toolResults: null,
+    createdAt: FIXED_DATE,
+    isActive: true,
+    ...overrides,
+  });
+
+  test('plain text user message serializes to OpenAI format', () => {
+    const result = serializeMessageToOpenAI(makeRow({ content: 'Hello' }));
+    assert({
+      given: 'a plain text user message',
+      should: 'return OpenAI message with role, content, and unix created_at',
+      actual: { role: result.role, content: result.content, created_at: result.created_at },
+      expected: { role: 'user', content: 'Hello', created_at: FIXED_UNIX },
+    });
+  });
+
+  test('structured content message extracts plain text', () => {
+    const structured = JSON.stringify({
+      textParts: ['Structured text'],
+      partsOrder: [{ index: 0, type: 'text' }],
+      originalContent: 'Structured text',
+    });
+    const result = serializeMessageToOpenAI(makeRow({ content: structured }));
+    assert({
+      given: 'a message with structured JSON content',
+      should: 'extract the text from originalContent',
+      actual: result.content,
+      expected: 'Structured text',
+    });
+  });
+
+  test('assistant message with tool calls includes tool_calls array', () => {
+    const toolCallsRaw = JSON.stringify([
+      { toolCallId: 'call-1', toolName: 'read_page', input: { pageId: 'p-1' }, state: 'output-available' },
+    ]);
+    const result = serializeMessageToOpenAI(makeRow({ role: 'assistant', content: '', toolCalls: toolCallsRaw }));
+    assert({
+      given: 'an assistant message with serialized tool calls',
+      should: 'include tool_calls in the output with the OpenAI function format',
+      actual: result.tool_calls?.[0],
+      expected: {
+        id: 'call-1',
+        type: 'function',
+        function: { name: 'read_page', arguments: '{"pageId":"p-1"}' },
+      },
+    });
+  });
+
+  test('message without tool calls has no tool_calls field', () => {
+    const result = serializeMessageToOpenAI(makeRow({ toolCalls: null }));
+    assert({
+      given: 'a message with no tool calls',
+      should: 'not include a tool_calls key in the output',
+      actual: 'tool_calls' in result,
+      expected: false,
+    });
+  });
+
+  test('tool calls stored as array (not JSON string) are handled', () => {
+    const toolCallsArray = [
+      { toolCallId: 'call-2', toolName: 'create_page', input: { title: 'T' }, state: 'output-available' },
+    ];
+    const result = serializeMessageToOpenAI(makeRow({ role: 'assistant', content: '', toolCalls: toolCallsArray }));
+    assert({
+      given: 'tool calls stored as a JS array (not a JSON string)',
+      should: 'still produce the correct tool_calls output',
+      actual: result.tool_calls?.[0]?.function.name,
+      expected: 'create_page',
+    });
+  });
+
+  test('empty content becomes null', () => {
+    const result = serializeMessageToOpenAI(makeRow({ content: '' }));
+    assert({
+      given: 'an empty content string',
+      should: 'return content:null',
+      actual: result.content,
+      expected: null,
+    });
+  });
+
+  test('createdAt is converted to unix timestamp in seconds', () => {
+    const date = new Date('2024-06-01T12:00:00.000Z');
+    const result = serializeMessageToOpenAI(makeRow({ createdAt: date }));
+    assert({
+      given: 'a specific createdAt date',
+      should: 'convert to seconds since epoch',
+      actual: result.created_at,
+      expected: Math.floor(date.getTime() / 1000),
+    });
+  });
+
+  test('message id is preserved', () => {
+    const result = serializeMessageToOpenAI(makeRow({ id: 'specific-msg-id' }));
+    assert({
+      given: 'a message with a specific id',
+      should: 'preserve the id in the output',
+      actual: result.id,
+      expected: 'specific-msg-id',
+    });
+  });
+});
