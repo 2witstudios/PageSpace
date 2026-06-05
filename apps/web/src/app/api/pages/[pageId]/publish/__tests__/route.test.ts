@@ -290,9 +290,12 @@ describe('GET /api/pages/[pageId]/publish', () => {
     }
   });
 
-  it('returns { published: true, url, available } when a row exists', async () => {
-    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome' });
+  it('returns { published: true, url, available, isStale: false } when page is up to date', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:01Z'); // published AFTER last edit
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
     findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T09:55:00Z') }); // edited before publish
 
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
@@ -300,10 +303,51 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(json).toEqual({
       published: true,
       available: true,
+      isStale: false,
       url: 'https://acme.pagespace.site/welcome',
       subdomain: 'acme',
       path: 'welcome',
     });
+  });
+
+  it('returns isStale: true when the page was edited after its last publish', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T11:00:00Z') }); // edited AFTER publish
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(true);
+  });
+
+  it('falls back to publishedAt when updatedAt is null (legacy row)', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt: null });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T11:00:00Z') }); // edited after first publish
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(true);
+  });
+
+  it('returns isStale: false when the live page has no updatedAt', async () => {
+    findFirstPublished.mockResolvedValue({
+      driveId: 'drive-1', path: 'welcome',
+      publishedAt: new Date('2024-01-01T10:00:00Z'),
+      updatedAt: new Date('2024-01-01T10:00:00Z'),
+    });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: null });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(false);
   });
 });
 

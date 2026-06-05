@@ -15,6 +15,7 @@ interface PublishState {
   // When false (e.g. a deployment without PUBLISH_BUCKET) the control is hidden
   // rather than offering a Publish button that only ever 503s.
   available: boolean;
+  isStale: boolean;
 }
 
 const readError = async (res: Response): Promise<string> => {
@@ -27,7 +28,7 @@ const readError = async (res: Response): Promise<string> => {
 };
 
 const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
-  const [state, setState] = useState<PublishState>({ published: false, url: null, available: false });
+  const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false });
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
 
@@ -38,19 +39,20 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
         if (!res.ok) {
-          if (!cancelled) setState({ published: false, url: null, available: false });
+          if (!cancelled) setState({ published: false, url: null, available: false, isStale: false });
           return;
         }
-        const data = (await res.json()) as { published: boolean; url?: string; available?: boolean };
+        const data = (await res.json()) as { published: boolean; url?: string; available?: boolean; isStale?: boolean };
         if (!cancelled) {
           setState({
             published: data.published,
             url: data.published ? data.url ?? null : null,
             available: data.available ?? false,
+            isStale: data.isStale ?? false,
           });
         }
       } catch {
-        if (!cancelled) setState({ published: false, url: null, available: false });
+        if (!cancelled) setState({ published: false, url: null, available: false, isStale: false });
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -69,7 +71,7 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
         return;
       }
       const data = (await res.json()) as { url: string };
-      setState({ published: true, url: data.url, available: true });
+      setState({ published: true, url: data.url, available: true, isStale: false });
       toast.success('Page published');
     } catch {
       toast.error('Failed to publish page');
@@ -138,7 +140,21 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
       >
         {state.url}
       </a>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {state.isStale && (
+          <>
+            <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 whitespace-nowrap">
+              Stale
+            </span>
+            <button
+              className="px-2 py-2 text-sm whitespace-nowrap disabled:opacity-50"
+              onClick={handlePublish}
+              disabled={isBusy}
+            >
+              {isBusy ? 'Updating…' : 'Update'}
+            </button>
+          </>
+        )}
         <button className="px-2 py-2 text-sm whitespace-nowrap" onClick={handleCopy}>
           Copy link
         </button>

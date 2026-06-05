@@ -53,23 +53,36 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
-      columns: { driveId: true, path: true },
+      columns: { driveId: true, path: true, publishedAt: true, updatedAt: true },
     });
 
     if (!row) {
       return NextResponse.json({ published: false, available });
     }
 
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, row.driveId),
-      columns: { publishSubdomain: true },
-    });
+    const [drive, livePage] = await Promise.all([
+      db.query.drives.findFirst({
+        where: eq(drives.id, row.driveId),
+        columns: { publishSubdomain: true },
+      }),
+      db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { updatedAt: true },
+      }),
+    ]);
 
     const subdomain = drive?.publishSubdomain ?? null;
+
+    const lastPublishedAt = row.updatedAt ?? row.publishedAt;
+    const isStale =
+      livePage?.updatedAt != null && lastPublishedAt != null
+        ? livePage.updatedAt > lastPublishedAt
+        : false;
 
     return NextResponse.json({
       published: true,
       available,
+      isStale,
       url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
       subdomain,
       path: row.path,
@@ -190,6 +203,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           path,
           artifactKey: key,
           publishedBy: userId,
+          updatedAt: new Date(),
         })
         .onConflictDoUpdate({
           target: publishedPages.pageId,
