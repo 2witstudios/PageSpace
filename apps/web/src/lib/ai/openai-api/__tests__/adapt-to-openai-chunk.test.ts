@@ -106,7 +106,7 @@ describe('adaptToOpenAIChunk', () => {
     );
     assert({
       given: 'a tool-output-available chunk',
-      should: 'produce an SSE line with delta.role=tool and the tool result as content',
+      should: 'produce an SSE line with delta.role=tool and the tool result in tool_result (not content)',
       actual: result ? parseSSE(result) : null,
       expected: {
         id: 'cmpl-abc',
@@ -115,7 +115,7 @@ describe('adaptToOpenAIChunk', () => {
         model: 'ps-agent://page-123',
         choices: [{
           index: 0,
-          delta: { role: 'tool', tool_call_id: 'tc-1', content: 'search result text' },
+          delta: { role: 'tool', tool_call_id: 'tc-1', tool_result: 'search result text' },
           finish_reason: null,
         }],
       },

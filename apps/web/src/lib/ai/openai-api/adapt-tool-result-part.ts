@@ -10,14 +10,22 @@ type OpenAIChunk = {
   model: string;
   choices: Array<{
     index: number;
-    delta: { role: 'tool'; tool_call_id: string; content: string };
+    delta: { role: 'tool'; tool_call_id: string; tool_result: string };
     finish_reason: null;
   }>;
 };
 
+// Uses 'tool_result' instead of 'content' so standard OpenAI clients that
+// concatenate every delta.content field do not mix tool outputs into the
+// displayed assistant text. PageSpace-aware clients read 'tool_result'.
 const serializeOutput = (output: unknown): string => {
   if (typeof output === 'string') return output;
-  return JSON.stringify(output);
+  try {
+    const serialized = JSON.stringify(output);
+    return serialized === undefined ? '' : serialized;
+  } catch {
+    return String(output);
+  }
 };
 
 export const adaptToolResultPart = (
@@ -36,7 +44,7 @@ export const adaptToolResultPart = (
       delta: {
         role: 'tool',
         tool_call_id: part.toolCallId,
-        content: serializeOutput(part.output),
+        tool_result: serializeOutput(part.output),
       },
       finish_reason: null,
     },

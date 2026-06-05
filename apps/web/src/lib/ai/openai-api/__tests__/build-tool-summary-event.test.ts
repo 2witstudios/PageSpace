@@ -2,12 +2,15 @@ import { describe, test } from 'vitest';
 import { assert } from './riteway';
 import { buildToolSummaryEvent } from '../build-tool-summary-event';
 
+const parsePayload = (result: string | null) => {
+  if (!result) return null;
+  const dataLine = result.split('\n').find(l => l.startsWith('data:'));
+  return dataLine ? JSON.parse(dataLine.replace(/^data: /, '')) : null;
+};
+
 describe('buildToolSummaryEvent', () => {
   test('returns null when no steps have tool calls', () => {
-    const steps = [
-      { toolCalls: [] },
-      { toolCalls: [] },
-    ];
+    const steps = [{ toolCalls: [] }, { toolCalls: [] }];
     assert({
       given: 'steps with no tool calls',
       should: 'return null — no summary to emit',
@@ -25,31 +28,48 @@ describe('buildToolSummaryEvent', () => {
     });
   });
 
-  test('returns PAGESPACE_TOOL_SUMMARY SSE event when tool calls are present', () => {
-    const steps = [
-      { toolCalls: [{ toolCallId: 'tc-1', toolName: 'search_web' }] },
-    ];
+  test('returns null for a step with missing toolCalls property', () => {
+    const steps = [{}];
+    assert({
+      given: 'a step with no toolCalls property at all',
+      should: 'return null without throwing (treats missing as empty)',
+      actual: buildToolSummaryEvent(steps as never),
+      expected: null,
+    });
+  });
+
+  test('emits a valid choices:[] chunk (not a named SSE event)', () => {
+    const steps = [{ toolCalls: [{ toolCallId: 'tc-1', toolName: 'search_web' }] }];
     const result = buildToolSummaryEvent(steps);
     assert({
       given: 'a step with one tool call',
-      should: 'return an SSE event with event:PAGESPACE_TOOL_SUMMARY',
-      actual: typeof result === 'string' && result.startsWith('event: PAGESPACE_TOOL_SUMMARY'),
+      should: 'return a data: line with choices:[] so standard OpenAI clients skip it safely',
+      actual: typeof result === 'string' && result.startsWith('data: ') && !result.startsWith('event:'),
       expected: true,
     });
   });
 
-  test('data field contains toolCalls array with toolName and toolCallId', () => {
+  test('payload has object:chat.completion.chunk and empty choices array', () => {
+    const steps = [{ toolCalls: [{ toolCallId: 'tc-1', toolName: 'search_web' }] }];
+    const payload = parsePayload(buildToolSummaryEvent(steps));
+    assert({
+      given: 'a step with one tool call',
+      should: 'include object and choices fields matching OpenAI chunk shape',
+      actual: { object: payload?.object, choices: payload?.choices },
+      expected: { object: 'chat.completion.chunk', choices: [] },
+    });
+  });
+
+  test('x_pagespace_tool_summary contains toolCalls array with toolName and toolCallId', () => {
     const steps = [
       { toolCalls: [{ toolCallId: 'tc-1', toolName: 'search_web' }] },
       { toolCalls: [{ toolCallId: 'tc-2', toolName: 'read_page' }] },
     ];
-    const result = buildToolSummaryEvent(steps);
-    const dataLine = (result ?? '').split('\n').find(l => l.startsWith('data:'));
-    const payload = dataLine ? JSON.parse(dataLine.replace(/^data: /, '')) : null;
+    const payload = parsePayload(buildToolSummaryEvent(steps));
     assert({
       given: 'two steps each with one tool call',
-      should: 'include both tool calls in the toolCalls array',
-      actual: payload?.toolCalls,
+      should: 'include both tool calls in x_pagespace_tool_summary.toolCalls',
+      actual: payload?.x_pagespace_tool_summary?.toolCalls,
       expected: [
         { toolCallId: 'tc-1', toolName: 'search_web' },
         { toolCallId: 'tc-2', toolName: 'read_page' },
@@ -57,19 +77,17 @@ describe('buildToolSummaryEvent', () => {
     });
   });
 
-  test('data field includes stepCount', () => {
+  test('x_pagespace_tool_summary includes stepCount', () => {
     const steps = [
       { toolCalls: [{ toolCallId: 'tc-1', toolName: 'search_web' }] },
       { toolCalls: [] },
       { toolCalls: [{ toolCallId: 'tc-2', toolName: 'read_page' }] },
     ];
-    const result = buildToolSummaryEvent(steps);
-    const dataLine = (result ?? '').split('\n').find(l => l.startsWith('data:'));
-    const payload = dataLine ? JSON.parse(dataLine.replace(/^data: /, '')) : null;
+    const payload = parsePayload(buildToolSummaryEvent(steps));
     assert({
       given: '3 steps (2 with tool calls, 1 without)',
-      should: 'include stepCount=3 in the payload',
-      actual: payload?.stepCount,
+      should: 'include stepCount=3 in x_pagespace_tool_summary',
+      actual: payload?.x_pagespace_tool_summary?.stepCount,
       expected: 3,
     });
   });
@@ -82,13 +100,11 @@ describe('buildToolSummaryEvent', () => {
       ]},
       { toolCalls: [{ toolCallId: 'tc-3', toolName: 'read_page' }] },
     ];
-    const result = buildToolSummaryEvent(steps);
-    const dataLine = (result ?? '').split('\n').find(l => l.startsWith('data:'));
-    const payload = dataLine ? JSON.parse(dataLine.replace(/^data: /, '')) : null;
+    const payload = parsePayload(buildToolSummaryEvent(steps));
     assert({
       given: 'two steps with 2 and 1 tool calls respectively',
       should: 'return 3 tool calls in a flat array',
-      actual: payload?.toolCalls?.length,
+      actual: payload?.x_pagespace_tool_summary?.toolCalls?.length,
       expected: 3,
     });
   });
