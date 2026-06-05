@@ -238,18 +238,19 @@ describe('canConsumeAI', () => {
     expect(r.reason).toBe('ok');
   });
 
-  it('forgives outstanding debt at the gate-driven free reset (debtCents -> 0, full allowance)', async () => {
+  it('nets outstanding debt against carry at gate-driven free reset (debt absorbed into monthly balance)', async () => {
+    // 0¢ remaining, 300¢ debt, 500¢ free allowance → net = (0 − 300) + 500 = 200¢.
     mockDb.select
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
-      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
     mockDb.update.mockReturnValue(updateCapturing(sink));
-    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+    mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
 
-    // Renewal restores the FULL allowance AND wipes the debt.
-    expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, monthlyAllowanceCents: 500, debtCents: 0 });
+    // Debt absorbed: net = 0 − 300 + 500 = 200; debtCents zeroed in the UPDATE.
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 200, monthlyAllowanceCents: 500, debtCents: 0 });
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
   });

@@ -67,19 +67,19 @@ function balanceUpsert(cap: Captured) {
 
 // Build a select chain for reading the current creditBalances row inside the tx.
 // Includes the .for('update') call that locks the row before the rollover write.
-function balanceSelectReturning(monthlyRemainingCents: number) {
-  const result = Promise.resolve([{ monthlyRemainingCents }]);
+function balanceSelectReturning(monthlyRemainingCents: number, debtCents = 0) {
+  const result = Promise.resolve([{ monthlyRemainingCents, debtCents }]);
   return { from: () => ({ where: () => ({ for: () => ({ limit: () => result }), limit: () => result }) }) };
 }
 
 // tx for the monthly refill path: ledger insert -> stub-row insert -> select current balance -> balance upsert.
-function refillTx(cap: Captured, ledgerReturned: Array<{ id: string }>, currentRemaining: number) {
+function refillTx(cap: Captured, ledgerReturned: Array<{ id: string }>, currentRemaining: number, currentDebt = 0) {
   return {
     insert: vi.fn()
       .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
       .mockReturnValueOnce(ensureRowInsert())   // stub: INSERT ... ON CONFLICT DO NOTHING
       .mockReturnValueOnce(balanceUpsert(cap)),
-    select: vi.fn().mockReturnValueOnce(balanceSelectReturning(currentRemaining)),
+    select: vi.fn().mockReturnValueOnce(balanceSelectReturning(currentRemaining, currentDebt)),
   };
 }
 
@@ -183,7 +183,7 @@ describe('applyStripeFunding', () => {
     expect(cap.balanceSet).toEqual({
       monthlyRemainingCents: allowance,
       monthlyAllowanceCents: allowance,
-      // Renewal forgives any outstanding overage — full allowance, never reduced.
+      // Zero debt: full allowance passes through — net = (0 − 0) + allowance = allowance.
       debtCents: 0,
       monthlyPeriodStart: new Date(1_700_000_000 * 1000),
       monthlyPeriodEnd: new Date(1_702_592_000 * 1000),
@@ -203,6 +203,24 @@ describe('applyStripeFunding', () => {
     const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.pro;
     expect(cap.balanceSet).toMatchObject({
       monthlyRemainingCents: 600 + allowance,
+      monthlyAllowanceCents: allowance,
+      debtCents: 0,
+    });
+  });
+
+  it('invoice.paid nets outstanding debt against carried balance (debt absorbed, not forwarded)', async () => {
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    // 200¢ carried, 200¢ debt → net = 200 − 200 = 0; monthly = 0 + pro allowance.
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(refillTx(cap, [{ id: 'led_debt_refill' }], 200, 200));
+    });
+
+    await applyStripeFunding(invoiceEvent);
+
+    const allowance = TIER_MONTHLY_ALLOWANCE_CENTS.pro;
+    expect(cap.balanceSet).toMatchObject({
+      monthlyRemainingCents: allowance,
       monthlyAllowanceCents: allowance,
       debtCents: 0,
     });

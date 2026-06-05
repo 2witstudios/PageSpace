@@ -560,7 +560,7 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect((await canConsumeAI('u1', 'pro')).allowed).toBe(true);
   });
 
-  it('forgives outstanding debt at the next renewal — full allowance, debt wiped', async () => {
+  it('nets outstanding debt against carry at renewal — debt absorbed, monthly reduced accordingly', async () => {
     seedUser('u1', 'cus_1', 'pro');
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END));
 
@@ -569,10 +569,11 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(balanceOf('u1')!.debtCents).toBe(300);
     expect((await canConsumeAI('u1', 'pro')).allowed).toBe(false); // blocked while in the red
 
-    // ── RENEWAL: invoice.paid restores the FULL allowance and forgives the debt. ──
+    // ── RENEWAL: debt netted against carry before allowance added. ──
+    // monthly = 0, debt = 300; netCarried = 0 − 300 = −300; monthly = −300 + 1500 = 1200.
     await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END));
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500); // full, NOT reduced by the 300 debt
-    expect(balanceOf('u1')!.debtCents).toBe(0); // forgiven
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200); // 1500 − 300 debt absorbed
+    expect(balanceOf('u1')!.debtCents).toBe(0); // absorbed into monthly balance
     expect((await canConsumeAI('u1', 'pro')).allowed).toBe(true);
   });
 
