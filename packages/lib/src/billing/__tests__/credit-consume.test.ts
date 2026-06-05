@@ -113,10 +113,9 @@ describe('consumeCredits', () => {
     });
   });
 
-  it('excludes an expired monthly bucket at settle (use-it-or-lose-it) and draws top-up only', async () => {
-    // Paid user past their monthly window: gate allowed via top-up. Settlement must
-    // NOT spend the expired monthly (allocateSpend draws monthly-first by default).
-    // cost $1 -> 150¢. Expired monthly 300, topup 1000 -> monthly zeroed, topup 850.
+  it('draws from the carry monthly balance even after the period has expired (rollover)', async () => {
+    // Rollover: carry credits are always spendable — period expiry is irrelevant at settle.
+    // cost $1 -> 150¢. Monthly 300 (expired period), topup 1000 -> draws monthly-first.
     mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_exp' }]));
     const captured: { balanceSet?: Record<string, number>; ledgerSet?: Record<string, unknown> } = {};
     mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
@@ -137,9 +136,9 @@ describe('consumeCredits', () => {
 
     await consumeCredits({ aiUsageLogId: 'aul_exp', userId: 'u1', costDollars: 1 });
 
-    // Expired monthly forfeited (zeroed), top-up charged the full 150¢.
-    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 850, pendingMillicents: 0 });
-    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150, bucket: 'topup' });
+    // Rollover: monthly drawn first (300 → 150), top-up untouched.
+    expect(captured.balanceSet).toEqual({ monthlyRemainingCents: 150, topupRemainingCents: 1000, pendingMillicents: 0 });
+    expect(captured.ledgerSet).toMatchObject({ consumeStatus: 'applied', appliedCents: -150, bucket: 'monthly' });
   });
 
   it('does not insert a debt row when the balance fully covers the charge', async () => {

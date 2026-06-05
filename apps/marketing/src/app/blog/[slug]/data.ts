@@ -119,7 +119,7 @@ The picker is one catalogue spanning OpenAI, Anthropic, Google, xAI, and more, g
 - **Free** plans use a curated allowlist of fast, capable models — GPT-5.3 Chat (the default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family.
 - **Paid** plans unlock the full catalogue, including frontier flagships like Claude Opus, the full GPT-5 family, and Gemini Pro.
 
-Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime or wait for your monthly allowance to reset — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
+Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime — unused credits roll over, so your balance accumulates month to month — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
 
 ## Why we did this
 
