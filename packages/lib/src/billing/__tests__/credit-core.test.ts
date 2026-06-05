@@ -420,6 +420,21 @@ describe('computeMonthlyRefill', () => {
     });
   });
 
+  it('clamps to 0 when debt exceeds remaining + allowance (DB constraint: monthlyRemainingCents >= 0)', () => {
+    // 100¢ remaining, 700¢ debt, 500¢ allowance → net = 100 − 700 + 500 = −100 → clamped to 0
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 700)).toEqual({
+      monthlyRemainingCents: 0,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+    // 0 remaining, 1000¢ debt, 500¢ allowance → −500 → 0
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 0, 1000)).toEqual({
+      monthlyRemainingCents: 0,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+  });
+
   it('backward compat: omitting currentDebtCents is identical to passing 0 (no debt = pure rollover)', () => {
     const withDefault = computeMonthlyRefill('pro', ALLOWANCE, 600);
     const withZero = computeMonthlyRefill('pro', ALLOWANCE, 600, 0);

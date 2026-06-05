@@ -275,8 +275,11 @@ export interface MonthlyRefill {
  * Compute the rollover state for a new billing period: outstanding debt is netted
  * against the carried balance, then the tier allowance is added. Credits accumulate
  * across periods (rollover); debt is absorbed into `monthlyRemainingCents`, not
- * forwarded as a field. Defaults to 0 for backward compat when no prior balance or
- * debt exists. Unknown tiers fall back to the free allowance.
+ * forwarded as a field. `monthlyRemainingCents` is clamped to 0 — the DB schema
+ * enforces `monthlyRemainingCents >= 0`, and any debt exceeding (remaining + allowance)
+ * is forgiven rather than written as a negative balance. Defaults to 0 for backward
+ * compat when no prior balance or debt exists. Unknown tiers fall back to the free
+ * allowance.
  */
 export function computeMonthlyRefill(
   tier: SubscriptionTier,
@@ -286,7 +289,9 @@ export function computeMonthlyRefill(
 ): MonthlyRefill {
   const allowance = allowanceTable[tier] ?? allowanceTable.free;
   const netCarried = currentRemainingCents - Math.max(0, currentDebtCents);
-  return { monthlyRemainingCents: netCarried + allowance, monthlyAllowanceCents: allowance, debtCents: 0 };
+  // Clamp to 0: the DB schema enforces monthlyRemainingCents >= 0. Excess debt beyond
+  // (remaining + allowance) is absorbed here rather than written as a negative balance.
+  return { monthlyRemainingCents: Math.max(0, netCarried + allowance), monthlyAllowanceCents: allowance, debtCents: 0 };
 }
 
 export interface PaymentToDebtResult {
