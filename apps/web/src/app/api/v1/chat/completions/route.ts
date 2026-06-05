@@ -32,6 +32,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
+import { buildToolSummaryEvent } from '@/lib/ai/openai-api/build-tool-summary-event';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -300,10 +301,34 @@ export async function POST(request: Request): Promise<Response> {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Per-step tool call state: tracks tool index and presence for finish-step finish_reason
+      let stepToolCallIndex = 0;
+      let stepHadToolCalls = false;
+
       try {
         for await (const chunk of aiResult.toUIMessageStream()) {
           if (chunk.type === 'text-delta') assistantText += chunk.delta;
-          const line = adaptToOpenAIChunk(chunk, { id: completionId, model: modelName, created });
+
+          // Reset per-step state at the start of each inference step
+          if (chunk.type === 'start-step') {
+            stepToolCallIndex = 0;
+            stepHadToolCalls = false;
+          }
+
+          // Capture index before increment so the emitted chunk gets the right index
+          const toolCallIndex = stepToolCallIndex;
+          if (chunk.type === 'tool-input-available') {
+            stepHadToolCalls = true;
+            stepToolCallIndex++;
+          }
+
+          const line = adaptToOpenAIChunk(chunk, {
+            id: completionId,
+            model: modelName,
+            created,
+            toolCallIndex,
+            hadToolCallsInStep: stepHadToolCalls,
+          });
           if (line) {
             controller.enqueue(encoder.encode(line + '\n\n'));
           }
@@ -320,6 +345,13 @@ export async function POST(request: Request): Promise<Response> {
         const totalUsage = await aiResult.totalUsage.catch(() => undefined);
         const steps = await aiResult.steps.catch(() => undefined);
         await settle({ aborted, text: assistantText || undefined, totalUsage, steps });
+        if (!aborted) {
+          const toolSummary = buildToolSummaryEvent(steps ?? []);
+          if (toolSummary) {
+            controller.enqueue(encoder.encode(toolSummary + '\n\n'));
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        }
         controller.close();
       } catch (err) {
         // Some providers surface an abort as a thrown AbortError instead. Treat it as a
