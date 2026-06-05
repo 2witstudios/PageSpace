@@ -155,6 +155,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       alerts: { balanceDrift, negativeMargin },
     });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('[ai-billing] route error:', msg, error instanceof Error ? error.stack : '');
     loggers.api.error('Error fetching ai-billing data:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch ai-billing data' }, { status: 500 });
   }
