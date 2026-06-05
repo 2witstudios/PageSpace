@@ -14,6 +14,11 @@ import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 import { useMentionTracker } from '@/hooks/useMentionTracker';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 
+// Typography classes applied to both the textarea and the mention overlay.
+// They must stay in sync — mismatched line-height causes the overlay text to
+// drift relative to the caret with each newline.
+const CHAT_TYPOGRAPHY = 'text-base md:text-sm leading-relaxed';
+
 export interface ChatTextareaProps {
   /** Current input value (markdown format with @[label](id:type) mentions) */
   value: string;
@@ -161,7 +166,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           disabled={disabled}
           className={cn(
             'min-h-[36px] max-h-48 resize-none break-words',
-            'text-base md:text-sm leading-relaxed',
+            CHAT_TYPOGRAPHY,
             // Context-aware background:
             // - main: transparent to blend with InputCard, no shadow in light mode for flush look
             // - sidebar: white in light mode for contrast, slight gray lift in dark mode
@@ -185,7 +190,8 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
             value={displayText}
             mentions={mentions}
             className={cn(
-              'px-3 py-2 text-base md:text-sm leading-relaxed',
+              'px-3 py-2',
+              CHAT_TYPOGRAPHY,
               'text-foreground',
               'min-h-[36px] max-h-48'
             )}
