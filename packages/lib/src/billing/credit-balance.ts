@@ -3,8 +3,8 @@
  * dashboard widget and the `GET /api/credits` endpoint.
  *
  * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
- * the monthly reset live in `./credit-gate` (the imperative shell that owns the clock
- * and the row lock). Here we only mirror the gate's semantics for presentation:
+ * the free-tier periodic rollover live in `./credit-gate` (the imperative shell that
+ * owns the clock and the row lock). Here we only mirror the gate's semantics for presentation:
  *   - free tier whose monthly window has lapsed is shown its stored remaining PLUS the
  *     tier allowance (the gate will add it on the next call — rollover semantics);
  *   - paid tier whose window has lapsed is shown its stored remaining (credits carry
