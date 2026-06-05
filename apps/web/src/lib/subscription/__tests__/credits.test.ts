@@ -28,8 +28,8 @@ describe('toDisplayCredits', () => {
     expect(toDisplayCredits(-300, 1500)).toBeCloseTo(-20, 1);
   });
 
-  it('returns 0 when allowanceCents is 0 (guard against division by zero)', () => {
-    expect(toDisplayCredits(500, 0)).toBe(0);
+  it('returns cents directly when allowanceCents is 0 (no monthly plan)', () => {
+    expect(toDisplayCredits(500, 0)).toBe(500);
   });
 
   it('returns 0 when both cents and allowanceCents are 0', () => {
@@ -58,8 +58,8 @@ describe('formatCreditUnits', () => {
     expect(formatCreditUnits(-150, 1500)).toBe('-10.00');
   });
 
-  it('returns "0.00" when allowanceCents is 0', () => {
-    expect(formatCreditUnits(500, 0)).toBe('0.00');
+  it('returns "500.00" when allowanceCents is 0', () => {
+    expect(formatCreditUnits(500, 0)).toBe('500.00');
   });
 });
 
@@ -76,8 +76,8 @@ describe('formatCreditUnitsSigned', () => {
     expect(formatCreditUnitsSigned(0, 1500)).toBe('0.00');
   });
 
-  it('returns "0.00" when allowanceCents is 0', () => {
-    expect(formatCreditUnitsSigned(500, 0)).toBe('0.00');
+  it('returns "500.00" when allowanceCents is 0', () => {
+    expect(formatCreditUnitsSigned(500, 0)).toBe('500.00');
   });
 });
 

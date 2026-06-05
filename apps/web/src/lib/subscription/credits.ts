@@ -43,7 +43,7 @@ export function formatCreditDollarsSigned(cents: number): string {
  * Positive top-up balances can push the result above 100.
  */
 export function toDisplayCredits(cents: number, allowanceCents: number): number {
-  if (allowanceCents <= 0) return 0;
+  if (allowanceCents <= 0) return cents;
   return (cents / allowanceCents) * 100;
 }
 
