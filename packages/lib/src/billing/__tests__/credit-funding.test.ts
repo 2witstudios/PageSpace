@@ -72,11 +72,12 @@ function balanceSelectReturning(monthlyRemainingCents: number) {
   return { from: () => ({ where: () => ({ for: () => ({ limit: () => result }), limit: () => result }) }) };
 }
 
-// tx for the monthly refill path: ledger insert -> select current balance -> balance upsert.
+// tx for the monthly refill path: ledger insert -> stub-row insert -> select current balance -> balance upsert.
 function refillTx(cap: Captured, ledgerReturned: Array<{ id: string }>, currentRemaining: number) {
   return {
     insert: vi.fn()
       .mockReturnValueOnce(ledgerInsert(ledgerReturned, cap))
+      .mockReturnValueOnce(ensureRowInsert())   // stub: INSERT ... ON CONFLICT DO NOTHING
       .mockReturnValueOnce(balanceUpsert(cap)),
     select: vi.fn().mockReturnValueOnce(balanceSelectReturning(currentRemaining)),
   };

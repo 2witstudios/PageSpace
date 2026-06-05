@@ -185,6 +185,16 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     // the balance was already updated for this period. Do not refill again.
     if (inserted.length === 0) return;
 
+    // Ensure the balance row exists before we try to lock it. FOR UPDATE only locks
+    // existing rows: if two distinct invoices race for a brand-new user, both would
+    // read "no row" → carriedCents = 0 → each writes allowance, the second
+    // overwriting the first and losing a grant. The stub insert guarantees a row is
+    // present so the FOR UPDATE below can serialise concurrent refills correctly.
+    await tx
+      .insert(creditBalances)
+      .values({ userId: user.id })
+      .onConflictDoNothing({ target: creditBalances.userId });
+
     // Read the current balance INSIDE the same transaction, locked FOR UPDATE, so the
     // rollover addition is atomic. The ON CONFLICT guard serialises redelivery of the
     // SAME invoice, but two DISTINCT invoices for the same user (e.g. rapid plan change
