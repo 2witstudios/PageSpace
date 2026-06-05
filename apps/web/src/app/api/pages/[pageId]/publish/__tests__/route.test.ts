@@ -167,7 +167,8 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     // validates and persists the NORMALIZED candidate derived from the slug
     expect(validatePublishSubdomain).toHaveBeenCalledWith('acme');
-    expect(updateWhere).toHaveBeenCalledTimes(1);
+    // 2 updates: subdomain allocation + post-upload updatedAt advancement
+    expect(updateWhere).toHaveBeenCalledTimes(2);
 
     expect(renderPublishedPage).toHaveBeenCalledWith({ html: '<p>hi</p>', title: 'Welcome' });
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
@@ -212,7 +213,8 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     // no new allocation when the drive already owns a subdomain
     expect(validatePublishSubdomain).not.toHaveBeenCalled();
-    expect(updateWhere).not.toHaveBeenCalled();
+    // 1 update: post-upload updatedAt advancement only (no subdomain allocation)
+    expect(updateWhere).toHaveBeenCalledTimes(1);
 
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'existing', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
@@ -232,6 +234,17 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(409);
     // Critical: storage is never written when the path is already owned by another page.
     expect(putPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('does NOT advance updatedAt when the artifact upload fails', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: 'x', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'existing' });
+    putPublishedArtifact.mockRejectedValue(new Error('S3 unavailable'));
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(500);
+    // updatedAt update must be skipped — upload failed, artifact is still old version
+    expect(updateWhere).not.toHaveBeenCalled();
   });
 
   it('deletes the stale artifact when republishing changes the resolved key (P2)', async () => {

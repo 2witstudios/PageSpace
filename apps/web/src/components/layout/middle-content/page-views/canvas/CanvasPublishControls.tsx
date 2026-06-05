@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface CanvasPublishControlsProps {
   pageId: string;
+  /** Mirrors the canvas document's isDirty flag. When it transitions true→false
+   *  (a save just completed) and the page is published, the control marks itself
+   *  stale so the user sees the Update button without a page reload. */
+  contentDirty?: boolean;
 }
 
 interface PublishState {
@@ -27,10 +31,11 @@ const readError = async (res: Response): Promise<string> => {
   }
 };
 
-const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
+const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsProps) => {
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false });
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
+  const prevDirtyRef = useRef<boolean | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +66,15 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
       cancelled = true;
     };
   }, [pageId]);
+
+  // When a save completes (dirty → clean), mark the published version as stale
+  // so the Update button appears without requiring a page reload.
+  useEffect(() => {
+    if (prevDirtyRef.current === true && contentDirty === false) {
+      setState(prev => prev.published ? { ...prev, isStale: true } : prev);
+    }
+    prevDirtyRef.current = contentDirty;
+  }, [contentDirty]);
 
   const handlePublish = useCallback(async (isUpdate = false) => {
     setIsBusy(true);

@@ -194,6 +194,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     // constraint on (driveId, path) rejects a page whose resolved path is already
     // owned by another page, so a colliding publish can never overwrite another
     // page's already-published artifact at the shared key.
+    // updatedAt is intentionally NOT advanced here on conflict — it is updated only
+    // after the artifact write succeeds, so a failed upload never falsely clears
+    // the stale indicator on the next GET.
     try {
       await db
         .insert(publishedPages)
@@ -211,7 +214,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             path,
             artifactKey: key,
             publishedBy: userId,
-            updatedAt: new Date(),
           },
         });
     } catch (err) {
@@ -223,6 +225,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     // The path is now reserved for this page — safe to write the artifact.
     await putPublishedArtifact({ subdomain, path, html });
+
+    // Advance updatedAt only after the artifact is successfully written. This
+    // ensures GET /publish reports isStale: true if a prior upload attempt failed.
+    await db
+      .update(publishedPages)
+      .set({ updatedAt: new Date() })
+      .where(eq(publishedPages.pageId, pageId));
 
     // Remove the previous artifact when the key changed, so a stale URL is not left
     // publicly servable after a rename/republish.
