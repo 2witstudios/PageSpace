@@ -62,7 +62,7 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
     };
   }, [pageId]);
 
-  const handlePublish = useCallback(async () => {
+  const handlePublish = useCallback(async (isUpdate = false) => {
     setIsBusy(true);
     try {
       const res = await fetchWithAuth(`/api/pages/${pageId}/publish`, { method: 'POST' });
@@ -72,7 +72,7 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
       }
       const data = (await res.json()) as { url: string };
       setState({ published: true, url: data.url, available: true, isStale: false });
-      toast.success('Page published');
+      toast.success(isUpdate ? 'Page updated' : 'Page published');
     } catch {
       toast.error('Failed to publish page');
     } finally {
@@ -88,7 +88,7 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
         toast.error(await readError(res));
         return;
       }
-      setState((prev) => ({ ...prev, published: false, url: null }));
+      setState((prev) => ({ ...prev, published: false, url: null, isStale: false }));
       toast.success('Page unpublished');
     } catch {
       toast.error('Failed to unpublish page');
@@ -121,7 +121,7 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
     return (
       <button
         className="px-4 py-2 text-sm disabled:opacity-50"
-        onClick={handlePublish}
+        onClick={() => handlePublish()}
         disabled={isBusy}
       >
         {isBusy ? 'Publishing…' : 'Publish'}
@@ -148,7 +148,7 @@ const CanvasPublishControls = ({ pageId }: CanvasPublishControlsProps) => {
             </span>
             <button
               className="px-2 py-2 text-sm whitespace-nowrap disabled:opacity-50"
-              onClick={handlePublish}
+              onClick={() => handlePublish(true)}
               disabled={isBusy}
             >
               {isBusy ? 'Updating…' : 'Update'}

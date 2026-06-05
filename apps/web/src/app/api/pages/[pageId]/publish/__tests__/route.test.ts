@@ -335,6 +335,18 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(json.isStale).toBe(true);
   });
 
+  it('returns isStale: false when page.updatedAt equals the publish timestamp (not strictly after)', async () => {
+    const ts = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt: ts, updatedAt: ts });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: ts }); // same instant — not stale
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(false);
+  });
+
   it('returns isStale: false when the live page has no updatedAt', async () => {
     findFirstPublished.mockResolvedValue({
       driveId: 'drive-1', path: 'welcome',
