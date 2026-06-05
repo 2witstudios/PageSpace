@@ -78,9 +78,12 @@ class Logger {
   private startTime: number = Date.now();
 
   private constructor(config: Partial<LoggerConfig> = {}) {
-    const configuredDestination = (process.env.LOG_DESTINATION || '').trim();
-    const destination = (configuredDestination as 'console' | 'database' | 'both') ||
-      (process.env.MONITORING_INGEST_KEY ? 'both' : 'console');
+    const rawDestination = (process.env.LOG_DESTINATION || '').trim().toLowerCase();
+    // 'stdout' is an alias for 'console' (Fly/Docker convention)
+    const normalizedDestination = rawDestination === 'stdout' || rawDestination === 'stderr' ? 'console' : rawDestination;
+    const destination = (['console', 'database', 'both'].includes(normalizedDestination)
+      ? normalizedDestination
+      : (process.env.MONITORING_INGEST_KEY ? 'both' : 'console')) as 'console' | 'database' | 'both';
 
     this.config = {
       level: this.parseLogLevel(process.env.LOG_LEVEL || 'info'),
