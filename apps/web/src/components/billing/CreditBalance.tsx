@@ -56,7 +56,7 @@ export function CreditBalance() {
   // In the red: the user owes overage and can't use AI until back to positive.
   const inDebt = spendable < 0;
   const isLow = inDebt || spendable <= Math.max(LOW_BALANCE_FLOOR_CENTS, Math.round(monthly.allowance * 0.15));
-  const resetDate = monthly.periodEnd ? new Date(monthly.periodEnd) : null;
+  const renewalDate = monthly.periodEnd ? new Date(monthly.periodEnd) : null;
   // Surface in-flight reservations as a quiet signal, not in the headline number — the
   // displayed balance is gross of holds (see getCreditBalance) so it doesn't dip-then-pop
   // across a call; this dot just tells the user a call is currently consuming credits.
@@ -100,7 +100,7 @@ export function CreditBalance() {
             </p>
             {debt > 0 && (
               <p className="text-xs text-primary-foreground/80">
-                Owed: {formatCreditDollars(debt)} (cleared by a purchase or your next reset)
+                Owed: {formatCreditDollars(debt)} (cleared by a purchase or your next renewal)
               </p>
             )}
             <p className="text-xs text-primary-foreground/80">
@@ -115,9 +115,9 @@ export function CreditBalance() {
                 ~{formatCreditDollars(reserved)} reserved on in-flight calls
               </p>
             )}
-            {resetDate && (
+            {renewalDate && (
               <p className="text-xs text-primary-foreground/80">
-                Monthly resets {resetDate.toLocaleDateString()}
+                Renews {renewalDate.toLocaleDateString()}
               </p>
             )}
           </TooltipContent>

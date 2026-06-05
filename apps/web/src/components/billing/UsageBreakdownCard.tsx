@@ -78,7 +78,7 @@ export function UsageBreakdownCard() {
     };
   }, [socket, mutate]);
 
-  const resetDate = data?.periodEnd ? new Date(data.periodEnd) : null;
+  const renewalDate = data?.periodEnd ? new Date(data.periodEnd) : null;
 
   return (
     <Card>
@@ -88,7 +88,7 @@ export function UsageBreakdownCard() {
           Usage this period
         </CardTitle>
         <CardDescription>
-          Where your AI credits are going{resetDate && <> · resets {resetDate.toLocaleDateString()}</>}
+          Where your AI credits are going{renewalDate && <> · renews {renewalDate.toLocaleDateString()}</>}
         </CardDescription>
       </CardHeader>
       <CardContent>

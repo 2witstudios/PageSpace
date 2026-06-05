@@ -10,7 +10,7 @@ import { formatCreditDollars, formatCreditDollarsSigned } from '@/lib/subscripti
 
 /**
  * Settings card showing the user's prepaid AI-credit balance: the monthly allowance
- * bucket (resets each period), the never-expiring top-up bucket, and a "Buy credits"
+ * bucket (rolls over each period), the never-expiring top-up bucket, and a "Buy credits"
  * action. Live-updates via `useCreditBalance`. Renders nothing when billing is
  * disabled; hides the buy action on iOS (App Store policy).
  */
@@ -23,7 +23,7 @@ export function CreditBalanceCard() {
     return null;
   }
 
-  const resetDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
+  const renewalDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
 
   return (
     <Card>
@@ -34,7 +34,7 @@ export function CreditBalanceCard() {
         </CardTitle>
         <CardDescription>
           Credits power AI features and are billed at usage. Your monthly allowance
-          resets each period; purchased top-up credits never expire.
+          rolls over and accumulates; purchased top-up credits also never expire.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -62,13 +62,13 @@ export function CreditBalanceCard() {
                 {balance.debt > 0 && (
                   <div className="text-red-600 dark:text-red-400">
                     You owe {formatCreditDollars(balance.debt)} in overage — add credits to keep
-                    using AI (or it clears at your next reset).
+                    using AI (or it clears at your next renewal).
                   </div>
                 )}
                 <div>
                   Monthly allowance: {formatCreditDollars(balance.monthly.remaining)} of{' '}
                   {formatCreditDollars(balance.monthly.allowance)}
-                  {resetDate && <> · resets {resetDate.toLocaleDateString()}</>}
+                  {renewalDate && <> · renews {renewalDate.toLocaleDateString()}</>}
                 </div>
                 <div>Top-up balance: {formatCreditDollars(balance.topup.remaining)}</div>
                 {balance.reserved > 0 && (

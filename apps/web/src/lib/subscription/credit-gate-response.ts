@@ -10,7 +10,7 @@ import type { GateResult } from '@pagespace/lib/billing/credit-core';
  *   - daily_cap_exceeded -> 429: the per-user/day exposure backstop; the user has hit
  *     their daily spend ceiling and should retry tomorrow, not buy credits.
  *   - everything else (out_of_credits / needs_init) -> 402: the prepaid balance is
- *     exhausted; the user must add credits or wait for the monthly reset.
+ *     exhausted; the user must add credits or wait for the next monthly renewal.
  */
 export function creditGatePayload(reason: GateResult['reason']): {
   status: number;
@@ -34,7 +34,7 @@ export function creditGatePayload(reason: GateResult['reason']): {
   return {
     status: 402,
     error: 'out_of_credits',
-    message: 'Your AI credit balance is too low. Add credits to get back to positive, or wait for your monthly allowance to reset.',
+    message: 'Your AI credit balance is too low. Add credits to get back to positive, or wait for your monthly allowance to be added at your next renewal.',
   };
 }
 
