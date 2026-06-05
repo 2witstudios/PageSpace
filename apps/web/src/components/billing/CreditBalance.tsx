@@ -46,8 +46,12 @@ export function CreditBalance() {
 
   const { spendable, monthly, topup, reserved, debt } = balance;
   const inDebt = spendable < 0;
-  const isLow = inDebt || (monthly.allowance > 0 && monthly.remaining / monthly.allowance <= LOW_BALANCE_THRESHOLD_PCT / 100);
-  const monthlyStr = formatCreditCount(monthly.remaining);
+  // Net monthly portion: gross bucket minus any outstanding debt (topup credits are separate).
+  // Using monthly.remaining would overstate the balance when a lapsed period carries debt
+  // (monthly.remaining holds the new allowance before debt is netted out).
+  const netMonthly = spendable - topup.remaining;
+  const isLow = inDebt || (monthly.allowance > 0 && netMonthly / monthly.allowance <= LOW_BALANCE_THRESHOLD_PCT / 100);
+  const monthlyStr = formatCreditCount(netMonthly);
   const allowanceStr = formatCreditCount(monthly.allowance);
   const topupCredits = centsToCredits(topup.remaining);
   const topupStr = formatCreditCount(topup.remaining);
