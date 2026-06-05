@@ -33,8 +33,13 @@ describe('getSentryOptions', () => {
     expect(getSentryOptions({ nodeEnv: 'production' }).enableLogs).toBe(true);
   });
 
-  it('always sets sendDefaultPii to true', () => {
-    expect(getSentryOptions({ nodeEnv: 'development' }).sendDefaultPii).toBe(true);
-    expect(getSentryOptions({ nodeEnv: 'production' }).sendDefaultPii).toBe(true);
+  it('defaults sendDefaultPii to false for privacy safety', () => {
+    expect(getSentryOptions({}).sendDefaultPii).toBe(false);
+    expect(getSentryOptions({ nodeEnv: 'development' }).sendDefaultPii).toBe(false);
+    expect(getSentryOptions({ nodeEnv: 'production' }).sendDefaultPii).toBe(false);
+  });
+
+  it('enables sendDefaultPii when explicitly opted in', () => {
+    expect(getSentryOptions({ sendDefaultPii: true }).sendDefaultPii).toBe(true);
   });
 });
