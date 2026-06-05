@@ -193,10 +193,10 @@ async function applyCorrection(
     let appliedCents = 0;
     if (drift.deltaChargeMillicents > 0) {
       // Undercharge → debit the extra, monthly-first, debt on shortfall (matches settle).
-      const monthlyExpired = bal.monthlyPeriodEnd != null && bal.monthlyPeriodEnd < new Date();
+      // Rollover: carry balance is always spendable; no period-expiry exclusion here.
       const accrual = accruePending(bal.pendingMillicents ?? 0, drift.deltaChargeMillicents);
       const spend = allocateSpend(
-        { monthlyCents: monthlyExpired ? 0 : bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
+        { monthlyCents: bal.monthlyRemainingCents, topupCents: bal.topupRemainingCents },
         accrual.wholeCents,
       );
       await tx
