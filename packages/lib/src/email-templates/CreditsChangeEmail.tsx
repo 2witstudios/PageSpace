@@ -119,9 +119,9 @@ export function CreditsChangeEmail({
             <Text style={emailStyles.paragraph}>
               We&apos;ve replaced the old daily cap on AI calls with something
               simpler and fairer. Every plan now comes with a monthly pool of{' '}
-              <strong>AI credits</strong> you spend however you like, billed at
-              our cost for the model plus a flat 1.5×, so what you pay tracks
-              what you actually do.
+              <strong>credits</strong> you spend however you like, billed based
+              on what each model actually costs, so what you pay tracks what you
+              actually do.
             </Text>
 
             <Section style={tierBox}>
@@ -129,7 +129,7 @@ export function CreditsChangeEmail({
                 Your {summary.tierLabel} plan now includes
               </Text>
               <Text style={allowanceAmount}>
-                {summary.monthlyAllowanceLabel} of AI credits / month
+                {summary.monthlyAllowanceLabel} credits / month
               </Text>
               <Text style={allowanceLabel}>
                 Refreshes at the start of every billing period.

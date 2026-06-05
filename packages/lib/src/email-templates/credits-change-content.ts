@@ -18,15 +18,20 @@ import {
 } from '../billing/credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
-/**
- * Format whole cents as a customer-facing USD string. Whole-dollar amounts drop
- * the trailing ".00" for cleaner copy ("$5"); sub-dollar precision is preserved
- * ("$15.50") so a tuned env override never renders a misleading rounded figure.
- */
-export function formatCents(cents: number): string {
+/** Format whole cents as a credit quantity string (no currency symbol). */
+export function formatCredits(cents: number): string {
+  const units = cents / 100;
+  return Number.isInteger(units) ? `${units}` : `${units.toFixed(2)}`;
+}
+
+/** Format whole cents as a dollar price string (for real purchase amounts). */
+export function formatPrice(cents: number): string {
   const dollars = cents / 100;
   return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
 }
+
+/** @deprecated Use formatCredits or formatPrice */
+export const formatCents = formatPrice;
 
 /** Human-readable label for each subscription tier. */
 const TIER_LABELS: Record<SubscriptionTier, string> = {
@@ -82,7 +87,7 @@ export function getTierCreditSummary(tier: SubscriptionTier): TierCreditSummary 
     (pack: CreditPack) => ({
       id: pack.id,
       label: pack.label,
-      amountLabel: formatCents(pack.cents),
+      amountLabel: formatCredits(pack.cents),
     }),
   );
 
@@ -90,10 +95,10 @@ export function getTierCreditSummary(tier: SubscriptionTier): TierCreditSummary 
     tier,
     tierLabel: TIER_LABELS[tier],
     monthlyAllowanceCents,
-    monthlyAllowanceLabel: formatCents(monthlyAllowanceCents),
+    monthlyAllowanceLabel: formatCredits(monthlyAllowanceCents),
     topupPacks,
     unlocksPremiumModels: tier !== 'free',
-    topupMinLabel: formatCents(CREDIT_TOPUP_MIN_CENTS),
-    topupMaxLabel: formatCents(CREDIT_TOPUP_MAX_CENTS),
+    topupMinLabel: formatPrice(CREDIT_TOPUP_MIN_CENTS),
+    topupMaxLabel: formatPrice(CREDIT_TOPUP_MAX_CENTS),
   };
 }
