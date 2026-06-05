@@ -180,8 +180,8 @@ jobs:
 
           # Wait for machine to reach stopped state. --wait-timeout takes a duration string.
           # flyctl machine wait exit code is authoritative: 0 = stopped, non-zero = timed out.
-          if ! flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 5m; then
-            echo "ERROR: machine did not reach stopped state within 5 minutes"
+          if ! flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 15m; then
+            echo "ERROR: machine did not reach stopped state within 15 minutes"
             flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
