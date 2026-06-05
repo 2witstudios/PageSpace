@@ -167,7 +167,8 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     // validates and persists the NORMALIZED candidate derived from the slug
     expect(validatePublishSubdomain).toHaveBeenCalledWith('acme');
-    expect(updateWhere).toHaveBeenCalledTimes(1);
+    // 2 updates: subdomain allocation + post-upload updatedAt advancement
+    expect(updateWhere).toHaveBeenCalledTimes(2);
 
     expect(renderPublishedPage).toHaveBeenCalledWith({ html: '<p>hi</p>', title: 'Welcome' });
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
@@ -212,7 +213,8 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     // no new allocation when the drive already owns a subdomain
     expect(validatePublishSubdomain).not.toHaveBeenCalled();
-    expect(updateWhere).not.toHaveBeenCalled();
+    // 1 update: post-upload updatedAt advancement only (no subdomain allocation)
+    expect(updateWhere).toHaveBeenCalledTimes(1);
 
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'existing', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
@@ -232,6 +234,17 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(409);
     // Critical: storage is never written when the path is already owned by another page.
     expect(putPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('does NOT advance updatedAt when the artifact upload fails', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: 'x', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'existing' });
+    putPublishedArtifact.mockRejectedValue(new Error('S3 unavailable'));
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(500);
+    // updatedAt update must be skipped — upload failed, artifact is still old version
+    expect(updateWhere).not.toHaveBeenCalled();
   });
 
   it('deletes the stale artifact when republishing changes the resolved key (P2)', async () => {
@@ -290,9 +303,12 @@ describe('GET /api/pages/[pageId]/publish', () => {
     }
   });
 
-  it('returns { published: true, url, available } when a row exists', async () => {
-    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome' });
+  it('returns { published: true, url, available, isStale: false } when page is up to date', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:01Z'); // published AFTER last edit
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
     findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T09:55:00Z') }); // edited before publish
 
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
@@ -300,10 +316,63 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(json).toEqual({
       published: true,
       available: true,
+      isStale: false,
       url: 'https://acme.pagespace.site/welcome',
       subdomain: 'acme',
       path: 'welcome',
     });
+  });
+
+  it('returns isStale: true when the page was edited after its last publish', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T11:00:00Z') }); // edited AFTER publish
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(true);
+  });
+
+  it('falls back to publishedAt when updatedAt is null (legacy row)', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt: null });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T11:00:00Z') }); // edited after first publish
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(true);
+  });
+
+  it('returns isStale: false when page.updatedAt equals the publish timestamp (not strictly after)', async () => {
+    const ts = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt: ts, updatedAt: ts });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: ts }); // same instant — not stale
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(false);
+  });
+
+  it('returns isStale: false when the live page has no updatedAt', async () => {
+    findFirstPublished.mockResolvedValue({
+      driveId: 'drive-1', path: 'welcome',
+      publishedAt: new Date('2024-01-01T10:00:00Z'),
+      updatedAt: new Date('2024-01-01T10:00:00Z'),
+    });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: null });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isStale).toBe(false);
   });
 });
 

@@ -172,7 +172,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           View
         </button>
         <div className="ml-auto min-w-0 max-w-full">
-          <CanvasPublishControls pageId={pageId} />
+          <CanvasPublishControls pageId={pageId} contentDirty={documentState?.isDirty} />
         </div>
       </div>
       {activeTab === 'code' && (

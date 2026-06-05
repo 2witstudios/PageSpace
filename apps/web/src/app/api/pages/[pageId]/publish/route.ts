@@ -53,23 +53,36 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
-      columns: { driveId: true, path: true },
+      columns: { driveId: true, path: true, publishedAt: true, updatedAt: true },
     });
 
     if (!row) {
       return NextResponse.json({ published: false, available });
     }
 
-    const drive = await db.query.drives.findFirst({
-      where: eq(drives.id, row.driveId),
-      columns: { publishSubdomain: true },
-    });
+    const [drive, livePage] = await Promise.all([
+      db.query.drives.findFirst({
+        where: eq(drives.id, row.driveId),
+        columns: { publishSubdomain: true },
+      }),
+      db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { updatedAt: true },
+      }),
+    ]);
 
     const subdomain = drive?.publishSubdomain ?? null;
+
+    const lastPublishedAt = row.updatedAt ?? row.publishedAt;
+    const isStale =
+      livePage?.updatedAt != null && lastPublishedAt != null
+        ? livePage.updatedAt > lastPublishedAt
+        : false;
 
     return NextResponse.json({
       published: true,
       available,
+      isStale,
       url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
       subdomain,
       path: row.path,
@@ -181,6 +194,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     // constraint on (driveId, path) rejects a page whose resolved path is already
     // owned by another page, so a colliding publish can never overwrite another
     // page's already-published artifact at the shared key.
+    // updatedAt is intentionally NOT advanced here on conflict — it is updated only
+    // after the artifact write succeeds, so a failed upload never falsely clears
+    // the stale indicator on the next GET.
     try {
       await db
         .insert(publishedPages)
@@ -190,6 +206,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           path,
           artifactKey: key,
           publishedBy: userId,
+          updatedAt: new Date(),
         })
         .onConflictDoUpdate({
           target: publishedPages.pageId,
@@ -197,7 +214,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             path,
             artifactKey: key,
             publishedBy: userId,
-            updatedAt: new Date(),
           },
         });
     } catch (err) {
@@ -209,6 +225,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     // The path is now reserved for this page — safe to write the artifact.
     await putPublishedArtifact({ subdomain, path, html });
+
+    // Advance updatedAt only after the artifact is successfully written. This
+    // ensures GET /publish reports isStale: true if a prior upload attempt failed.
+    await db
+      .update(publishedPages)
+      .set({ updatedAt: new Date() })
+      .where(eq(publishedPages.pageId, pageId));
 
     // Remove the previous artifact when the key changed, so a stale URL is not left
     // publicly servable after a rename/republish.
