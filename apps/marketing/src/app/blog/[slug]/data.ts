@@ -46,7 +46,7 @@ Every plan comes with a monthly pool of credits:
 - **Founder:** 50/month in credits
 - **Business:** 100/month in credits
 
-Your pool refreshes at the start of every billing period. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
+Each period adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
 
 Each call draws from your balance based on what that model actually costs. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more — keeping the math simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
 
