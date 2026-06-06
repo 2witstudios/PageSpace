@@ -188,4 +188,24 @@ describe('adaptToOpenAIChunk', () => {
       expected: { id: 'cmpl-abc', model: 'ps-agent://page-123', created: 1000000000 },
     });
   });
+
+  test('finish chunk with overrideFinishReason:tool_calls emits finish_reason:tool_calls', () => {
+    const result = adaptToOpenAIChunk({ type: 'finish' }, { ...baseOpts, overrideFinishReason: 'tool_calls' });
+    assert({
+      given: 'a finish chunk with overrideFinishReason set to tool_calls',
+      should: 'emit finish_reason:tool_calls so the caller knows to execute the tool locally',
+      actual: result ? parseSSE(result).choices[0].finish_reason : null,
+      expected: 'tool_calls',
+    });
+  });
+
+  test('finish chunk with overrideFinishReason undefined defaults to stop', () => {
+    const result = adaptToOpenAIChunk({ type: 'finish' }, { ...baseOpts, overrideFinishReason: undefined });
+    assert({
+      given: 'a finish chunk with overrideFinishReason undefined',
+      should: 'emit finish_reason:stop (unchanged default)',
+      actual: result ? parseSSE(result).choices[0].finish_reason : null,
+      expected: 'stop',
+    });
+  });
 });

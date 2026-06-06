@@ -11,7 +11,7 @@ describe('validateInferenceRequest', () => {
       given: 'a valid ps-agent model URI and non-empty messages array',
       should: 'return ok:true with the parsed pageId, messages, stream:true, and no driveContext',
       actual: result,
-      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined } },
+      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined, clientTools: undefined, disableServerTools: false } },
     });
   });
 
@@ -213,6 +213,91 @@ describe('validateInferenceRequest', () => {
       should: 'return undefined for conversationId',
       actual: result.ok ? result.data.conversationId : 'error',
       expected: undefined,
+    });
+  });
+
+  test('valid tools array is parsed into clientTools', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const tools = [{ type: 'function', function: { name: 'bash', description: 'Run a shell command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } } }];
+    const body = { model: 'ps-agent://page-123', messages, tools };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a valid tools array with type:function and function.name',
+      should: 'return ok:true with clientTools populated',
+      actual: result.ok ? result.data.clientTools : undefined,
+      expected: [{ type: 'function', function: { name: 'bash', description: 'Run a shell command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } } }],
+    });
+  });
+
+  test('tool entry missing function.name returns 400', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'function', function: { description: 'no name' } }] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a tools array with an entry missing function.name',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('tool entry with non-function type returns 400', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'retrieval', function: { name: 'search' } }] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a tools array with an entry whose type is not "function"',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('empty tools array treats clientTools as undefined', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an empty tools array',
+      should: 'return clientTools as undefined',
+      actual: result.ok ? result.data.clientTools : 'error',
+      expected: undefined,
+    });
+  });
+
+  test('disable_server_tools:true sets disableServerTools', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, disable_server_tools: true };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'disable_server_tools:true in the body',
+      should: 'return disableServerTools:true',
+      actual: result.ok ? result.data.disableServerTools : undefined,
+      expected: true,
+    });
+  });
+
+  test('disable_server_tools absent defaults to false', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'disable_server_tools absent from the body',
+      should: 'return disableServerTools:false',
+      actual: result.ok ? result.data.disableServerTools : undefined,
+      expected: false,
+    });
+  });
+
+  test('tool without description or parameters is accepted', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'function', function: { name: 'read_file' } }] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a tool with only name (no description or parameters)',
+      should: 'return ok:true with the tool in clientTools',
+      actual: result.ok ? result.data.clientTools?.[0]?.function.name : undefined,
+      expected: 'read_file',
     });
   });
 });

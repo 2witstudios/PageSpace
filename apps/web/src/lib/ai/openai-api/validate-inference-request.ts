@@ -1,6 +1,15 @@
 import type { UIMessage } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 
+export interface OpenAIToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
 export interface ValidatedInferenceRequest {
   pageId: string;
   model: string;
@@ -8,6 +17,8 @@ export interface ValidatedInferenceRequest {
   stream: true;
   driveContext?: string;
   conversationId?: string;
+  clientTools?: OpenAIToolDefinition[];
+  disableServerTools?: boolean;
 }
 
 export type ValidationResult =
@@ -89,6 +100,44 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
 
   const conversationId = (typeof raw.conversation_id === 'string' && raw.conversation_id.trim()) || undefined;
 
+  let clientTools: OpenAIToolDefinition[] | undefined;
+  if (raw.tools !== undefined) {
+    if (!Array.isArray(raw.tools)) {
+      return { ok: false, status: 400, error: 'tools must be an array' };
+    }
+    const tools: OpenAIToolDefinition[] = [];
+    for (const t of raw.tools as unknown[]) {
+      if (typeof t !== 'object' || t === null) {
+        return { ok: false, status: 400, error: 'each tool must be an object' };
+      }
+      const entry = t as Record<string, unknown>;
+      if (entry.type !== 'function') {
+        return { ok: false, status: 400, error: "tool type must be 'function'" };
+      }
+      const fn = entry.function;
+      if (typeof fn !== 'object' || fn === null) {
+        return { ok: false, status: 400, error: 'each tool must have a function object' };
+      }
+      const fnObj = fn as Record<string, unknown>;
+      if (typeof fnObj.name !== 'string' || !fnObj.name) {
+        return { ok: false, status: 400, error: 'each tool must have a function.name string' };
+      }
+      tools.push({
+        type: 'function',
+        function: {
+          name: fnObj.name,
+          description: typeof fnObj.description === 'string' ? fnObj.description : undefined,
+          parameters: (typeof fnObj.parameters === 'object' && fnObj.parameters !== null)
+            ? fnObj.parameters as Record<string, unknown>
+            : undefined,
+        },
+      });
+    }
+    clientTools = tools.length > 0 ? tools : undefined;
+  }
+
+  const disableServerTools = raw.disable_server_tools === true;
+
   return {
     ok: true,
     data: {
@@ -98,6 +147,8 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
       stream: true,
       driveContext,
       conversationId,
+      clientTools,
+      disableServerTools,
     },
   };
 };

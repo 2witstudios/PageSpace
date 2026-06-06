@@ -11,6 +11,8 @@ export type AdaptOptions = {
   toolCallIndex?: number;
   /** Whether the current step has had any tool calls (for finish-step chunks) */
   hadToolCallsInStep?: boolean;
+  /** Override the finish_reason emitted on the 'finish' chunk (e.g. 'tool_calls' for client-tool stops) */
+  overrideFinishReason?: string;
 };
 
 const makeChunk = (options: AdaptOptions, delta: Record<string, unknown>, finishReason: string | null) => ({
@@ -48,7 +50,7 @@ export const adaptToOpenAIChunk = (chunk: UIMessageChunk, options: AdaptOptions)
 
     case 'finish':
       // [DONE] is emitted by the route after buildToolSummaryEvent
-      return toSSE(makeChunk(options, {}, 'stop'));
+      return toSSE(makeChunk(options, {}, options.overrideFinishReason ?? 'stop'));
 
     default:
       return null;
