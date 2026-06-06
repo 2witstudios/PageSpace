@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
@@ -60,6 +60,13 @@ export default function SettingsPage() {
           description: "Customize keyboard shortcuts",
           icon: Keyboard,
           href: "/settings/hotkeys",
+          available: true,
+        },
+        {
+          title: "Backups",
+          description: "Create and manage snapshots of your drives",
+          icon: HardDrive,
+          href: "/settings/backups",
           available: true,
         },
         {
