@@ -16,9 +16,9 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
-import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import { MAX_CHAT_INFLIGHT, MARKUP_BPS, RESERVE_FLOOR_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { estimateChatHoldCentsForModel, calcStepCostDollars, shouldAbortAfterStep } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -92,6 +92,30 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
 export const maxDuration = 300;
+
+/**
+ * Returns a per-step cost accumulator that aborts the stream once the user's
+ * available balance (minus accumulated real-cost markup) falls to or below the
+ * reserve floor. Extracted for unit testing; used via onStepFinish in streamText.
+ */
+export function makeOnStepFinishHandler(
+  creditAbortController: AbortController,
+  availableBalanceCents: number,
+  model: string,
+): (usage: { promptTokens: number; completionTokens: number }) => void {
+  let cumulativeCostDollars = 0;
+  return (usage) => {
+    cumulativeCostDollars += calcStepCostDollars(model, usage);
+    if (shouldAbortAfterStep({
+      cumulativeCostDollars,
+      balanceCents: availableBalanceCents,
+      markupBps: MARKUP_BPS,
+      reserveFloorCents: RESERVE_FLOOR_CENTS,
+    })) {
+      creditAbortController.abort();
+    }
+  };
+}
 
 
 export async function POST(request: Request) {
@@ -366,6 +390,14 @@ export async function POST(request: Request) {
     }
     holdId = creditGate.holdId;
 
+    const creditAbortController = holdId ? new AbortController() : null;
+    const availableBalanceCents =
+      holdId && creditGate.balanceSnapshot
+        ? creditGate.balanceSnapshot.monthlyCents +
+          creditGate.balanceSnapshot.topupCents -
+          creditGate.balanceSnapshot.debtCents
+        : null;
+
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent
     // via onConflictDoNothing, so safe for every message in a conversation.
@@ -537,6 +569,11 @@ export async function POST(request: Request) {
     // real OpenRouter model id sent to the backend.
     const { model } = providerResult;
     resolvedModelName = providerResult.modelName;
+
+    const onStepFinishForCredits =
+      creditAbortController && availableBalanceCents !== null
+        ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, resolvedModelName)
+        : null;
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
@@ -904,7 +941,13 @@ export async function POST(request: Request) {
               tools: filteredTools,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
               // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
-              abortSignal,
+              // creditAbortController fires when mid-stream credit check determines balance is exhausted
+              abortSignal: creditAbortController
+                ? AbortSignal.any([abortSignal, creditAbortController.signal])
+                : abortSignal,
+              onStepFinish: onStepFinishForCredits
+                ? async ({ usage }) => { onStepFinishForCredits(usage); }
+                : undefined,
               experimental_context: {
                 userId,
                 timezone: userTimezone,

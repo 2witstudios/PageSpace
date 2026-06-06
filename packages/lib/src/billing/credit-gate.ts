@@ -291,7 +291,15 @@ export async function canConsumeAI(
       .values({ userId, estCents: estCost, expiresAt })
       .returning({ id: creditHolds.id });
 
-    return { ...result, holdId: inserted[0]?.id };
+    return {
+      ...result,
+      holdId: inserted[0]?.id,
+      balanceSnapshot: bal ? {
+        monthlyCents: bal.monthlyRemainingCents,
+        topupCents: bal.topupRemainingCents,
+        debtCents: bal.debtCents ?? 0,
+      } : undefined,
+    };
   });
 
   // NOTE: we deliberately do NOT emit a balance update when the hold is placed. Holds

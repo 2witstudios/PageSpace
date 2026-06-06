@@ -181,6 +181,9 @@ export interface GateResult {
   reason: GateReason;
   /** Set by the gate shell when a hold row was inserted for an allowed request. */
   holdId?: string;
+  /** Snapshot of the user's balance at gate time — threaded into the stream so
+   *  onStepFinish can check remaining headroom without an extra DB read. */
+  balanceSnapshot?: { monthlyCents: number; topupCents: number; debtCents: number };
 }
 
 /**
