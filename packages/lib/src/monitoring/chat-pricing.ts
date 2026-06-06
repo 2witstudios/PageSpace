@@ -15,7 +15,7 @@
  */
 
 import { calculateCost, AI_PRICING } from './ai-monitoring';
-import { estimateChatHoldCents } from '../billing/credit-core';
+import { estimateChatHoldCents, markupCents } from '../billing/credit-core';
 import {
   MARKUP_BPS,
   CHAT_HOLD_FLOOR_CENTS,
@@ -23,6 +23,37 @@ import {
   CHAT_HOLD_ASSUMED_OUTPUT_TOKENS,
   CREDIT_HOLD_ESTIMATE_CENTS,
 } from '../billing/credit-pricing';
+
+/**
+ * Cost in dollars for one AI SDK step, using the static pricing fallback.
+ * Returns 0 for unknown models (calculateCost returns 0) or if pricing throws.
+ * Pure — no side effects.
+ */
+export function calcStepCostDollars(
+  model: string,
+  usage: { promptTokens: number; completionTokens: number },
+): number {
+  try {
+    return calculateCost(model, usage.promptTokens, usage.completionTokens);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * True when the user's remaining spendable credits (after applying the markup on
+ * cumulative cost so far) are at or below the reserve floor. Abort the stream.
+ * Pure — no side effects.
+ */
+export function shouldAbortAfterStep(input: {
+  cumulativeCostDollars: number;
+  balanceCents: number;
+  markupBps: number;
+  reserveFloorCents: number;
+}): boolean {
+  const chargedSoFarCents = markupCents(input.cumulativeCostDollars, input.markupBps);
+  return input.balanceCents - chargedSoFarCents <= input.reserveFloorCents;
+}
 
 /**
  * Whole-cent hold reservation for one chat call against `model`. Prices the assumed
