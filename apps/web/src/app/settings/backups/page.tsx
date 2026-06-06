@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -63,8 +63,9 @@ export default function BackupsPage() {
   const fetchDrives = useDriveStore((s) => s.fetchDrives);
   const isLoadingDrives = useDriveStore((s) => s.isLoading);
 
-  const adminDrives = drives.filter(
-    (d) => !d.isTrashed && (d.isOwned || d.role === 'OWNER' || d.role === 'ADMIN')
+  const adminDrives = useMemo(
+    () => drives.filter((d) => !d.isTrashed && (d.isOwned || d.role === 'OWNER' || d.role === 'ADMIN')),
+    [drives]
   );
 
   const [selectedDriveId, setSelectedDriveId] = useState('');
