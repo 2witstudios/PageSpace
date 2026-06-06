@@ -549,7 +549,7 @@ export async function POST(request: Request) {
 
     const onStepFinishForCredits =
       creditAbortController && availableBalanceCents !== null
-        ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, resolvedModelName)
+        ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, resolvedModelName ?? 'unknown')
         : null;
 
     // Update user's current provider/model if changed
