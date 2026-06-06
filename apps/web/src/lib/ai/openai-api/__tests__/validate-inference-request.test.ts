@@ -300,4 +300,72 @@ describe('validateInferenceRequest', () => {
       expected: 'read_file',
     });
   });
+
+  test('assistant message with tool_calls (content null) is normalized to tool part', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an assistant message with tool_calls and null content',
+      should: 'normalize to a UIMessage with a tool-bash part at input-available state',
+      actual: result.ok
+        ? { ok: true, partType: (result.data.messages[0].parts[0] as Record<string, unknown>)?.type, partState: (result.data.messages[0].parts[0] as Record<string, unknown>)?.state }
+        : { ok: false },
+      expected: { ok: true, partType: 'tool-bash', partState: 'input-available' },
+    });
+  });
+
+  test('assistant tool_calls paired with role:tool result normalized to output-available', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'run ls', parts: [{ type: 'text', text: 'run ls' }] },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }],
+        },
+        { role: 'tool', tool_call_id: 'tc-1', content: 'file1.txt\nfile2.txt' },
+      ],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'assistant tool_calls followed by a matching role:tool result',
+      should: 'collapse into a single assistant UIMessage with output-available part (not two separate messages)',
+      actual: result.ok
+        ? {
+            messageCount: result.data.messages.length,
+            secondRole: result.data.messages[1]?.role,
+            partState: (result.data.messages[1]?.parts[0] as Record<string, unknown>)?.state,
+            partOutput: (result.data.messages[1]?.parts[0] as Record<string, unknown>)?.output,
+          }
+        : { ok: false },
+      expected: { messageCount: 2, secondRole: 'assistant', partState: 'output-available', partOutput: 'file1.txt\nfile2.txt' },
+    });
+  });
+
+  test('standalone role:tool message without preceding assistant is skipped', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'hi', parts: [{ type: 'text', text: 'hi' }] },
+        { role: 'tool', tool_call_id: 'orphan', content: 'some result' },
+      ],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a role:tool message with no preceding assistant tool_calls',
+      should: 'skip it and return ok:true with only the user message',
+      actual: result.ok
+        ? { ok: true, messageCount: result.data.messages.length }
+        : { ok: false },
+      expected: { ok: true, messageCount: 1 },
+    });
+  });
 });

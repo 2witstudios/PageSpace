@@ -82,9 +82,9 @@ export async function POST(request: Request): Promise<Response> {
   for (const def of rawClientTools ?? []) {
     clientToolSet[def.function.name] = tool({
       description: def.function.description ?? '',
-      parameters: jsonSchema(def.function.parameters ?? { type: 'object', properties: {} }),
+      inputSchema: jsonSchema(def.function.parameters ?? { type: 'object', properties: {} }),
       // No execute — signals to the SDK to return this call to the caller.
-    });
+    }) as ToolSet[string];
   }
   const hasClientTools = Object.keys(clientToolSet).length > 0;
   const useServerTools = !disableServerTools;
@@ -159,21 +159,25 @@ export async function POST(request: Request): Promise<Response> {
     ?? buildSystemPrompt('page', undefined, false);
 
   // 7b. Build the final tool set and stop conditions based on the request mode:
-  //   server-only (!hasClientTools)  — full PageSpace tools + finish tool (unchanged default)
-  //   client-only (hasClientTools && !useServerTools) — caller tools only, no finish tool
-  //   both        (hasClientTools &&  useServerTools) — merged; client wins on name collision, no finish tool
+  //   server-only (useServerTools && !hasClientTools)  — full PageSpace tools + finish tool (default)
+  //   client-only (!useServerTools) — caller tools only, or empty if no client tools provided
+  //   both        (useServerTools && hasClientTools) — merged; client wins on name collision
   // Client modes skip the finish tool because the caller controls the conversation externally;
   // each round-trip is a new request and the finish tool would conflict with that flow.
+  // disable_server_tools is honoured independently of whether client tools are present:
+  //   disable_server_tools:true with no tools → no tools at all (model generates text only).
   const agentEnabledTools = page.enabledTools as string[] | null;
   const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
 
+  const inServerOnlyMode = useServerTools && !hasClientTools;
+
   let finalTools: ToolSet;
   let toolDiscoveryPrompt = '';
-  const stopConditions = hasClientTools
-    ? [stepCountIs(100)]
-    : [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)];
+  const stopConditions = inServerOnlyMode
+    ? [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)]
+    : [stepCountIs(100)];
 
-  if (!hasClientTools) {
+  if (inServerOnlyMode) {
     // server-only: existing pipeline unchanged
     const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
     let filteredTools: ToolSet =
@@ -187,7 +191,7 @@ export async function POST(request: Request): Promise<Response> {
     toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
     finalTools = { ...filteredTools, ...finishTool } as ToolSet;
   } else if (!useServerTools) {
-    // client-only: caller tools only
+    // client-only or no-tools: just client tools (may be empty when disable_server_tools=true but no tools provided)
     finalTools = clientToolSet;
   } else {
     // both: server tools + client tools; client wins on name collision

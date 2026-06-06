@@ -53,6 +53,68 @@ const normalizeMessage = (msg: Record<string, unknown>): UIMessage => {
   return { id, role, parts: [] } as unknown as UIMessage;
 };
 
+// Normalizes a flat OpenAI-format messages array into UIMessage[].
+// Handles the multi-turn client-tool pattern: an assistant message with `tool_calls`
+// followed by one or more `role:"tool"` messages is collapsed into a single assistant
+// UIMessage whose parts carry `type:"tool-<name>"` / `state:"output-available"` data
+// (the same shape the streaming pipeline produces for server-side tools).
+// Standalone role:tool messages with no preceding matched assistant are skipped.
+const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] => {
+  const result: UIMessage[] = [];
+  let i = 0;
+
+  while (i < rawMessages.length) {
+    const msg = rawMessages[i];
+    const role = msg.role as string;
+
+    if (role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      const toolCalls = msg.tool_calls as Array<{
+        id: string;
+        function: { name: string; arguments: string };
+      }>;
+
+      // Collect immediately following role:tool messages and build a result map.
+      const toolResults: Record<string, string> = {};
+      let j = i + 1;
+      while (j < rawMessages.length && rawMessages[j].role === 'tool') {
+        const toolMsg = rawMessages[j];
+        const toolCallId = typeof toolMsg.tool_call_id === 'string' ? toolMsg.tool_call_id : undefined;
+        if (toolCallId) {
+          toolResults[toolCallId] = typeof toolMsg.content === 'string' ? toolMsg.content : '';
+        }
+        j++;
+      }
+
+      const parts = toolCalls.map(tc => {
+        let input: Record<string, unknown> = {};
+        try { input = JSON.parse(tc.function.arguments) as Record<string, unknown>; } catch { /* leave empty on bad JSON */ }
+        const toolName = tc.function.name;
+
+        if (toolResults[tc.id] !== undefined) {
+          return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'output-available' as const, output: toolResults[tc.id] };
+        }
+        return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'input-available' as const };
+      });
+
+      const id = typeof msg.id === 'string' ? msg.id : createId();
+      result.push({ id, role: 'assistant', parts } as unknown as UIMessage);
+      i = j; // skip the consumed role:tool messages
+      continue;
+    }
+
+    // Standalone role:tool message without a preceding matched assistant — skip.
+    if (role === 'tool') {
+      i++;
+      continue;
+    }
+
+    result.push(normalizeMessage(msg));
+    i++;
+  }
+
+  return result;
+};
+
 export const validateInferenceRequest = (body: unknown): ValidationResult => {
   if (typeof body !== 'object' || body === null) {
     return { ok: false, status: 400, error: 'request body must be a JSON object' };
@@ -88,7 +150,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
     }
   }
 
-  const normalized = (messages as Record<string, unknown>[]).map(normalizeMessage);
+  const normalized = normalizeMessages(messages as Record<string, unknown>[]);
 
   for (const msg of normalized) {
     if (!Array.isArray(msg.parts) || msg.parts.length === 0) {
