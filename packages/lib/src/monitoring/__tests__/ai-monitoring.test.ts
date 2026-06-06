@@ -135,18 +135,9 @@ describe('calculateCost', () => {
     expect(calculateCost('completely-unknown-model', 1_000_000, 1_000_000)).toBe(0);
   });
 
-  it('emits warn when unknown model has non-zero tokens', () => {
+  it('does not warn for unknown model (warning lives in trackAIUsage with provider context)', () => {
     vi.clearAllMocks();
     calculateCost('completely-unknown-model', 1_000_000, 500_000);
-    expect(mockAiLogger.warn).toHaveBeenCalledWith(
-      'calculateCost: unknown model, billing $0',
-      { model: 'completely-unknown-model', inputTokens: 1_000_000, outputTokens: 500_000 }
-    );
-  });
-
-  it('does not warn when unknown model has zero tokens', () => {
-    vi.clearAllMocks();
-    calculateCost('completely-unknown-model', 0, 0);
     expect(mockAiLogger.warn).not.toHaveBeenCalled();
   });
 
@@ -689,6 +680,45 @@ describe('trackAIUsage', () => {
       'openrouter cost metadata missing; falling back to estimate',
       expect.anything(),
     );
+  });
+
+  it('warns when a cloud provider uses an unknown model with non-zero tokens', async () => {
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'completely-unknown-model',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+    });
+    expect(mockAiLogger.warn).toHaveBeenCalledWith(
+      'unknown model pricing, billing $0',
+      expect.objectContaining({ model: 'completely-unknown-model', provider: 'anthropic' }),
+    );
+  });
+
+  it('does not warn when a local provider uses an unknown model (expected $0)', async () => {
+    vi.clearAllMocks();
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'ollama',
+      model: 'qwen3',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+    });
+    expect(mockAiLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when a real OpenRouter cost is present (no estimate fallback)', async () => {
+    vi.clearAllMocks();
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'completely-unknown-model',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      providerCostDollars: 0.42,
+    });
+    expect(mockAiLogger.warn).not.toHaveBeenCalled();
   });
 });
 

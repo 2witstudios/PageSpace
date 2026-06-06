@@ -623,9 +623,6 @@ export function calculateCost(
 ): number {
   const pricing = AI_PRICING[model as keyof typeof AI_PRICING];
   if (!pricing) {
-    if (inputTokens > 0 || outputTokens > 0) {
-      loggers.ai.warn('calculateCost: unknown model, billing $0', { model, inputTokens, outputTokens });
-    }
     return 0;
   }
 
@@ -840,6 +837,18 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     // Every cloud vendor is served through OpenRouter; only the providers on the
     // explicit non-OpenRouter allowlist (local runtimes + direct voice) are not.
     const isOpenRouter = !NON_OPENROUTER_AI_PROVIDERS.has(data.provider);
+    // Flag unknown pricing only for cloud providers where missing AI_PRICING is a
+    // real coverage gap. Local providers (ollama, lmstudio) run arbitrary models
+    // absent from the static list, so $0 cost there is expected — not an alarm.
+    if (!hasRealCost && isOpenRouter && fallbackCost === 0 &&
+        ((inputTokens ?? 0) + (outputTokens ?? 0)) > 0) {
+      loggers.ai.warn('unknown model pricing, billing $0', {
+        model: data.model,
+        provider: data.provider,
+        inputTokens,
+        outputTokens,
+      });
+    }
     if (!hasRealCost && isOpenRouter) {
       // An OpenRouter call that should have carried cost metadata didn't — log
       // and fall back so we still bill (durability), but flag the coverage gap.
