@@ -25,18 +25,6 @@ import {
 } from '../billing/credit-pricing';
 
 /**
- * Whole-cent hold reservation for one chat call against `model`. Prices the assumed
- * per-call token budget (or a caller-supplied `inputTokens` estimate, when cheaply
- * available) at the catalog rate, applies the markup, and clamps to
- * [CHAT_HOLD_FLOOR_CENTS, CREDIT_HOLD_ESTIMATE_CENTS] — never below a sane minimum nor
- * above the legacy flat chat hold.
- *
- * An UNKNOWN or absent model (not in the catalog) falls back to the legacy flat hold
- * rather than being priced: the catalog default rate is $0, which would otherwise clamp
- * a real call down to the floor and weaken the gate. A KNOWN free model (input/output
- * both $0, e.g. gpt-oss) legitimately prices to the floor — that's fine.
- */
-/**
  * Cost in dollars for one AI SDK step, using the static pricing fallback.
  * Returns 0 for unknown models (calculateCost returns 0) or if pricing throws.
  * Pure — no side effects.
@@ -67,6 +55,18 @@ export function shouldAbortAfterStep(input: {
   return input.balanceCents - chargedSoFarCents <= input.reserveFloorCents;
 }
 
+/**
+ * Whole-cent hold reservation for one chat call against `model`. Prices the assumed
+ * per-call token budget (or a caller-supplied `inputTokens` estimate, when cheaply
+ * available) at the catalog rate, applies the markup, and clamps to
+ * [CHAT_HOLD_FLOOR_CENTS, CREDIT_HOLD_ESTIMATE_CENTS] — never below a sane minimum nor
+ * above the legacy flat chat hold.
+ *
+ * An UNKNOWN or absent model (not in the catalog) falls back to the legacy flat hold
+ * rather than being priced: the catalog default rate is $0, which would otherwise clamp
+ * a real call down to the floor and weaken the gate. A KNOWN free model (input/output
+ * both $0, e.g. gpt-oss) legitimately prices to the floor — that's fine.
+ */
 export function estimateChatHoldCentsForModel(
   model: string | undefined,
   opts: { inputTokens?: number } = {},

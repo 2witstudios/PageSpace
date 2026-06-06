@@ -93,6 +93,7 @@ describe('calcStepCostDollars', () => {
   it('returns 0 for an unknown model (calculateCost returns 0)', () => {
     mockCalculateCost.mockReturnValue(0);
     const result = calcStepCostDollars('some/unknown-model', { promptTokens: 1000, completionTokens: 500 });
+    expect(mockCalculateCost).toHaveBeenCalledWith('some/unknown-model', 1000, 500);
     expect(result).toBe(0);
   });
 
