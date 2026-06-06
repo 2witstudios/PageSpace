@@ -16,9 +16,10 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
-import { MAX_CHAT_INFLIGHT, MARKUP_BPS, RESERVE_FLOOR_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { estimateChatHoldCentsForModel, calcStepCostDollars, shouldAbortAfterStep } from '@pagespace/lib/monitoring/chat-pricing';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { makeOnStepFinishHandler } from './step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -92,31 +93,6 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
 export const maxDuration = 300;
-
-/**
- * Returns a per-step cost accumulator that aborts the stream once the user's
- * available balance (minus accumulated real-cost markup) falls to or below the
- * reserve floor. Extracted for unit testing; used via onStepFinish in streamText.
- */
-export function makeOnStepFinishHandler(
-  creditAbortController: AbortController,
-  availableBalanceCents: number,
-  model: string,
-): (usage: { promptTokens: number; completionTokens: number }) => void {
-  let cumulativeCostDollars = 0;
-  return (usage) => {
-    cumulativeCostDollars += calcStepCostDollars(model, usage);
-    if (shouldAbortAfterStep({
-      cumulativeCostDollars,
-      balanceCents: availableBalanceCents,
-      markupBps: MARKUP_BPS,
-      reserveFloorCents: RESERVE_FLOOR_CENTS,
-    })) {
-      creditAbortController.abort();
-    }
-  };
-}
-
 
 export async function POST(request: Request) {
   const startTime = Date.now();

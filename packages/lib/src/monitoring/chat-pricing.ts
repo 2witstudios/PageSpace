@@ -43,10 +43,10 @@ const UNKNOWN_MODEL_FALLBACK_DOLLARS = CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS 
  */
 export function calcStepCostDollars(
   model: string,
-  usage: { promptTokens: number; completionTokens: number },
+  usage: { inputTokens?: number | undefined; outputTokens?: number | undefined },
 ): number {
   try {
-    const cost = calculateCost(model, usage.promptTokens, usage.completionTokens);
+    const cost = calculateCost(model, usage.inputTokens ?? 0, usage.outputTokens ?? 0);
     if (cost > 0) return cost;
     // cost === 0: either a known free model OR an unknown model that hit the $0 default.
     // Unknown models should use the conservative fallback; known free models return 0.
