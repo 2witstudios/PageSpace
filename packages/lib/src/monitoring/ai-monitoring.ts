@@ -621,7 +621,10 @@ export function calculateCost(
   outputTokens: number = 0,
   opts: { cachedInputTokens?: number; reasoningTokens?: number } = {}
 ): number {
-  const pricing = AI_PRICING[model as keyof typeof AI_PRICING] || AI_PRICING.default;
+  const pricing = AI_PRICING[model as keyof typeof AI_PRICING];
+  if (!pricing) {
+    return 0;
+  }
 
   // Cached tokens are a subset of input; clamp to [0, inputTokens] so bad metadata
   // can't drive the cost negative or above the full-input cost. Fresh input bills at
@@ -835,12 +838,24 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
     // explicit non-OpenRouter allowlist (local runtimes + direct voice) are not.
     const isOpenRouter = !NON_OPENROUTER_AI_PROVIDERS.has(data.provider);
     if (!hasRealCost && isOpenRouter) {
-      // An OpenRouter call that should have carried cost metadata didn't — log
-      // and fall back so we still bill (durability), but flag the coverage gap.
-      loggers.ai.debug('openrouter cost metadata missing; falling back to estimate', {
-        model: data.model,
-        provider: data.provider,
-      });
+      if (fallbackCost === 0 && ((inputTokens ?? 0) + (outputTokens ?? 0)) > 0) {
+        // Model absent from AI_PRICING for a cloud provider — real coverage gap.
+        // Local providers (ollama, lmstudio) run arbitrary model ids not in the
+        // static list, so $0 there is expected; isOpenRouter already excludes them.
+        loggers.ai.warn('unknown model pricing, billing $0', {
+          model: data.model,
+          provider: data.provider,
+          inputTokens,
+          outputTokens,
+        });
+      } else {
+        // Known model but OpenRouter didn't return cost metadata — fall back to
+        // the static estimate so billing is durable.
+        loggers.ai.debug('openrouter cost metadata missing; falling back to estimate', {
+          model: data.model,
+          provider: data.provider,
+        });
+      }
     }
     const success = data.success !== false;
 
