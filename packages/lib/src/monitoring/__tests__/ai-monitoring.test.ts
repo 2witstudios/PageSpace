@@ -654,7 +654,7 @@ describe('trackAIUsage', () => {
     await trackAIUsage({
       userId: 'user-1',
       provider: 'openai',
-      model: 'openai/some-model',
+      model: 'openai/o3',
       inputTokens: 10,
       outputTokens: 10,
     });

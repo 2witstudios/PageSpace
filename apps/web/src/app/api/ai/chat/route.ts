@@ -105,6 +105,8 @@ export async function POST(request: Request) {
   // summed usage/steps for billing plus the success flag, abort detection, and retry
   // observability — so no separate usage/steps promises are needed.
   let agentRun: RunAgentWithRetryResult | undefined;
+  // Hoisted to outer scope so the catch-path trackUsage call bills on the real
+  // backend model id rather than the client-supplied alias (selectedModel).
   let resolvedModelName: string | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
