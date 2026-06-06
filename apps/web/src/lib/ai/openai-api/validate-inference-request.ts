@@ -53,13 +53,17 @@ const normalizeMessage = (msg: Record<string, unknown>): UIMessage => {
   return { id, role, parts: [] } as unknown as UIMessage;
 };
 
+type NormalizeResult =
+  | { ok: true; messages: UIMessage[] }
+  | { ok: false; error: string };
+
 // Normalizes a flat OpenAI-format messages array into UIMessage[].
 // Handles the multi-turn client-tool pattern: an assistant message with `tool_calls`
 // followed by one or more `role:"tool"` messages is collapsed into a single assistant
 // UIMessage whose parts carry `type:"tool-<name>"` / `state:"output-available"` data
 // (the same shape the streaming pipeline produces for server-side tools).
 // Standalone role:tool messages with no preceding matched assistant are skipped.
-const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] => {
+const normalizeMessages = (rawMessages: Record<string, unknown>[]): NormalizeResult => {
   const result: UIMessage[] = [];
   let i = 0;
 
@@ -68,7 +72,24 @@ const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] 
     const role = msg.role as string;
 
     if (role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
-      const toolCalls = msg.tool_calls as Array<{
+      const rawToolCalls = msg.tool_calls as Array<unknown>;
+
+      // Validate each entry before dereferencing — malformed entries return 400, not 500.
+      for (let idx = 0; idx < rawToolCalls.length; idx++) {
+        const tc = rawToolCalls[idx] as Record<string, unknown>;
+        const fn = tc?.function as Record<string, unknown> | undefined;
+        if (
+          typeof tc !== 'object' || tc === null ||
+          typeof tc.id !== 'string' ||
+          typeof fn !== 'object' || fn === null ||
+          typeof fn.name !== 'string' ||
+          typeof fn.arguments !== 'string'
+        ) {
+          return { ok: false, error: `tool_calls[${idx}] must have id (string), function.name (string), and function.arguments (string)` };
+        }
+      }
+
+      const toolCalls = rawToolCalls as Array<{
         id: string;
         function: { name: string; arguments: string };
       }>;
@@ -87,16 +108,31 @@ const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] 
         j++;
       }
 
-      const parts = toolCalls.map(tc => {
+      // Build parts: preserve any natural-language content first, then tool call parts.
+      // OpenAI permits assistant messages with both `content` and `tool_calls`; dropping
+      // the text would remove context that follow-up requests depend on.
+      const parts: Array<Record<string, unknown>> = [];
+      if (typeof msg.content === 'string' && msg.content) {
+        parts.push({ type: 'text', text: msg.content });
+      } else if (Array.isArray(msg.content)) {
+        for (const c of msg.content as Array<Record<string, unknown>>) {
+          if (c.type === 'text' && typeof c.text === 'string' && c.text) {
+            parts.push({ type: 'text', text: c.text });
+          }
+        }
+      }
+
+      for (const tc of toolCalls) {
         let input: Record<string, unknown> = {};
         try { input = JSON.parse(tc.function.arguments) as Record<string, unknown>; } catch { /* leave empty on bad JSON */ }
         const toolName = tc.function.name;
 
         if (toolResults.has(tc.id)) {
-          return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'output-available' as const, output: toolResults.get(tc.id) };
+          parts.push({ type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'output-available', output: toolResults.get(tc.id) });
+        } else {
+          parts.push({ type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'input-available' });
         }
-        return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'input-available' as const };
-      });
+      }
 
       const id = typeof msg.id === 'string' ? msg.id : createId();
       result.push({ id, role: 'assistant', parts } as unknown as UIMessage);
@@ -114,7 +150,7 @@ const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] 
     i++;
   }
 
-  return result;
+  return { ok: true, messages: result };
 };
 
 export const validateInferenceRequest = (body: unknown): ValidationResult => {
@@ -152,7 +188,11 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
     }
   }
 
-  const normalized = normalizeMessages(messages as Record<string, unknown>[]);
+  const normalizeResult = normalizeMessages(messages as Record<string, unknown>[]);
+  if (!normalizeResult.ok) {
+    return { ok: false, status: 400, error: normalizeResult.error };
+  }
+  const normalized = normalizeResult.messages;
 
   for (const msg of normalized) {
     if (!Array.isArray(msg.parts) || msg.parts.length === 0) {

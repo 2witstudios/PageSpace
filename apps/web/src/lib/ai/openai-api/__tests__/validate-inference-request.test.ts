@@ -368,4 +368,43 @@ describe('validateInferenceRequest', () => {
       expected: { ok: true, messageCount: 1 },
     });
   });
+
+  test('malformed tool_calls entry returns 400 instead of 500', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'assistant',
+        content: null,
+        tool_calls: [{}],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an assistant message with a tool_calls entry missing id and function',
+      should: 'return ok:false with status 400 (not throw a 500)',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('assistant message with content and tool_calls preserves text as first part', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'assistant',
+        content: "I'll run bash for you.",
+        tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    const parts = result.ok ? result.data.messages[0].parts as Array<Record<string, unknown>> : [];
+    assert({
+      given: 'an assistant message with both string content and tool_calls',
+      should: 'include a text part before the tool part so the natural-language context is preserved',
+      actual: result.ok
+        ? { ok: true, partCount: parts.length, firstType: parts[0]?.type, firstText: parts[0]?.text, secondType: parts[1]?.type }
+        : { ok: false },
+      expected: { ok: true, partCount: 2, firstType: 'text', firstText: "I'll run bash for you.", secondType: 'tool-bash' },
+    });
+  });
 });
