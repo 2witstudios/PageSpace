@@ -96,7 +96,10 @@ export default function BackupsPage() {
     fetcher
   );
 
-  const selectedDrive = drives.find((d) => d.id === selectedDriveId);
+  const selectedDrive = useMemo(
+    () => drives.find((d) => d.id === selectedDriveId),
+    [drives, selectedDriveId]
+  );
 
   const handleCreateBackup = async () => {
     if (!selectedDriveId || isCreating) return;
