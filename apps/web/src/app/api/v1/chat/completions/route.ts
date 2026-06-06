@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, hasToolCall, stepCountIs } from 'ai';
+import { streamText, convertToModelMessages, hasToolCall, stepCountIs, tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
@@ -73,7 +73,21 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId } = validation.data;
+  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools } = validation.data;
+
+  // Build the caller's client-side tool set. Tools registered without `execute` are returned
+  // to the caller as native tool_calls — the SDK pauses, the caller executes locally, and the
+  // conversation resumes via role:tool messages (see multi-turn conversation API, PR #1552).
+  const clientToolSet: ToolSet = {};
+  for (const def of rawClientTools ?? []) {
+    clientToolSet[def.function.name] = tool({
+      description: def.function.description ?? '',
+      inputSchema: jsonSchema(def.function.parameters ?? { type: 'object', properties: {} }),
+      // No execute — signals to the SDK to return this call to the caller.
+    }) as ToolSet[string];
+  }
+  const hasClientTools = Object.keys(clientToolSet).length > 0;
+  const useServerTools = !disableServerTools;
 
   // 3. MCP drive-scope check
   const scopeError = await checkMCPPageScope(authResult, pageId);
@@ -144,26 +158,55 @@ export async function POST(request: Request): Promise<Response> {
   const systemPrompt = page.systemPrompt
     ?? buildSystemPrompt('page', undefined, false);
 
-  // 7b. Build the agent's server-side tool set (mirrors /api/ai/chat).
-  // The OpenAI request shape carries no read-only / web-search toggles, so
-  // read-only defaults to false; web_search falls through the allowlist.
-  const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
-  // Per-agent allowlist: null/undefined = unrestricted; [] = none; [names] = only those.
+  // 7b. Build the final tool set and stop conditions based on the request mode:
+  //   server-only (useServerTools && !hasClientTools)  — full PageSpace tools + finish tool (default)
+  //   client-only (!useServerTools) — caller tools only, or empty if no client tools provided
+  //   both        (useServerTools && hasClientTools) — merged; client wins on name collision
+  // Client modes skip the finish tool because the caller controls the conversation externally;
+  // each round-trip is a new request and the finish tool would conflict with that flow.
+  // disable_server_tools is honoured independently of whether client tools are present:
+  //   disable_server_tools:true with no tools → no tools at all (model generates text only).
   const agentEnabledTools = page.enabledTools as string[] | null;
-  let filteredTools: ToolSet =
-    agentEnabledTools != null
-      ? (Object.fromEntries(
-          Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
-        ) as ToolSet)
-      : (baseTools as ToolSet);
-  // Exposure mode: 'upfront' (default) hands every tool over; 'search' defers
-  // non-core tools behind tool_search/execute_tool.
   const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
-  const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
-  filteredTools = exposure.tools;
-  const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
-  // Always inject the finish tool so the agentic loop can terminate cleanly.
-  filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
+
+  const inServerOnlyMode = useServerTools && !hasClientTools;
+
+  let finalTools: ToolSet;
+  let toolDiscoveryPrompt = '';
+  const stopConditions = inServerOnlyMode
+    ? [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)]
+    : [stepCountIs(100)];
+
+  if (inServerOnlyMode) {
+    // server-only: existing pipeline unchanged
+    const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+    let filteredTools: ToolSet =
+      agentEnabledTools != null
+        ? (Object.fromEntries(
+            Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
+          ) as ToolSet)
+        : (baseTools as ToolSet);
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+    filteredTools = exposure.tools;
+    toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+    finalTools = { ...filteredTools, ...finishTool } as ToolSet;
+  } else if (!useServerTools) {
+    // client-only or no-tools: just client tools (may be empty when disable_server_tools=true but no tools provided)
+    finalTools = clientToolSet;
+  } else {
+    // both: server tools + client tools; client wins on name collision
+    const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+    let filteredTools: ToolSet =
+      agentEnabledTools != null
+        ? (Object.fromEntries(
+            Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
+          ) as ToolSet)
+        : (baseTools as ToolSet);
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+    filteredTools = exposure.tools;
+    toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
+    finalTools = { ...filteredTools, ...clientToolSet } as ToolSet;
+  }
 
   // Load the caller's timezone so time-aware tools (calendar, task triggers)
   // resolve dates in the user's zone instead of defaulting to UTC, matching
@@ -289,8 +332,8 @@ export async function POST(request: Request): Promise<Response> {
     model: providerResult.model,
     system: systemPrompt + (callerSystemPrompt ? `\n\n${callerSystemPrompt}` : '') + toolDiscoveryPrompt,
     messages: convertToModelMessages(sanitized),
-    tools: filteredTools,
-    stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
+    tools: finalTools,
+    stopWhen: stopConditions,
     // Aborts when the consumer closes the connection (see abortController above).
     abortSignal: abortController.signal,
     experimental_context: {
@@ -322,6 +365,11 @@ export async function POST(request: Request): Promise<Response> {
       // Per-step tool call state: tracks tool index and presence for finish-step finish_reason
       let stepToolCallIndex = 0;
       let stepHadToolCalls = false;
+      // Client-tool tracking: detect when the stream ends on a client-side tool call so we
+      // can emit finish_reason:'tool_calls' instead of 'stop' on the final finish chunk.
+      const clientToolNames = new Set(Object.keys(clientToolSet));
+      let hadClientToolThisStep = false;
+      let streamEndedOnClientTool = false;
 
       try {
         for await (const chunk of aiResult.toUIMessageStream()) {
@@ -331,6 +379,7 @@ export async function POST(request: Request): Promise<Response> {
           if (chunk.type === 'start-step') {
             stepToolCallIndex = 0;
             stepHadToolCalls = false;
+            hadClientToolThisStep = false;
           }
 
           // Capture index before increment so the emitted chunk gets the right index
@@ -338,6 +387,13 @@ export async function POST(request: Request): Promise<Response> {
           if (chunk.type === 'tool-input-available') {
             stepHadToolCalls = true;
             stepToolCallIndex++;
+            if (clientToolNames.has(chunk.toolName)) {
+              hadClientToolThisStep = true;
+            }
+          }
+
+          if (chunk.type === 'finish-step' && hadClientToolThisStep) {
+            streamEndedOnClientTool = true;
           }
 
           const line = adaptToOpenAIChunk(chunk, {
@@ -346,6 +402,7 @@ export async function POST(request: Request): Promise<Response> {
             created,
             toolCallIndex,
             hadToolCallsInStep: stepHadToolCalls,
+            overrideFinishReason: chunk.type === 'finish' && streamEndedOnClientTool ? 'tool_calls' : undefined,
           });
           if (line) {
             controller.enqueue(encoder.encode(line + '\n\n'));

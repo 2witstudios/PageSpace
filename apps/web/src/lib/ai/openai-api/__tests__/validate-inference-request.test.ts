@@ -11,7 +11,7 @@ describe('validateInferenceRequest', () => {
       given: 'a valid ps-agent model URI and non-empty messages array',
       should: 'return ok:true with the parsed pageId, messages, stream:true, and no driveContext',
       actual: result,
-      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined } },
+      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined, clientTools: undefined, disableServerTools: false } },
     });
   });
 
@@ -213,6 +213,198 @@ describe('validateInferenceRequest', () => {
       should: 'return undefined for conversationId',
       actual: result.ok ? result.data.conversationId : 'error',
       expected: undefined,
+    });
+  });
+
+  test('valid tools array is parsed into clientTools', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const tools = [{ type: 'function', function: { name: 'bash', description: 'Run a shell command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } } }];
+    const body = { model: 'ps-agent://page-123', messages, tools };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a valid tools array with type:function and function.name',
+      should: 'return ok:true with clientTools populated',
+      actual: result.ok ? result.data.clientTools : undefined,
+      expected: [{ type: 'function', function: { name: 'bash', description: 'Run a shell command', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } } }],
+    });
+  });
+
+  test('tool entry missing function.name returns 400', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'function', function: { description: 'no name' } }] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a tools array with an entry missing function.name',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('tool entry with non-function type returns 400', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'retrieval', function: { name: 'search' } }] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a tools array with an entry whose type is not "function"',
+      should: 'return ok:false with status 400',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('empty tools array treats clientTools as undefined', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an empty tools array',
+      should: 'return clientTools as undefined',
+      actual: result.ok ? result.data.clientTools : 'error',
+      expected: undefined,
+    });
+  });
+
+  test('disable_server_tools:true sets disableServerTools', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, disable_server_tools: true };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'disable_server_tools:true in the body',
+      should: 'return disableServerTools:true',
+      actual: result.ok ? result.data.disableServerTools : undefined,
+      expected: true,
+    });
+  });
+
+  test('disable_server_tools absent defaults to false', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'disable_server_tools absent from the body',
+      should: 'return disableServerTools:false',
+      actual: result.ok ? result.data.disableServerTools : undefined,
+      expected: false,
+    });
+  });
+
+  test('tool without description or parameters is accepted', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'function', function: { name: 'read_file' } }] };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a tool with only name (no description or parameters)',
+      should: 'return ok:true with the tool in clientTools',
+      actual: result.ok ? result.data.clientTools?.[0]?.function.name : undefined,
+      expected: 'read_file',
+    });
+  });
+
+  test('assistant message with tool_calls (content null) is normalized to tool part', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an assistant message with tool_calls and null content',
+      should: 'normalize to a UIMessage with a tool-bash part at input-available state',
+      actual: result.ok
+        ? { ok: true, partType: (result.data.messages[0].parts[0] as Record<string, unknown>)?.type, partState: (result.data.messages[0].parts[0] as Record<string, unknown>)?.state }
+        : { ok: false },
+      expected: { ok: true, partType: 'tool-bash', partState: 'input-available' },
+    });
+  });
+
+  test('assistant tool_calls paired with role:tool result normalized to output-available', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'run ls', parts: [{ type: 'text', text: 'run ls' }] },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }],
+        },
+        { role: 'tool', tool_call_id: 'tc-1', content: 'file1.txt\nfile2.txt' },
+      ],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'assistant tool_calls followed by a matching role:tool result',
+      should: 'collapse into a single assistant UIMessage with output-available part (not two separate messages)',
+      actual: result.ok
+        ? {
+            messageCount: result.data.messages.length,
+            secondRole: result.data.messages[1]?.role,
+            partState: (result.data.messages[1]?.parts[0] as Record<string, unknown>)?.state,
+            partOutput: (result.data.messages[1]?.parts[0] as Record<string, unknown>)?.output,
+          }
+        : { ok: false },
+      expected: { messageCount: 2, secondRole: 'assistant', partState: 'output-available', partOutput: 'file1.txt\nfile2.txt' },
+    });
+  });
+
+  test('standalone role:tool message without preceding assistant is skipped', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'hi', parts: [{ type: 'text', text: 'hi' }] },
+        { role: 'tool', tool_call_id: 'orphan', content: 'some result' },
+      ],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a role:tool message with no preceding assistant tool_calls',
+      should: 'skip it and return ok:true with only the user message',
+      actual: result.ok
+        ? { ok: true, messageCount: result.data.messages.length }
+        : { ok: false },
+      expected: { ok: true, messageCount: 1 },
+    });
+  });
+
+  test('malformed tool_calls entry returns 400 instead of 500', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'assistant',
+        content: null,
+        tool_calls: [{}],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'an assistant message with a tool_calls entry missing id and function',
+      should: 'return ok:false with status 400 (not throw a 500)',
+      actual: { ok: result.ok, status: result.ok ? undefined : result.status },
+      expected: { ok: false, status: 400 },
+    });
+  });
+
+  test('assistant message with content and tool_calls preserves text as first part', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'assistant',
+        content: "I'll run bash for you.",
+        tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'bash', arguments: '{"cmd":"ls"}' } }],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    const parts = result.ok ? result.data.messages[0].parts as Array<Record<string, unknown>> : [];
+    assert({
+      given: 'an assistant message with both string content and tool_calls',
+      should: 'include a text part before the tool part so the natural-language context is preserved',
+      actual: result.ok
+        ? { ok: true, partCount: parts.length, firstType: parts[0]?.type, firstText: parts[0]?.text, secondType: parts[1]?.type }
+        : { ok: false },
+      expected: { ok: true, partCount: 2, firstType: 'text', firstText: "I'll run bash for you.", secondType: 'tool-bash' },
     });
   });
 });
