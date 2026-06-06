@@ -11,6 +11,7 @@ const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined)
 const mockAiLogger = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
+  warn: vi.fn(),
 }));
 const mockDbSelectFn = vi.hoisted(() => vi.fn());
 
@@ -130,8 +131,23 @@ describe('calculateCost', () => {
     expect(calculateCost('llama3.2', 100_000, 100_000)).toBe(0);
   });
 
-  it('should fall back to default pricing (0,0) for unknown model', () => {
+  it('should return 0 for unknown model', () => {
     expect(calculateCost('completely-unknown-model', 1_000_000, 1_000_000)).toBe(0);
+  });
+
+  it('emits warn when unknown model has non-zero tokens', () => {
+    vi.clearAllMocks();
+    calculateCost('completely-unknown-model', 1_000_000, 500_000);
+    expect(mockAiLogger.warn).toHaveBeenCalledWith(
+      'calculateCost: unknown model, billing $0',
+      { model: 'completely-unknown-model', inputTokens: 1_000_000, outputTokens: 500_000 }
+    );
+  });
+
+  it('does not warn when unknown model has zero tokens', () => {
+    vi.clearAllMocks();
+    calculateCost('completely-unknown-model', 0, 0);
+    expect(mockAiLogger.warn).not.toHaveBeenCalled();
   });
 
   // Regression guard: the retired GLM model ids must stay priced as a legacy billing
@@ -227,7 +243,7 @@ describe('calculateCost', () => {
     ).toBe(calculateCost('gpt-4o', 1_000_000, 1_000_000));
   });
 
-  it('unknown model still uses default pricing with opts', () => {
+  it('unknown model returns 0 regardless of opts', () => {
     expect(
       calculateCost('completely-unknown-model', 1_000_000, 0, { reasoningTokens: 1_000_000 })
     ).toBe(0);

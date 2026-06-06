@@ -105,6 +105,7 @@ export async function POST(request: Request) {
   // summed usage/steps for billing plus the success flag, abort detection, and retry
   // observability — so no separate usage/steps promises are needed.
   let agentRun: RunAgentWithRetryResult | undefined;
+  let resolvedModelName: string | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
@@ -532,7 +533,8 @@ export async function POST(request: Request) {
 
     // Use the resolved model name for billing. providerResult.modelName is the
     // real OpenRouter model id sent to the backend.
-    const { model, modelName: resolvedModelName } = providerResult;
+    const { model } = providerResult;
+    resolvedModelName = providerResult.modelName;
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
@@ -880,7 +882,7 @@ export async function POST(request: Request) {
           // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the
           // model string, so an alias yields wrong capability flags.
-          const modelCapabilitiesForTools = await getModelCapabilities(resolvedModelName, currentProvider);
+          const modelCapabilitiesForTools = await getModelCapabilities(resolvedModelName!, currentProvider);
           // Server-side, in-request retry: if an attempt drops mid-loop (OpenRouter
           // disconnect) or ends mid-tool without the finish tool, transparently
           // re-drive the loop under one message envelope. The loop lives inside
@@ -1055,7 +1057,7 @@ export async function POST(request: Request) {
             await AIMonitoring.trackUsage({
               userId: userId!,
               provider: currentProvider,
-              model: resolvedModelName,
+              model: resolvedModelName!,
               source: 'chat',
               inputTokens,
               outputTokens,
@@ -1096,7 +1098,7 @@ export async function POST(request: Request) {
                 await AIMonitoring.trackToolUsage({
                   userId: userId!,
                   provider: currentProvider,
-                  model: resolvedModelName,
+                  model: resolvedModelName!,
                   toolName: toolCall.toolName,
                   toolId: toolCall.toolCallId,
                   args: undefined,
@@ -1169,7 +1171,7 @@ export async function POST(request: Request) {
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
       provider: selectedProvider || 'unknown',
-      model: selectedModel || 'unknown',
+      model: resolvedModelName ?? selectedModel ?? 'unknown',
       source: 'chat',
       inputTokens: usage?.inputTokens ?? undefined,
       outputTokens: usage?.outputTokens ?? undefined,

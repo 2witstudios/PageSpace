@@ -621,7 +621,13 @@ export function calculateCost(
   outputTokens: number = 0,
   opts: { cachedInputTokens?: number; reasoningTokens?: number } = {}
 ): number {
-  const pricing = AI_PRICING[model as keyof typeof AI_PRICING] || AI_PRICING.default;
+  const pricing = AI_PRICING[model as keyof typeof AI_PRICING];
+  if (!pricing) {
+    if (inputTokens > 0 || outputTokens > 0) {
+      loggers.ai.warn('calculateCost: unknown model, billing $0', { model, inputTokens, outputTokens });
+    }
+    return 0;
+  }
 
   // Cached tokens are a subset of input; clamp to [0, inputTokens] so bad metadata
   // can't drive the cost negative or above the full-input cost. Fresh input bills at
