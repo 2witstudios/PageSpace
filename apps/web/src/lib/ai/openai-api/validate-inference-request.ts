@@ -74,13 +74,15 @@ const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] 
       }>;
 
       // Collect immediately following role:tool messages and build a result map.
-      const toolResults: Record<string, string> = {};
+      // Use Map (not plain object) so user-supplied tool_call_id values cannot
+      // pollute Object.prototype via keys like "__proto__".
+      const toolResults = new Map<string, string>();
       let j = i + 1;
       while (j < rawMessages.length && rawMessages[j].role === 'tool') {
         const toolMsg = rawMessages[j];
         const toolCallId = typeof toolMsg.tool_call_id === 'string' ? toolMsg.tool_call_id : undefined;
         if (toolCallId) {
-          toolResults[toolCallId] = typeof toolMsg.content === 'string' ? toolMsg.content : '';
+          toolResults.set(toolCallId, typeof toolMsg.content === 'string' ? toolMsg.content : '');
         }
         j++;
       }
@@ -90,8 +92,8 @@ const normalizeMessages = (rawMessages: Record<string, unknown>[]): UIMessage[] 
         try { input = JSON.parse(tc.function.arguments) as Record<string, unknown>; } catch { /* leave empty on bad JSON */ }
         const toolName = tc.function.name;
 
-        if (toolResults[tc.id] !== undefined) {
-          return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'output-available' as const, output: toolResults[tc.id] };
+        if (toolResults.has(tc.id)) {
+          return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'output-available' as const, output: toolResults.get(tc.id) };
         }
         return { type: `tool-${toolName}`, toolCallId: tc.id, toolName, input, state: 'input-available' as const };
       });
