@@ -25,8 +25,20 @@ import {
 } from '../billing/credit-pricing';
 
 /**
- * Cost in dollars for one AI SDK step, using the static pricing fallback.
- * Returns 0 for unknown models (calculateCost returns 0) or if pricing throws.
+ * Conservative per-step cost (dollars) used when a model is not in the catalog.
+ * `calculateCost` returns 0 for unknown models (the catalog `default` has $0 rates),
+ * which would leave the mid-stream abort guard permanently inactive for uncatalogued
+ * but potentially expensive models. This fallback converts the legacy flat hold
+ * (CREDIT_HOLD_ESTIMATE_CENTS) back to dollars — after markup it charges exactly
+ * CREDIT_HOLD_ESTIMATE_CENTS per step, bounding uncatalogued-model runs.
+ */
+const UNKNOWN_MODEL_FALLBACK_DOLLARS = CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS / 10000) / 100;
+
+/**
+ * Cost in dollars for one AI SDK step. Unknown/uncatalogued models use a conservative
+ * fallback (UNKNOWN_MODEL_FALLBACK_DOLLARS) so the mid-stream abort still fires rather
+ * than letting an uncatalogued model run without bound. Known free models ($0 catalog
+ * rate) correctly return 0. Returns the fallback on any pricing error.
  * Pure — no side effects.
  */
 export function calcStepCostDollars(
@@ -34,9 +46,15 @@ export function calcStepCostDollars(
   usage: { promptTokens: number; completionTokens: number },
 ): number {
   try {
-    return calculateCost(model, usage.promptTokens, usage.completionTokens);
+    const cost = calculateCost(model, usage.promptTokens, usage.completionTokens);
+    if (cost > 0) return cost;
+    // cost === 0: either a known free model OR an unknown model that hit the $0 default.
+    // Unknown models should use the conservative fallback; known free models return 0.
+    return Object.prototype.hasOwnProperty.call(AI_PRICING, model)
+      ? 0
+      : UNKNOWN_MODEL_FALLBACK_DOLLARS;
   } catch {
-    return 0;
+    return UNKNOWN_MODEL_FALLBACK_DOLLARS;
   }
 }
 

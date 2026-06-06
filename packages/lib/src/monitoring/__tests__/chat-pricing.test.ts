@@ -21,6 +21,7 @@ import {
   CHAT_HOLD_ASSUMED_OUTPUT_TOKENS,
   CHAT_HOLD_FLOOR_CENTS,
   CREDIT_HOLD_ESTIMATE_CENTS,
+  MARKUP_BPS,
 } from '../../billing/credit-pricing';
 
 beforeEach(() => vi.clearAllMocks());
@@ -90,15 +91,19 @@ describe('calcStepCostDollars', () => {
     expect(result).toBe(0.10);
   });
 
-  it('returns 0 for an unknown model (calculateCost returns 0)', () => {
+  it('returns the conservative fallback for an unknown model (not 0)', () => {
     mockCalculateCost.mockReturnValue(0);
     const result = calcStepCostDollars('some/unknown-model', { promptTokens: 1000, completionTokens: 500 });
     expect(mockCalculateCost).toHaveBeenCalledWith('some/unknown-model', 1000, 500);
-    expect(result).toBe(0);
+    // Unknown model must NOT return 0 — that would disable the mid-stream abort
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeCloseTo(CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS / 10000) / 100, 10);
   });
 
-  it('returns 0 when both token counts are zero', () => {
+  it('returns 0 for a known free model (both $0 catalog rates)', () => {
+    // 'default' key is in the mock AI_PRICING but has $0 rates — known, legitimately free
     mockCalculateCost.mockReturnValue(0);
+    // Use a model that IS in the mock AI_PRICING but has 0 cost
     const result = calcStepCostDollars('anthropic/claude-opus-4.8', { promptTokens: 0, completionTokens: 0 });
     expect(result).toBe(0);
   });
@@ -110,9 +115,11 @@ describe('calcStepCostDollars', () => {
     expect(result).toBe(0.05);
   });
 
-  it('returns 0 if calculateCost throws', () => {
+  it('returns the conservative fallback (not 0) if calculateCost throws', () => {
     mockCalculateCost.mockImplementation(() => { throw new Error('pricing error'); });
-    expect(calcStepCostDollars('anthropic/claude-opus-4.8', { promptTokens: 1000, completionTokens: 500 })).toBe(0);
+    const result = calcStepCostDollars('anthropic/claude-opus-4.8', { promptTokens: 1000, completionTokens: 500 });
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeCloseTo(CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS / 10000) / 100, 10);
   });
 });
 

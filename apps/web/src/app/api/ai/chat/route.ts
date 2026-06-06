@@ -391,11 +391,12 @@ export async function POST(request: Request) {
     holdId = creditGate.holdId;
 
     const creditAbortController = holdId ? new AbortController() : null;
+    // Net spendable after all holds (including this request's) — already computed by
+    // the gate so no extra DB read is needed. Each stream guards against its own slice,
+    // not the gross balance, preventing concurrent streams from collectively overshooting.
     const availableBalanceCents =
       holdId && creditGate.balanceSnapshot
-        ? creditGate.balanceSnapshot.monthlyCents +
-          creditGate.balanceSnapshot.topupCents -
-          creditGate.balanceSnapshot.debtCents
+        ? creditGate.balanceSnapshot.netSpendableCents
         : null;
 
     // Eagerly ensure a conversations row exists so the creator can always see

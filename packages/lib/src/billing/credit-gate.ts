@@ -291,14 +291,19 @@ export async function canConsumeAI(
       .values({ userId, estCents: estCost, expiresAt })
       .returning({ id: creditHolds.id });
 
+    // Net spendable after ALL holds (existing `reserved` + this call's `estCost`) and
+    // debt — the same quantity evaluateGate checked. Stored so onStepFinish can guard
+    // the per-stream abort budget without an extra DB read. Each concurrent stream gets
+    // only its fair slice, not the gross bucket balance (which would let N streams each
+    // consume nearly the full balance before aborting, collectively exceeding the cap).
+    const netSpendableCents = bal
+      ? bal.monthlyRemainingCents + bal.topupRemainingCents - (bal.debtCents ?? 0) - reserved - estCost
+      : 0;
+
     return {
       ...result,
       holdId: inserted[0]?.id,
-      balanceSnapshot: bal ? {
-        monthlyCents: bal.monthlyRemainingCents,
-        topupCents: bal.topupRemainingCents,
-        debtCents: bal.debtCents ?? 0,
-      } : undefined,
+      balanceSnapshot: bal ? { netSpendableCents } : undefined,
     };
   });
 
