@@ -666,7 +666,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
     // Get AI provider
     const providerResult = await createAIProvider(userId, {
-      selectedProvider: 'openai',
+      selectedProvider: 'anthropic',
       selectedModel: BACKGROUND_LIGHT_MODEL,
     });
 

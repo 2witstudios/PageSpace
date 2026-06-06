@@ -37,7 +37,7 @@ export const DEFAULT_MODEL = DEFAULT_AI_MODEL;
  * workflows) that previously used the `standard`/`pro` PageSpace aliases. These are
  * concrete OpenRouter IDs so the jobs no longer depend on the removed alias layer.
  */
-export const BACKGROUND_LIGHT_MODEL = 'openai/gpt-5.4-mini';
+export const BACKGROUND_LIGHT_MODEL = 'anthropic/claude-haiku-4.5';
 export const BACKGROUND_HEAVY_MODEL = 'anthropic/claude-sonnet-4.6';
 
 /**
