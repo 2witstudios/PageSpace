@@ -178,10 +178,28 @@ jobs:
             exit 1
           fi
 
-          # Wait for machine to reach stopped state. --wait-timeout takes a duration string.
-          # flyctl machine wait exit code is authoritative: 0 = stopped, non-zero = timed out.
-          if ! flyctl machine wait "$MACHINE_ID" --app pagespace-web --state stopped --wait-timeout 15m; then
-            echo "ERROR: machine did not reach stopped state within 15 minutes"
+          # Poll for terminal state. A machine that exits 0 → "stopped"; non-zero → "failed".
+          # flyctl machine wait --state stopped hangs the full timeout when migrations fail
+          # because the machine is already in "failed" state, not "stopped". Poll both.
+          TIMEOUT=900
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATE=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>/dev/null | jq -r '.state // "unknown"')
+            echo "  [${ELAPSED}s] state: $STATE"
+            if [ "$STATE" = "stopped" ]; then
+              break
+            elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
+              echo "ERROR: migration machine reached $STATE state (migrations failed)"
+              flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
+              flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+              exit 1
+            fi
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: timed out after ${TIMEOUT}s waiting for migration machine"
             flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
