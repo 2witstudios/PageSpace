@@ -15,7 +15,7 @@
  */
 
 import { calculateCost, AI_PRICING } from './ai-monitoring';
-import { estimateChatHoldCents } from '../billing/credit-core';
+import { estimateChatHoldCents, markupCents } from '../billing/credit-core';
 import {
   MARKUP_BPS,
   CHAT_HOLD_FLOOR_CENTS,
@@ -36,6 +36,37 @@ import {
  * a real call down to the floor and weaken the gate. A KNOWN free model (input/output
  * both $0, e.g. gpt-oss) legitimately prices to the floor — that's fine.
  */
+/**
+ * Cost in dollars for one AI SDK step, using the static pricing fallback.
+ * Returns 0 for unknown models (calculateCost returns 0) or if pricing throws.
+ * Pure — no side effects.
+ */
+export function calcStepCostDollars(
+  model: string,
+  usage: { promptTokens: number; completionTokens: number },
+): number {
+  try {
+    return calculateCost(model, usage.promptTokens, usage.completionTokens);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * True when the user's remaining spendable credits (after applying the markup on
+ * cumulative cost so far) are at or below the reserve floor. Abort the stream.
+ * Pure — no side effects.
+ */
+export function shouldAbortAfterStep(input: {
+  cumulativeCostDollars: number;
+  balanceCents: number;
+  markupBps: number;
+  reserveFloorCents: number;
+}): boolean {
+  const chargedSoFarCents = markupCents(input.cumulativeCostDollars, input.markupBps);
+  return input.balanceCents - chargedSoFarCents <= input.reserveFloorCents;
+}
+
 export function estimateChatHoldCentsForModel(
   model: string | undefined,
   opts: { inputTokens?: number } = {},
