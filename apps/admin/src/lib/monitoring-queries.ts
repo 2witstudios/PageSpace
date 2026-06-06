@@ -601,7 +601,7 @@ export async function getMarginByPeriod(
   if (granularity !== 'day' && granularity !== 'month') {
     throw new Error(`Invalid granularity: ${granularity}`);
   }
-  const periodExpr = sql<string>`DATE_TRUNC(${granularity}, ${creditLedger.createdAt})`;
+  const periodExpr = sql<string>`DATE_TRUNC('${sql.raw(granularity)}', ${creditLedger.createdAt})`;
 
   const rows = await db
     .select({
@@ -951,7 +951,7 @@ export async function getTokenUsageByPeriod(
   if (granularity !== 'day' && granularity !== 'month') {
     throw new Error(`Invalid granularity: ${granularity}`);
   }
-  const periodExpr = sql<string>`DATE_TRUNC(${granularity}, ${aiUsageLogs.timestamp})`;
+  const periodExpr = sql<string>`DATE_TRUNC('${sql.raw(granularity)}', ${aiUsageLogs.timestamp})`;
 
   return db
     .select({
