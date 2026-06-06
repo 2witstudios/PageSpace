@@ -184,7 +184,11 @@ jobs:
           TIMEOUT=900
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            STATE=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>/dev/null | jq -r '.state // "unknown"')
+            # Capture stdout+stderr together; flyctl may print an update notification to stdout
+            # before the JSON (superfly/flyctl#137) — extract the JSON line defensively.
+            STATUS_RAW=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>&1 || true)
+            STATUS_JSON=$(printf '%s' "$STATUS_RAW" | grep '^{' | head -1 || true)
+            STATE=$(printf '%s' "$STATUS_JSON" | jq -r '.state // "unknown"' 2>/dev/null || echo "unknown")
             echo "  [${ELAPSED}s] state: $STATE"
             if [ "$STATE" = "stopped" ]; then
               break
@@ -208,6 +212,7 @@ jobs:
           echo "Migrations complete"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_NO_UPDATE_CHECK: "true"
 
       - name: Deploy web
         run: |
