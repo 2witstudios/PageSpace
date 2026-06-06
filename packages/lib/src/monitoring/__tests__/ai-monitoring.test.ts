@@ -741,8 +741,10 @@ describe('extractOpenRouterCostDollars', () => {
     expect(extractOpenRouterCostDollars([step(0.001), step(0.002), step(0.003)])).toBeCloseTo(0.006, 10);
   });
 
-  it('adds BYOK upstream inference cost to the OpenRouter fee', () => {
-    expect(extractOpenRouterCostDollars([step(0.0001, 0.005)])).toBeCloseTo(0.0051, 10);
+  it('ignores upstreamInferenceCost — it is a sub-breakdown of cost, not additive', () => {
+    // usage.cost is the complete OpenRouter charge (inclusive of upstream inference).
+    // Adding upstreamInferenceCost on top would double-count it.
+    expect(extractOpenRouterCostDollars([step(0.24, 0.17)])).toBeCloseTo(0.24, 10);
   });
 
   it('treats a zeroed (cached) cost as a real 0, not a missing value', () => {

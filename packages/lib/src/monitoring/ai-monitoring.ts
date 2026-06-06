@@ -668,8 +668,15 @@ function asFiniteNumber(value: unknown): number | undefined {
  * OpenRouter returns the real per-request cost under
  * `providerMetadata.openrouter.usage.cost` once usage accounting is enabled
  * (see provider-factory `openrouter.chat(model, { usage: { include: true } })`).
- * For BYOK passthrough the upstream provider's charge is reported separately in
- * `usage.costDetails.upstreamInferenceCost`, so we add both to get total real cost.
+ * For standard (managed-key) routing `usage.cost` is the complete charge (OpenRouter
+ * margin + upstream inference). `usage.costDetails.upstreamInferenceCost` is a
+ * sub-breakdown of that total for auditing — NOT an additive fee. Adding both would
+ * double-count the upstream portion and overcharge users by ~2.5×.
+ *
+ * Note: BYOK (bring-your-own-key) routing — where `cost` is only OpenRouter's small
+ * routing fee and `upstreamInferenceCost` is a separate provider charge — is retired
+ * in this product (provider-factory always uses the platform's managed API key).
+ * If BYOK is ever re-introduced, this function must be revisited.
  *
  * Tool loops (`stepCountIs(n)`) issue one OpenRouter request PER step, each with
  * its own cost, so we sum across every step — mirroring how routes sum tokens via
@@ -693,12 +700,11 @@ export function extractOpenRouterCostDollars(
     if (!usage) continue;
 
     const cost = asFiniteNumber(usage.cost);
-    const upstream = asFiniteNumber(asRecord(usage.costDetails)?.upstreamInferenceCost);
 
-    if (cost === undefined && upstream === undefined) continue;
+    if (cost === undefined) continue;
 
     found = true;
-    total += (cost ?? 0) + (upstream ?? 0);
+    total += cost;
   }
 
   return found ? total : undefined;
