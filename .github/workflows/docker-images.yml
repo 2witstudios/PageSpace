@@ -184,11 +184,19 @@ jobs:
           TIMEOUT=900
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            # Capture stdout+stderr together; flyctl may print an update notification to stdout
-            # before the JSON (superfly/flyctl#137) — extract the JSON line defensively.
-            STATUS_RAW=$(flyctl machine status "$MACHINE_ID" --app pagespace-web --json 2>&1 || true)
-            STATUS_JSON=$(printf '%s' "$STATUS_RAW" | grep '^{' | head -1 || true)
-            STATE=$(printf '%s' "$STATUS_JSON" | jq -r '.state // "unknown"' 2>/dev/null || echo "unknown")
+            # flyctl machine status has no --json flag (outputs a formatted table regardless).
+            # Use the Fly.io Machines REST API directly for reliable JSON state polling.
+            HTTP_CODE=$(curl -s -o /tmp/fly_machine.json -w "%{http_code}" \
+              -H "Authorization: Bearer $FLY_API_TOKEN" \
+              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID")
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATE=$(jq -r '.state // "unknown"' /tmp/fly_machine.json 2>/dev/null || echo "unknown")
+            elif [ "$HTTP_CODE" = "404" ]; then
+              echo "ERROR: migration machine $MACHINE_ID not found (unexpectedly destroyed)"
+              exit 1
+            else
+              STATE="unknown"
+            fi
             echo "  [${ELAPSED}s] state: $STATE"
             if [ "$STATE" = "stopped" ]; then
               break
