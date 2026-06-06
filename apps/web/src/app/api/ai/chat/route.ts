@@ -19,6 +19,7 @@ import { requiresProSubscription } from '@/lib/subscription/rate-limit-middlewar
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { makeOnStepFinishHandler } from './step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -92,7 +93,6 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
 export const maxDuration = 300;
-
 
 export async function POST(request: Request) {
   const startTime = Date.now();
@@ -366,6 +366,15 @@ export async function POST(request: Request) {
     }
     holdId = creditGate.holdId;
 
+    const creditAbortController = holdId ? new AbortController() : null;
+    // Net spendable after all holds (including this request's) — already computed by
+    // the gate so no extra DB read is needed. Each stream guards against its own slice,
+    // not the gross balance, preventing concurrent streams from collectively overshooting.
+    const availableBalanceCents =
+      holdId && creditGate.balanceSnapshot
+        ? creditGate.balanceSnapshot.netSpendableCents
+        : null;
+
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent
     // via onConflictDoNothing, so safe for every message in a conversation.
@@ -537,6 +546,11 @@ export async function POST(request: Request) {
     // real OpenRouter model id sent to the backend.
     const { model } = providerResult;
     resolvedModelName = providerResult.modelName;
+
+    const onStepFinishForCredits =
+      creditAbortController && availableBalanceCents !== null
+        ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, resolvedModelName ?? 'unknown')
+        : null;
 
     // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
@@ -904,7 +918,13 @@ export async function POST(request: Request) {
               tools: filteredTools,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
               // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
-              abortSignal,
+              // creditAbortController fires when mid-stream credit check determines balance is exhausted
+              abortSignal: creditAbortController
+                ? AbortSignal.any([abortSignal, creditAbortController.signal])
+                : abortSignal,
+              onStepFinish: onStepFinishForCredits
+                ? async ({ usage }) => { onStepFinishForCredits(usage); }
+                : undefined,
               experimental_context: {
                 userId,
                 timezone: userTimezone,

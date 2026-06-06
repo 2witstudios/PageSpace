@@ -21,6 +21,7 @@ import {
   CHAT_HOLD_ASSUMED_OUTPUT_TOKENS,
   CHAT_HOLD_FLOOR_CENTS,
   CREDIT_HOLD_ESTIMATE_CENTS,
+  MARKUP_BPS,
 } from '../../billing/credit-pricing';
 
 beforeEach(() => vi.clearAllMocks());
@@ -85,34 +86,40 @@ describe('estimateChatHoldCentsForModel', () => {
 describe('calcStepCostDollars', () => {
   it('returns the dollar cost from calculateCost for a known model with realistic tokens', () => {
     mockCalculateCost.mockReturnValue(0.10);
-    const result = calcStepCostDollars('anthropic/claude-opus-4.8', { promptTokens: 1000, completionTokens: 500 });
+    const result = calcStepCostDollars('anthropic/claude-opus-4.8', { inputTokens: 1000, outputTokens: 500 });
     expect(mockCalculateCost).toHaveBeenCalledWith('anthropic/claude-opus-4.8', 1000, 500);
     expect(result).toBe(0.10);
   });
 
-  it('returns 0 for an unknown model (calculateCost returns 0)', () => {
+  it('returns the conservative fallback for an unknown model (not 0)', () => {
     mockCalculateCost.mockReturnValue(0);
-    const result = calcStepCostDollars('some/unknown-model', { promptTokens: 1000, completionTokens: 500 });
+    const result = calcStepCostDollars('some/unknown-model', { inputTokens: 1000, outputTokens: 500 });
     expect(mockCalculateCost).toHaveBeenCalledWith('some/unknown-model', 1000, 500);
-    expect(result).toBe(0);
+    // Unknown model must NOT return 0 — that would disable the mid-stream abort
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeCloseTo(CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS / 10000) / 100, 10);
   });
 
-  it('returns 0 when both token counts are zero', () => {
+  it('returns 0 for a known free model (both $0 catalog rates)', () => {
+    // 'default' key is in the mock AI_PRICING but has $0 rates — known, legitimately free
     mockCalculateCost.mockReturnValue(0);
-    const result = calcStepCostDollars('anthropic/claude-opus-4.8', { promptTokens: 0, completionTokens: 0 });
+    // Use a model that IS in the mock AI_PRICING but has 0 cost
+    const result = calcStepCostDollars('anthropic/claude-opus-4.8', { inputTokens: 0, outputTokens: 0 });
     expect(result).toBe(0);
   });
 
-  it('returns non-zero when only completionTokens are present for a known model', () => {
+  it('returns non-zero when only outputTokens are present for a known model', () => {
     mockCalculateCost.mockReturnValue(0.05);
-    const result = calcStepCostDollars('openai/gpt-5', { promptTokens: 0, completionTokens: 2000 });
+    const result = calcStepCostDollars('openai/gpt-5', { inputTokens: 0, outputTokens: 2000 });
     expect(mockCalculateCost).toHaveBeenCalledWith('openai/gpt-5', 0, 2000);
     expect(result).toBe(0.05);
   });
 
-  it('returns 0 if calculateCost throws', () => {
+  it('returns the conservative fallback (not 0) if calculateCost throws', () => {
     mockCalculateCost.mockImplementation(() => { throw new Error('pricing error'); });
-    expect(calcStepCostDollars('anthropic/claude-opus-4.8', { promptTokens: 1000, completionTokens: 500 })).toBe(0);
+    const result = calcStepCostDollars('anthropic/claude-opus-4.8', { inputTokens: 1000, outputTokens: 500 });
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeCloseTo(CREDIT_HOLD_ESTIMATE_CENTS / (MARKUP_BPS / 10000) / 100, 10);
   });
 });
 
