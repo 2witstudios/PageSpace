@@ -27,7 +27,11 @@ const NON_TOOL_CAPABLE_MODELS: Record<string, boolean> = {
  * Cache for tool capability detection to avoid repeated API calls and errors
  */
 const toolCapabilityCache = new Map<string, boolean>();
+const temperatureCapabilityCache = new Map<string, boolean>();
 const openRouterModelsCache = new Map<string, boolean>();
+// Tracks which OpenRouter models list 'temperature' in supported_parameters.
+// Populated in the same fetch as openRouterModelsCache — no second API call.
+const openRouterTemperatureCache = new Map<string, boolean>();
 let openRouterCacheExpiry = 0;
 
 /**
@@ -66,6 +70,7 @@ async function fetchOpenRouterToolCapabilities(): Promise<Map<string, boolean>> 
       const hasTools = model.supported_parameters?.includes('tools') &&
                       model.supported_parameters?.includes('tool_choice');
       openRouterModelsCache.set(model.id, hasTools || false);
+      openRouterTemperatureCache.set(model.id, model.supported_parameters?.includes('temperature') ?? false);
     });
 
     // Set cache expiry to 1 hour from now
@@ -149,6 +154,67 @@ export function getSuggestedToolCapableModels(provider: string): string[] {
     default:
       return ['openai/gpt-5.3-chat', 'anthropic/claude-haiku-4.5', 'google/gemini-3.5-flash'];
   }
+}
+
+// Known reasoning model bare IDs for non-OpenRouter providers (e.g. direct openai).
+// These models reject the temperature parameter entirely.
+const NON_TEMPERATURE_MODELS = new Set([
+  'o1', 'o1-mini', 'o1-preview', 'o1-pro',
+  'o3', 'o3-mini', 'o3-pro',
+  'o4-mini',
+  'deepseek-r1', 'deepseek-r1-0528',
+]);
+
+/** Strip provider prefix for bare-ID lookups (e.g. "openai/o3" → "o3") */
+const stripModelPrefix = (model: string): string => {
+  const idx = model.indexOf('/');
+  return idx >= 0 ? model.slice(idx + 1) : model;
+};
+
+/**
+ * Returns false for reasoning/thinking models that reject the temperature parameter.
+ * For OpenRouter-backed providers this is authoritative (from supported_parameters).
+ * For direct providers, falls back to a static set + name-based patterns.
+ */
+export async function supportsTemperature(model: string, provider: string): Promise<boolean> {
+  const cacheKey = `${provider}:${model}`;
+  if (temperatureCapabilityCache.has(cacheKey)) {
+    return temperatureCapabilityCache.get(cacheKey)!;
+  }
+
+  if (getBackendProvider(provider) === 'openrouter') {
+    try {
+      await fetchOpenRouterToolCapabilities(); // ensures caches are warm
+      if (openRouterTemperatureCache.has(model)) {
+        const result = openRouterTemperatureCache.get(model)!;
+        temperatureCapabilityCache.set(cacheKey, result);
+        return result;
+      }
+    } catch {
+      // fall through to static detection
+    }
+    // Unknown model on OpenRouter → assume temperature is fine
+    temperatureCapabilityCache.set(cacheKey, true);
+    return true;
+  }
+
+  const bare = stripModelPrefix(model);
+
+  if (NON_TEMPERATURE_MODELS.has(bare)) {
+    temperatureCapabilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  // Pattern-based: -thinking suffix, -r1 suffix, or o1/o3/o4 prefix
+  const lower = bare.toLowerCase();
+  if (lower.includes('-thinking') || lower.includes('-r1') ||
+      lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) {
+    temperatureCapabilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  temperatureCapabilityCache.set(cacheKey, true);
+  return true;
 }
 
 /**
