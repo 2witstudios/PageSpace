@@ -183,19 +183,22 @@ export async function supportsTemperature(model: string, provider: string): Prom
   }
 
   if (getBackendProvider(provider) === 'openrouter') {
+    // fetchOpenRouterToolCapabilities swallows its own errors and returns an empty map,
+    // so this try/catch only guards against unexpected throws. When the fetch fails the
+    // cache stays empty and we fall through to static detection below — which correctly
+    // blocks known reasoning models even during an OpenRouter outage.
     try {
-      await fetchOpenRouterToolCapabilities(); // ensures caches are warm
-      if (openRouterTemperatureCache.has(model)) {
-        const result = openRouterTemperatureCache.get(model)!;
-        temperatureCapabilityCache.set(cacheKey, result);
-        return result;
-      }
+      await fetchOpenRouterToolCapabilities(); // populates openRouterTemperatureCache
     } catch {
       // fall through to static detection
     }
-    // Unknown model on OpenRouter → assume temperature is fine
-    temperatureCapabilityCache.set(cacheKey, true);
-    return true;
+    if (openRouterTemperatureCache.has(model)) {
+      const result = openRouterTemperatureCache.get(model)!;
+      temperatureCapabilityCache.set(cacheKey, result);
+      return result;
+    }
+    // Model not in OpenRouter cache (API unavailable or truly unknown model).
+    // Fall through to static detection so known reasoning model IDs are still blocked.
   }
 
   const bare = stripModelPrefix(model);
