@@ -90,7 +90,7 @@ vi.mock('ai', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { createAIProvider } from '@/lib/ai/core';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { generateText } from 'ai';
 
 const mockAuth = (): SessionAuthResult => ({

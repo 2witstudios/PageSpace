@@ -2,16 +2,11 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall, type To
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
-import {
-  createAIProvider,
-  isProviderError,
-  pageSpaceTools,
-  buildTimestampSystemPrompt,
-  DEFAULT_PROVIDER,
-  DEFAULT_MODEL,
-  type ToolExecutionContext,
-  type ProviderRequest,
-} from '@/lib/ai/core';
+import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db } from '@pagespace/db/db'

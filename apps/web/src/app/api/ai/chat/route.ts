@@ -33,33 +33,18 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import {
-  createAIProvider,
-  updateUserProviderSettings,
-  createProviderErrorResponse,
-  isProviderError,
-  type ProviderRequest,
-  buildProviderAvailabilityMap,
-  pageSpaceTools,
-  extractMessageContent,
-  extractToolCalls,
-  extractToolResults,
-  saveMessageToDatabase,
-  sanitizeMessagesForModel,
-  convertDbMessageToUIMessage,
-  processMentionsInMessage,
-  buildMentionSystemPrompt,
-  buildTimestampSystemPrompt,
-  buildSystemPrompt,
-  buildPersonalizationPrompt,
-  filterToolsForReadOnly,
-  getPageTreeContext,
-  getModelCapabilities,
-  convertMCPToolsToAISDKSchemas,
-  parseMCPToolName,
-  sanitizeToolNamesForProvider,
-  getUserPersonalization,
-} from '@/lib/ai/core';
+import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { buildProviderAvailabilityMap } from '@/lib/ai/core/ai-utils';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { extractMessageContent, extractToolCalls, extractToolResults, saveMessageToDatabase, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
+import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
+import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
+import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.

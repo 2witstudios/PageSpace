@@ -53,7 +53,7 @@ import { chatMessageRepository } from '@/lib/repositories/chat-message-repositor
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 
 // Test fixtures
 const mockUserId = 'user_123';

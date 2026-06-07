@@ -1,15 +1,8 @@
 import { NextResponse } from 'next/server';
 import { generateText } from 'ai';
-import {
-  createAIProvider,
-  isProviderError,
-  buildTimestampSystemPrompt,
-  getUserTimeOfDay,
-  getStartOfTodayInTimezone,
-  normalizeTimezone,
-  formatDateInTimezone,
-  BACKGROUND_LIGHT_MODEL,
-} from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { buildTimestampSystemPrompt, getUserTimeOfDay, getStartOfTodayInTimezone, normalizeTimezone, formatDateInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, lt, gte, ne, desc, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'

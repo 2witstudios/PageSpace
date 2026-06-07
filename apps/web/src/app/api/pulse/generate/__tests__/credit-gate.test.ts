@@ -75,7 +75,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
-import { createAIProvider } from '@/lib/ai/core';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { generateText } from 'ai';
 
 const mockAuth = () => ({

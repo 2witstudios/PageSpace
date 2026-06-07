@@ -111,7 +111,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { executeWorkflow, type WorkflowExecutionInput } from '../workflow-executor';
 import { generateText } from 'ai';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({

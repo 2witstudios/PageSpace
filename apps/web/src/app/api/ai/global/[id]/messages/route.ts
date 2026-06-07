@@ -15,37 +15,18 @@ import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  createAIProvider,
-  updateUserProviderSettings,
-  createProviderErrorResponse,
-  isProviderError,
-  type ProviderRequest,
-  pageSpaceTools,
-  extractMessageContent,
-  extractToolCalls,
-  extractToolResults,
-  sanitizeMessagesForModel,
-  convertGlobalAssistantMessageToUIMessage,
-  saveGlobalAssistantMessageToDatabase,
-  processMentionsInMessage,
-  buildMentionSystemPrompt,
-  buildTimestampSystemPrompt,
-  buildSystemPrompt,
-  buildNonCoreToolNamesPrompt,
-  TOOL_DISCOVERY_PROMPT,
-  buildAgentAwarenessPrompt,
-  filterToolsForReadOnly,
-  filterToolsForWebSearch,
-  getPageTreeContext,
-  getDriveListSummary,
-  getModelCapabilities,
-  convertMCPToolsToAISDKSchemas,
-  parseMCPToolName,
-  sanitizeToolNamesForProvider,
-  getUserPersonalization,
-  getUserTimezone,
-} from '@/lib/ai/core';
+import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
+import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
+import { filterToolsForReadOnly, filterToolsForWebSearch } from '@/lib/ai/core/tool-filtering';
+import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
+import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
+import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'

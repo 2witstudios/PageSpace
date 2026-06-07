@@ -11,21 +11,13 @@
 
 import { withAdminAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import {
-  buildCompleteRequest,
-  type CompletePayloadResult,
-  type LocationContext,
-  type ToolDefinitionForExtraction,
-  pageSpaceTools,
-  extractToolSchemas,
-  calculateTotalToolTokens,
-  buildSystemPrompt,
-  buildAgentAwarenessPrompt,
-  getPageTreeContext,
-  getDriveListSummary,
-  buildInlineInstructions,
-  buildGlobalAssistantInstructions,
-} from '@/lib/ai/core';
+import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/core/complete-request-builder';
+import { type ToolDefinitionForExtraction, extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/schema-introspection';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
+import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
+import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc } from '@pagespace/db/operators'

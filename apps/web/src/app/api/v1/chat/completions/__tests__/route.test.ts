@@ -146,7 +146,7 @@ import { db } from '@pagespace/db/db';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core';
+import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
