@@ -11,7 +11,7 @@ describe('validateInferenceRequest', () => {
       given: 'a valid ps-agent model URI and non-empty messages array',
       should: 'return ok:true with the parsed pageId, messages, stream:true, and no driveContext',
       actual: result,
-      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined, clientTools: undefined, disableServerTools: false } },
+      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined, clientTools: undefined, disableServerTools: false, clientManagesHistory: false } },
     });
   });
 
@@ -285,6 +285,30 @@ describe('validateInferenceRequest', () => {
       given: 'disable_server_tools absent from the body',
       should: 'return disableServerTools:false',
       actual: result.ok ? result.data.disableServerTools : undefined,
+      expected: false,
+    });
+  });
+
+  test('client_manages_history:true sets clientManagesHistory', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, client_manages_history: true };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'client_manages_history:true in the body',
+      should: 'return clientManagesHistory:true',
+      actual: result.ok ? result.data.clientManagesHistory : undefined,
+      expected: true,
+    });
+  });
+
+  test('client_manages_history absent defaults to false', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'client_manages_history absent from the body',
+      should: 'return clientManagesHistory:false',
+      actual: result.ok ? result.data.clientManagesHistory : undefined,
       expected: false,
     });
   });

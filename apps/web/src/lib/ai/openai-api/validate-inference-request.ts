@@ -19,6 +19,7 @@ export interface ValidatedInferenceRequest {
   conversationId?: string;
   clientTools?: OpenAIToolDefinition[];
   disableServerTools?: boolean;
+  clientManagesHistory?: boolean;
 }
 
 export type ValidationResult =
