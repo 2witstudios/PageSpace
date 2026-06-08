@@ -12,10 +12,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@/services/api/backup-export-service', () => ({
   streamBackupExport: vi.fn(),
-  getExportContentDisposition: vi.fn(),
 }));
 
-import { GET, getExportContentDisposition } from '../route';
+import { GET } from '../route';
+import { getExportContentDisposition } from '../utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { streamBackupExport } from '@/services/api/backup-export-service';
 

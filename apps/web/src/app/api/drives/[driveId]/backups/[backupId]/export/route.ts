@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { streamBackupExport } from '@/services/api/backup-export-service';
+import { getExportContentDisposition } from './utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
-
-export function getExportContentDisposition(backupId: string): string {
-  return `attachment; filename="backup-${backupId}.zip"`;
-}
 
 export async function GET(
   request: Request,
