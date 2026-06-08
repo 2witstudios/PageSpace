@@ -7,6 +7,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -17,11 +18,19 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { ArrowLeft, HardDrive, Loader2, Plus } from 'lucide-react';
+import { ArrowLeft, Download, HardDrive, Loader2, Plus } from 'lucide-react';
 import useSWR from 'swr';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { format, formatDistanceToNow } from 'date-fns';
 import type { DriveBackupWithDriveName } from '@/services/api/drive-backup-service';
+
+export function getExportFilename(backupId: string, label: string | null | undefined): string {
+  return label ? `${label}.zip` : `backup-${backupId}.zip`;
+}
+
+export function getDownloadButtonLabel(isDownloading: boolean): string {
+  return isDownloading ? 'Downloading…' : 'Download';
+}
 
 const PAGE_SIZE = 50;
 
@@ -77,6 +86,7 @@ export default function BackupsPage() {
   const [accumulatedBackups, setAccumulatedBackups] = useState<SerializedBackup[]>([]);
   const [offset, setOffset] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -125,6 +135,29 @@ export default function BackupsPage() {
       setIsLoadingMore(false);
     }
   }, [isLoadingMore, offset]);
+
+  const handleDownload = useCallback(async (backup: SerializedBackup) => {
+    if (backup.status !== 'ready' || downloadingId) return;
+    setDownloadingId(backup.id);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${backup.driveId}/backups/${backup.id}/export`);
+      if (!res.ok) {
+        toast.error('Export failed');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = getExportFilename(backup.id, backup.label);
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Export failed');
+    } finally {
+      setDownloadingId(null);
+    }
+  }, [downloadingId]);
 
   const handleCreateBackup = async () => {
     if (!createDriveId || isCreating) return;
@@ -276,11 +309,40 @@ export default function BackupsPage() {
                         <p className="text-xs text-destructive">{backup.failureReason}</p>
                       )}
                     </div>
-                    <div
-                      className="text-right text-sm text-muted-foreground shrink-0"
-                      title={format(new Date(backup.createdAt), 'PPpp')}
-                    >
-                      {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div
+                        className="text-right text-sm text-muted-foreground"
+                        title={format(new Date(backup.createdAt), 'PPpp')}
+                      >
+                        {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
+                      </div>
+                      {backup.status !== 'ready' ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button size="sm" variant="outline" disabled aria-disabled="true">
+                                <Download className="h-3 w-3 mr-1.5" />
+                                Download
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>Backup not ready</TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!!downloadingId}
+                          onClick={() => handleDownload(backup)}
+                        >
+                          {downloadingId === backup.id ? (
+                            <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                          ) : (
+                            <Download className="h-3 w-3 mr-1.5" />
+                          )}
+                          {getDownloadButtonLabel(downloadingId === backup.id)}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}

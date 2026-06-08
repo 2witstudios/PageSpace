@@ -47,6 +47,10 @@ const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
     'Followup #4: pending admins should not receive @mention broadcast — tracked in followup-4.',
   ],
   [
+    'drives/[driveId]/backups/[backupId]/restore',
+    'Reads driveMembers to enumerate ALL current members (including pending) for full-replacement during restore. The gate is intentionally absent here: the goal is to delete all rows so the backup state is faithfully restored — filtering on acceptedAt would silently leave pending-invite rows behind.',
+  ],
+  [
     'users/messageable',
     'DM-eligibility surfacing intentionally drops the gate so co-members whose driveMembers.acceptedAt is NULL (legacy rows missed by migrate-pending-invites, or transient invite states) still appear in the New Conversation picker. DM eligibility is softer than drive access; the gate is preserved everywhere a NULL row could exercise authority (page reads, member listings, broadcasts).',
   ],
