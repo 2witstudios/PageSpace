@@ -36,6 +36,14 @@ import {
 } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
+// The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
+// stripeRef IS NOT NULL; Postgres only infers it as the ON CONFLICT arbiter when
+// we restate that predicate (mirrors the same constant in credit-funding.ts).
+const STRIPE_REF_ARBITER = {
+  target: creditLedger.stripeRef,
+  where: sql`${creditLedger.stripeRef} IS NOT NULL`,
+} as const;
+
 /**
  * One calendar month after `from`, clamped to the last valid day of the target
  * month so a month-end start doesn't overflow. Naive `setUTCMonth(+1)` turns
@@ -137,21 +145,40 @@ export async function canConsumeAI(
     // handle a concurrent reset that already rolled the window forward.
     const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, row.monthlyRemainingCents ?? 0, row.debtCents ?? 0);
     const newEnd = addOneMonth(now);
-    await db
-      .update(creditBalances)
-      .set({
-        monthlyRemainingCents: refill.monthlyRemainingCents,
-        monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // The renewal-equivalent for free/no-sub users: debt is netted against the
-        // carried balance before the allowance is added (refill.debtCents === 0).
-        debtCents: refill.debtCents,
-        monthlyPeriodStart: now,
-        monthlyPeriodEnd: newEnd,
-      })
-      .where(and(
-        eq(creditBalances.userId, userId),
-        or(isNull(creditBalances.monthlyPeriodEnd), lt(creditBalances.monthlyPeriodEnd, now)),
-      ));
+    await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(creditBalances)
+        .set({
+          monthlyRemainingCents: refill.monthlyRemainingCents,
+          monthlyAllowanceCents: refill.monthlyAllowanceCents,
+          // The renewal-equivalent for free/no-sub users: debt is netted against the
+          // carried balance before the allowance is added (refill.debtCents === 0).
+          debtCents: refill.debtCents,
+          monthlyPeriodStart: now,
+          monthlyPeriodEnd: newEnd,
+        })
+        .where(and(
+          eq(creditBalances.userId, userId),
+          or(isNull(creditBalances.monthlyPeriodEnd), lt(creditBalances.monthlyPeriodEnd, now)),
+        ))
+        .returning({ userId: creditBalances.userId });
+      // Only record the grant when this call won the race — if a concurrent reset
+      // already rolled the window forward, updated is empty and we skip the ledger
+      // write to avoid a phantom grant entry.
+      if (updated.length > 0) {
+        await tx
+          .insert(creditLedger)
+          .values({
+            userId,
+            entryType: 'monthly_grant',
+            bucket: 'monthly',
+            amountCents: refill.monthlyAllowanceCents,
+            stripeRef: `free-reset-${userId}-${now.toISOString()}`,
+            consumeStatus: 'applied',
+          })
+          .onConflictDoNothing(STRIPE_REF_ARBITER);
+      }
+    });
     row = await readBalance();
   }
 
@@ -164,17 +191,38 @@ export async function canConsumeAI(
   // so we can't allow when a racing request already drew the row down.
   if (!row) {
     const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
-    await db
-      .insert(creditBalances)
-      .values({
-        userId,
-        monthlyRemainingCents: monthly,
-        monthlyAllowanceCents: monthly,
-        topupRemainingCents: 0,
-        monthlyPeriodStart: now,
-        monthlyPeriodEnd: addOneMonth(now),
-      })
-      .onConflictDoNothing({ target: creditBalances.userId });
+    await db.transaction(async (tx) => {
+      const balanceInserted = await tx
+        .insert(creditBalances)
+        .values({
+          userId,
+          monthlyRemainingCents: monthly,
+          monthlyAllowanceCents: monthly,
+          topupRemainingCents: 0,
+          monthlyPeriodStart: now,
+          monthlyPeriodEnd: addOneMonth(now),
+        })
+        .onConflictDoNothing({ target: creditBalances.userId })
+        .returning({ userId: creditBalances.userId });
+      // Only record the grant when THIS transaction created the balance row.
+      // If a concurrent top-up or invoice.paid already created the row between
+      // readBalance() and here, balanceInserted is empty and we skip the ledger
+      // write — that path writes its own grant/purchase entry, and a phantom
+      // monthly_grant here would overstate the user's credits in the drift formula.
+      if (balanceInserted.length > 0) {
+        await tx
+          .insert(creditLedger)
+          .values({
+            userId,
+            entryType: 'monthly_grant',
+            bucket: 'monthly',
+            amountCents: monthly,
+            stripeRef: `free-init-${userId}`,
+            consumeStatus: 'applied',
+          })
+          .onConflictDoNothing(STRIPE_REF_ARBITER);
+      }
+    });
   }
 
   const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);

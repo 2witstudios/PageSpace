@@ -18,7 +18,11 @@ vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: {
     userId: 'cl.userId',
     entryType: 'cl.entryType',
+    bucket: 'cl.bucket',
+    amountCents: 'cl.amountCents',
     chargeMillicents: 'cl.chargeMillicents',
+    stripeRef: 'cl.stripeRef',
+    consumeStatus: 'cl.consumeStatus',
     createdAt: 'cl.createdAt',
   },
 }));
@@ -71,8 +75,72 @@ function selectReturning(rows: unknown[]) {
 function insertChain() {
   return { values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }) };
 }
-function updateCapturing(sink: { set?: Record<string, unknown> }) {
-  return { set: (v: Record<string, unknown>) => { sink.set = v; return { where: () => Promise.resolve(undefined) }; } };
+
+/**
+ * Mock the lazy-init transaction (first db.transaction call when no balance row exists).
+ * Captures the values passed to both tx.insert calls (balance and ledger).
+ * `balanceCreated` controls whether the balance insert's .returning() reports a new row
+ * (true = this call created it; false = concurrent path already created it, insert was a no-op).
+ */
+function mockLazyInitTransaction(
+  sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {},
+  balanceCreated = true,
+) {
+  let insertCount = 0;
+  mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      insert: vi.fn(() => {
+        insertCount++;
+        const callNum = insertCount;
+        return {
+          values: (v: Record<string, unknown>) => {
+            if (callNum === 1) sink.balanceValues = v;
+            else sink.ledgerValues = v;
+            return {
+              onConflictDoNothing: () => ({
+                returning: () => Promise.resolve(
+                  callNum === 1 && balanceCreated ? [{ userId: 'u1' }] : [],
+                ),
+              }),
+            };
+          },
+        };
+      }),
+    };
+    return cb(tx);
+  });
+}
+
+/**
+ * Mock the reset transaction (first db.transaction call when the period has expired).
+ * Captures the set payload and ledger values. `didUpdate` controls whether the
+ * UPDATE .returning() reports a match (true = reset ran, false = concurrent already ran).
+ */
+function mockResetTransaction(
+  sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {},
+  didUpdate = true,
+) {
+  mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      update: vi.fn(() => ({
+        set: (v: Record<string, unknown>) => {
+          sink.set = v;
+          return {
+            where: () => ({
+              returning: () => Promise.resolve(didUpdate ? [{ userId: 'ignored' }] : []),
+            }),
+          };
+        },
+      })),
+      insert: vi.fn(() => ({
+        values: (v: Record<string, unknown>) => {
+          sink.ledgerValues = v;
+          return { onConflictDoNothing: () => Promise.resolve(undefined) };
+        },
+      })),
+    };
+    return cb(tx);
+  });
 }
 
 /**
@@ -244,7 +312,7 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockDb.update.mockReturnValue(updateCapturing(sink));
+    mockResetTransaction(sink);
     mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
@@ -286,27 +354,25 @@ describe('canConsumeAI', () => {
   });
 
   it('lazy-inits a balance row from tier defaults on first request, then allows with a hold', async () => {
-    // 1st select: no row. After insert, the transaction's locked read sees the persisted row.
+    // 1st select: no row. After the init transaction, the auth transaction's locked read
+    // sees the persisted row.
     mockDb.select.mockReturnValueOnce(selectReturning([]));
-    let initValues: Record<string, unknown> | undefined;
-    mockDb.insert.mockReturnValue({
-      values: (v: Record<string, unknown>) => { initValues = v; return { onConflictDoNothing: () => Promise.resolve(undefined) }; },
-    });
+    const initSink: { balanceValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(initSink);
     mockTransaction({ monthlyRemainingCents: 1500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'pro');
 
-    expect(mockDb.insert).toHaveBeenCalledTimes(1);
-    expect(initValues?.monthlyPeriodStart).toBeInstanceOf(Date);
-    expect(initValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    expect(initSink.balanceValues?.monthlyPeriodStart).toBeInstanceOf(Date);
+    expect(initSink.balanceValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
     expect(r.allowed).toBe(true);
     expect(r.holdId).toBe('hold_1');
   });
 
   it('re-evaluates against the persisted (drained) row after a concurrent init — no false allow', async () => {
     mockDb.select.mockReturnValueOnce(selectReturning([]));
-    mockDb.insert.mockReturnValue(insertChain());
-    // The locked read inside the transaction sees an empty balance (a racing request drained it).
+    mockLazyInitTransaction();
+    // The locked read inside the auth transaction sees an empty balance (a racing request drained it).
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'pro');
@@ -319,12 +385,11 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockDb.update.mockReturnValue(updateCapturing(sink));
+    mockResetTransaction(sink);
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
 
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
     expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, monthlyAllowanceCents: 500 });
     expect(r.allowed).toBe(true);
     expect(r.reason).toBe('ok');
@@ -336,12 +401,11 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 700, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockDb.update.mockReturnValue(updateCapturing(sink));
+    mockResetTransaction(sink);
     mockTransaction({ monthlyRemainingCents: 700, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
 
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
     expect(sink.set).toMatchObject({ monthlyRemainingCents: 700, monthlyAllowanceCents: 500 });
     expect(r.allowed).toBe(true);
   });
@@ -351,12 +415,11 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockDb.update.mockReturnValue(updateCapturing(sink));
+    mockResetTransaction(sink);
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
 
-    expect(mockDb.update).toHaveBeenCalledTimes(1);
     expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, monthlyAllowanceCents: 500 });
     expect(r.allowed).toBe(true);
   });
@@ -395,8 +458,79 @@ describe('canConsumeAI', () => {
     mockTransaction({ monthlyRemainingCents: 800, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
-    expect(mockDb.update).not.toHaveBeenCalled();
     expect(r.allowed).toBe(true);
+  });
+
+  // ── Ledger write tests ────────────────────────────────────────────────────
+
+  it('lazy-init writes a monthly_grant ledger row alongside the balance row', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free');
+
+    expect(sink.ledgerValues).toMatchObject({
+      userId: 'u1',
+      entryType: 'monthly_grant',
+      bucket: 'monthly',
+      amountCents: 500,
+      consumeStatus: 'applied',
+    });
+  });
+
+  it('concurrent lazy-init produces exactly ONE grant row — stripeRef is user-scoped (no timestamp)', async () => {
+    // The unique index on stripeRef rejects a second insert with the same key.
+    // A timestamp-based key would let two concurrent inits produce two different
+    // stripeRefs and both insert, causing phantom grants. Verify the key is stable.
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free');
+
+    // The key contains no timestamp — both concurrent inits produce the same
+    // stripeRef, so the unique index silently drops the second via onConflictDoNothing.
+    expect(sink.ledgerValues?.stripeRef).toBe('free-init-u1');
+  });
+
+  it('lazy-init skips ledger write when balance insert conflicts (concurrent top-up/invoice already created the row)', async () => {
+    // If a top-up or invoice.paid creates the balance between readBalance() and the lazy-init
+    // transaction, the balance INSERT conflicts and returns nothing. We must NOT write
+    // a phantom grant row — that path already wrote its own grant/purchase entry.
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink, false /* balanceCreated = false, simulates conflict */);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free');
+
+    expect(sink.ledgerValues).toBeUndefined();
+  });
+
+  it('free-tier monthly reset writes a monthly_grant ledger row with the period-keyed stripeRef', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockResetTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free');
+
+    expect(sink.ledgerValues).toMatchObject({
+      userId: 'u1',
+      entryType: 'monthly_grant',
+      bucket: 'monthly',
+      amountCents: 500,
+      consumeStatus: 'applied',
+    });
+    // The stripeRef includes the period timestamp so each rollover gets a unique
+    // key; concurrent resets within the same millisecond de-duplicate via the index.
+    expect(typeof sink.ledgerValues?.stripeRef).toBe('string');
+    expect((sink.ledgerValues?.stripeRef as string).startsWith('free-reset-u1-')).toBe(true);
   });
 });
 
