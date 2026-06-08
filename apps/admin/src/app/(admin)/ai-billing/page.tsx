@@ -215,55 +215,53 @@ export default function AdminAiBillingPage() {
         </AlertDescription>
       </Alert>
 
-      {(alerts.balanceDrift.length > 0 || alerts.negativeMargin.length > 0) && (
-        <Card>
+      <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><ShieldAlert className="h-4 w-4 text-red-600 dark:text-red-400" />Account alerts</CardTitle>
             <CardDescription>Accounts to review: balance drift and negative margin.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {alerts.balanceDrift.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-sm font-semibold">Balance drift ({alerts.balanceDrift.length})</h3>
-                <Table>
-                  <TableHeader><TableRow><TableHead>User</TableHead><TableHead className="text-right">Expected</TableHead><TableHead className="text-right">Materialized</TableHead><TableHead className="text-right">Drift</TableHead><TableHead className="text-right">Debt</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {alerts.balanceDrift.map((r) => (
-                      <TableRow key={r.userId}>
-                        <TableCell>{userLabel(r)}</TableCell>
-                        <TableCell className="text-right">{usd(r.expectedSpendableCents)}</TableCell>
-                        <TableCell className="text-right">{usd(r.materializedSpendableCents)}</TableCell>
-                        <TableCell className={`text-right font-medium ${marginClass(-Math.abs(r.driftCents) || 0)}`}>{usd(r.driftCents)}</TableCell>
-                        <TableCell className="text-right">{usd(r.debtCents)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-            {alerts.negativeMargin.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-sm font-semibold">Negative margin ({alerts.negativeMargin.length})</h3>
-                <Table>
-                  <TableHeader><TableRow><TableHead>User</TableHead><TableHead className="text-right">Real cost</TableHead><TableHead className="text-right">Charged</TableHead><TableHead className="text-right">Margin</TableHead><TableHead className="text-right">Margin %</TableHead><TableHead className="text-right">Requests</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {alerts.negativeMargin.map((r) => (
-                      <TableRow key={r.userId}>
-                        <TableCell>{userLabel(r)}</TableCell>
-                        <TableCell className="text-right">{usd(r.realCostCents)}</TableCell>
-                        <TableCell className="text-right">{usd(r.chargedCents)}</TableCell>
-                        <TableCell className={`text-right font-medium ${marginClass(r.marginCents)}`}>{usd(r.marginCents)}</TableCell>
-                        <TableCell className={`text-right ${marginClass(r.marginPct)}`}>{pct(r.marginPct)}</TableCell>
-                        <TableCell className="text-right">{num(r.requestCount)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Balance drift ({alerts.balanceDrift.length})</h3>
+              <Table>
+                <TableHeader><TableRow><TableHead>User</TableHead><TableHead className="text-right">Expected</TableHead><TableHead className="text-right">Materialized</TableHead><TableHead className="text-right">Drift</TableHead><TableHead className="text-right">Debt</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {alerts.balanceDrift.length > 0 ? alerts.balanceDrift.map((r) => (
+                    <TableRow key={r.userId}>
+                      <TableCell>{userLabel(r)}</TableCell>
+                      <TableCell className="text-right">{usd(r.expectedSpendableCents)}</TableCell>
+                      <TableCell className="text-right">{usd(r.materializedSpendableCents)}</TableCell>
+                      <TableCell className={`text-right font-medium ${marginClass(-Math.abs(r.driftCents) || 0)}`}>{usd(r.driftCents)}</TableCell>
+                      <TableCell className="text-right">{usd(r.debtCents)}</TableCell>
+                    </TableRow>
+                  )) : (
+                    <TableRow><TableCell colSpan={5} className="py-4 text-center text-sm text-muted-foreground">✓ No balance drift detected</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Negative margin ({alerts.negativeMargin.length})</h3>
+              <Table>
+                <TableHeader><TableRow><TableHead>User</TableHead><TableHead className="text-right">Real cost</TableHead><TableHead className="text-right">Charged</TableHead><TableHead className="text-right">Margin</TableHead><TableHead className="text-right">Margin %</TableHead><TableHead className="text-right">Requests</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {alerts.negativeMargin.length > 0 ? alerts.negativeMargin.map((r) => (
+                    <TableRow key={r.userId}>
+                      <TableCell>{userLabel(r)}</TableCell>
+                      <TableCell className="text-right">{usd(r.realCostCents)}</TableCell>
+                      <TableCell className="text-right">{usd(r.chargedCents)}</TableCell>
+                      <TableCell className={`text-right font-medium ${marginClass(r.marginCents)}`}>{usd(r.marginCents)}</TableCell>
+                      <TableCell className={`text-right ${marginClass(r.marginPct)}`}>{pct(r.marginPct)}</TableCell>
+                      <TableCell className="text-right">{num(r.requestCount)}</TableCell>
+                    </TableRow>
+                  )) : (
+                    <TableRow><TableCell colSpan={6} className="py-4 text-center text-sm text-muted-foreground">✓ No negative-margin accounts</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
-      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Card><CardHeader className="pb-2"><CardDescription>Total tokens</CardDescription><CardTitle className="text-2xl">{num(tokens.summary.totalTokens)}</CardTitle></CardHeader></Card>
