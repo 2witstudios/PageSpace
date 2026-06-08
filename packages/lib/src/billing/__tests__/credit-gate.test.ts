@@ -79,9 +79,12 @@ function insertChain() {
 /**
  * Mock the lazy-init transaction (first db.transaction call when no balance row exists).
  * Captures the values passed to both tx.insert calls (balance and ledger).
+ * `balanceCreated` controls whether the balance insert's .returning() reports a new row
+ * (true = this call created it; false = concurrent path already created it, insert was a no-op).
  */
 function mockLazyInitTransaction(
   sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {},
+  balanceCreated = true,
 ) {
   let insertCount = 0;
   mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -93,7 +96,13 @@ function mockLazyInitTransaction(
           values: (v: Record<string, unknown>) => {
             if (callNum === 1) sink.balanceValues = v;
             else sink.ledgerValues = v;
-            return { onConflictDoNothing: () => Promise.resolve(undefined) };
+            return {
+              onConflictDoNothing: () => ({
+                returning: () => Promise.resolve(
+                  callNum === 1 && balanceCreated ? [{ userId: 'u1' }] : [],
+                ),
+              }),
+            };
           },
         };
       }),
@@ -485,6 +494,20 @@ describe('canConsumeAI', () => {
     // The key contains no timestamp — both concurrent inits produce the same
     // stripeRef, so the unique index silently drops the second via onConflictDoNothing.
     expect(sink.ledgerValues?.stripeRef).toBe('free-init-u1');
+  });
+
+  it('lazy-init skips ledger write when balance insert conflicts (concurrent top-up/invoice already created the row)', async () => {
+    // If a top-up or invoice.paid creates the balance between readBalance() and the lazy-init
+    // transaction, the balance INSERT conflicts and returns nothing. We must NOT write
+    // a phantom grant row — that path already wrote its own grant/purchase entry.
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink, false /* balanceCreated = false, simulates conflict */);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free');
+
+    expect(sink.ledgerValues).toBeUndefined();
   });
 
   it('free-tier monthly reset writes a monthly_grant ledger row with the period-keyed stripeRef', async () => {

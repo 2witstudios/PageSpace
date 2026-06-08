@@ -192,7 +192,7 @@ export async function canConsumeAI(
   if (!row) {
     const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier] ?? TIER_MONTHLY_ALLOWANCE_CENTS.free;
     await db.transaction(async (tx) => {
-      await tx
+      const balanceInserted = await tx
         .insert(creditBalances)
         .values({
           userId,
@@ -202,22 +202,26 @@ export async function canConsumeAI(
           monthlyPeriodStart: now,
           monthlyPeriodEnd: addOneMonth(now),
         })
-        .onConflictDoNothing({ target: creditBalances.userId });
-      // Record the initial grant so the balance drift formula can account for it.
-      // stripeRef is user-scoped (no timestamp) so concurrent inits de-duplicate:
-      // the unique index rejects the second insert and the balance row already
-      // exists from the first, leaving exactly one grant row per user lifetime.
-      await tx
-        .insert(creditLedger)
-        .values({
-          userId,
-          entryType: 'monthly_grant',
-          bucket: 'monthly',
-          amountCents: monthly,
-          stripeRef: `free-init-${userId}`,
-          consumeStatus: 'applied',
-        })
-        .onConflictDoNothing(STRIPE_REF_ARBITER);
+        .onConflictDoNothing({ target: creditBalances.userId })
+        .returning({ userId: creditBalances.userId });
+      // Only record the grant when THIS transaction created the balance row.
+      // If a concurrent top-up or invoice.paid already created the row between
+      // readBalance() and here, balanceInserted is empty and we skip the ledger
+      // write — that path writes its own grant/purchase entry, and a phantom
+      // monthly_grant here would overstate the user's credits in the drift formula.
+      if (balanceInserted.length > 0) {
+        await tx
+          .insert(creditLedger)
+          .values({
+            userId,
+            entryType: 'monthly_grant',
+            bucket: 'monthly',
+            amountCents: monthly,
+            stripeRef: `free-init-${userId}`,
+            consumeStatus: 'applied',
+          })
+          .onConflictDoNothing(STRIPE_REF_ARBITER);
+      }
     });
   }
 
