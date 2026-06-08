@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { canActorEditPage } from './actor-permissions';

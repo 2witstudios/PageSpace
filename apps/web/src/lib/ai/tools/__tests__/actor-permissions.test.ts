@@ -42,7 +42,7 @@ import {
   filterDriveIdsByMcpScope,
   driveOutsideMcpScope,
 } from '../actor-permissions';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const DRIVE = 'drive-1';
 const userCtx = { userId: 'user-1' } as ToolExecutionContext;

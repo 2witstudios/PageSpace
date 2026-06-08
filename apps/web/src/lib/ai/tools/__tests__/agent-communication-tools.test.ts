@@ -117,8 +117,9 @@ vi.mock('../../core', () => ({
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
 import { canActorViewPage } from '../actor-permissions';
-import { createAIProvider, saveMessageToDatabase } from '../../core';
-import type { ToolExecutionContext } from '../../core';
+import { createAIProvider } from '../../core/provider-factory';
+import { saveMessageToDatabase } from '../../core/message-utils';
+import type { ToolExecutionContext } from '../../core/types';
 import { generateText } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';

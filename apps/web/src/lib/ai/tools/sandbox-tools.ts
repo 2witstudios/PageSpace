@@ -29,7 +29,7 @@ import {
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 
 const MAX_PATH_LENGTH = 1024;
 

@@ -10,7 +10,7 @@ import { getDriveAccessWithDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { getAgentPageId, filterDriveIdsByMcpScope, driveOutsideMcpScope, isMcpScoped } from './actor-permissions';
 
 // Helper: Extract AI attribution context with actor info for activity logging

@@ -7,7 +7,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 import { modelTools } from '../model-tools';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 type ListModelsResult = {
   providers: Array<{ provider: string; dynamic: boolean; models: Array<{ id: string; free: boolean }> }>;

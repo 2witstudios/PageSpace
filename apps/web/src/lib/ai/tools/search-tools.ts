@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 
 export const searchTools = {
   /**

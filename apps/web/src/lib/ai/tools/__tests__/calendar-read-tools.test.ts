@@ -70,7 +70,7 @@ vi.mock('@/lib/logging/mask', () => ({
 import { calendarReadTools } from '../calendar-read-tools';
 import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);

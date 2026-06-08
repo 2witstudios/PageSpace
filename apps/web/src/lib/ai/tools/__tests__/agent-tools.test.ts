@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 // Mock repository seams - the proper boundary for tests
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

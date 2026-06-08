@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import type { ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 
 export function createExecuteTool(allowedTools: ToolSet): Tool {
   return {

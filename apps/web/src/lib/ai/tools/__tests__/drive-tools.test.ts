@@ -46,7 +46,7 @@ vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db/db';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 

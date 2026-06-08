@@ -28,7 +28,7 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('../../core', () => ({}));
 
 import { webSearchTools } from '../web-search-tools';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 type WebSearchResult = Exclude<
   Awaited<ReturnType<NonNullable<(typeof webSearchTools.web_search)['execute']>>>,

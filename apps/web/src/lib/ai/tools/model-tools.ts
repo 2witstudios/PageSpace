@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { buildModelCatalog } from '../core/model-catalog';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 
 /**
  * Read-only tool exposing the real AI model catalog so an agent uses a valid
