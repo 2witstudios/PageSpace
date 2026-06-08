@@ -21,7 +21,12 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() },
+    ai: { child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })) },
   },
+}));
+
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  supportsTemperature: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));

@@ -18,6 +18,7 @@ import {
   DEFAULT_MODEL,
   type ToolExecutionContext,
 } from '@/lib/ai/core';
+import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
@@ -371,6 +372,8 @@ export async function POST(request: Request) {
         hasDriveContext: !!drive
       });
 
+      const tempSupported = await supportsTemperature(resolvedModelName, resolvedProvider);
+
       const result = Object.keys(toolsForRun).length > 0
         ? await generateText({
             model,
@@ -382,7 +385,7 @@ export async function POST(request: Request) {
             }))),
             tools: { ...toolsForRun, ...finishTool },
             toolChoice: 'auto',
-            temperature: 0.7,
+            ...(tempSupported ? { temperature: 0.7 } : {}),
             maxRetries: 3,
             experimental_context: executionContext,
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
@@ -404,10 +407,10 @@ export async function POST(request: Request) {
               content: m.content,
               parts: [{ type: 'text', text: m.content }]
             }))),
-            temperature: 0.7,
+            ...(tempSupported ? { temperature: 0.7 } : {}),
             maxRetries: 3,
             experimental_context: executionContext,
-            stopWhen: stepCountIs(100), // Match AI SDK version
+            stopWhen: stepCountIs(100),
           });
 
       // Enhanced debugging: Log the complete result structure
