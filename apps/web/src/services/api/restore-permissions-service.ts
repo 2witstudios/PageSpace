@@ -110,9 +110,10 @@ export async function applyPermRestoreOps(
     );
   }
 
-  // 6. Insert backup roles
+  // 6. Insert backup roles — map roleId → id to match the live driveRoles schema
   for (const role of roleOps.toInsert) {
-    await tx.insert(driveRoles).values({ driveId, ...role });
+    const { roleId, ...rest } = role as { roleId: string; [key: string]: unknown };
+    await tx.insert(driveRoles).values({ id: roleId, driveId, ...rest });
   }
 
   return { skippedMembers };

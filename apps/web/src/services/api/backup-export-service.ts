@@ -84,11 +84,12 @@ async function withConcurrencyLimit<T>(
   await Promise.all(workers);
 }
 
-export async function* streamBackupExport(
+export async function streamBackupExport(
   backupId: string,
   driveId: string,
   userId: string,
-): AsyncGenerator<Buffer> {
+): Promise<AsyncGenerator<Buffer>> {
+  // Eagerly validate before any streaming begins so 403/400 can be returned as JSON
   const isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
   if (!isAdmin) {
     throw new HttpError(403, 'Access denied');
@@ -119,42 +120,43 @@ export async function* streamBackupExport(
 
   const manifest = buildExportManifest(backup, new Date().toISOString(), pageRows);
 
-  const archive = archiver('zip', { store: true });
-  const passthrough = new PassThrough();
+  return (async function* () {
+    const archive = archiver('zip', { store: true });
+    const passthrough = new PassThrough();
 
-  archive.pipe(passthrough);
-  archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+    archive.pipe(passthrough);
+    archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
 
-  // Read content concurrently, capped at 10
-  const contentMap = new Map<string, Buffer>();
+    const contentMap = new Map<string, Buffer>();
 
-  await withConcurrencyLimit(
-    pageRows,
-    async row => {
-      if (!row.contentRef) {
-        contentMap.set(row.pageId, Buffer.from('', 'utf-8'));
-        return;
-      }
-      try {
-        const content = await readPageContent(row.contentRef);
-        contentMap.set(row.pageId, Buffer.from(content, 'utf-8'));
-      } catch (err) {
-        const errorContent = JSON.stringify({ error: (err as Error).message });
-        contentMap.set(row.pageId, Buffer.from(errorContent, 'utf-8'));
-      }
-    },
-    CONCURRENCY_CAP,
-  );
+    await withConcurrencyLimit(
+      pageRows,
+      async row => {
+        if (!row.contentRef) {
+          contentMap.set(row.pageId, Buffer.from('', 'utf-8'));
+          return;
+        }
+        try {
+          const content = await readPageContent(row.contentRef);
+          contentMap.set(row.pageId, Buffer.from(content, 'utf-8'));
+        } catch (err) {
+          const errorContent = JSON.stringify({ error: (err as Error).message });
+          contentMap.set(row.pageId, Buffer.from(errorContent, 'utf-8'));
+        }
+      },
+      CONCURRENCY_CAP,
+    );
 
-  for (const row of pageRows) {
-    archive.append(contentMap.get(row.pageId) ?? Buffer.from('', 'utf-8'), {
-      name: `${row.pageId}.txt`,
-    });
-  }
+    for (const row of pageRows) {
+      archive.append(contentMap.get(row.pageId) ?? Buffer.from('', 'utf-8'), {
+        name: `${row.pageId}.txt`,
+      });
+    }
 
-  archive.finalize();
+    archive.finalize();
 
-  for await (const chunk of passthrough) {
-    yield chunk as Buffer;
-  }
+    for await (const chunk of passthrough) {
+      yield chunk as Buffer;
+    }
+  })();
 }

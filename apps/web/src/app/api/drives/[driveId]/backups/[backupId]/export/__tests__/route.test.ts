@@ -64,7 +64,7 @@ describe('GET /api/drives/[driveId]/backups/[backupId]/export', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth(userId));
     vi.mocked(isAuthError).mockReturnValue(false);
-    vi.mocked(streamBackupExport).mockReturnValue(emptyStream());
+    vi.mocked(streamBackupExport).mockResolvedValue(emptyStream());
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -76,18 +76,14 @@ describe('GET /api/drives/[driveId]/backups/[backupId]/export', () => {
 
   it('returns 403 when streamBackupExport throws 403-class error', async () => {
     const err = Object.assign(new Error('Access denied'), { status: 403 });
-    vi.mocked(streamBackupExport).mockImplementation(() => {
-      throw err;
-    });
+    vi.mocked(streamBackupExport).mockRejectedValue(err);
     const res = await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(res.status).toBe(403);
   });
 
   it('returns 400 when streamBackupExport throws 400-class error', async () => {
     const err = Object.assign(new Error('Not found'), { status: 400 });
-    vi.mocked(streamBackupExport).mockImplementation(() => {
-      throw err;
-    });
+    vi.mocked(streamBackupExport).mockRejectedValue(err);
     const res = await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(res.status).toBe(400);
   });

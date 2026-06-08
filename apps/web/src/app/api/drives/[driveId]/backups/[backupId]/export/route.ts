@@ -17,7 +17,7 @@ export async function GET(
 
   let stream: AsyncGenerator<Buffer>;
   try {
-    stream = streamBackupExport(backupId, driveId, auth.userId);
+    stream = await streamBackupExport(backupId, driveId, auth.userId);
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status !== undefined && status >= 400 && status < 500) {

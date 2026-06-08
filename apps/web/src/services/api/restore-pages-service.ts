@@ -76,6 +76,8 @@ export async function applyPageRestoreOps(
       continue;
     }
 
+    const content = op.contentRef ? await readPageContent(op.contentRef) : '';
+
     if (op.op === 'create') {
       await tx
         .insert(pages)
@@ -88,6 +90,7 @@ export async function applyPageRestoreOps(
           position: op.position ?? 0,
           isTrashed: false,
           revision: 0,
+          content,
         });
     } else {
       await tx
@@ -98,11 +101,10 @@ export async function applyPageRestoreOps(
           parentId: op.parentId,
           position: op.position ?? 0,
           isTrashed: false,
+          content,
         })
         .where(eq(pages.id, op.pageId));
     }
-
-    const content = op.contentRef ? await readPageContent(op.contentRef) : '';
 
     const stateHash = computePageStateHash({
       title: op.title,

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { driveBackups } from '@pagespace/db/schema/versioning';
-import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
+import { eq, inArray } from '@pagespace/db/operators';
+import { driveBackups, driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
+import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -69,26 +69,61 @@ export async function POST(
       if (!diffResult.ok) throw new Error('Failed to compute diff');
       const { diff, backupPageMap } = diffResult;
 
-      // Load current members and roles for planning (permissions fetched empty — restored from backup tables)
-      const [currentMemberRows, currentRoleRows] =
-        await Promise.all([
-          tx.select({ userId: driveMembers.userId }).from(driveMembers).where(eq(driveMembers.driveId, driveId)),
-          tx.select({ roleId: driveRoles.id }).from(driveRoles).where(eq(driveRoles.driveId, driveId)),
-        ]);
-      const currentPermRows: never[] = [];
-
-      const ops = planPageRestoreOps(diff, backupPageMap);
-      await applyPageRestoreOps(ops, driveId, auth.userId, backupId, changeGroupId, tx as never);
-
       const affectedPageIds = [
         ...diff.toCreate.map(p => p.pageId),
         ...diff.toOverwrite.map(p => p.pageId),
         ...diff.toOrphan.map(p => p.pageId),
       ];
 
-      const permOps = planPermissionRestoreOps([], currentPermRows as never[], affectedPageIds);
-      const memberOps = planMemberRestoreOps([], currentMemberRows as never[]);
-      const roleOps = planRoleRestoreOps([], currentRoleRows as never[]);
+      // Fetch backup and current perm/member/role data in parallel before applying writes
+      const [
+        backupPermRows,
+        backupMemberRows,
+        backupRoleRows,
+        currentPermRows,
+        currentMemberRows,
+        currentRoleRows,
+      ] = await Promise.all([
+        tx.select({
+          pageId: driveBackupPermissions.pageId,
+          userId: driveBackupPermissions.userId,
+          canView: driveBackupPermissions.canView,
+          canEdit: driveBackupPermissions.canEdit,
+          canShare: driveBackupPermissions.canShare,
+          canDelete: driveBackupPermissions.canDelete,
+        }).from(driveBackupPermissions).where(eq(driveBackupPermissions.backupId, backupId)),
+        tx.select({
+          userId: driveBackupMembers.userId,
+          role: driveBackupMembers.role,
+          customRoleId: driveBackupMembers.customRoleId,
+          invitedBy: driveBackupMembers.invitedBy,
+          invitedAt: driveBackupMembers.invitedAt,
+          acceptedAt: driveBackupMembers.acceptedAt,
+        }).from(driveBackupMembers).where(eq(driveBackupMembers.backupId, backupId)),
+        tx.select({
+          roleId: driveBackupRoles.roleId,
+          name: driveBackupRoles.name,
+          description: driveBackupRoles.description,
+          color: driveBackupRoles.color,
+          isDefault: driveBackupRoles.isDefault,
+          permissions: driveBackupRoles.permissions,
+          position: driveBackupRoles.position,
+        }).from(driveBackupRoles).where(eq(driveBackupRoles.backupId, backupId)),
+        affectedPageIds.length > 0
+          ? tx.select({ pageId: pagePermissions.pageId, userId: pagePermissions.userId })
+              .from(pagePermissions)
+              .where(inArray(pagePermissions.pageId, affectedPageIds))
+          : Promise.resolve([] as { pageId: string; userId: string }[]),
+        tx.select({ userId: driveMembers.userId }).from(driveMembers).where(eq(driveMembers.driveId, driveId)),
+        tx.select({ roleId: driveRoles.id }).from(driveRoles).where(eq(driveRoles.driveId, driveId)),
+      ]);
+
+      const ops = planPageRestoreOps(diff, backupPageMap);
+      await applyPageRestoreOps(ops, driveId, auth.userId, backupId, changeGroupId, tx as never);
+
+      const permOps = planPermissionRestoreOps(backupPermRows as never[], currentPermRows, affectedPageIds);
+      const memberOps = planMemberRestoreOps(backupMemberRows as never[], currentMemberRows);
+      const roleOps = planRoleRestoreOps(backupRoleRows as never[], currentRoleRows);
 
       const { skippedMembers } = await applyPermRestoreOps(
         permOps,
