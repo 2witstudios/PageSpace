@@ -91,7 +91,9 @@ function CollapsibleBlock({ label, children }: { label: string; children: ReactN
 }
 
 function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInfo[] }) {
-  const totalToolTokens = tools.reduce((s, t) => s + t.tokenEstimate, 0);
+  const allowedNames = new Set(data.toolsAllowed);
+  const modeTools = tools.filter((t) => allowedNames.has(t.name));
+  const totalToolTokens = modeTools.reduce((s, t) => s + t.tokenEstimate, 0);
 
   return (
     <div className="space-y-4">
@@ -119,15 +121,15 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
         </div>
       </div>
 
-      {tools.length > 0 && (
+      {modeTools.length > 0 && (
         <>
           <Separator />
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Wrench className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-semibold">Tools ({tools.length})</span>
+              <span className="text-sm font-semibold">Tools ({modeTools.length})</span>
             </div>
-            <ToolsTable tools={tools} />
+            <ToolsTable tools={modeTools} />
           </div>
         </>
       )}
