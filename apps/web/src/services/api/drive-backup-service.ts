@@ -1,6 +1,6 @@
 import { db } from '@pagespace/db/db'
-import { eq, inArray, desc } from '@pagespace/db/operators'
-import { pages } from '@pagespace/db/schema/core'
+import { eq, and, inArray, isNotNull, desc, sql } from '@pagespace/db/operators'
+import { drives, pages } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members'
 import { files } from '@pagespace/db/schema/storage'
 import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
@@ -47,6 +47,73 @@ export interface CreateDriveBackupResult {
     members: number;
     roles: number;
     files: number;
+  };
+}
+
+export type DriveBackupWithDriveName = DriveBackupSummary & { driveName: string | null };
+
+export async function listAllUserBackups(
+  userId: string,
+  options?: { limit?: number; offset?: number }
+): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; total: number; error?: string }> {
+  const ownedDrives = await db.select({ id: drives.id })
+    .from(drives)
+    .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
+
+  const adminMemberships = await db
+    .select({ driveId: driveMembers.driveId })
+    .from(driveMembers)
+    .innerJoin(drives, and(eq(driveMembers.driveId, drives.id), eq(drives.isTrashed, false)))
+    .where(and(
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.role, 'ADMIN'),
+      isNotNull(driveMembers.acceptedAt)
+    ));
+
+  const driveIds = [
+    ...ownedDrives.map((d) => d.id),
+    ...adminMemberships.map((d) => d.driveId),
+  ];
+
+  if (driveIds.length === 0) {
+    return { success: true, backups: [], total: 0 };
+  }
+
+  const limit = options?.limit ?? 50;
+  const offset = options?.offset ?? 0;
+
+  const [rows, countRows] = await Promise.all([
+    db
+      .select({ backup: driveBackups, driveName: drives.name })
+      .from(driveBackups)
+      .innerJoin(drives, eq(driveBackups.driveId, drives.id))
+      .where(inArray(driveBackups.driveId, driveIds))
+      .orderBy(desc(driveBackups.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(driveBackups)
+      .where(inArray(driveBackups.driveId, driveIds)),
+  ]);
+
+  return {
+    success: true,
+    total: countRows[0]?.count ?? 0,
+    backups: rows.map((r) => ({
+      id: r.backup.id,
+      driveId: r.backup.driveId,
+      createdAt: r.backup.createdAt,
+      createdBy: r.backup.createdBy,
+      source: r.backup.source as DriveBackupSource,
+      status: r.backup.status as DriveBackupSummary['status'],
+      label: r.backup.label,
+      reason: r.backup.reason,
+      completedAt: r.backup.completedAt,
+      failedAt: r.backup.failedAt,
+      failureReason: r.backup.failureReason,
+      driveName: r.driveName,
+    })),
   };
 }
 

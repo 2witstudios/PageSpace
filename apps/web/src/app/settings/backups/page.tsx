@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -21,15 +21,17 @@ import { ArrowLeft, HardDrive, Loader2, Plus } from 'lucide-react';
 import useSWR from 'swr';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { format, formatDistanceToNow } from 'date-fns';
-import type { DriveBackupSummary } from '@/services/api/drive-backup-service';
+import type { DriveBackupWithDriveName } from '@/services/api/drive-backup-service';
 
-type SerializedBackup = Omit<DriveBackupSummary, 'createdAt' | 'completedAt' | 'failedAt'> & {
+const PAGE_SIZE = 50;
+
+type SerializedBackup = Omit<DriveBackupWithDriveName, 'createdAt' | 'completedAt' | 'failedAt'> & {
   createdAt: string;
   completedAt: string | null;
   failedAt: string | null;
 };
 
-type BackupListResponse = { backups: SerializedBackup[] };
+type BackupListResponse = { backups: SerializedBackup[]; total: number };
 
 type CreateBackupResult = {
   backupId: string;
@@ -68,10 +70,13 @@ export default function BackupsPage() {
     [drives]
   );
 
-  const [selectedDriveId, setSelectedDriveId] = useState('');
+  const [createDriveId, setCreateDriveId] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [accumulatedBackups, setAccumulatedBackups] = useState<SerializedBackup[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -84,34 +89,56 @@ export default function BackupsPage() {
   }, [fetchDrives]);
 
   useEffect(() => {
-    if (!selectedDriveId && adminDrives.length > 0) {
+    if (!createDriveId && adminDrives.length > 0) {
       const preferred =
         adminDrives.find((d) => d.id === currentDriveId) ?? adminDrives[0];
-      setSelectedDriveId(preferred.id);
+      setCreateDriveId(preferred.id);
     }
-  }, [adminDrives, currentDriveId, selectedDriveId]);
+  }, [adminDrives, currentDriveId, createDriveId]);
 
+  const swrKey = user ? `/api/backups?limit=${PAGE_SIZE}&offset=0` : null;
   const { data, isLoading: isLoadingBackups, mutate, error } = useSWR<BackupListResponse>(
-    selectedDriveId ? `/api/drives/${selectedDriveId}/backups` : null,
-    fetcher
+    swrKey,
+    fetcher,
+    { revalidateOnFocus: false }
   );
 
-  const selectedDrive = useMemo(
-    () => drives.find((d) => d.id === selectedDriveId),
-    [drives, selectedDriveId]
-  );
+  useEffect(() => {
+    if (data) {
+      setAccumulatedBackups(data.backups);
+      setOffset(data.backups.length);
+    }
+  }, [data]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const r = await fetchWithAuth(`/api/backups?limit=${PAGE_SIZE}&offset=${offset}`);
+      if (!r.ok) throw new Error('Failed to load more backups');
+      const result = (await r.json()) as BackupListResponse;
+      setAccumulatedBackups((prev) => [...prev, ...result.backups]);
+      setOffset((prev) => prev + result.backups.length);
+    } catch {
+      toast.error('Failed to load more backups');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, offset]);
 
   const handleCreateBackup = async () => {
-    if (!selectedDriveId || isCreating) return;
+    if (!createDriveId || isCreating) return;
     setIsCreating(true);
     try {
-      const result = await post<CreateBackupResult>(`/api/drives/${selectedDriveId}/backups`, {
+      const result = await post<CreateBackupResult>(`/api/drives/${createDriveId}/backups`, {
         source: 'manual',
         label: newLabel.trim() || undefined,
       });
       toast.success(`Backup created — ${result.counts.pages} pages snapshotted`);
       setNewLabel('');
       setShowCreateForm(false);
+      setAccumulatedBackups([]);
+      setOffset(0);
       mutate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create backup');
@@ -150,56 +177,44 @@ export default function BackupsPage() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Select Drive</CardTitle>
-          <CardDescription>
-            Choose a drive you own or administer to view its backups.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoadingDrives ? (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Loading drives…</span>
-            </div>
-          ) : adminDrives.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              You don&apos;t own or administer any drives.
-            </p>
-          ) : (
-            <Select value={selectedDriveId} onValueChange={setSelectedDriveId}>
-              <SelectTrigger className="w-full max-w-sm">
-                <SelectValue placeholder="Select a drive" />
-              </SelectTrigger>
-              <SelectContent>
-                {adminDrives.map((drive) => (
-                  <SelectItem key={drive.id} value={drive.id}>
-                    {drive.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        <CardHeader className="flex flex-row items-start justify-between space-y-0">
+          <div>
+            <CardTitle>Backups</CardTitle>
+            <CardDescription>All backups across your drives</CardDescription>
+          </div>
+          {!showCreateForm && (
+            <Button size="sm" onClick={() => setShowCreateForm(true)} disabled={adminDrives.length === 0}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Backup
+            </Button>
           )}
-        </CardContent>
-      </Card>
-
-      {selectedDriveId && (
-        <Card>
-          <CardHeader className="flex flex-row items-start justify-between space-y-0">
-            <div>
-              <CardTitle>Backups</CardTitle>
-              <CardDescription>{selectedDrive?.name}</CardDescription>
-            </div>
-            {!showCreateForm && (
-              <Button size="sm" onClick={() => setShowCreateForm(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Backup
-              </Button>
-            )}
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {showCreateForm && (
-              <div className="flex items-end gap-3 p-4 rounded-lg border bg-muted/40">
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {showCreateForm && (
+            <div className="space-y-3 p-4 rounded-lg border bg-muted/40">
+              <div className="space-y-1.5">
+                <Label>Drive</Label>
+                {isLoadingDrives ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading drives…
+                  </div>
+                ) : (
+                  <Select value={createDriveId} onValueChange={setCreateDriveId}>
+                    <SelectTrigger className="w-full max-w-sm">
+                      <SelectValue placeholder="Select a drive" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {adminDrives.map((drive) => (
+                        <SelectItem key={drive.id} value={drive.id}>
+                          {drive.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div className="flex items-end gap-3">
                 <div className="flex-1 space-y-1.5">
                   <Label htmlFor="backup-label">Label <span className="text-muted-foreground font-normal">(optional)</span></Label>
                   <Input
@@ -215,7 +230,7 @@ export default function BackupsPage() {
                     autoFocus
                   />
                 </div>
-                <Button onClick={handleCreateBackup} disabled={isCreating}>
+                <Button onClick={handleCreateBackup} disabled={isCreating || !createDriveId}>
                   {isCreating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                   Snapshot Now
                 </Button>
@@ -227,31 +242,32 @@ export default function BackupsPage() {
                   Cancel
                 </Button>
               </div>
-            )}
+            </div>
+          )}
 
-            {error ? (
-              <p className="text-sm text-muted-foreground py-4">
-                {(error as { status?: number }).status === 403
-                  ? 'You need to be a drive owner or admin to manage backups for this drive.'
-                  : 'Failed to load backups.'}
-              </p>
-            ) : isLoadingBackups ? (
-              <div className="flex items-center gap-2 text-muted-foreground py-4">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm">Loading backups…</span>
-              </div>
-            ) : !data?.backups.length ? (
-              <p className="text-sm text-muted-foreground py-4">
-                No backups yet. Create one to snapshot this drive&apos;s current state.
-              </p>
-            ) : (
+          {error ? (
+            <p className="text-sm text-muted-foreground py-4">Failed to load backups.</p>
+          ) : isLoadingBackups ? (
+            <div className="flex items-center gap-2 text-muted-foreground py-4">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">Loading backups…</span>
+            </div>
+          ) : !accumulatedBackups.length ? (
+            <p className="text-sm text-muted-foreground py-4">
+              No backups yet. Create one to snapshot a drive&apos;s current state.
+            </p>
+          ) : (
+            <>
               <div className="divide-y">
-                {data.backups.map((backup) => (
+                {accumulatedBackups.map((backup) => (
                   <div key={backup.id} className="flex items-start justify-between py-3 gap-4">
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>
                         <Badge variant="outline">{backup.source}</Badge>
+                        {backup.driveName && (
+                          <span className="text-sm text-muted-foreground">{backup.driveName}</span>
+                        )}
                         {backup.label && (
                           <span className="text-sm font-medium truncate">{backup.label}</span>
                         )}
@@ -269,10 +285,26 @@ export default function BackupsPage() {
                   </div>
                 ))}
               </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+              {data && accumulatedBackups.length < data.total && (
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-xs text-muted-foreground">
+                    Showing {accumulatedBackups.length} of {data.total}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
+                  >
+                    {isLoadingMore && <Loader2 className="h-3 w-3 mr-2 animate-spin" />}
+                    Load more
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
