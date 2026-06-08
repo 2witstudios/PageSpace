@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -73,7 +73,7 @@ function ToolsTable({ tools }: { tools: ToolSchemaInfo[] }) {
   );
 }
 
-function JsonBlock({ label, value }: { label: string; value: unknown }) {
+function CollapsibleBlock({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -83,9 +83,7 @@ function JsonBlock({ label, value }: { label: string; value: unknown }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <ScrollArea className="h-64 mt-1 mb-2">
-          <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
-            {JSON.stringify(value, null, 2)}
-          </pre>
+          {children}
         </ScrollArea>
       </CollapsibleContent>
     </Collapsible>
@@ -137,29 +135,22 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
       {data.completePayload?.request.experimental_context && (
         <>
           <Separator />
-          <JsonBlock label="Experimental Context" value={data.completePayload.request.experimental_context} />
+          <CollapsibleBlock label="Experimental Context">
+            <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
+              {JSON.stringify(data.completePayload.request.experimental_context, null, 2)}
+            </pre>
+          </CollapsibleBlock>
         </>
       )}
 
       {data.completePayload?.formattedString && (
         <>
           <Separator />
-          <Collapsible>
-            <CollapsibleTrigger className="flex items-center gap-2 py-2 text-sm hover:bg-muted/50 px-2 rounded w-full">
-              <ChevronRight className="h-3 w-3" />
-              <span className="font-medium">Complete Payload (raw)</span>
-              <span className="text-xs text-muted-foreground ml-auto">
-                {fmt(data.completePayload.tokenEstimates?.total ?? 0)} tok total
-              </span>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <ScrollArea className="h-96 mt-1">
-                <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
-                  {data.completePayload.formattedString}
-                </pre>
-              </ScrollArea>
-            </CollapsibleContent>
-          </Collapsible>
+          <CollapsibleBlock label={`Complete Payload (raw) — ${fmt(data.completePayload.tokenEstimates.total)} tok`}>
+            <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
+              {data.completePayload.formattedString}
+            </pre>
+          </CollapsibleBlock>
         </>
       )}
     </div>
@@ -212,10 +203,7 @@ export default function GlobalPromptPage() {
   }
 
   const availableDrives = data?.availableDrives ?? [];
-  const availablePages = (data?.availablePages ?? []).filter(
-    (p) => !selectedDriveId || p.path.startsWith("/")
-  );
-
+  const availablePages = data?.availablePages ?? [];
   const modes = data ? Object.keys(data.promptData) : [];
   const tools = data?.toolSchemas ?? [];
   const contextLabel = data?.metadata.contextType ?? "dashboard";
