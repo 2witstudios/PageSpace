@@ -23,14 +23,7 @@ import useSWR from 'swr';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { format, formatDistanceToNow } from 'date-fns';
 import type { DriveBackupWithDriveName } from '@/services/api/drive-backup-service';
-
-export function getExportFilename(backupId: string, label: string | null | undefined): string {
-  return label ? `${label}.zip` : `backup-${backupId}.zip`;
-}
-
-export function getDownloadButtonLabel(isDownloading: boolean): string {
-  return isDownloading ? 'Downloading…' : 'Download';
-}
+import { getExportFilename, getDownloadButtonLabel } from './utils';
 
 const PAGE_SIZE = 50;
 

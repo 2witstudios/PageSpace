@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getExportFilename, getDownloadButtonLabel } from '../page';
+import { getExportFilename, getDownloadButtonLabel } from '../utils';
 
 // ============================================================================
 // Pure function tests (zero mocks, zero I/O)

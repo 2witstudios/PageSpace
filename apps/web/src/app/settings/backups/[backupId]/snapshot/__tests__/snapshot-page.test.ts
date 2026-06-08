@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatSnapshotLabel, flattenTree, getNodeIcon } from '../page';
+import { formatSnapshotLabel, flattenTree, getNodeIcon } from '../utils';
 import type { SnapshotPageNode } from '@/services/api/snapshot-pages-service';
 
 // ============================================================================

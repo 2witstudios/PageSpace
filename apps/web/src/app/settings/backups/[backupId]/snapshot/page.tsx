@@ -4,56 +4,13 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
-import { format } from 'date-fns';
 import { ArrowLeft, File, FileCode, FileImage, FileSpreadsheet, FileText, Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDriveStore } from '@/hooks/useDrive';
 import type { SnapshotPageNode } from '@/services/api/snapshot-pages-service';
-
-// ============================================================================
-// Pure functions
-// ============================================================================
-
-export function formatSnapshotLabel(backup: {
-  label: string | null;
-  createdAt: string;
-  source: string;
-}): string {
-  if (backup.label) return backup.label;
-  return `${backup.source} snapshot — ${format(new Date(backup.createdAt), 'MMM d, yyyy h:mm a')}`;
-}
-
-export function flattenTree(
-  nodes: SnapshotPageNode[],
-  depth = 0,
-): Array<SnapshotPageNode & { depth: number }> {
-  const result: Array<SnapshotPageNode & { depth: number }> = [];
-  for (const node of nodes) {
-    result.push({ ...node, depth });
-    if (node.children.length > 0) {
-      result.push(...flattenTree(node.children, depth + 1));
-    }
-  }
-  return result;
-}
-
-const ICON_MAP: Record<string, string> = {
-  DOCUMENT: 'FileText',
-  CODE: 'FileCode',
-  SHEET: 'FileSpreadsheet',
-  CANVAS: 'FileImage',
-  FILE: 'File',
-  FOLDER: 'Folder',
-  CHANNEL: 'MessagesSquare',
-  AI_CHAT: 'BotMessageSquare',
-  TASK_LIST: 'SquareCheckBig',
-};
-
-export function getNodeIcon(type: string): string {
-  return ICON_MAP[type] ?? 'File';
-}
+import { formatSnapshotLabel, flattenTree, getNodeIcon } from './utils';
 
 const ICON_COMPONENTS: Record<string, React.ComponentType<{ className?: string }>> = {
   FileText,
