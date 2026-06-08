@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { db } from '@pagespace/db/db';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
-import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from '@pagespace/db/operators';
 
 // Mirror the STRIPE_REF_ARBITER from credit-gate / credit-funding (same partial index).
@@ -17,18 +16,15 @@ async function main(): Promise<void> {
   const rows = await db
     .select({
       userId: creditBalances.userId,
-      userEmail: users.email,
       materializedSpendableCents: sql<number>`(${creditBalances.monthlyRemainingCents} + ${creditBalances.topupRemainingCents})::int`,
       grantCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} IN ('monthly_grant', 'topup_purchase') THEN ${creditLedger.amountCents} ELSE 0 END), 0)::int`,
       appliedUsageCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'usage' THEN ABS(${creditLedger.appliedCents}) ELSE 0 END), 0)::int`,
       adjustmentCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'adjustment' THEN COALESCE(${creditLedger.appliedCents}, 0) ELSE 0 END), 0)::int`,
     })
     .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
     .leftJoin(creditLedger, eq(creditLedger.userId, creditBalances.userId))
     .groupBy(
       creditBalances.userId,
-      users.email,
       creditBalances.monthlyRemainingCents,
       creditBalances.topupRemainingCents,
     );
@@ -47,7 +43,7 @@ async function main(): Promise<void> {
 
     found++;
     console.log(
-      `  ${r.userEmail ?? r.userId}: materialized=${r.materializedSpendableCents}¢, expected=${expectedSpendableCents}¢, drift=${driftCents}¢`,
+      `  ${r.userId}: materialized=${r.materializedSpendableCents}¢, expected=${expectedSpendableCents}¢, drift=${driftCents}¢`,
     );
 
     const result = await db
