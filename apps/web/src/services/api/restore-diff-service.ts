@@ -5,7 +5,7 @@ import { pages } from '@pagespace/db/schema/core';
 
 export type RestoreDiff = {
   toCreate:    { pageId: string; title: string; type: string }[];
-  toOverwrite: { pageId: string; title: string; currentHash: string | null; backupHash: string | null }[];
+  toOverwrite: { pageId: string; title: string; type: string; currentHash: string | null; backupHash: string | null }[];
   toOrphan:    { pageId: string; title: string }[];
   unchanged:   { pageId: string }[];
 };
@@ -66,6 +66,7 @@ export function computeRestoreDiff(
       toOverwrite.push({
         pageId: bpItem.pageId,
         title: bpItem.title,
+        type: bpItem.type,
         backupHash: bpItem.stateHash,
         currentHash: cpItem.stateHash,
       });

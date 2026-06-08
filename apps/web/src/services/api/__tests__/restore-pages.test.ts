@@ -55,7 +55,7 @@ describe('planPageRestoreOps', () => {
   });
 
   it('toOverwrite → op overwrite', () => {
-    const diff = makeDiff({ toOverwrite: [{ pageId: 'p2', title: 'P2', currentHash: 'c', backupHash: 'b' }] });
+    const diff = makeDiff({ toOverwrite: [{ pageId: 'p2', title: 'P2', type: 'document', currentHash: 'c', backupHash: 'b' }] });
     const map = new Map([['p2', makeRow('p2')]]);
     const ops = planPageRestoreOps(diff, map);
     expect(ops).toHaveLength(1);
@@ -88,7 +88,7 @@ describe('planPageRestoreOps', () => {
   it('output length equals toCreate + toOverwrite + toOrphan', () => {
     const diff = makeDiff({
       toCreate: [{ pageId: 'a', title: 'A', type: 'document' }],
-      toOverwrite: [{ pageId: 'b', title: 'B', currentHash: null, backupHash: null }],
+      toOverwrite: [{ pageId: 'b', title: 'B', type: 'document', currentHash: null, backupHash: null }],
       toOrphan: [{ pageId: 'c', title: 'C' }],
       unchanged: [{ pageId: 'd' }],
     });

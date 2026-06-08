@@ -71,8 +71,9 @@ export async function applyPermRestoreOps(
   roleOps: RoleOps,
   driveId: string,
   tx: DbLike,
-): Promise<{ skippedMembers: string[] }> {
+): Promise<{ skippedMembers: string[]; skippedPermissions: string[] }> {
   const skippedMembers: string[] = [];
+  const skippedPermissions: string[] = [];
 
   // 1. Delete current page permissions for affected pages
   for (const del of permOps.toDelete) {
@@ -81,8 +82,13 @@ export async function applyPermRestoreOps(
     );
   }
 
-  // 2. Insert backup permissions
+  // 2. Insert backup permissions (skip if user no longer exists)
   for (const perm of permOps.toInsert) {
+    const existing = await tx.select().from(users).where(eq(users.id, perm.userId));
+    if (!existing || existing.length === 0) {
+      skippedPermissions.push(perm.userId);
+      continue;
+    }
     await tx.insert(pagePermissions).values(perm);
   }
 
@@ -116,5 +122,5 @@ export async function applyPermRestoreOps(
     await tx.insert(driveRoles).values({ id: roleId, driveId, ...rest });
   }
 
-  return { skippedMembers };
+  return { skippedMembers, skippedPermissions };
 }

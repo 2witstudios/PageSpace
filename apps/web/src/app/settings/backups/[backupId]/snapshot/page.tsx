@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
@@ -61,9 +61,9 @@ export default function SnapshotPage({
   const [loadingContent, setLoadingContent] = useState(false);
 
   // Resolve async params on mount
-  if (!resolvedBackupId) {
+  useEffect(() => {
     params.then(({ backupId }) => setResolvedBackupId(backupId));
-  }
+  }, [params]);
 
   const swrKey = driveId && resolvedBackupId
     ? `/api/drives/${driveId}/backups/${resolvedBackupId}/pages`

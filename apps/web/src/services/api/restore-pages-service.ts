@@ -40,7 +40,7 @@ export function planPageRestoreOps(
       op: 'overwrite',
       pageId: item.pageId,
       title: row.title ?? item.title,
-      type: row.type ?? '',
+      type: row.type ?? item.type,
       parentId: row.parentId ?? null,
       position: row.position ?? null,
       contentRef: row.contentRef ?? null,

@@ -18,7 +18,7 @@ describe('buildDiffSummary', () => {
   it('computes correct totals with mixed diff', () => {
     const diff = makeDiff({
       toCreate: [{ pageId: 'a', title: 'A', type: 'document' }],
-      toOverwrite: [{ pageId: 'b', title: 'B', currentHash: null, backupHash: 'h' }],
+      toOverwrite: [{ pageId: 'b', title: 'B', type: 'document', currentHash: null, backupHash: 'h' }],
       toOrphan: [{ pageId: 'c', title: 'C' }],
       unchanged: [{ pageId: 'd' }],
     });
