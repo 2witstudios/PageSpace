@@ -23,7 +23,8 @@ export async function GET(
       auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_usage', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
       return auth.error;
     }
-    const userId = auth.userId;
+    const { userId, role } = auth;
+    const isAdmin = role === 'admin';
 
     const { id } = await context.params;
 
@@ -41,13 +42,19 @@ export async function GET(
     // Calculate summary statistics (pure function)
     const summary = calculateUsageSummary(logs, getContextWindow);
 
+    // Strip cost data from non-admin responses
+    const responseLogs = isAdmin ? logs : logs.map(log => ({ ...log, cost: null }));
+    const responseSummary = isAdmin
+      ? summary
+      : { ...summary, billing: { ...summary.billing, totalCost: 0 } };
+
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'global_chat_usage', resourceId: id, details: {
       action: 'view_usage',
     } });
 
     return NextResponse.json({
-      logs,
-      summary,
+      logs: responseLogs,
+      summary: responseSummary,
     });
   } catch (error) {
     loggers.api.error('Error fetching AI usage:', error as Error);

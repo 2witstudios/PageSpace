@@ -31,7 +31,7 @@ const INTERFACE_SETTINGS: DisplaySetting[] = [
   {
     id: 'SHOW_TOKEN_COUNTS',
     label: 'Show AI token counts',
-    description: 'Display context window usage and cost information in AI chats',
+    description: 'Display context window usage in AI chats',
     preferenceKey: 'showTokenCounts',
   },
   {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 import { useAiUsage, usePageAiUsage } from '@/hooks/useAiUsage';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -28,6 +29,8 @@ interface AiUsageMonitorProps {
  * - For Page AI: pass both `conversationId` and `pageId` (will prioritize conversationId)
  */
 export function AiUsageMonitor({ conversationId, pageId, className, compact = false }: AiUsageMonitorProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const connect = useSocketStore((state) => state.connect);
   const socket = useSocketStore((state) => state.socket);
 
@@ -152,8 +155,8 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
             </TooltipContent>
           </Tooltip>
 
-          {/* Session Cost */}
-          {usage.billing.cost > 0 && (
+          {/* Session Cost — admin only */}
+          {isAdmin && usage.billing.cost > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center gap-1">
@@ -241,8 +244,8 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
             </Tooltip>
           </div>
 
-          {/* Cost (if applicable) */}
-          {usage.billing.cost > 0 && (
+          {/* Cost — admin only */}
+          {isAdmin && usage.billing.cost > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center justify-between pt-1 text-xs">
