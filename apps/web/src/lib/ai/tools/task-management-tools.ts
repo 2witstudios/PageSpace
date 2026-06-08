@@ -5,7 +5,7 @@ import { eq, and, desc, asc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { type ToolExecutionContext } from '../core';
-import { broadcastTaskEvent } from '@/lib/websocket';
+import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { canActorEditPage } from './actor-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -192,6 +192,7 @@ Agent Triggers:
         }
 
         let updateTitleDeferred: DeferredWorkflowTrigger | undefined;
+        let linkedPageDriveId: string | undefined;
         const aiContextForTitle = trimmedTitle !== undefined
           ? await getAiContextWithActor(context as ToolExecutionContext)
           : null;
@@ -238,6 +239,7 @@ Agent Triggers:
                   tx,
                 });
                 updateTitleDeferred = mutationResult.deferredTrigger;
+                linkedPageDriveId = mutationResult.driveId;
               }
             }
 
@@ -247,6 +249,13 @@ Agent Triggers:
             return updatedTask;
           });
           updateTitleDeferred?.();
+          if (trimmedTitle !== undefined && linkedPageDriveId && existingTask.pageId) {
+            void broadcastPageEvent(
+              createPageEventPayload(linkedPageDriveId, existingTask.pageId, 'updated', {
+                title: trimmedTitle,
+              }),
+            );
+          }
         } catch (error) {
           if (error instanceof PageRevisionMismatchError) {
             throw new Error(`Linked page was modified concurrently — retry the update: ${error.message}`);
