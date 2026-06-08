@@ -186,9 +186,6 @@ vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn().mockResolvedValue(''),
   getDriveListSummary: vi.fn().mockResolvedValue(''),
 }));
-vi.mock('@/lib/ai/core/model-capabilities', () => ({
-  getModelCapabilities: vi.fn().mockResolvedValue({}),
-}));
 vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
@@ -282,6 +279,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 }));
 
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
 }));
 

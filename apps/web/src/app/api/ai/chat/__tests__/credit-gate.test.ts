@@ -130,9 +130,7 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
-vi.mock('@/lib/ai/core/model-capabilities', () => ({
-  getModelCapabilities: vi.fn(),
-}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({ pageSpaceTools: {}, corePageSpaceTools: {} }));
 vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
@@ -178,7 +176,10 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
   validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true }),
   hasFileParts: vi.fn().mockReturnValue(false),
 }));
-vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn().mockReturnValue(true) }));
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
