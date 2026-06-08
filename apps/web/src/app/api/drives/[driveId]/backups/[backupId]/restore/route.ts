@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
+import { eq } from '@pagespace/db/operators';
 import { driveBackups } from '@pagespace/db/schema/versioning';
-import { pages } from '@pagespace/db/schema/core';
-import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
+import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -70,17 +69,13 @@ export async function POST(
       if (!diffResult.ok) throw new Error('Failed to compute diff');
       const { diff, backupPageMap } = diffResult;
 
-      // Load current permissions, members, roles for planning
-      const [backupPermRows, currentPermRows, backupMemberRows, currentMemberRows, backupRoleRows, currentRoleRows] =
+      // Load current members and roles for planning (permissions fetched empty — restored from backup tables)
+      const [currentMemberRows, currentRoleRows] =
         await Promise.all([
-          tx.select().from(driveBackups).where(eq(driveBackups.id, backupId)),
-          // We'll pass empty arrays and let the planner handle it — actual data comes from backup tables
-          Promise.resolve([]),
-          Promise.resolve([]),
           tx.select({ userId: driveMembers.userId }).from(driveMembers).where(eq(driveMembers.driveId, driveId)),
-          Promise.resolve([]),
           tx.select({ roleId: driveRoles.id }).from(driveRoles).where(eq(driveRoles.driveId, driveId)),
         ]);
+      const currentPermRows: never[] = [];
 
       const ops = planPageRestoreOps(diff, backupPageMap);
       await applyPageRestoreOps(ops, driveId, auth.userId, backupId, changeGroupId, tx as never);

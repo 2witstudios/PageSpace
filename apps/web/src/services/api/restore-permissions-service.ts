@@ -1,6 +1,5 @@
 import { eq, and, inArray } from '@pagespace/db/operators';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
-import { driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
 import { users } from '@pagespace/db/schema/auth';
 
 type BackupPerm = {

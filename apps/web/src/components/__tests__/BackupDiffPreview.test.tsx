@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { buildDiffSummary } from '../BackupDiffPreview';
 import type { RestoreDiff } from '@/services/api/restore-diff-service';
 
