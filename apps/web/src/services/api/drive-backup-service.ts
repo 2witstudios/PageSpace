@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, isNotNull, desc } from '@pagespace/db/operators'
+import { eq, and, inArray, isNotNull, desc, sql } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members'
 import { files } from '@pagespace/db/schema/storage'
@@ -55,7 +55,7 @@ export type DriveBackupWithDriveName = DriveBackupSummary & { driveName: string 
 export async function listAllUserBackups(
   userId: string,
   options?: { limit?: number; offset?: number }
-): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; error?: string }> {
+): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; total: number; error?: string }> {
   const ownedDrives = await db.select({ id: drives.id })
     .from(drives)
     .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
@@ -74,20 +74,30 @@ export async function listAllUserBackups(
   ];
 
   if (driveIds.length === 0) {
-    return { success: true, backups: [] };
+    return { success: true, backups: [], total: 0 };
   }
 
-  const rows = await db
-    .select({ backup: driveBackups, driveName: drives.name })
-    .from(driveBackups)
-    .innerJoin(drives, eq(driveBackups.driveId, drives.id))
-    .where(inArray(driveBackups.driveId, driveIds))
-    .orderBy(desc(driveBackups.createdAt))
-    .limit(options?.limit ?? 50)
-    .offset(options?.offset ?? 0);
+  const limit = options?.limit ?? 50;
+  const offset = options?.offset ?? 0;
+
+  const [rows, countRows] = await Promise.all([
+    db
+      .select({ backup: driveBackups, driveName: drives.name })
+      .from(driveBackups)
+      .innerJoin(drives, eq(driveBackups.driveId, drives.id))
+      .where(inArray(driveBackups.driveId, driveIds))
+      .orderBy(desc(driveBackups.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(driveBackups)
+      .where(inArray(driveBackups.driveId, driveIds)),
+  ]);
 
   return {
     success: true,
+    total: countRows[0]?.count ?? 0,
     backups: rows.map((r) => ({
       id: r.backup.id,
       driveId: r.backup.driveId,

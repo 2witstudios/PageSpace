@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -23,13 +23,15 @@ import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { format, formatDistanceToNow } from 'date-fns';
 import type { DriveBackupWithDriveName } from '@/services/api/drive-backup-service';
 
+const PAGE_SIZE = 50;
+
 type SerializedBackup = Omit<DriveBackupWithDriveName, 'createdAt' | 'completedAt' | 'failedAt'> & {
   createdAt: string;
   completedAt: string | null;
   failedAt: string | null;
 };
 
-type BackupListResponse = { backups: SerializedBackup[] };
+type BackupListResponse = { backups: SerializedBackup[]; total: number };
 
 type CreateBackupResult = {
   backupId: string;
@@ -72,6 +74,9 @@ export default function BackupsPage() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [accumulatedBackups, setAccumulatedBackups] = useState<SerializedBackup[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -91,10 +96,35 @@ export default function BackupsPage() {
     }
   }, [adminDrives, currentDriveId, createDriveId]);
 
+  const swrKey = user ? `/api/backups?limit=${PAGE_SIZE}&offset=0` : null;
   const { data, isLoading: isLoadingBackups, mutate, error } = useSWR<BackupListResponse>(
-    user ? '/api/backups' : null,
-    fetcher
+    swrKey,
+    fetcher,
+    { revalidateOnFocus: false }
   );
+
+  useEffect(() => {
+    if (data) {
+      setAccumulatedBackups(data.backups);
+      setOffset(data.backups.length);
+    }
+  }, [data]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const r = await fetchWithAuth(`/api/backups?limit=${PAGE_SIZE}&offset=${offset}`);
+      if (!r.ok) throw new Error('Failed to load more backups');
+      const result = (await r.json()) as BackupListResponse;
+      setAccumulatedBackups((prev) => [...prev, ...result.backups]);
+      setOffset((prev) => prev + result.backups.length);
+    } catch {
+      toast.error('Failed to load more backups');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, offset]);
 
   const handleCreateBackup = async () => {
     if (!createDriveId || isCreating) return;
@@ -107,6 +137,8 @@ export default function BackupsPage() {
       toast.success(`Backup created — ${result.counts.pages} pages snapshotted`);
       setNewLabel('');
       setShowCreateForm(false);
+      setAccumulatedBackups([]);
+      setOffset(0);
       mutate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create backup');
@@ -220,38 +252,56 @@ export default function BackupsPage() {
               <Loader2 className="h-4 w-4 animate-spin" />
               <span className="text-sm">Loading backups…</span>
             </div>
-          ) : !data?.backups.length ? (
+          ) : !accumulatedBackups.length ? (
             <p className="text-sm text-muted-foreground py-4">
               No backups yet. Create one to snapshot a drive&apos;s current state.
             </p>
           ) : (
-            <div className="divide-y">
-              {data.backups.map((backup) => (
-                <div key={backup.id} className="flex items-start justify-between py-3 gap-4">
-                  <div className="space-y-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>
-                      <Badge variant="outline">{backup.source}</Badge>
-                      {backup.driveName && (
-                        <span className="text-sm text-muted-foreground">{backup.driveName}</span>
-                      )}
-                      {backup.label && (
-                        <span className="text-sm font-medium truncate">{backup.label}</span>
+            <>
+              <div className="divide-y">
+                {accumulatedBackups.map((backup) => (
+                  <div key={backup.id} className="flex items-start justify-between py-3 gap-4">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>
+                        <Badge variant="outline">{backup.source}</Badge>
+                        {backup.driveName && (
+                          <span className="text-sm text-muted-foreground">{backup.driveName}</span>
+                        )}
+                        {backup.label && (
+                          <span className="text-sm font-medium truncate">{backup.label}</span>
+                        )}
+                      </div>
+                      {backup.failureReason && (
+                        <p className="text-xs text-destructive">{backup.failureReason}</p>
                       )}
                     </div>
-                    {backup.failureReason && (
-                      <p className="text-xs text-destructive">{backup.failureReason}</p>
-                    )}
+                    <div
+                      className="text-right text-sm text-muted-foreground shrink-0"
+                      title={format(new Date(backup.createdAt), 'PPpp')}
+                    >
+                      {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
+                    </div>
                   </div>
-                  <div
-                    className="text-right text-sm text-muted-foreground shrink-0"
-                    title={format(new Date(backup.createdAt), 'PPpp')}
+                ))}
+              </div>
+              {data && accumulatedBackups.length < data.total && (
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-xs text-muted-foreground">
+                    Showing {accumulatedBackups.length} of {data.total}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleLoadMore}
+                    disabled={isLoadingMore}
                   >
-                    {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
-                  </div>
+                    {isLoadingMore && <Loader2 className="h-3 w-3 mr-2 animate-spin" />}
+                    Load more
+                  </Button>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

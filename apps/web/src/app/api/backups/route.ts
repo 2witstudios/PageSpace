@@ -38,7 +38,7 @@ export async function GET(request: Request) {
       details: { operation: 'list_all_backups', count: result.backups.length },
     });
 
-    return NextResponse.json({ backups: result.backups });
+    return NextResponse.json({ backups: result.backups, total: result.total });
   } catch (error) {
     loggers.api.error('Error fetching user backups', error as Error);
     return NextResponse.json({ error: 'Failed to fetch backups' }, { status: 500 });
