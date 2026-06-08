@@ -73,7 +73,7 @@ function ToolsTable({ tools }: { tools: ToolSchemaInfo[] }) {
   );
 }
 
-function CollapsibleBlock({ label, children }: { label: string; children: ReactNode }) {
+function CollapsibleBlock({ label, children, height = "h-64" }: { label: string; children: ReactNode; height?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -82,7 +82,7 @@ function CollapsibleBlock({ label, children }: { label: string; children: ReactN
         <span className="font-medium">{label}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ScrollArea className="h-64 mt-1 mb-2">
+        <ScrollArea className={`${height} mt-1 mb-2`}>
           {children}
         </ScrollArea>
       </CollapsibleContent>
@@ -148,7 +148,7 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
       {data.completePayload?.formattedString && (
         <>
           <Separator />
-          <CollapsibleBlock label={`Complete Payload (raw) — ${fmt(data.completePayload.tokenEstimates.total)} tok`}>
+          <CollapsibleBlock label={`Complete Payload (raw) — ${fmt(data.completePayload.tokenEstimates.total)} tok`} height="h-96">
             <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
               {data.completePayload.formattedString}
             </pre>
