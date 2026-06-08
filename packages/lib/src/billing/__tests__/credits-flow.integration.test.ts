@@ -349,6 +349,7 @@ const H = vi.hoisted(() => {
       set(v: Row) {
         return {
           where(p: Pred) {
+            const matched: Row[] = [];
             for (const r of store[table]) {
               if (evalPred(p, { [table]: r } as Ctx)) {
                 // Resolve any SQL-expression set values (e.g. debtCents + shortfall)
@@ -359,9 +360,16 @@ const H = vi.hoisted(() => {
                 }
                 Object.assign(r, resolved);
                 if (table === 'creditBalances') enforceBalanceInvariants(r);
+                matched.push(r);
               }
             }
-            return Promise.resolve(undefined);
+            const result = matched;
+            return {
+              then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
+              returning(_proj?: Record<string, Col>) {
+                return Promise.resolve(result);
+              },
+            };
           },
         };
       },
