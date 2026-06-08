@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listAllUserBackups } from '@/services/api/drive-backup-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -28,6 +29,13 @@ export async function GET(request: Request) {
     const result = await listAllUserBackups(auth.userId, {
       limit: parsedLimit ?? undefined,
       offset: parsedOffset ?? undefined,
+    });
+
+    auditRequest(request, {
+      eventType: 'data.read',
+      userId: auth.userId,
+      resourceType: 'backup',
+      details: { operation: 'list_all_backups', count: result.backups.length },
     });
 
     return NextResponse.json({ backups: result.backups });
