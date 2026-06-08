@@ -60,8 +60,10 @@ export async function listAllUserBackups(
     .from(drives)
     .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
 
-  const adminMemberships = await db.select({ driveId: driveMembers.driveId })
+  const adminMemberships = await db
+    .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
+    .innerJoin(drives, and(eq(driveMembers.driveId, drives.id), eq(drives.isTrashed, false)))
     .where(and(
       eq(driveMembers.userId, userId),
       eq(driveMembers.role, 'ADMIN'),
