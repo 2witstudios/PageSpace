@@ -71,7 +71,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
-vi.mock('@/lib/ai/core', () => ({ convertDbMessageToUIMessage: vi.fn((m) => m) }));
+vi.mock('@/lib/ai/core/message-utils', () => ({ convertDbMessageToUIMessage: vi.fn((m) => m) }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';

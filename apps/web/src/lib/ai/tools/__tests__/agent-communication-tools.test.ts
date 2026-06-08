@@ -101,13 +101,19 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 // Mock core AI modules
-vi.mock('../../core', () => ({
+vi.mock('../../core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs) => msgs),
   saveMessageToDatabase: vi.fn(),
   convertDbMessageToUIMessage: vi.fn((msg) => msg),
+}));
+vi.mock('../../core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(() => false),
+}));
+vi.mock('../../core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn(() => ''),
+}));
+vi.mock('../../core/ai-providers-config', () => ({
   AI_PROVIDERS: { openai: { name: 'OpenAI' } },
   getModelDisplayName: vi.fn(() => 'Test Model'),
   DEFAULT_PROVIDER: 'openai',

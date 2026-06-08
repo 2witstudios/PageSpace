@@ -43,7 +43,7 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
-vi.mock('../../core', () => ({
+vi.mock('../../core/ai-tools', () => ({
   pageSpaceTools: {
     list_drives: { name: 'list_drives' },
     list_pages: { name: 'list_pages' },

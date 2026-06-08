@@ -68,7 +68,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     read_page: { description: 'Read a page' },
     write_page: { description: 'Write a page' },

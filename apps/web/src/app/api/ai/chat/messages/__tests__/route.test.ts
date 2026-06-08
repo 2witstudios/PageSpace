@@ -41,7 +41,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 // Mock message converter (boundary)
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/message-utils', () => ({
   convertDbMessageToUIMessage: vi.fn((msg: ChatMessage) => ({
     id: msg.id,
     role: msg.role,

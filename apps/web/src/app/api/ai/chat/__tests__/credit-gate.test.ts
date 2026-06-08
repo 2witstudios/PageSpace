@@ -98,29 +98,47 @@ vi.mock('@/lib/websocket', () => ({
   broadcastChatUserMessage: vi.fn(),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {} }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
   saveMessageToDatabase: vi.fn(),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertDbMessageToUIMessage: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/mention-processor', () => ({
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue(''),
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
+}));
+vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
   sanitizeToolNamesForProvider: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
 
