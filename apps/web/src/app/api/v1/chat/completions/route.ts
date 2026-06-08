@@ -67,7 +67,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools } = validation.data;
+  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools, clientManagesHistory } = validation.data;
 
   // Build the caller's client-side tool set. Tools registered without `execute` are returned
   // to the caller as native tool_calls — the SDK pauses, the caller executes locally, and the
@@ -114,11 +114,22 @@ export async function POST(request: Request): Promise<Response> {
   // 5b. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
   // into another user's thread.
+  //
+  // client_manages_history callers (e.g. pi) send the full context themselves on every
+  // request. They may supply a brand-new conversation_id that doesn't exist yet — we
+  // auto-create the row below instead of 404ing. We still 403 if the row belongs to
+  // someone else (ID collision / cross-user attempt).
   if (incomingConversationId) {
     const conv = await conversationRepository.getConversation(incomingConversationId);
-    const convAccess = validateConversationAccess(conv, authResult.userId);
-    if (!convAccess.ok) {
-      return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
+    if (clientManagesHistory) {
+      if (conv && conv.userId !== authResult.userId) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
+    } else {
+      const convAccess = validateConversationAccess(conv, authResult.userId);
+      if (!convAccess.ok) {
+        return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
+      }
     }
   }
 
@@ -217,12 +228,17 @@ export async function POST(request: Request): Promise<Response> {
   const userMessage = messages[messages.length - 1];
 
   let inferenceMessages = messages;
-  if (isThreadMode) {
+  if (isThreadMode && !clientManagesHistory) {
     const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
     inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
   }
 
   const userMessageId = userMessage.id;
+  if (isThreadMode && clientManagesHistory) {
+    // Auto-create the conversations row the first time this session ID is used.
+    // createConversation uses onConflictDoNothing, so subsequent turns are no-ops.
+    await conversationRepository.createConversation(conversationId, authResult.userId, pageId);
+  }
   if (userMessage && userMessage.role === 'user') {
     await saveMessageToDatabase({
       messageId: userMessageId,

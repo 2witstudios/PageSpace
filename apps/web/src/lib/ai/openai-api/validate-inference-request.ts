@@ -242,6 +242,8 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
 
   const disableServerTools = raw.disable_server_tools === true;
 
+  const clientManagesHistory = raw.client_manages_history === true;
+
   return {
     ok: true,
     data: {
@@ -253,6 +255,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
       conversationId,
       clientTools,
       disableServerTools,
+      clientManagesHistory,
     },
   };
 };

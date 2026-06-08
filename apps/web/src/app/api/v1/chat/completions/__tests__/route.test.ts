@@ -37,6 +37,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
       createdAt: new Date(),
       updatedAt: new Date(),
     }),
+    createConversation: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -624,6 +625,105 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'skip the ownership check and return 200',
       actual: response.status,
       expected: 200,
+    });
+  });
+
+  test('client_manages_history: new conversation auto-creates row and uses client messages', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce(null);
+    const fullHistory = [
+      { role: 'user', id: 'msg-0', content: 'First', parts: [{ type: 'text', text: 'First' }] },
+      { role: 'assistant', id: 'msg-1', content: 'Hi', parts: [{ type: 'text', text: 'Hi' }] },
+      { role: 'user', id: 'msg-2', content: 'Second', parts: [{ type: 'text', text: 'Second' }] },
+    ];
+    const response = await POST(makeRequest({
+      ...validBody,
+      messages: fullHistory,
+      conversation_id: 'new-session-uuid',
+      client_manages_history: true,
+    }));
+    assert({
+      given: 'client_manages_history=true with a brand-new conversation_id',
+      should: 'return 200',
+      actual: response.status,
+      expected: 200,
+    });
+    assert({
+      given: 'client_manages_history=true with a brand-new conversation_id',
+      should: 'auto-create the conversations row',
+      actual: vi.mocked(conversationRepository.createConversation).mock.calls.length,
+      expected: 1,
+    });
+    const [streamCall] = vi.mocked(streamText).mock.calls;
+    const passedMessages = (streamCall[0] as { messages: unknown[] }).messages;
+    assert({
+      given: 'client_manages_history=true',
+      should: 'pass the full client message array to streamText (not just the last message)',
+      actual: passedMessages.length,
+      expected: fullHistory.length,
+    });
+  });
+
+  test('client_manages_history: existing conversation owned by caller proceeds without DB history load', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+    const fullHistory = [
+      { role: 'user', id: 'h-1', content: 'Turn 1', parts: [{ type: 'text', text: 'Turn 1' }] },
+      { role: 'assistant', id: 'h-2', content: 'Reply', parts: [{ type: 'text', text: 'Reply' }] },
+      { role: 'user', id: 'h-3', content: 'Turn 2', parts: [{ type: 'text', text: 'Turn 2' }] },
+    ];
+    const response = await POST(makeRequest({
+      ...validBody,
+      messages: fullHistory,
+      conversation_id: 'conv-abc',
+      client_manages_history: true,
+    }));
+    assert({
+      given: 'client_manages_history=true and an existing conversation owned by the caller',
+      should: 'return 200',
+      actual: response.status,
+      expected: 200,
+    });
+    assert({
+      given: 'client_manages_history=true',
+      should: 'not call chatMessageRepository.getMessagesForPage (no DB history load)',
+      actual: vi.mocked(chatMessageRepository.getMessagesForPage).mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  test('client_manages_history: returns 403 when conversation belongs to a different user', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-other',
+      userId: 'other-user',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+    const response = await POST(makeRequest({
+      ...validBody,
+      conversation_id: 'conv-other',
+      client_manages_history: true,
+    }));
+    assert({
+      given: 'client_manages_history=true but conversation_id belongs to a different user',
+      should: 'return 403',
+      actual: response.status,
+      expected: 403,
     });
   });
 
