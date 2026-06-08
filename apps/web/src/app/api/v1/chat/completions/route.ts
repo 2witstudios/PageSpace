@@ -115,15 +115,29 @@ export async function POST(request: Request): Promise<Response> {
   // must own the conversations row. This prevents one user from appending messages
   // into another user's thread.
   //
-  // client_manages_history callers (e.g. pi) send the full context themselves on every
-  // request. They may supply a brand-new conversation_id that doesn't exist yet — we
-  // auto-create the row below instead of 404ing. We still 403 if the row belongs to
-  // someone else (ID collision / cross-user attempt).
+  // client_manages_history callers (e.g. pi) manage their own context window and may
+  // supply a brand-new conversation_id. When the row doesn't exist yet we auto-create it
+  // here (not deferred) so we can immediately re-read and catch a TOCTOU race where two
+  // requests collide on the same new ID. We still 403 on wrong owner and 404 on inactive.
   if (incomingConversationId) {
     const conv = await conversationRepository.getConversation(incomingConversationId);
     if (clientManagesHistory) {
-      if (conv && conv.userId !== authResult.userId) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      if (conv) {
+        // Row exists — apply the same isActive + ownership checks as the normal path.
+        if (!conv.isActive) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
+        if (conv.userId !== authResult.userId) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        }
+      } else {
+        // First use: create the row then re-read to verify ownership, guarding against
+        // the unlikely TOCTOU case where two requests race on the same new UUID.
+        await conversationRepository.createConversation(incomingConversationId, authResult.userId, pageId);
+        const owned = await conversationRepository.getConversation(incomingConversationId);
+        if (!owned || owned.userId !== authResult.userId) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        }
       }
     } else {
       const convAccess = validateConversationAccess(conv, authResult.userId);
@@ -234,11 +248,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const userMessageId = userMessage.id;
-  if (isThreadMode && clientManagesHistory) {
-    // Auto-create the conversations row the first time this session ID is used.
-    // createConversation uses onConflictDoNothing, so subsequent turns are no-ops.
-    await conversationRepository.createConversation(conversationId, authResult.userId, pageId);
-  }
   if (userMessage && userMessage.role === 'user') {
     await saveMessageToDatabase({
       messageId: userMessageId,

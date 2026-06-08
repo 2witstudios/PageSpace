@@ -629,7 +629,22 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   test('client_manages_history: new conversation auto-creates row and uses client messages', async () => {
-    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce(null);
+    // First getConversation call (ownership check): null — new session
+    // Second getConversation call (TOCTOU verify after create): owned by caller
+    vi.mocked(conversationRepository.getConversation)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'new-session-uuid',
+        userId: 'user-1',
+        isActive: true,
+        title: null,
+        contextId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isShared: false,
+        type: 'page',
+        lastMessageAt: null,
+      });
     const fullHistory = [
       { role: 'user', id: 'msg-0', content: 'First', parts: [{ type: 'text', text: 'First' }] },
       { role: 'assistant', id: 'msg-1', content: 'Hi', parts: [{ type: 'text', text: 'Hi' }] },
@@ -722,6 +737,62 @@ describe('POST /api/v1/chat/completions', () => {
     assert({
       given: 'client_manages_history=true but conversation_id belongs to a different user',
       should: 'return 403',
+      actual: response.status,
+      expected: 403,
+    });
+  });
+
+  test('client_manages_history: returns 404 when conversation row is inactive (soft-deleted)', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-deleted',
+      userId: 'user-1',
+      isActive: false,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+    const response = await POST(makeRequest({
+      ...validBody,
+      conversation_id: 'conv-deleted',
+      client_manages_history: true,
+    }));
+    assert({
+      given: 'client_manages_history=true and the conversation row exists but isActive=false',
+      should: 'return 404, matching the normal thread-mode behaviour for inactive conversations',
+      actual: response.status,
+      expected: 404,
+    });
+  });
+
+  test('client_manages_history: returns 403 when TOCTOU race means create was won by another user', async () => {
+    // First read: null (our request sees no row)
+    // After createConversation, second read: owned by a different user (race lost)
+    vi.mocked(conversationRepository.getConversation)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'race-uuid',
+        userId: 'other-user',
+        isActive: true,
+        title: null,
+        contextId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        isShared: false,
+        type: 'page',
+        lastMessageAt: null,
+      });
+    const response = await POST(makeRequest({
+      ...validBody,
+      conversation_id: 'race-uuid',
+      client_manages_history: true,
+    }));
+    assert({
+      given: 'a TOCTOU race where another user\'s insert won before the ownership re-read',
+      should: 'return 403 rather than silently appending messages to the wrong conversation',
       actual: response.status,
       expected: 403,
     });
