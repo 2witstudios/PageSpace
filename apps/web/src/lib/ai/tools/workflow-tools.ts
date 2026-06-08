@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { canActorManageDrive } from './actor-permissions';
 import { agentTriggerBaseSchema, validateAgentTrigger } from '@/lib/workflows/agent-trigger-shared';
 import {

@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 

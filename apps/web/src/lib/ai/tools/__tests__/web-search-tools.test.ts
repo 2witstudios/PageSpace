@@ -25,10 +25,10 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
-vi.mock('../../core', () => ({}));
+vi.mock('../../core/types', () => ({}));
 
 import { webSearchTools } from '../web-search-tools';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 type WebSearchResult = Exclude<
   Awaited<ReturnType<NonNullable<(typeof webSearchTools.web_search)['execute']>>>,

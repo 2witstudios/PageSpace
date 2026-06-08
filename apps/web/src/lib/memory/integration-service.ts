@@ -10,7 +10,8 @@ import { generateText } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { userPersonalization } from '@pagespace/db/schema/personalization';
-import { createAIProvider, isProviderError, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { DiscoveryResult } from './discovery-service';

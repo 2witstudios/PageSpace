@@ -41,7 +41,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 // Mock message converter (boundary)
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/message-utils', () => ({
   convertDbMessageToUIMessage: vi.fn((msg: ChatMessage) => ({
     id: msg.id,
     role: msg.role,
@@ -53,7 +53,7 @@ import { chatMessageRepository } from '@/lib/repositories/chat-message-repositor
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 
 // Test fixtures
 const mockUserId = 'user_123';

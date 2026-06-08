@@ -1,4 +1,4 @@
-import type { ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import {
   getUserAccessLevel,
   getUserDriveAccess,

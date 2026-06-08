@@ -6,20 +6,11 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByMcpScope } from './actor-permissions';
-import {
-  sanitizeMessagesForModel,
-  saveMessageToDatabase,
-  convertDbMessageToUIMessage,
-  createAIProvider,
-  isProviderError,
-  DEFAULT_PROVIDER,
-  DEFAULT_MODEL,
-  type ProviderRequest,
-  buildTimestampSystemPrompt,
-  type ToolExecutionContext,
-  AI_PROVIDERS,
-  getModelDisplayName,
-} from '@/lib/ai/core';
+import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';

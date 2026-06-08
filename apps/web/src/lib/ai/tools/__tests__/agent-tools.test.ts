@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 // Mock repository seams - the proper boundary for tests
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -43,7 +43,7 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
-vi.mock('../../core', () => ({
+vi.mock('../../core/ai-tools', () => ({
   pageSpaceTools: {
     list_drives: { name: 'list_drives' },
     list_pages: { name: 'list_pages' },

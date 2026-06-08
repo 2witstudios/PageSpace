@@ -2,7 +2,7 @@ import { promises as dnsPromises } from 'dns';
 import { tool } from 'ai';
 import { z } from 'zod';
 import TurndownService from 'turndown';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 

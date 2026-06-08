@@ -12,7 +12,7 @@ import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core';
+import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core/timestamp-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 

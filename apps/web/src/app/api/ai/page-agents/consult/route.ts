@@ -7,17 +7,12 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import {
-  createAIProvider,
-  isProviderError,
-  type ProviderRequest,
-  pageSpaceTools,
-  buildTimestampSystemPrompt,
-  getUserTimezone,
-  DEFAULT_PROVIDER,
-  DEFAULT_MODEL,
-  type ToolExecutionContext,
-} from '@/lib/ai/core';
+import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'

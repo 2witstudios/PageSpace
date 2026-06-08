@@ -60,7 +60,7 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 // Mock AI tools for validation
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     read_page: {},
     list_pages: {},

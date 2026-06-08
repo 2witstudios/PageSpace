@@ -7,7 +7,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { driveOutsideMcpScope } from './actor-permissions';
 
 export const memberTools = {

@@ -19,7 +19,7 @@ import {
   type DiffRequest,
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { filterDriveIdsByMcpScope } from './actor-permissions';
 
 /**

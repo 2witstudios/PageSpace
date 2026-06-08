@@ -17,7 +17,7 @@ import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { replaceLines } from '@/lib/editor/line-edit';
 

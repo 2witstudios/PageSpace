@@ -55,10 +55,14 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-mini' }),
   isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_LIGHT_MODEL: 'openai/gpt-5.4-mini',
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
   getUserTimeOfDay: vi.fn().mockReturnValue('morning'),
   getStartOfTodayInTimezone: vi.fn().mockReturnValue(new Date(0)),
@@ -75,7 +79,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
-import { createAIProvider } from '@/lib/ai/core';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { generateText } from 'ai';
 
 const mockAuth = () => ({

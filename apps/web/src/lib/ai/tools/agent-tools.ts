@@ -6,7 +6,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { type ToolExecutionContext, pageSpaceTools } from '../core';
+import type { ToolExecutionContext } from '../core/types';
+import { pageSpaceTools } from '../core/ai-tools';
 import { validateAgentModelSelection } from '../core/ai-providers-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 

@@ -107,7 +107,7 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { channelMessageRepository, type ChannelMessageRow } from '@pagespace/lib/services/channel-message-repository';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const mockCanActorEditPage = vi.mocked(canActorEditPage);
 const mockGetActorInfo = vi.mocked(getActorInfo);

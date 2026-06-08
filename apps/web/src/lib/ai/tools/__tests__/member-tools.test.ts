@@ -34,7 +34,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 
 import { memberTools } from '../member-tools';
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 vi.mocked(listDriveMembers);

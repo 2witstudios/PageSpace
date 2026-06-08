@@ -38,9 +38,11 @@ vi.mock('@pagespace/db/schema/personalization', () => ({
 
 // Mock AI provider
 const mockCreateAIProvider = vi.fn();
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: () => mockCreateAIProvider(),
   isProviderError: (result: unknown) => result !== null && typeof result === 'object' && 'error' in result,
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-4.6',
 }));
 

@@ -74,9 +74,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
+}));
+vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue('You are a helpful agent.'),
+}));
+vi.mock('@/lib/ai/core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
   saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   convertDbMessageToUIMessage: vi.fn((m: unknown) => {
@@ -84,9 +89,14 @@ vi.mock('@/lib/ai/core', () => ({
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
-  isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
+}));
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
 }));
 
@@ -146,7 +156,7 @@ import { db } from '@pagespace/db/db';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core';
+import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';

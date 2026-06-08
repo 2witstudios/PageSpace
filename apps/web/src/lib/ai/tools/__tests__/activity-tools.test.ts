@@ -18,7 +18,7 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
 
 import { activityTools } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 

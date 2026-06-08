@@ -12,7 +12,7 @@ import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const channelLogger = loggers.ai.child({ module: 'channel-tools' });

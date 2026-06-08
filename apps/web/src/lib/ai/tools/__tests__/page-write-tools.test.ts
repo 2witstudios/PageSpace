@@ -126,7 +126,7 @@ import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permission
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
 const mockCanUserDeletePage = vi.mocked(canUserDeletePage);

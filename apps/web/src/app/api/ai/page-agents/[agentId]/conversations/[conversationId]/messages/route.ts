@@ -6,7 +6,7 @@ import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 

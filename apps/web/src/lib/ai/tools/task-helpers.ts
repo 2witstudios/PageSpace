@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canActorEditPage } from './actor-permissions';
 import { logPageActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';

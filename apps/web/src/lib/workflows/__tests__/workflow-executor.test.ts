@@ -73,15 +73,21 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     list_pages: { name: 'list_pages' },
     create_page: { name: 'create_page' },
     search_pages: { name: 'search_pages' },
   },
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn(() => 'Timestamp: now'),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
@@ -111,7 +117,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { executeWorkflow, type WorkflowExecutionInput } from '../workflow-executor';
 import { generateText } from 'ai';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({

@@ -122,34 +122,53 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {},
   corePageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/system-prompt', () => ({
   TOOL_DISCOVERY_PROMPT: 'TOOLS: mock',
+  buildSystemPrompt: vi.fn().mockReturnValue(''),
+  buildNonCoreToolNamesPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertGlobalAssistantMessageToUIMessage: vi.fn(),
   saveGlobalAssistantMessageToDatabase: mockSaveGlobalAssistantMessageToDatabase,
+}));
+vi.mock('@/lib/ai/core/mention-processor', () => ({
   processMentionsInMessage: vi.fn().mockReturnValue({ mentions: [], pageIds: [] }),
   buildMentionSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
-  buildSystemPrompt: vi.fn().mockReturnValue(''),
-  buildNonCoreToolNamesPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/agent-awareness', () => ({
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+}));
+vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn().mockResolvedValue(''),
   getDriveListSummary: vi.fn().mockResolvedValue(''),
-  getModelCapabilities: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
   sanitizeToolNamesForProvider: vi.fn((t: unknown) => t),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
 }));
@@ -211,7 +230,10 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
   validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true }),
   hasFileParts: vi.fn().mockReturnValue(false),
 }));
-vi.mock('@/lib/ai/core/model-capabilities', () => ({ hasVisionCapability: vi.fn().mockReturnValue(true) }));
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  getModelCapabilities: vi.fn().mockResolvedValue({}),
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
 }));

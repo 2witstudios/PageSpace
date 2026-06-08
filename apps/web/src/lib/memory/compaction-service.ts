@@ -7,7 +7,8 @@
  */
 
 import { generateText } from 'ai';
-import { createAIProvider, isProviderError, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import {

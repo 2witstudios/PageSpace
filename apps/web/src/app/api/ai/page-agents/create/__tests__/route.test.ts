@@ -56,7 +56,7 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 // Mock AI tools for validation
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     read_page: {},
     list_pages: {},
@@ -64,6 +64,8 @@ vi.mock('@/lib/ai/core', () => ({
     update_page: {},
     delete_page: {},
   },
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
   ONPREM_ALLOWED_PROVIDERS: new Set(['ollama', 'lmstudio', 'azure_openai']),

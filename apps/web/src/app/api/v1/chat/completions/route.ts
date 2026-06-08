@@ -15,18 +15,12 @@ import {
   checkMCPPageScope,
   getAllowedDriveIds,
 } from '@/lib/auth';
-import {
-  createAIProvider,
-  buildSystemPrompt,
-  sanitizeMessagesForModel,
-  saveMessageToDatabase,
-  extractMessageContent,
-  isProviderError,
-  convertDbMessageToUIMessage,
-  pageSpaceTools,
-  filterToolsForReadOnly,
-  getModelCapabilities,
-} from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';

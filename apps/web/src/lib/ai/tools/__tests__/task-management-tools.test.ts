@@ -100,7 +100,7 @@ vi.mock('@/lib/tasks/completion-guard', () => ({
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
 import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 

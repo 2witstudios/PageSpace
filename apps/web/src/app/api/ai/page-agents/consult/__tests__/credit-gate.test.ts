@@ -63,12 +63,20 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
@@ -90,7 +98,7 @@ vi.mock('ai', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { createAIProvider } from '@/lib/ai/core';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { generateText } from 'ai';
 
 const mockAuth = (): SessionAuthResult => ({

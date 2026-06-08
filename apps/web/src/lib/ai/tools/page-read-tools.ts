@@ -9,7 +9,8 @@ import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive } from './actor-permissions';
 import { getPageTypeEmoji, isFolderPage, isCodePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
+import type { ToolExecutionContext } from '../core/types';
+import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 
 export const pageReadTools = {
