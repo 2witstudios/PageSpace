@@ -21,7 +21,8 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+    const { userId, role } = auth;
+    const isAdmin = role === 'admin';
 
     const { pageId } = await context.params;
 
@@ -103,15 +104,18 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_usage', resourceId: pageId, details: { action: 'view_ai_usage', logCount: logs.length } });
 
+    // Strip cost from logs for non-admins
+    const responseLogs = isAdmin ? logs : logs.map(log => ({ ...log, cost: null }));
+
     return NextResponse.json({
-      logs,
+      logs: responseLogs,
       summary: {
         // Billing metrics (cumulative across all calls)
         billing: {
           totalInputTokens,
           totalOutputTokens,
           totalTokens,
-          totalCost: Number(totalCost.toFixed(6)),
+          totalCost: isAdmin ? Number(totalCost.toFixed(6)) : 0,
         },
 
         // Context metrics (current conversation state)
