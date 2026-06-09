@@ -479,4 +479,30 @@ describe('serializeMessageRowToMessages', () => {
       expected: 1,
     });
   });
+
+  test('failed tool result uses errorText as content instead of null', () => {
+    const toolResults = JSON.stringify([
+      { toolCallId: 'tc-err', toolName: 'Bash', output: null, state: 'output-error', errorText: 'command not found: foobar' },
+    ]);
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: '', toolResults }));
+    assert({
+      given: 'an assistant message row with an output-error tool result',
+      should: 'emit a role:tool message using errorText as content',
+      actual: result[1]?.role === 'tool' ? (result[1] as { content: string }).content : undefined,
+      expected: 'command not found: foobar',
+    });
+  });
+
+  test('failed tool result with no errorText falls back to JSON.stringify(null)', () => {
+    const toolResults = JSON.stringify([
+      { toolCallId: 'tc-err', toolName: 'Bash', output: null, state: 'output-error' },
+    ]);
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: '', toolResults }));
+    assert({
+      given: 'an output-error tool result with no errorText',
+      should: 'emit a role:tool message with "null" as content',
+      actual: result[1]?.role === 'tool' ? (result[1] as { content: string }).content : undefined,
+      expected: 'null',
+    });
+  });
 });

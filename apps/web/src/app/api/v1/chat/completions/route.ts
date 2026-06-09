@@ -257,7 +257,7 @@ export async function POST(request: Request): Promise<Response> {
       if (msg.role !== 'assistant') continue;
       const toolResults = extractToolResults(msg);
       if (toolResults.length === 0) continue;
-      chatMessageRepository.updateMessageToolResults(msg.id, toolResults)
+      chatMessageRepository.updateMessageToolResults(msg.id, conversationId, toolResults)
         .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
     }
   }

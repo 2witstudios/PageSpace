@@ -928,13 +928,16 @@ export function renderToolContent(ctx: {
     );
   }
 
-  // Registry renderers are tried before the parsedOutput null guard because
-  // client-side tools (e.g. pi) return plain strings, not JSON objects, so their
-  // parsedOutput is {}. Renderers that need parsedOutput check it themselves.
+  // CLI tool renderers (PascalCase names) receive plain-string output so parsedOutput
+  // is always {}; they must run before the null guard. Server tool renderers (snake_case)
+  // only run when parsedOutput is present — otherwise a pending tool would appear completed.
   const renderer = toolRenderers[toolName];
   if (renderer) {
-    const node = renderer({ toolName, parsedInput, parsedOutput: parsedOutput ?? {}, output, error });
-    if (node != null) return node;
+    const isCliTool = /^[A-Z]/.test(toolName);
+    if (isCliTool || parsedOutput) {
+      const node = renderer({ toolName, parsedInput, parsedOutput: parsedOutput ?? {}, output, error });
+      if (node != null) return node;
+    }
   }
 
   if (!parsedOutput) return null;

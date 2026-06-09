@@ -173,7 +173,7 @@ function parseRawToolCalls(
 
 function parseRawToolResults(
   raw: unknown,
-): Array<{ toolCallId: string; output: unknown }> {
+): Array<{ toolCallId: string; output: unknown; state?: string; errorText?: string }> {
   if (!raw) return [];
   const arr: unknown[] = Array.isArray(raw)
     ? raw
@@ -186,7 +186,7 @@ function parseRawToolResults(
         }
       })();
   return arr.filter(
-    (tr): tr is { toolCallId: string; output: unknown } =>
+    (tr): tr is { toolCallId: string; output: unknown; state?: string; errorText?: string } =>
       typeof tr === 'object' &&
       tr !== null &&
       typeof (tr as Record<string, unknown>).toolCallId === 'string',
@@ -229,7 +229,11 @@ export function serializeMessageRowToMessages(
         id: `${row.id}:${tr.toolCallId}`,
         role: 'tool',
         tool_call_id: tr.toolCallId,
-        content: typeof tr.output === 'string' ? tr.output : JSON.stringify(tr.output ?? null),
+        content: tr.state === 'output-error' && tr.errorText
+          ? tr.errorText
+          : typeof tr.output === 'string'
+            ? tr.output
+            : JSON.stringify(tr.output ?? null),
         created_at: Math.floor(row.createdAt.getTime() / 1000),
       });
     }

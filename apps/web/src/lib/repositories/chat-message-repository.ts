@@ -182,13 +182,14 @@ export const chatMessageRepository = {
    */
   async updateMessageToolResults(
     messageId: string,
+    conversationId: string,
     toolResults: ToolResult[]
   ): Promise<void> {
     if (toolResults.length === 0) return;
     await db
       .update(chatMessages)
       .set({ toolResults: JSON.stringify(toolResults) })
-      .where(eq(chatMessages.id, messageId));
+      .where(and(eq(chatMessages.id, messageId), eq(chatMessages.conversationId, conversationId)));
   },
 
   /**

@@ -37,19 +37,22 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
     vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
   });
 
-  it('should UPDATE toolResults for the given message ID', async () => {
+  it('should UPDATE toolResults scoped to the given message and conversation IDs', async () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-abc', results);
+    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', results);
 
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
     expect(mockWhere).toHaveBeenCalledTimes(1);
+    // WHERE clause should be an AND of id + conversationId conditions
+    const whereArg = mockWhere.mock.calls[0][0];
+    expect(whereArg).toMatchObject({ type: 'and' });
   });
 
   it('should no-op when toolResults array is empty', async () => {
-    await chatMessageRepository.updateMessageToolResults('msg-abc', []);
+    await chatMessageRepository.updateMessageToolResults('msg-abc', 'conv-123', []);
 
     expect(db.update).not.toHaveBeenCalled();
   });
@@ -59,7 +62,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
       { toolCallId: 'tc-1', toolName: 'Read', output: 'contents', state: 'output-available' },
       { toolCallId: 'tc-2', toolName: 'Bash', output: 'exit 0', state: 'output-available' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-xyz', results);
+    await chatMessageRepository.updateMessageToolResults('msg-xyz', 'conv-456', results);
 
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });
   });
@@ -68,7 +71,7 @@ describe('chatMessageRepository.updateMessageToolResults', () => {
     const results: ToolResult[] = [
       { toolCallId: 'tc-1', toolName: 'Bash', output: null, state: 'output-error', errorText: 'command not found' },
     ];
-    await chatMessageRepository.updateMessageToolResults('msg-err', results);
+    await chatMessageRepository.updateMessageToolResults('msg-err', 'conv-789', results);
 
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(mockSet).toHaveBeenCalledWith({ toolResults: JSON.stringify(results) });

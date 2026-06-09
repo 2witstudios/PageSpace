@@ -902,13 +902,14 @@ describe('POST /api/v1/chat/completions', () => {
     const backFillCalls = vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls;
     assert({
       given: 'client_manages_history=true with a prior assistant message carrying output-available tool parts',
-      should: 'call updateMessageToolResults with the message ID and extracted results',
+      should: 'call updateMessageToolResults with the message ID, conversation ID, and extracted results',
       actual: {
         called: backFillCalls.length,
         messageId: backFillCalls[0]?.[0],
-        resultsCount: backFillCalls[0]?.[1]?.length,
+        conversationId: backFillCalls[0]?.[1],
+        resultsCount: (backFillCalls[0]?.[2] as unknown[])?.length,
       },
-      expected: { called: 1, messageId: 'asst-prior', resultsCount: 1 },
+      expected: { called: 1, messageId: 'asst-prior', conversationId: 'conv-abc', resultsCount: 1 },
     });
   });
 
