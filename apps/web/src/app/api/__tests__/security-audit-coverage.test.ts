@@ -99,7 +99,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
 
   // --- Drive backup sub-routes ---
+  ['drives/[driveId]/backups/[backupId]', 'Read-only backup detail (pages/members/roles/files) — no data written, covered by isDriveOwnerOrAdmin check'],
   ['drives/[driveId]/backups/[backupId]/diff', 'Read-only diff preview — no data written, covered by parent backup auth'],
+  ['drives/[driveId]/backups/[backupId]/download', 'Read-only JSON download — no data written, covered by getDriveBackupDetail authz'],
   ['drives/[driveId]/backups/[backupId]/export', 'Read-only ZIP download — no data written, covered by streamBackupExport authz'],
   ['drives/[driveId]/backups/[backupId]/pages', 'Read-only snapshot page tree — no data written, covered by isDriveOwnerOrAdmin check'],
 

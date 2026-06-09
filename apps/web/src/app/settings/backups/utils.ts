@@ -1,5 +1,10 @@
-export function getExportFilename(backupId: string, label: string | null | undefined): string {
-  return label ? `${label}.zip` : `backup-${backupId}.zip`;
+export function getExportFilename(
+  backupId: string,
+  label: string | null | undefined,
+  driveSlug?: string | null,
+): string {
+  const slug = driveSlug ? `${driveSlug}-` : '';
+  return label ? `${slug}${label}.zip` : `${slug}backup-${backupId}.zip`;
 }
 
 export function getDownloadButtonLabel(isDownloading: boolean): string {

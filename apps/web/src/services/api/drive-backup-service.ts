@@ -50,7 +50,26 @@ export interface CreateDriveBackupResult {
   };
 }
 
-export type DriveBackupWithDriveName = DriveBackupSummary & { driveName: string | null };
+export type DriveBackupWithDriveName = DriveBackupSummary & { driveName: string | null; driveSlug: string | null };
+
+export interface DriveBackupPage {
+  pageId: string;
+  title: string | null;
+  type: string | null;
+  parentId: string | null;
+  position: number | null;
+  isTrashed: boolean;
+}
+
+export interface DriveBackupDetail extends DriveBackupSummary {
+  driveName: string | null;
+  driveSlug: string | null;
+  pages: DriveBackupPage[];
+  members: { userId: string; role: string | null }[];
+  roles: { roleId: string; name: string | null }[];
+  files: { fileId: string; mimeType: string | null; sizeBytes: number | null }[];
+}
+
 
 export async function listAllUserBackups(
   userId: string,
@@ -84,7 +103,7 @@ export async function listAllUserBackups(
 
   const [rows, countRows] = await Promise.all([
     db
-      .select({ backup: driveBackups, driveName: drives.name })
+      .select({ backup: driveBackups, driveName: drives.name, driveSlug: drives.slug })
       .from(driveBackups)
       .innerJoin(drives, eq(driveBackups.driveId, drives.id))
       .where(inArray(driveBackups.driveId, driveIds))
@@ -113,6 +132,7 @@ export async function listAllUserBackups(
       failedAt: r.backup.failedAt,
       failureReason: r.backup.failureReason,
       driveName: r.driveName,
+      driveSlug: r.driveSlug,
     })),
   };
 }
@@ -402,3 +422,62 @@ export async function createDriveBackup(
     }
   });
 }
+
+export async function getDriveBackupDetail(
+  backupId: string,
+  driveId: string,
+  userId: string,
+): Promise<{ success: boolean; detail?: DriveBackupDetail; error?: string; status?: number }> {
+  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
+  if (!canManage) {
+    return { success: false, error: 'Only drive owners and admins can view backups', status: 403 };
+  }
+
+  const [backup] = await db
+    .select({ backup: driveBackups, driveName: drives.name, driveSlug: drives.slug })
+    .from(driveBackups)
+    .innerJoin(drives, eq(driveBackups.driveId, drives.id))
+    .where(and(eq(driveBackups.id, backupId), eq(driveBackups.driveId, driveId)));
+
+  if (!backup) {
+    return { success: false, error: 'Backup not found', status: 404 };
+  }
+
+  const [bPages, bMembers, bRoles, bFiles] = await Promise.all([
+    db.select().from(driveBackupPages).where(eq(driveBackupPages.backupId, backupId)),
+    db.select().from(driveBackupMembers).where(eq(driveBackupMembers.backupId, backupId)),
+    db.select().from(driveBackupRoles).where(eq(driveBackupRoles.backupId, backupId)),
+    db.select().from(driveBackupFiles).where(eq(driveBackupFiles.backupId, backupId)),
+  ]);
+
+  return {
+    success: true,
+    detail: {
+      id: backup.backup.id,
+      driveId: backup.backup.driveId,
+      createdAt: backup.backup.createdAt,
+      createdBy: backup.backup.createdBy,
+      source: backup.backup.source as DriveBackupSource,
+      status: backup.backup.status as DriveBackupSummary['status'],
+      label: backup.backup.label,
+      reason: backup.backup.reason,
+      completedAt: backup.backup.completedAt,
+      failedAt: backup.backup.failedAt,
+      failureReason: backup.backup.failureReason,
+      driveName: backup.driveName,
+      driveSlug: backup.driveSlug,
+      pages: bPages.map((p) => ({
+        pageId: p.pageId,
+        title: p.title,
+        type: p.type,
+        parentId: p.parentId,
+        position: p.position,
+        isTrashed: p.isTrashed,
+      })),
+      members: bMembers.map((m) => ({ userId: m.userId, role: m.role })),
+      roles: bRoles.map((r) => ({ roleId: r.roleId, name: r.name })),
+      files: bFiles.map((f) => ({ fileId: f.fileId, mimeType: f.mimeType, sizeBytes: f.sizeBytes })),
+    },
+  };
+}
+
