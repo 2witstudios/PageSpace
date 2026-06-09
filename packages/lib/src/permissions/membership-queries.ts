@@ -4,6 +4,21 @@ import { pages } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
 
 export type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+export type PagePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
+
+/**
+ * Resolves the effective permissions for a pageId against a custom role.
+ * Per-page entry wins; driveWidePermissions is the fallback for pages not
+ * explicitly listed. Returns null when neither is set.
+ */
+export function resolveCustomRolePermissions(
+  role: { permissions: CustomRolePerms; driveWidePermissions: PagePerm | null },
+  pageId: string,
+): PagePerm | null {
+  const perPage = role.permissions[pageId];
+  if (perPage !== undefined) return perPage;
+  return role.driveWidePermissions ?? null;
+}
 
 export async function fetchDriveIdForPage(targetPageId: string): Promise<string> {
   const page = await db
