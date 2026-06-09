@@ -76,6 +76,7 @@ const createRoleFixture = (overrides: {
   color: '#000000',
   isDefault: overrides.isDefault ?? false,
   permissions: overrides.permissions ?? { page_1: { canView: true, canEdit: false, canShare: false } },
+  driveWidePermissions: null,
   position: overrides.position ?? 0,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
