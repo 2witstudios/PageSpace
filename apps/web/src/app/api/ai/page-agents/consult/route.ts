@@ -21,6 +21,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -219,16 +220,21 @@ export async function POST(request: Request) {
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
       .where(eq(users.id, userId));
-    const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
-      estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
-      maxInFlight: MAX_CHAT_INFLIGHT,
-    });
-    if (!creditGate.allowed) {
-      loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
-      return creditGateErrorResponse(creditGate.reason);
+    // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+    // subscription, so skip the gate entirely — no hold, no balance check — and never
+    // debit at settle (see isMeteringExempt in trackAIUsage).
+    if (!isMeteringExempt(agent.aiProvider)) {
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
+      if (!creditGate.allowed) {
+        loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
+        return creditGateErrorResponse(creditGate.reason);
+      }
+      // The gate's reservation for this call, released when usage is billed below.
+      holdId = creditGate.holdId;
     }
-    // The gate's reservation for this call, released when usage is billed below.
-    holdId = creditGate.holdId;
 
     // Get the drive information for context awareness
     const [drive] = await db

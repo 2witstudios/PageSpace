@@ -6,6 +6,7 @@ import { requiresProSubscription, createSubscriptionRequiredResponse, createAdmi
 import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
@@ -313,23 +314,29 @@ export async function POST(
     let userSubscriptionTier: string | undefined;
     {
       const [gateUser] = await db
-        .select({ subscriptionTier: users.subscriptionTier })
+        .select({ subscriptionTier: users.subscriptionTier, currentAiProvider: users.currentAiProvider })
         .from(users)
         .where(eq(users.id, userId));
       userSubscriptionTier = gateUser?.subscriptionTier ?? undefined;
-      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
-        estCostCents: estimateChatHoldCentsForModel(selectedModel),
-        maxInFlight: MAX_CHAT_INFLIGHT,
-      });
-      if (!creditGate.allowed) {
-        loggers.api.warn('Global Assistant Chat API: AI credit gate denied', {
-          userId: maskIdentifier(userId),
-          reason: creditGate.reason,
-          conversationId,
+      // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+      // subscription, so skip the credit gate entirely — no hold, no balance check —
+      // and never debit at settle (see isMeteringExempt in trackAIUsage).
+      const gateProvider = selectedProvider || gateUser?.currentAiProvider;
+      if (!isMeteringExempt(gateProvider)) {
+        const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+          estCostCents: estimateChatHoldCentsForModel(selectedModel),
+          maxInFlight: MAX_CHAT_INFLIGHT,
         });
-        return creditGateErrorResponse(creditGate.reason);
+        if (!creditGate.allowed) {
+          loggers.api.warn('Global Assistant Chat API: AI credit gate denied', {
+            userId: maskIdentifier(userId),
+            reason: creditGate.reason,
+            conversationId,
+          });
+          return creditGateErrorResponse(creditGate.reason);
+        }
+        holdId = creditGate.holdId;
       }
-      holdId = creditGate.holdId;
     }
 
     // Process @mentions in the user's message

@@ -11,6 +11,7 @@ import { consumeCredits, releaseHold } from '../billing/credit-consume';
 import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
+import { isMeteringExempt } from '../ai/model-defaults';
 
 /**
  * Providers NOT served through OpenRouter. Everything else is a cloud vendor
@@ -939,7 +940,13 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       // failure (pre-generation error) carries 0 tokens and is skipped; a
       // zero-charge call still reaches consumeCredits, which settles it as
       // 'skipped' without churning a $0 ledger transaction.
-      if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
+      if (isMeteringExempt(data.provider)) {
+        // Admin Z.ai Coder Plan (flat-rate external subscription): the usage row
+        // above is kept for observability, but the call never bills against the
+        // shared credit pool. The gate is normally skipped for this provider so no
+        // hold exists; release one defensively if a caller placed it anyway.
+        if (data.holdId) await releaseHold(data.holdId);
+      } else if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
         await consumeCredits({
           aiUsageLogId,
           userId: data.userId,

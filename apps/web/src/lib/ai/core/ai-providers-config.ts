@@ -255,10 +255,29 @@ export const AI_PROVIDERS = {
       'writer/palmyra-x5': 'Palmyra X5',
     },
   },
+  zai: {
+    name: 'Z.ai',
+    // Public GLM family, served through OpenRouter (`z-ai/*` model ids) and metered
+    // normally. Distinct from the admin-only `glm` provider below, which routes
+    // directly to the Z.ai Coder Plan endpoint and is exempt from billing.
+    models: {
+      'z-ai/glm-5.1':      'GLM-5.1',
+      'z-ai/glm-5-turbo':  'GLM-5 Turbo',
+      'z-ai/glm-5':        'GLM-5',
+      'z-ai/glm-4.7':      'GLM-4.7',
+      'z-ai/glm-4.7-flash':'GLM-4.7 Flash',
+      'z-ai/glm-4.6':      'GLM-4.6',
+      'z-ai/glm-4.5':      'GLM-4.5',
+      'z-ai/glm-4.5-air':  'GLM-4.5 Air',
+      'z-ai/glm-4.5v':     'GLM-4.5V',
+    },
+  },
   glm: {
-    name: 'Z.ai (GLM)',
-    // Models officially supported by the GLM Coder Plan endpoint (api.z.ai/api/coding/paas/v4).
-    // Other GLM models are available on the general Z.ai API but not through this plan.
+    name: 'Z.ai (Admin)',
+    // Admin-only direct connection to the Z.ai Coder Plan endpoint
+    // (api.z.ai/api/coding/paas/v4). Flat-rate subscription, so usage is logged but
+    // NOT billed against the shared credit pool (see METERING_EXEMPT_PROVIDERS).
+    // Models officially supported by that endpoint; bare `glm-*` ids (no vendor prefix).
     models: {
       'glm-5.1':     'GLM-5.1',
       'glm-5-turbo': 'GLM-5 Turbo',
@@ -293,6 +312,7 @@ export const AI_PROVIDERS = {
 const CLOUD_VENDOR_PROVIDERS = new Set<string>([
   'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
   'moonshot', 'minimax', 'meta', 'bytedance', 'ai21', 'inception', 'writer',
+  'zai',
 ]);
 
 /**

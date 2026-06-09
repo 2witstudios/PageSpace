@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Hoisted mocks ─────────────────────────────────────────────────────────────
 const mockWriteAiUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockConsumeCredits = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockReleaseHold = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAiLogger = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('../../logging/logger-database', () => ({
 
 vi.mock('../../billing/credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
+  releaseHold: mockReleaseHold,
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -296,6 +298,7 @@ describe('trackAIUsage', () => {
     vi.clearAllMocks();
     mockWriteAiUsage.mockResolvedValue(undefined);
     mockConsumeCredits.mockResolvedValue(undefined);
+    mockReleaseHold.mockResolvedValue(undefined);
   });
 
   it('debits credits with the returned usage-log id on a successful call', async () => {
@@ -395,6 +398,55 @@ describe('trackAIUsage', () => {
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o', success: false, error: 'fail' });
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('logs but does NOT debit credits for a metering-exempt provider (admin glm)', async () => {
+    // The admin Z.ai Coder Plan (`glm`) bills on a flat-rate external subscription:
+    // the usage row is still written for observability, but no credits are debited.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_glm');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'glm',
+      model: 'glm-4.7',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledTimes(1); // logged
+    expect(mockConsumeCredits).not.toHaveBeenCalled(); // not billed
+  });
+
+  it('releases a stray hold for an exempt provider without debiting', async () => {
+    // The gate is normally skipped for exempt providers (no hold), but if a hold was
+    // placed anyway it must be released at settle rather than left for the cron.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_glm2');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'glm',
+      model: 'glm-5.1',
+      inputTokens: 100,
+      outputTokens: 50,
+      holdId: 'hold_glm',
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_glm');
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('still bills the public OpenRouter-backed zai provider normally', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_zai');
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'zai',
+      model: 'z-ai/glm-4.6',
+      inputTokens: 1000,
+      outputTokens: 500,
+      providerCostDollars: 0.01,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ aiUsageLogId: 'aul_zai', userId: 'user-1' }),
+    );
   });
 
   it('debits credits for an errored call that still consumed tokens (errored-but-real spend)', async () => {

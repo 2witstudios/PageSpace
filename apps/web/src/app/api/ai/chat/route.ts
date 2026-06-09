@@ -18,6 +18,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { makeOnStepFinishHandler } from './step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -341,24 +342,31 @@ export async function POST(request: Request) {
     // unlimited) and lazy-inits balances. On an allowed request it places a hold
     // (reservation + in-flight marker) whose id is threaded to billing and released
     // at settle; out_of_credits -> 402, the free-tier in-flight cap -> 429.
-    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
-      estCostCents: estimateChatHoldCentsForModel(selectedModel),
-      maxInFlight: MAX_CHAT_INFLIGHT,
-    });
-    if (!creditGate.allowed) {
-      loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
-      return creditGateErrorResponse(creditGate.reason);
-    }
-    holdId = creditGate.holdId;
-
-    const creditAbortController = holdId ? new AbortController() : null;
+    // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+    // subscription, so skip the credit gate entirely — no hold, no balance check —
+    // and never debit at settle (see isMeteringExempt in trackAIUsage).
+    const gateProvider = selectedProvider || user?.currentAiProvider || DEFAULT_PROVIDER;
     // Net spendable after all holds (including this request's) — already computed by
     // the gate so no extra DB read is needed. Each stream guards against its own slice,
     // not the gross balance, preventing concurrent streams from collectively overshooting.
-    const availableBalanceCents =
-      holdId && creditGate.balanceSnapshot
-        ? creditGate.balanceSnapshot.netSpendableCents
-        : null;
+    let availableBalanceCents: number | null = null;
+    if (!isMeteringExempt(gateProvider)) {
+      const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        estCostCents: estimateChatHoldCentsForModel(selectedModel),
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
+      if (!creditGate.allowed) {
+        loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
+        return creditGateErrorResponse(creditGate.reason);
+      }
+      holdId = creditGate.holdId;
+      availableBalanceCents =
+        holdId && creditGate.balanceSnapshot
+          ? creditGate.balanceSnapshot.netSpendableCents
+          : null;
+    }
+
+    const creditAbortController = holdId ? new AbortController() : null;
 
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent

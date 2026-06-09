@@ -33,6 +33,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -165,16 +166,22 @@ export async function POST(request: Request): Promise<Response> {
     .select({ subscriptionTier: users.subscriptionTier })
     .from(users)
     .where(eq(users.id, authResult.userId));
-  const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
-    estCostCents: estimateChatHoldCentsForModel(page.aiModel ?? undefined),
-    maxInFlight: MAX_CHAT_INFLIGHT,
-  });
-  if (!creditGate.allowed) {
-    auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: creditGate.reason }, riskScore: 0 });
-    return creditGateErrorResponse(creditGate.reason);
-  }
   // The gate's reservation for this call, released when usage is billed in onFinish.
-  const holdId = creditGate.holdId;
+  // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+  // subscription, so skip the gate entirely — no hold, no balance check — and never
+  // debit at settle (see isMeteringExempt in trackAIUsage).
+  let holdId: string | undefined;
+  if (!isMeteringExempt(page.aiProvider)) {
+    const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      estCostCents: estimateChatHoldCentsForModel(page.aiModel ?? undefined),
+      maxInFlight: MAX_CHAT_INFLIGHT,
+    });
+    if (!creditGate.allowed) {
+      auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: creditGate.reason }, riskScore: 0 });
+      return creditGateErrorResponse(creditGate.reason);
+    }
+    holdId = creditGate.holdId;
+  }
 
   // 7. Build system prompt from agent page config
   const systemPrompt = page.systemPrompt
