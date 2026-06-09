@@ -40,6 +40,12 @@ export const driveBackupStatusEnum = pgEnum('drive_backup_status', [
   'failed',
 ]);
 
+export const driveBackupScheduleFrequencyEnum = pgEnum('drive_backup_schedule_frequency', [
+  'daily',
+  'weekly',
+  'monthly',
+]);
+
 // ============================================================================
 // Retention Policy Configuration
 // ============================================================================
@@ -291,5 +297,26 @@ export const driveBackupsRelations = relations(driveBackups, ({ one }) => ({
   creator: one(users, {
     fields: [driveBackups.createdBy],
     references: [users.id],
+  }),
+}));
+
+export const driveBackupSchedules = pgTable('drive_backup_schedules', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  driveId: text('driveId').notNull().unique().references(() => drives.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(false),
+  frequency: driveBackupScheduleFrequencyEnum('frequency').notNull().default('daily'),
+  timezone: text('timezone').notNull().default('UTC'),
+  nextRunAt: timestamp('nextRunAt', { mode: 'date' }),
+  lastRunAt: timestamp('lastRunAt', { mode: 'date' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  enabledNextRunIdx: index('drive_backup_schedules_enabled_next_run_idx').on(table.enabled, table.nextRunAt),
+}));
+
+export const driveBackupSchedulesRelations = relations(driveBackupSchedules, ({ one }) => ({
+  drive: one(drives, {
+    fields: [driveBackupSchedules.driveId],
+    references: [drives.id],
   }),
 }));

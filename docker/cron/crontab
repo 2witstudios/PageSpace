@@ -57,6 +57,10 @@
 # across crashes/deploys. Local-only — makes no Stripe calls.
 */10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
 
+# Scheduled drive backups - Hourly
+# Fires automatic backups for drives with active schedules (pro+ only)
+0 * * * * cron-curl POST __WEB_URL__/api/cron/scheduled-backups >> /var/log/cron/scheduled-backups.log 2>&1
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3). Short cadence matches the 5-minute default

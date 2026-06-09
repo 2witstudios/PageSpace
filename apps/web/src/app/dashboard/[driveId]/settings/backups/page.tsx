@@ -5,12 +5,15 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Plus, Loader2 } from 'lucide-react';
+import { ChevronLeft, Shield, Plus, Loader2, Lock } from 'lucide-react';
+import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -35,6 +38,146 @@ type CreateBackupResult = {
   status: string;
   counts: { pages: number; permissions: number; members: number; roles: number; files: number };
 };
+
+type BackupFrequency = 'daily' | 'weekly' | 'monthly';
+
+type BackupSchedule = {
+  available: boolean;
+  enabled: boolean;
+  frequency: BackupFrequency;
+  timezone: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+};
+
+const scheduleFetcher = (url: string) =>
+  fetchWithAuth(url).then((r) => {
+    if (!r.ok) throw new Error('Failed to fetch schedule');
+    return r.json() as Promise<BackupSchedule>;
+  });
+
+function AutomaticBackups({ driveId }: { driveId: string }) {
+  const { data, isLoading, error, mutate } = useSWR<BackupSchedule>(
+    `/api/drives/${driveId}/backups/schedule`,
+    scheduleFetcher,
+    { revalidateOnFocus: false }
+  );
+  const [saving, setSaving] = useState(false);
+
+  const handleToggle = async (enabled: boolean) => {
+    if (!data) return;
+    setSaving(true);
+    try {
+      const updated = await patch<BackupSchedule>(`/api/drives/${driveId}/backups/schedule`, {
+        enabled,
+        frequency: data.frequency,
+        timezone: data.timezone,
+      });
+      mutate({ ...data, ...updated }, false);
+      toast.success(enabled ? 'Automatic backups enabled' : 'Automatic backups disabled');
+    } catch {
+      toast.error('Failed to update backup schedule');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleFrequencyChange = async (frequency: BackupFrequency) => {
+    if (!data) return;
+    setSaving(true);
+    try {
+      const updated = await patch<BackupSchedule>(`/api/drives/${driveId}/backups/schedule`, {
+        enabled: data.enabled,
+        frequency,
+        timezone: data.timezone,
+      });
+      mutate({ ...data, ...updated }, false);
+    } catch {
+      toast.error('Failed to update backup frequency');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (isLoading) {
+    return <Skeleton className="h-28 w-full" />;
+  }
+
+  if (error) {
+    return null;
+  }
+
+  const available = data?.available ?? false;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <span className="flex items-center gap-2">
+            Automatic Backups
+            {!available && <Lock className="h-4 w-4 text-muted-foreground" />}
+          </span>
+        </CardTitle>
+        <CardDescription>
+          {available
+            ? 'Automatically snapshot this drive on a recurring schedule.'
+            : <>Automatic backups require a Pro plan.{' '}<Link href="/settings/plan" className="underline">Upgrade to enable</Link></>
+          }
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className={available ? undefined : 'opacity-50 pointer-events-none'}>
+          <div className="flex items-center justify-between mb-4">
+            <Label htmlFor="schedule-toggle">Enable automatic backups</Label>
+            <Switch
+              id="schedule-toggle"
+              checked={data?.enabled ?? false}
+              onCheckedChange={handleToggle}
+              disabled={saving || !available}
+            />
+          </div>
+          {data?.enabled && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <Label htmlFor="schedule-frequency" className="w-20 shrink-0">Frequency</Label>
+                <Select
+                  value={data.frequency}
+                  onValueChange={(v) => handleFrequencyChange(v as BackupFrequency)}
+                  disabled={saving}
+                >
+                  <SelectTrigger id="schedule-frequency" className="w-36">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {data.nextRunAt && (
+                <p className="text-sm text-muted-foreground">
+                  Next backup{' '}
+                  <span title={format(new Date(data.nextRunAt), 'PPpp')}>
+                    {formatDistanceToNow(new Date(data.nextRunAt), { addSuffix: true })}
+                  </span>
+                </p>
+              )}
+              {data.lastRunAt && (
+                <p className="text-sm text-muted-foreground">
+                  Last backup{' '}
+                  <span title={format(new Date(data.lastRunAt), 'PPpp')}>
+                    {formatDistanceToNow(new Date(data.lastRunAt), { addSuffix: true })}
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'ready') return 'default';
@@ -174,6 +317,8 @@ export default function DriveBackupsPage() {
           Create and restore snapshots of this drive&apos;s pages, members, and roles.
         </p>
       </div>
+
+      <AutomaticBackups driveId={driveId} />
 
       <Card>
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
