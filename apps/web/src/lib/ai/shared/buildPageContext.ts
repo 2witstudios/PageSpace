@@ -1,9 +1,11 @@
 import { buildPagePath } from '@/lib/tree/tree-utils';
+import type { TreePage } from '@/hooks/usePageTree';
 
 export type PageContextInput = {
   page: { id: string; title: string; type: string };
   driveId: string;
   drives: Array<{ id: string; name: string; slug?: string }>;
+  /** Structural subset of TreePage[] — only id/title/children are accessed by buildPagePath */
   cachedTree: Array<{ id: string; title: string; children?: unknown[] }>;
   fetchBreadcrumbs: (pageId: string) => Promise<Array<{ title?: string }>>;
 };
@@ -25,8 +27,7 @@ export async function buildPageContext(input: PageContextInput): Promise<PageCon
 
   const currentDrive = drives.find((d) => d.id === driveId);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pagePathInfo = buildPagePath(cachedTree as any, page.id, driveId);
+  const pagePathInfo = buildPagePath(cachedTree as unknown as TreePage[], page.id, driveId);
 
   let breadcrumbs: string[] = pagePathInfo?.breadcrumbs ?? [driveId, page.title];
   let pagePath: string = pagePathInfo?.path ?? `/${driveId}/${page.title}`;

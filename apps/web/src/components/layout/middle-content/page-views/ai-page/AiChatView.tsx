@@ -219,13 +219,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const chatConfig = useMemo(
     () => !transport ? null : ({
-      id: streamTrackingId,
+      id: page.id,
       messages: EMPTY_MESSAGES,
       transport,
       experimental_throttle: 100,
       onError: handleChatError,
     }),
-    [streamTrackingId, transport, handleChatError]
+    [page.id, transport, handleChatError]
   );
 
   const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
@@ -415,8 +415,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     // No assistant id yet (submitted, before first chunk): fall back to the chatId map.
+    // The transport's chatId is always page.id (Chat never recreates on conversation switch),
+    // so try streamTrackingId first (desired key) then page.id (actual registration key).
     if (streamTrackingId) void abortActiveStream({ chatId: streamTrackingId });
-  }, [chatStop, ownStreamMessageId, isStreaming, lastAssistantMessageId, streamTrackingId]);
+    if (streamTrackingId !== page.id) void abortActiveStream({ chatId: page.id });
+  }, [chatStop, ownStreamMessageId, isStreaming, lastAssistantMessageId, streamTrackingId, page.id]);
 
   usePageSocketRoom(page.id);
   useChannelStreamSocket(page.id, {
