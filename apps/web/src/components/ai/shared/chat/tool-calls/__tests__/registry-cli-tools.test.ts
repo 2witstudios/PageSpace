@@ -21,54 +21,63 @@ describe('CLI tool renderers (pi)', () => {
     }
   });
 
-  it('Read: returns null when output is not a string', () => {
-    const result = toolRenderers['Read'](makeCtx('Read', { path: 'foo.ts' }, null));
+  it('read: returns null when output is not a string', () => {
+    const result = toolRenderers['read'](makeCtx('read', { path: 'foo.ts' }, null));
     expect(result).toBeNull();
   });
 
-  it('Read: returns non-null node for valid string output (pi uses path key)', () => {
-    const result = toolRenderers['Read'](makeCtx('Read', { path: 'foo.ts' }, 'line 1\nline 2'));
+  it('read: returns non-null node for valid string output (pi uses path key)', () => {
+    const result = toolRenderers['read'](makeCtx('read', { path: 'foo.ts' }, 'line 1\nline 2'));
     expect(result).not.toBeNull();
   });
 
-  it('Read: falls back to file_path key when path is absent', () => {
-    const result = toolRenderers['Read'](makeCtx('Read', { file_path: 'bar.ts' }, 'content'));
+  it('read: falls back to file_path key when path is absent', () => {
+    const result = toolRenderers['read'](makeCtx('read', { file_path: 'bar.ts' }, 'content'));
     expect(result).not.toBeNull();
   });
 
-  it('Bash: returns null when both command and output are absent', () => {
-    const result = toolRenderers['Bash'](makeCtx('Bash', {}, null));
+  it('bash: returns null when both command and output are absent', () => {
+    const result = toolRenderers['bash'](makeCtx('bash', {}, null));
     expect(result).toBeNull();
   });
 
-  it('Bash: returns non-null node when command is present', () => {
-    const result = toolRenderers['Bash'](makeCtx('Bash', { command: 'ls -la' }, 'foo.ts\nbar.ts'));
+  it('bash: returns non-null node when command is present', () => {
+    const result = toolRenderers['bash'](makeCtx('bash', { command: 'ls -la' }, 'foo.ts\nbar.ts'));
     expect(result).not.toBeNull();
   });
 
-  it('Glob: returns null when output is not a string', () => {
-    const result = toolRenderers['Glob'](makeCtx('Glob', { pattern: '**/*.ts' }, null));
+  it('find: returns null when output is not a string', () => {
+    const result = toolRenderers['find'](makeCtx('find', { pattern: '**/*.ts' }, null));
     expect(result).toBeNull();
   });
 
-  it('Glob: returns non-null node for valid string output', () => {
-    const result = toolRenderers['Glob'](makeCtx('Glob', { pattern: '**/*.ts' }, 'src/foo.ts\nsrc/bar.ts'));
+  it('find: returns non-null node for valid string output', () => {
+    const result = toolRenderers['find'](makeCtx('find', { pattern: '**/*.ts' }, 'src/foo.ts\nsrc/bar.ts'));
     expect(result).not.toBeNull();
   });
 
-  it('Grep: returns null when output is not a string', () => {
-    const result = toolRenderers['Grep'](makeCtx('Grep', { pattern: 'TODO' }, null));
+  it('grep: returns null when output is not a string', () => {
+    const result = toolRenderers['grep'](makeCtx('grep', { pattern: 'TODO' }, null));
     expect(result).toBeNull();
   });
 
-  it('Grep: returns non-null node for valid string output', () => {
-    const result = toolRenderers['Grep'](makeCtx('Grep', { pattern: 'TODO' }, 'foo.ts:42: // TODO fix'));
+  it('grep: returns non-null node for valid string output', () => {
+    const result = toolRenderers['grep'](makeCtx('grep', { pattern: 'TODO' }, 'foo.ts:42: // TODO fix'));
     expect(result).not.toBeNull();
   });
 
-  it('Write/Edit/MultiEdit: return non-null nodes even with null output', () => {
-    expect(toolRenderers['Write'](makeCtx('Write', { file_path: 'foo.ts' }, null))).not.toBeNull();
-    expect(toolRenderers['Edit'](makeCtx('Edit', { file_path: 'foo.ts' }, null))).not.toBeNull();
-    expect(toolRenderers['MultiEdit'](makeCtx('MultiEdit', { file_path: 'foo.ts' }, null))).not.toBeNull();
+  it('write/edit: return non-null nodes even with null output', () => {
+    expect(toolRenderers['write'](makeCtx('write', { file_path: 'foo.ts' }, null))).not.toBeNull();
+    expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, null))).not.toBeNull();
+  });
+
+  it('ls: returns null when output is not a string', () => {
+    const result = toolRenderers['ls'](makeCtx('ls', { path: '.' }, null));
+    expect(result).toBeNull();
+  });
+
+  it('ls: returns non-null node for valid string output', () => {
+    const result = toolRenderers['ls'](makeCtx('ls', { path: 'src/' }, 'foo.ts\nbar.ts'));
+    expect(result).not.toBeNull();
   });
 });

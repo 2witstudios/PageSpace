@@ -179,7 +179,8 @@ export const SPECIAL_HANDLED_TOOLS: Set<string> = new Set<string>([
   'ask_agent',
 ]);
 
-export const CLI_TOOL_NAMES = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep'] as const;
+// pi uses lowercase tool names — these must match exactly what the pi coding agent sends.
+export const CLI_TOOL_NAMES = ['read', 'write', 'edit', 'bash', 'find', 'grep', 'ls'] as const;
 
 export const toolRenderers: Record<string, ToolRenderer> = {
   // === DRIVE TOOLS ===
@@ -842,10 +843,11 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   ),
 
   // === CLI TOOLS (pi / pagespace-cli) ===
-  // pi tools return plain strings, not JSON objects, so `output` carries the content
-  // and `parsedOutput` is {}. Renderers must read from `output` directly.
+  // pi tool names are lowercase (read, write, edit, bash, find, grep, ls).
+  // These tools return plain strings so `output` carries the content and `parsedOutput` is {}.
+  // Renderers must read from `output` directly.
 
-  Read: ({ parsedInput, output }) => {
+  read: ({ parsedInput, output }) => {
     const path = (parsedInput?.path ?? parsedInput?.file_path) as string | undefined;
     const content = typeof output === 'string' ? output : null;
     if (!content) return null;
@@ -854,7 +856,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     return <RichContentRenderer title={path ?? 'File'} content={preview} />;
   },
 
-  Write: ({ parsedInput }) => (
+  write: ({ parsedInput }) => (
     <ActionResultRenderer
       actionType="create"
       success={true}
@@ -862,7 +864,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     />
   ),
 
-  Edit: ({ parsedInput }) => (
+  edit: ({ parsedInput }) => (
     <ActionResultRenderer
       actionType="update"
       success={true}
@@ -870,15 +872,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     />
   ),
 
-  MultiEdit: ({ parsedInput }) => (
-    <ActionResultRenderer
-      actionType="update"
-      success={true}
-      title={parsedInput?.file_path as string | undefined}
-    />
-  ),
-
-  Bash: ({ parsedInput, output }) => {
+  bash: ({ parsedInput, output }) => {
     const command = parsedInput?.command as string | undefined;
     const stdout = typeof output === 'string' ? output : null;
     if (!command && !stdout) return null;
@@ -890,18 +884,25 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     return <RichContentRenderer title="Bash" content={content} />;
   },
 
-  Glob: ({ parsedInput, output }) => {
+  find: ({ parsedInput, output }) => {
     const pattern = parsedInput?.pattern as string | undefined;
     const content = typeof output === 'string' ? output : null;
     if (!content) return null;
-    return <RichContentRenderer title={pattern ? `Glob: ${pattern}` : 'Glob'} content={content} />;
+    return <RichContentRenderer title={pattern ? `Find: ${pattern}` : 'Find'} content={content} />;
   },
 
-  Grep: ({ parsedInput, output }) => {
+  grep: ({ parsedInput, output }) => {
     const pattern = parsedInput?.pattern as string | undefined;
     const content = typeof output === 'string' ? output : null;
     if (!content) return null;
     return <RichContentRenderer title={pattern ? `Grep: ${pattern}` : 'Grep'} content={content} />;
+  },
+
+  ls: ({ parsedInput, output }) => {
+    const path = parsedInput?.path as string | undefined;
+    const content = typeof output === 'string' ? output : null;
+    if (!content) return null;
+    return <RichContentRenderer title={path ?? 'Directory'} content={content} />;
   },
 };
 
@@ -930,12 +931,13 @@ export function renderToolContent(ctx: {
     );
   }
 
-  // CLI tool renderers (PascalCase names) receive plain-string output so parsedOutput
-  // is always {}; they must run before the null guard. Server tool renderers (snake_case)
-  // only run when parsedOutput is present — otherwise a pending tool would appear completed.
+  // CLI tool renderers receive plain-string output so parsedOutput is always {};
+  // they must run before the null guard. Server tool renderers only run when
+  // parsedOutput is present — otherwise a pending tool would appear completed.
+  const CLI_SET = new Set<string>(CLI_TOOL_NAMES);
   const renderer = toolRenderers[toolName];
   if (renderer) {
-    const isCliTool = /^[A-Z]/.test(toolName);
+    const isCliTool = CLI_SET.has(toolName);
     if (isCliTool || parsedOutput) {
       const node = renderer({ toolName, parsedInput, parsedOutput: parsedOutput ?? {}, output, error });
       if (node != null) return node;
