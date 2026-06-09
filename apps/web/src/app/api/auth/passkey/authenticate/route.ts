@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
+import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
+import {
+  getAccountLockoutStatus,
+  recordFailedLoginAttempt,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth/account-lockout';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
@@ -124,6 +129,39 @@ export async function POST(req: Request) {
       );
     }
 
+    // Per-account lockout (complements the per-IP rate limit above; the two use
+    // independent counters so there is no double-counting). Resolve the account
+    // from the credential and, if it is locked, reject BEFORE running the crypto
+    // verification. The magic-link path is the always-open recovery channel, so
+    // a locked passkey never means a fully locked-out account.
+    const credentialId =
+      response && typeof (response as { id?: unknown }).id === 'string'
+        ? (response as { id: string }).id
+        : undefined;
+    const lockoutUserId = credentialId ? await findUserIdByCredentialId(credentialId) : null;
+
+    if (lockoutUserId) {
+      const lockout = await getAccountLockoutStatus(lockoutUserId);
+      if (lockout.isLocked) {
+        const retryAfter = lockout.lockedUntil
+          ? Math.max(0, Math.ceil((lockout.lockedUntil.getTime() - Date.now()) / 1000))
+          : undefined;
+        auditRequest(req, {
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
+          details: { reason: 'passkey_account_locked' },
+        });
+        loggers.auth.warn('Passkey authentication blocked by account lockout', {
+          userId: lockoutUserId,
+          ip: clientIP,
+        });
+        return NextResponse.json(
+          { error: 'Account temporarily locked due to repeated failed attempts. Try again later or sign in with a magic link.', retryAfter },
+          { status: 423 }
+        );
+      }
+    }
+
     // Verify authentication
     const result = await verifyAuthentication({
       response,
@@ -131,6 +169,17 @@ export async function POST(req: Request) {
     });
 
     if (!result.ok) {
+      // Count only the genuine attack signals toward lockout — a real credential
+      // presented for a real account that fails crypto verification or trips
+      // replay detection. Benign challenge/credential errors are not counted so
+      // ordinary UX hiccups never lock anyone out.
+      if (
+        lockoutUserId &&
+        (result.error.code === 'VERIFICATION_FAILED' ||
+          result.error.code === 'COUNTER_REPLAY_DETECTED')
+      ) {
+        await recordFailedLoginAttempt(lockoutUserId);
+      }
       const errorMap: Record<string, { status: number; message: string }> = {
         'CREDENTIAL_NOT_FOUND': { status: 400, message: 'Passkey not found' },
         'CHALLENGE_NOT_FOUND': { status: 400, message: 'Challenge not found or invalid' },
@@ -160,6 +209,10 @@ export async function POST(req: Request) {
     }
 
     const { userId } = result.data;
+
+    // Successful passkey auth proves legitimacy — clear any accumulated failed
+    // attempts / lock for this account.
+    await resetFailedLoginAttempts(userId);
 
     // Passkey is the strongest auth flow — hard-reset web sessions across devices
     // (admin-console sessions are scoped separately and left intact).

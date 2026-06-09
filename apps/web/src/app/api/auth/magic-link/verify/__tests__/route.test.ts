@@ -55,6 +55,10 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
@@ -126,6 +130,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
+import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 
 const createVerifyRequest = (token?: string) => {
   const url = token
@@ -163,6 +168,39 @@ describe('GET /api/auth/magic-link/verify', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  describe('account lockout (recovery path)', () => {
+    it('clears the lockout counter on a successful verification', async () => {
+      const response = await GET(createVerifyRequest('valid-token'));
+
+      expect(response.status).toBe(302);
+      expect(resetFailedLoginAttempts).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('a valid magic link still signs the user in even if the account was locked (never blocked)', async () => {
+      // A fresh, valid magic link is the sanctioned recovery channel: it must
+      // always succeed and clear the lock, so an attacker can never lock a
+      // victim out of their own account.
+      const response = await GET(createVerifyRequest('valid-token'));
+
+      expect(response.status).toBe(302);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('auth=success');
+      expect(resetFailedLoginAttempts).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('does not clear the counter when verification fails', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: false,
+        // @ts-expect-error - test mock with extra properties
+        error: { code: 'TOKEN_EXPIRED', message: 'Token expired' },
+      });
+
+      await GET(createVerifyRequest('stale-token'));
+
+      expect(resetFailedLoginAttempts).not.toHaveBeenCalled();
+    });
   });
 
   describe('token validation', () => {

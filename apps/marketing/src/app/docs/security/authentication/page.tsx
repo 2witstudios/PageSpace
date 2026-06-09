@@ -86,13 +86,12 @@ Login, signup, magic-link send, and token refresh are rate-limited per-IP, per-e
 
 ### Account Lockout
 
-Rate limiting throttles traffic; account lockout targets the account under attack. After repeated failed authentication attempts against a single account, the account is temporarily locked regardless of attempt source. Because lockout state is durable:
+Rate limiting throttles traffic by IP and email; account lockout adds a per-account layer with an independent counter. Repeated failed passkey verifications against a single account temporarily lock it, regardless of where the attempts originate. Because lockout state lives on the account record:
 
 - it persists across infrastructure restarts,
-- it's unaffected by an attacker cycling IP addresses,
-- failed attempts across every auth method feed the same counter.
+- it's unaffected by an attacker cycling IP addresses or networks.
 
-A successful authentication clears the counter. Every failed attempt and every lock transition is recorded in the tamper-evident audit log.
+A successful sign-in clears the counter. Critically, a freshly-requested magic link is always honored — it's the recovery channel, so a locked account is never shut out of its own recovery path (which is also why an attacker can't use lockout to deny a victim access). Lockout rejections and failed attempts are recorded in the audit log.
 
 ## MCP Tokens
 

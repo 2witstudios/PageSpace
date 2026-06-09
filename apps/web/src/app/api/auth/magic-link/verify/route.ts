@@ -11,6 +11,7 @@ import {
   type MagicLinkMetadata,
 } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
@@ -76,6 +77,17 @@ export async function GET(req: Request) {
     }
 
     const { userId, isNewUser, metadata } = result.data;
+
+    // Account-lockout recovery path. A valid, freshly-issued magic link proves
+    // the real user requested it, so it ALWAYS signs them in and clears any
+    // lock — even one set by failed passkey attempts. This is what makes the
+    // lockout safe against a denial-of-service: an attacker can never lock a
+    // victim out of their account because the magic-link channel is never
+    // blocked. We deliberately do NOT record failed magic-link verifications:
+    // a failed token carries no account identity to attribute (only the
+    // already-administrative USER_SUSPENDED does), and benign expired/used-link
+    // clicks would self-lock legitimate users for zero attacker-facing benefit.
+    await resetFailedLoginAttempts(userId);
 
     // Parse metadata once. The shape carries optional desktop fields and an
     // optional invite-token binding — desktop and invite can co-exist on the
