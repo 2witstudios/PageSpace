@@ -180,3 +180,90 @@ export function filterToSubtree<T extends { id: string; parentId: string | null 
 
   return nodes.filter(n => descendantIds.has(n.id));
 }
+
+/**
+ * Filter a flat list of tree nodes down to those an actor may access.
+ *
+ * Security policy (ancestor-gated): a node is kept ONLY IF it is itself present
+ * in `accessiblePageIds` AND every one of its ancestors that is present in
+ * `nodes` is also accessible. Dropping an inaccessible node therefore also drops
+ * its now-orphaned descendant subtree, even when those descendants are
+ * individually in the accessible set.
+ *
+ * This deliberately avoids re-parenting an accessible descendant of an
+ * inaccessible node to a fabricated root: doing so would alter the true
+ * parent/child shape and could imply structure about (or the existence of) the
+ * inaccessible ancestor. The result is always a sub-forest of the input, so
+ * feeding it to `buildTree` reproduces the original shape minus the dropped
+ * branches.
+ *
+ * Boundary handling matches `buildTree`: a node whose `parentId` is null, or
+ * whose parent is absent from `nodes`, is treated as a root — only its own
+ * accessibility is required at that point. A `parentId` cycle (which has no real
+ * root) fails closed and drops the cycle's members.
+ *
+ * Visibility is memoized per node id, so each ancestor edge is traversed at most
+ * once: the whole filter is O(n) regardless of tree depth (a deep, e.g.
+ * API-created, chain does not degrade to O(n²)). The ancestor walk is iterative,
+ * so depth cannot overflow the call stack.
+ */
+export function filterTreeNodesByAccess<T extends { id: string; parentId: string | null }>(
+  nodes: T[],
+  accessiblePageIds: ReadonlySet<string>
+): T[] {
+  const byId = new Map<string, T>();
+  for (const node of nodes) {
+    byId.set(node.id, node);
+  }
+
+  // id -> final visible/hidden decision (memo across all nodes).
+  const visible = new Map<string, boolean>();
+
+  function isVisible(start: T): boolean {
+    // Walk up the ancestor chain, stacking accessible nodes whose visibility is
+    // not yet known, until we hit a resolved boundary. Then propagate that
+    // boundary result back down to every stacked node in one pass.
+    const pending: T[] = [];
+    const onPath = new Set<string>();
+    let current: T | undefined = start;
+    let boundary: boolean;
+
+    for (;;) {
+      // Parent absent from the list => root boundary (matches buildTree).
+      if (current === undefined) { boundary = true; break; }
+
+      const cached = visible.get(current.id);
+      if (cached !== undefined) { boundary = cached; break; }
+
+      // Revisiting a node on the current path => parentId cycle: fail closed.
+      if (onPath.has(current.id)) { boundary = false; break; }
+
+      if (!accessiblePageIds.has(current.id)) {
+        // Inaccessible ancestor: it (and everything stacked below it) is hidden.
+        visible.set(current.id, false);
+        boundary = false;
+        break;
+      }
+
+      if (current.parentId === null) {
+        // Accessible root: it is visible; stacked descendants inherit that.
+        visible.set(current.id, true);
+        boundary = true;
+        break;
+      }
+
+      pending.push(current);
+      onPath.add(current.id);
+      current = byId.get(current.parentId);
+    }
+
+    // Every node still pending was accessible and shares the boundary's verdict.
+    for (const node of pending) {
+      visible.set(node.id, boundary);
+    }
+
+    return visible.get(start.id) ?? boundary;
+  }
+
+  return nodes.filter(isVisible);
+}
