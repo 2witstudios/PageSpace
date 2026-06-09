@@ -16,8 +16,8 @@ import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-re
 import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
+import { buildPageContext } from '@/lib/ai/shared/buildPageContext';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
@@ -219,13 +219,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const chatConfig = useMemo(
     () => !transport ? null : ({
-      id: page.id,
+      id: streamTrackingId,
       messages: EMPTY_MESSAGES,
       transport,
       experimental_throttle: 100,
       onError: handleChatError,
     }),
-    [page.id, transport, handleChatError]
+    [streamTrackingId, transport, handleChatError]
   );
 
   const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
@@ -546,112 +546,74 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // HANDLERS
   // ============================================
 
-  const buildFreshPageContext = useCallback(async () => {
-    const currentDrive = drives.find((drive) => drive.id === driveId);
+  const buildFreshPageContext = useCallback(() => {
     const treeCacheKey = `/api/drives/${encodeURIComponent(driveId)}/pages`;
     const treeCacheValue = cache.get(treeCacheKey) as { data?: TreePage[] } | undefined;
     const cachedTree = Array.isArray(treeCacheValue?.data) ? treeCacheValue.data : [];
-    const pagePathInfo = buildPagePath(cachedTree, page.id, driveId);
-    let breadcrumbs: string[] = pagePathInfo?.breadcrumbs || [driveId, page.title];
-    let pagePath = pagePathInfo?.path || `/${driveId}/${page.title}`;
-    let parentPath = pagePathInfo?.parentPath || `/${driveId}`;
-
-    if (!pagePathInfo) {
-      try {
-        const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${page.id}/breadcrumbs`);
-        if (breadcrumbsResponse.ok) {
-          const breadcrumbItems = (await breadcrumbsResponse.json()) as Array<{ title?: string }>;
-          const breadcrumbTitles = breadcrumbItems
-            .map((item) => item.title?.trim())
-            .filter((title): title is string => Boolean(title));
-
-          if (breadcrumbTitles.length > 0) {
-            breadcrumbs = [driveId, ...breadcrumbTitles];
-            pagePath = `/${driveId}/${breadcrumbTitles.map((title) => encodeURIComponent(title)).join('/')}`;
-            if (breadcrumbTitles.length > 1) {
-              parentPath = `/${driveId}/${breadcrumbTitles
-                .slice(0, -1)
-                .map((title) => encodeURIComponent(title))
-                .join('/')}`;
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to fetch breadcrumbs for AI page context:', error);
-      }
-    }
-
-    return {
-      pageId: page.id,
-      pageTitle: page.title,
-      pageType: page.type,
-      pagePath,
-      parentPath,
-      breadcrumbs,
-      driveId: currentDrive?.id,
-      driveName: currentDrive?.name || driveId,
-      driveSlug: currentDrive?.slug,
-    };
+    return buildPageContext({
+      page: { id: page.id, title: page.title, type: page.type },
+      driveId,
+      drives,
+      cachedTree,
+      fetchBreadcrumbs: async (pageId) => {
+        const res = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
+        if (!res.ok) return [];
+        return res.json();
+      },
+    });
   }, [cache, drives, driveId, page.id, page.title, page.type]);
-
-  const sendMessageWithContext = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    const files = getFilesForSend();
-    if (!trimmed && files.length === 0) {
-      return;
-    }
-
-    const pageContext = await buildFreshPageContext();
-
-    sendMessage(
-      { text: trimmed, files: files.length > 0 ? files : undefined },
-      {
-        body: {
-          chatId: page.id,
-          conversationId: currentConversationId,
-          selectedProvider,
-          selectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          pageContext,
-        },
-      }
-    );
-  }, [
-    buildFreshPageContext,
-    sendMessage,
-    page.id,
-    currentConversationId,
-    selectedProvider,
-    selectedModel,
-    isReadOnly,
-    webSearchEnabled,
-    mcpToolSchemas,
-    getFilesForSend,
-  ]);
 
   const handleSendMessage = useCallback(() => {
     if (isReadOnly) {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
     }
-    if (!input.trim() && attachments.length === 0) return;
+    const trimmed = input.trim();
+    const files = getFilesForSend();
+    if (!trimmed && files.length === 0) return;
     if (!currentConversationId) return;
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessageWithContext(input));
+    // Start context fetch eagerly — runs in parallel with input clear so the
+    // async wait doesn't delay sendMessage (and the optimistic bubble).
+    const contextPromise = buildFreshPageContext();
+
     clearInputDraft();
     clearFiles();
     inputRef.current?.clear();
-    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
+
+    wrapSend(async () => {
+      const pageContext = await contextPromise;
+      sendMessage(
+        { text: trimmed, files: files.length > 0 ? files : undefined },
+        {
+          body: {
+            chatId: page.id,
+            conversationId: currentConversationId,
+            selectedProvider,
+            selectedModel,
+            isReadOnly,
+            webSearchEnabled,
+            mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+            pageContext,
+          },
+        }
+      );
+    });
   }, [
     isReadOnly,
     input,
     attachments.length,
     currentConversationId,
-    sendMessageWithContext,
+    buildFreshPageContext,
+    getFilesForSend,
+    clearInputDraft,
     clearFiles,
+    sendMessage,
+    page.id,
+    selectedProvider,
+    selectedModel,
+    webSearchEnabled,
+    mcpToolSchemas,
     wrapSend,
   ]);
 
@@ -664,12 +626,35 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!text.trim()) return;
     if (!currentConversationId) return;
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessageWithContext(text));
+    const contextPromise = buildFreshPageContext();
+    wrapSend(async () => {
+      const pageContext = await contextPromise;
+      sendMessage(
+        { text: text.trim() },
+        {
+          body: {
+            chatId: page.id,
+            conversationId: currentConversationId,
+            selectedProvider,
+            selectedModel,
+            isReadOnly,
+            webSearchEnabled,
+            mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+            pageContext,
+          },
+        }
+      );
+    });
   }, [
     isReadOnly,
     currentConversationId,
-    sendMessageWithContext,
+    buildFreshPageContext,
+    sendMessage,
+    page.id,
+    selectedProvider,
+    selectedModel,
+    webSearchEnabled,
+    mcpToolSchemas,
     wrapSend,
   ]);
 
