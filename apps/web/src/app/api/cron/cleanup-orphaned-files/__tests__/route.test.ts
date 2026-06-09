@@ -49,6 +49,18 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateStorageUsage: mockUpdateStorageUsage,
+  // Real (pure) impl so the reaper's credit rules are exercised, not stubbed.
+  computeStorageCreditOnUnlink: (input: {
+    createdBy: string | null;
+    sizeBytes: number | string | null;
+    deletedByThisCall: boolean;
+    hadPhysicalBlob: boolean;
+  }) => {
+    if (!input.deletedByThisCall || !input.hadPhysicalBlob || !input.createdBy) return null;
+    const n = typeof input.sizeBytes === 'string' ? Number(input.sizeBytes) : (input.sizeBytes ?? 0);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return { userId: input.createdBy, deltaBytes: -Math.floor(n) };
+  },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({

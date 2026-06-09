@@ -13,6 +13,7 @@ import {
   checkStorageQuota,
   updateActiveUploads,
   updateStorageUsage,
+  shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
@@ -169,11 +170,20 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // under-report storage / forge the file row.
   const resolvedSize = verify.size;
 
+  // M8: only the first physical store of a content-addressed blob inserts the
+  // `files` row; charge storage once on that insert (symmetric with the single
+  // credit the reaper issues at unlink) rather than on every dedup completion.
+  // The file-row insert and target link run in ONE transaction so a link failure
+  // rolls the insert back — a retry then re-inserts and is charged, instead of
+  // leaving an orphaned, never-charged row (inserted=false forever).
+  let fileWasInserted = false;
   try {
-    await attachmentUploadRepository.saveFileRecord(
-      buildAttachmentFileRecord({ contentHash, target, fileSize: resolvedSize, mimeType: storedMime, userId }),
-    );
-    await attachmentUploadRepository.linkFileToTarget({ target, fileId: contentHash, userId });
+    const saved = await attachmentUploadRepository.saveFileRecordAndLink({
+      fileRecord: buildAttachmentFileRecord({ contentHash, target, fileSize: resolvedSize, mimeType: storedMime, userId }),
+      target,
+      userId,
+    });
+    fileWasInserted = saved.inserted;
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await updateActiveUploads(userId, -1).catch(() => undefined);
@@ -187,10 +197,12 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // retry and double-charge storage).
   try {
     await updateActiveUploads(userId, -1);
-    await updateStorageUsage(userId, resolvedSize, {
-      driveId: attachmentFileDriveId(target) ?? undefined,
-      eventType: 'upload',
-    });
+    if (shouldChargeForStore(fileWasInserted)) {
+      await updateStorageUsage(userId, resolvedSize, {
+        driveId: attachmentFileDriveId(target) ?? undefined,
+        eventType: 'upload',
+      });
+    }
     auditRequest(request, {
       eventType: 'data.write',
       userId,

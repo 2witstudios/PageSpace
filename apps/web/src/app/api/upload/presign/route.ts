@@ -5,9 +5,10 @@ import {
   validateFileSize,
   validateMimeTypeDeclaration,
   buildS3Key,
+  canClaimExistingObject,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { checkStorageQuota, getUserStorageQuota, updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { checkStorageQuota, getUserStorageQuota, updateActiveUploads, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -86,15 +87,36 @@ export async function POST(request: Request) {
 
   const exists = await checkObjectExists(key);
 
+  // H3: storage is a GLOBAL content-addressed namespace, so a known hash alone
+  // must NOT grant access to bytes the caller never uploaded. Only honor the
+  // dedup fast-path (skip the proof-of-possession PUT) when the caller already
+  // references the hash.
+  const callerAlreadyReferences = await userReferencesContentHash(userId, canonicalHash, driveId);
+  const allowFastPath = canClaimExistingObject({ contentHash: canonicalHash, callerAlreadyReferences });
+
+  // The object already exists but the caller has never uploaded/linked it — this
+  // is the cross-tenant claim. Reject before reserving a slot: we must NOT hand
+  // out a presigned PUT for the canonical (content-addressed) key either, since a
+  // non-possessor could overwrite another tenant's bytes with non-matching
+  // content. Honoring possession requires per-drive namespacing (see WO-02 H3).
+  if (exists && !allowFastPath) {
+    return NextResponse.json(
+      { error: 'This file could not be verified for upload. Please re-upload the original file.' },
+      { status: 409 },
+    );
+  }
+
   // Reserve a slot in both paths so the client always has a jobId to pass to
-  // /complete — the dedup path skips the PUT but still creates a page record.
+  // /complete — the dedup fast-path skips the PUT but still creates a page record.
   // The slot carries the server-trusted upload params so /complete can't be
-  // tricked with a divergent hash/drive/size/mime.
+  // tricked with a divergent hash/drive/size/mime — and the H3 facts so it can
+  // reject a claim without re-trusting the client.
   const jobId = await uploadSemaphore.acquireUploadSlot(userId, quota.tier, fileSize, {
     contentHash: canonicalHash,
     driveId,
     fileSize,
     mimeType,
+    callerAlreadyReferences,
   });
   if (!jobId) {
     return NextResponse.json(
@@ -108,7 +130,7 @@ export async function POST(request: Request) {
   try {
     await updateActiveUploads(userId, 1);
 
-    if (exists) {
+    if (exists && allowFastPath) {
       return NextResponse.json({ alreadyExists: true, jobId, key });
     }
 

@@ -1,6 +1,6 @@
 import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compliance/file-cleanup/orphan-detector';
 import { createSystemFileDeleteToken } from '@pagespace/lib/services/validated-service-token';
-import { updateStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { updateStorageUsage, computeStorageCreditOnUnlink } from '@pagespace/lib/services/storage-limits';
 
 type Database = typeof import('@pagespace/db/db').db;
 
@@ -113,19 +113,26 @@ export async function reapOrphanedFiles(database: Database, options?: ReapOption
   const deletedIdSet = new Set(deletedIds);
 
   // Credit storage quota back for every reaped orphan whose row this call
-  // actually deleted. Attribute to the original uploader (createdBy); orphans
-  // whose createdBy was nulled (cascade from user delete) skip the credit, as
-  // do DB-only orphans whose bytes were never persisted.
+  // actually deleted. computeStorageCreditOnUnlink (M8) centralizes the rules:
+  // attribute to the original uploader (createdBy), skip rows nulled by a user
+  // cascade, skip rows another reap already removed (race-safe), skip DB-only
+  // stubs whose bytes were never persisted — and issue exactly ONE credit per
+  // blob, symmetric with the single first-store charge.
   for (const orphan of reapedOrphans) {
-    if (!orphan.createdBy) continue;
-    if (!deletedIdSet.has(orphan.id)) continue;
+    const credit = computeStorageCreditOnUnlink({
+      createdBy: orphan.createdBy,
+      sizeBytes: orphan.sizeBytes,
+      deletedByThisCall: deletedIdSet.has(orphan.id),
+      hadPhysicalBlob: true,
+    });
+    if (!credit) continue;
     try {
-      await updateStorageUsage(orphan.createdBy, -orphan.sizeBytes, {
+      await updateStorageUsage(credit.userId, credit.deltaBytes, {
         driveId: orphan.driveId ?? undefined,
         eventType: 'delete',
       });
     } catch (error) {
-      console.warn(`[ReapOrphans] Failed to credit storage for ${orphan.createdBy} (-${orphan.sizeBytes}):`, error);
+      console.warn(`[ReapOrphans] Failed to credit storage for ${credit.userId} (${credit.deltaBytes}):`, error);
     }
   }
 

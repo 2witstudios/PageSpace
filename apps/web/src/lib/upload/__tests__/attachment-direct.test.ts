@@ -10,6 +10,8 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   checkStorageQuota: (...a: unknown[]) => mockCheckStorageQuota(...a),
   updateActiveUploads: (...a: unknown[]) => mockUpdateActiveUploads(...a),
   updateStorageUsage: (...a: unknown[]) => mockUpdateStorageUsage(...a),
+  // Real (pure) impl: charge iff the files row was newly inserted (M8).
+  shouldChargeForStore: (inserted: boolean) => inserted,
 }));
 
 const mockAcquire = vi.fn();
@@ -37,12 +39,10 @@ vi.mock('../attachment-verify-effect', () => ({
   verifyAttachmentBytes: (...a: unknown[]) => mockVerifyAttachmentBytes(...a),
 }));
 
-const mockSaveFileRecord = vi.fn();
-const mockLinkFileToTarget = vi.fn();
+const mockSaveFileRecordAndLink = vi.fn();
 vi.mock('@pagespace/lib/services/attachment-upload-repository', () => ({
   attachmentUploadRepository: {
-    saveFileRecord: (...a: unknown[]) => mockSaveFileRecord(...a),
-    linkFileToTarget: (...a: unknown[]) => mockLinkFileToTarget(...a),
+    saveFileRecordAndLink: (...a: unknown[]) => mockSaveFileRecordAndLink(...a),
   },
 }));
 
@@ -146,8 +146,7 @@ describe('completeAttachment', () => {
     vi.clearAllMocks();
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: 'drive-1', attachmentTarget: PAGE_TARGET });
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
-    mockSaveFileRecord.mockResolvedValue(undefined);
-    mockLinkFileToTarget.mockResolvedValue(undefined);
+    mockSaveFileRecordAndLink.mockResolvedValue({ inserted: true });
     mockUpdateActiveUploads.mockResolvedValue(undefined);
     mockUpdateStorageUsage.mockResolvedValue(undefined);
   });
@@ -161,8 +160,11 @@ describe('completeAttachment', () => {
     const res = await completeAttachment(completeArgs());
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, file: { id: HASH, mimeType: 'application/pdf', contentHash: HASH } });
-    expect(mockSaveFileRecord).toHaveBeenCalledWith(expect.objectContaining({ id: HASH, driveId: 'drive-1', mimeType: 'application/pdf' }));
-    expect(mockLinkFileToTarget).toHaveBeenCalledWith({ target: PAGE_TARGET, fileId: HASH, userId: 'user-1' });
+    expect(mockSaveFileRecordAndLink).toHaveBeenCalledWith(expect.objectContaining({
+      fileRecord: expect.objectContaining({ id: HASH, driveId: 'drive-1', mimeType: 'application/pdf' }),
+      target: PAGE_TARGET,
+      userId: 'user-1',
+    }));
     expect(mockRelease).toHaveBeenCalledWith('job-1');
   });
 
@@ -170,14 +172,14 @@ describe('completeAttachment', () => {
     mockGetSlotMetadata.mockReturnValue(null);
     const res = await completeAttachment(completeArgs());
     expect(res.status).toBe(403);
-    expect(mockSaveFileRecord).not.toHaveBeenCalled();
+    expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
   });
 
   it('returns 403 when the slot is bound to a different target', async () => {
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: '', attachmentTarget: CONV_TARGET });
     const res = await completeAttachment(completeArgs({ target: PAGE_TARGET }));
     expect(res.status).toBe(403);
-    expect(mockSaveFileRecord).not.toHaveBeenCalled();
+    expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
   });
 
   it('returns 403 when the slot has no attachment binding (page-file slot replay)', async () => {
@@ -190,7 +192,7 @@ describe('completeAttachment', () => {
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: false, status: 422, error: 'integrity' });
     const res = await completeAttachment(completeArgs());
     expect(res.status).toBe(422);
-    expect(mockSaveFileRecord).not.toHaveBeenCalled();
+    expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
     expect(mockRelease).toHaveBeenCalledWith('job-1');
     expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
   });
@@ -199,7 +201,7 @@ describe('completeAttachment', () => {
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 2048, mimeType: 'image/png', driveId: '', attachmentTarget: CONV_TARGET });
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 2048 });
     await completeAttachment(completeArgs({ target: CONV_TARGET }));
-    expect(mockSaveFileRecord).toHaveBeenCalledWith(expect.objectContaining({ driveId: null }));
+    expect(mockSaveFileRecordAndLink).toHaveBeenCalledWith(expect.objectContaining({ fileRecord: expect.objectContaining({ driveId: null }) }));
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 2048, expect.objectContaining({ driveId: undefined }));
   });
 
@@ -210,15 +212,23 @@ describe('completeAttachment', () => {
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
     const res = await completeAttachment(completeArgs());
     expect(res.body).toMatchObject({ file: { size: 1024 } });
-    expect(mockSaveFileRecord).toHaveBeenCalledWith(expect.objectContaining({ sizeBytes: 1024 }));
+    expect(mockSaveFileRecordAndLink).toHaveBeenCalledWith(expect.objectContaining({ fileRecord: expect.objectContaining({ sizeBytes: 1024 }) }));
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 1024, expect.anything());
+  });
+
+  it('M8: does not charge storage on a dedup completion (files row already existed)', async () => {
+    mockSaveFileRecordAndLink.mockResolvedValue({ inserted: false });
+    const res = await completeAttachment(completeArgs());
+    expect(res.status).toBe(200);
+    expect(mockSaveFileRecordAndLink).toHaveBeenCalled();
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
   });
 
   it('releases the slot and returns a retryable 503 when the verify call throws', async () => {
     mockVerifyAttachmentBytes.mockRejectedValue(new Error('processor unreachable'));
     const res = await completeAttachment(completeArgs());
     expect(res.status).toBe(503);
-    expect(mockSaveFileRecord).not.toHaveBeenCalled();
+    expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
     expect(mockRelease).toHaveBeenCalledWith('job-1');
     expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
   });

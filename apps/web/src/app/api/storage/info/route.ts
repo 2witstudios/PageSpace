@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   getUserStorageQuota,
@@ -20,12 +21,29 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Check for reconcile parameter
+    // Resolve admin status UP FRONT — independent of the user-supplied reconcile
+    // flag — so the privileged reconcile is gated on a verified authorization
+    // result rather than on user-controlled request data (avoids the
+    // user-controlled-bypass pattern). The session role short-circuits the DB
+    // validation for non-admins, so normal storage-info reads incur no extra read
+    // and emit no security logs. `validateAdminAccess` re-checks role +
+    // adminRoleVersion against the DB to reject stale/revoked admin sessions.
+    const isAdmin = user.role === 'admin'
+      && (await validateAdminAccess(user.id, user.adminRoleVersion)).isValid;
+
+    // Reconcile rewrites stored usage from a recomputed total; admin-gate it as
+    // defense-in-depth (H4) on top of the accounting-basis fix. The gate is the
+    // non-user-controlled `isAdmin`; the request param only selects the operation.
     const { searchParams } = new URL(request.url);
     const shouldReconcile = searchParams.get('reconcile') === 'true';
 
-    // Reconcile if requested
     if (shouldReconcile) {
+      if (!isAdmin) {
+        return NextResponse.json(
+          { error: 'Forbidden: admin access required to reconcile storage' },
+          { status: 403 },
+        );
+      }
       try {
         const reconcileResult = await reconcileStorageUsage(user.id);
         console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);

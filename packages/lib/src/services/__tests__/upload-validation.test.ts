@@ -6,6 +6,8 @@ import {
   validateTtl,
   buildS3Key,
   buildPresignParams,
+  canClaimExistingObject,
+  canLinkExistingFileRow,
 } from '../upload-validation';
 
 describe('validateContentHash', () => {
@@ -227,5 +229,39 @@ describe('buildPresignParams', () => {
     const params = buildPresignParams(hash, 'drive-2', 'video.mp4', 'video/mp4', 999, 300);
     expect(params.fileSize).toBe(999);
     expect(params.ttlSeconds).toBe(300);
+  });
+});
+
+describe('canClaimExistingObject (H3 — presign dedup fast-path gate)', () => {
+  const contentHash = 'a'.repeat(64);
+
+  it('allows the dedup fast-path when the caller already references the hash', () => {
+    expect(canClaimExistingObject({ contentHash, callerAlreadyReferences: true })).toBe(true);
+  });
+
+  it('denies the fast-path when the caller does not reference the hash (cross-tenant claim)', () => {
+    expect(canClaimExistingObject({ contentHash, callerAlreadyReferences: false })).toBe(false);
+  });
+
+  it('decision is independent of the hash value (a known hash is never sufficient on its own)', () => {
+    expect(canClaimExistingObject({ contentHash: 'f'.repeat(64), callerAlreadyReferences: false })).toBe(false);
+  });
+});
+
+describe('canLinkExistingFileRow (H3 — atomic /complete link gate)', () => {
+  it('allows when this completion inserted the files row (first physical store)', () => {
+    expect(canLinkExistingFileRow({ fileWasInserted: true, ownedByCaller: false, callerAlreadyReferences: false })).toBe(true);
+  });
+
+  it('allows when an existing files row is owned by the caller (re-link of own file)', () => {
+    expect(canLinkExistingFileRow({ fileWasInserted: false, ownedByCaller: true, callerAlreadyReferences: false })).toBe(true);
+  });
+
+  it('allows when the caller already references the hash (legit dedup)', () => {
+    expect(canLinkExistingFileRow({ fileWasInserted: false, ownedByCaller: false, callerAlreadyReferences: true })).toBe(true);
+  });
+
+  it('denies linking a files row owned by another tenant the caller does not reference (the claim / TOCTOU)', () => {
+    expect(canLinkExistingFileRow({ fileWasInserted: false, ownedByCaller: false, callerAlreadyReferences: false })).toBe(false);
   });
 });

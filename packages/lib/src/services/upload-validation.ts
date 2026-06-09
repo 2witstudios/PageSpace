@@ -89,6 +89,57 @@ export function buildS3Key(hash: string): string {
   return `files/${hash}/original`;
 }
 
+/**
+ * H3 — cross-tenant file-claim defense (presign fast-path gate).
+ *
+ * Storage is content-addressed in a GLOBAL namespace (`files/${hash}/original`),
+ * so a content hash a caller scraped from a presigned URL or a `contentHash` API
+ * field is enough to find that another tenant's bytes already exist in S3. The
+ * old presign returned `{ alreadyExists: true }` purely on object existence,
+ * letting any caller skip the PUT and then /complete a FILE page in THEIR drive
+ * pointing at the foreign object — a permanent, revocation-surviving claim.
+ *
+ * The dedup fast-path (skip the proof-of-possession PUT) is therefore honored
+ * ONLY when the same user/drive already references the hash. Everyone else is
+ * routed through an actual presigned PUT so they must possess the bytes.
+ */
+export function canClaimExistingObject(args: {
+  contentHash: string;
+  callerAlreadyReferences: boolean;
+}): boolean {
+  return args.callerAlreadyReferences;
+}
+
+/**
+ * H3 — cross-tenant file-claim defense (/complete link gate).
+ *
+ * Forcing the PUT at presign is not sufficient on its own: an attacker handed a
+ * presigned URL can simply skip it and call /complete, where a bare
+ * object-existence check would still link the pre-existing (victim's) object —
+ * including through a presign→complete race where the object is created by a
+ * different tenant between presign and completion.
+ *
+ * The authoritative, race-proof proof-of-ownership is the content-addressed
+ * `files` row, claimed atomically inside the completion transaction:
+ *  - `fileWasInserted` — THIS completion inserted the `files` row, so the caller
+ *    is the first physical storer and demonstrably possessed the bytes; OR
+ *  - `ownedByCaller` — an existing `files` row was created by this caller (e.g. a
+ *    re-link of their own file after the page was deleted but before reap); OR
+ *  - `callerAlreadyReferences` — a page in the caller's drive already points at
+ *    the hash (legitimate dedup).
+ *
+ * Any other case is a caller trying to link bytes they never uploaded and is
+ * rejected (the transaction rolls back). This replaces the earlier
+ * `existedAtPresign` snapshot, which a presign→complete race could defeat.
+ */
+export function canLinkExistingFileRow(args: {
+  fileWasInserted: boolean;
+  ownedByCaller: boolean;
+  callerAlreadyReferences: boolean;
+}): boolean {
+  return args.fileWasInserted || args.ownedByCaller || args.callerAlreadyReferences;
+}
+
 export function buildPresignParams(
   hash: string,
   driveId: string,
