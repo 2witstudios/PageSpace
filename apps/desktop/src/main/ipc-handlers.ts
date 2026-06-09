@@ -221,8 +221,14 @@ export function registerIPCHandlers(): void {
     }
   });
 
-  ipcMain.handle('mcp:get-config', async () => {
+  ipcMain.handle('mcp:get-config', async (event) => {
     logger.debug('mcp:get-config handler called', {});
+    // The config may include per-server `env` (e.g. MCP API keys), so restrict
+    // the read to the trusted origin (H5), consistent with the token reads.
+    if (!isTrustedSender(event)) {
+      console.warn('[IPC] Blocked mcp:get-config from untrusted sender');
+      return { mcpServers: {} };
+    }
     const mcpManager = getMCPManager();
     const config = mcpManager.getConfig();
     logger.debug('Returning config to renderer', { config });
@@ -263,7 +269,11 @@ export function registerIPCHandlers(): void {
     }
   });
 
-  ipcMain.handle('mcp:stop-server', async (_event, name: string) => {
+  ipcMain.handle('mcp:stop-server', async (event, name: string) => {
+    if (!isTrustedSender(event)) {
+      console.warn('[IPC] Blocked mcp:stop-server from untrusted sender');
+      return { success: false, error: 'Untrusted sender origin' };
+    }
     const mcpManager = getMCPManager();
     try {
       await mcpManager.stopServer(name);

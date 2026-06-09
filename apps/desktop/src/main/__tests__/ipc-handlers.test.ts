@@ -293,6 +293,28 @@ describe('IPC Handlers', () => {
     });
   });
 
+  describe('mcp:get-config (H5 origin gate — env secrets)', () => {
+    it('returns an empty config to an untrusted sender (no env leak)', async () => {
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      const handler = getRegisteredHandler('mcp:get-config');
+
+      const result = await handler(untrustedEvent);
+
+      expect(result).toEqual({ mcpServers: {} });
+    });
+  });
+
+  describe('mcp:stop-server (H5 origin gate)', () => {
+    it('refuses to stop a server from an untrusted sender', async () => {
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+      const handler = getRegisteredHandler('mcp:stop-server');
+
+      const result = await handler(untrustedEvent, 'srv');
+
+      expect(result).toEqual({ success: false, error: 'Untrusted sender origin' });
+    });
+  });
+
   describe('auth:open-external', () => {
     it('should open allowed Google OAuth URL', async () => {
       vi.mocked(shell.openExternal).mockResolvedValue(undefined);
