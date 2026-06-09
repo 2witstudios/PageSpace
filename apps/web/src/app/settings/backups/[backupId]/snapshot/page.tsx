@@ -58,7 +58,7 @@ export default function SnapshotPage({
   const [resolvedBackupId, setResolvedBackupId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<(SnapshotPageNode & { depth: number }) | null>(null);
   const [contentMap, setContentMap] = useState<Map<string, string>>(new Map());
-  const [loadingContent, setLoadingContent] = useState(false);
+  const [loadingPageIds, setLoadingPageIds] = useState<Set<string>>(new Set());
 
   // Resolve async params on mount
   useEffect(() => {
@@ -78,7 +78,7 @@ export default function SnapshotPage({
     if (contentMap.has(node.pageId)) return;
     if (!driveId || !resolvedBackupId) return;
 
-    setLoadingContent(true);
+    setLoadingPageIds(prev => new Set(prev).add(node.pageId));
     try {
       const r = await fetchWithAuth(
         `/api/drives/${driveId}/backups/${resolvedBackupId}/pages?includeContent=true&pageId=${node.pageId}`,
@@ -95,7 +95,7 @@ export default function SnapshotPage({
       flatten(result.pages);
       setContentMap(newMap);
     } finally {
-      setLoadingContent(false);
+      setLoadingPageIds(prev => { const s = new Set(prev); s.delete(node.pageId); return s; });
     }
   };
 
@@ -187,7 +187,7 @@ export default function SnapshotPage({
               </Button>
             </div>
             <div className="flex-1 p-4 overflow-auto">
-              {loadingContent ? (
+              {loadingPageIds.has(selectedNode.pageId) ? (
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   <span className="text-sm">Loading content…</span>
