@@ -135,6 +135,10 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  releaseHold: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>();
   return {
@@ -165,6 +169,7 @@ import { chatMessageRepository } from '@/lib/repositories/chat-message-repositor
 import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const mcpAuth = {
@@ -893,6 +898,175 @@ describe('POST /api/v1/chat/completions', () => {
         hasToolCalls: Array.isArray(assistantSave?.[0]?.toolCalls) && (assistantSave![0].toolCalls as unknown[]).length > 0,
       },
       expected: { saved: true, hasToolCalls: true },
+    });
+  });
+
+  // --- Credit-hold leak regressions (audit findings L6, L7) ---
+
+  test('L6: a pre-stream setup throw releases the hold and never reaches the model', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-setup' });
+    // Persisting the user message is the last awaited setup step before streamText. A failure
+    // here must NOT strand the gate's hold + in-flight slot until TTL.
+    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+
+    const response = await POST(makeRequest(validBody));
+
+    assert({
+      given: 'a throw during pre-stream setup (user-message persistence) after the hold is placed',
+      should: 'return 500, release the hold exactly once, never call streamText, and never settle usage',
+      actual: {
+        status: response.status,
+        releaseCalls: vi.mocked(releaseHold).mock.calls.length,
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+        trackUsageCalls: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: {
+        status: 500,
+        releaseCalls: 1,
+        releasedHoldId: 'hold-setup',
+        streamTextCalls: 0,
+        trackUsageCalls: 0,
+      },
+    });
+  });
+
+  test('L6: a successful stream hands the hold off — the setup finally does not release it', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-ok' });
+
+    const response = await POST(makeRequest(validBody));
+    await response.text();
+
+    assert({
+      given: 'a request that reaches the streaming Response',
+      should: 'hand the hold to the stream lifecycle (settle billed it) and not double-release in finally',
+      actual: {
+        status: response.status,
+        releaseCalls: vi.mocked(releaseHold).mock.calls.length,
+        trackUsageHoldId: vi.mocked(AIMonitoring.trackUsage).mock.calls[0]?.[0]?.holdId,
+      },
+      expected: { status: 200, releaseCalls: 0, trackUsageHoldId: 'hold-ok' },
+    });
+  });
+
+  test('L7: a mid-stream (non-abort) error settles partial usage as a failure before releasing', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-l7' });
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      // Partial spend the provider already burned before the error.
+      totalUsage: Promise.resolve({ inputTokens: 12, outputTokens: 4 }),
+      steps: Promise.resolve([]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', delta: 'Half a thought' };
+        // A genuine provider error mid-stream (NOT a consumer abort).
+        throw new Error('provider exploded mid-stream');
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest(validBody));
+    // The route propagates the error via controller.error after settling; draining throws.
+    await response.text().catch(() => undefined);
+
+    const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+    assert({
+      given: 'a provider error mid-stream after tokens were burned',
+      should: 'bill the partial usage once as a failed run (success=false, errored) with the holdId, and NOT release the hold (settle consumes it)',
+      actual: {
+        trackUsageCalls: calls.length,
+        holdId: calls[0]?.[0]?.holdId,
+        success: calls[0]?.[0]?.success,
+        inputTokens: calls[0]?.[0]?.inputTokens,
+        errored: (calls[0]?.[0]?.metadata as Record<string, unknown> | undefined)?.errored,
+        releaseCalls: vi.mocked(releaseHold).mock.calls.length,
+      },
+      expected: {
+        trackUsageCalls: 1,
+        holdId: 'hold-l7',
+        success: false,
+        inputTokens: 12,
+        errored: true,
+        releaseCalls: 0,
+      },
+    });
+  });
+
+  test('L7: a mid-stream error with no burned usage releases the hold without billing', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-empty' });
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      // No usage/steps ever materialised before the failure.
+      totalUsage: Promise.reject(new Error('no usage')),
+      steps: Promise.reject(new Error('no steps')),
+      toUIMessageStream: async function* () {
+        throw new Error('failed before any output');
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest(validBody));
+    await response.text().catch(() => undefined);
+
+    assert({
+      given: 'a mid-stream error before any tokens were burned',
+      should: 'release the hold once with its id and record no usage',
+      actual: {
+        releaseCalls: vi.mocked(releaseHold).mock.calls.length,
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        trackUsageCalls: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: { releaseCalls: 1, releasedHoldId: 'hold-empty', trackUsageCalls: 0 },
+    });
+  });
+
+  test('L7: streamed text with no token counts releases the hold instead of settling a $0 row', async () => {
+    // Codex P1: a partial-output error where text was emitted but the usage/steps promises
+    // reject leaves NO billable token counts. Settling here would record a misleading $0 usage
+    // row (trackUsage skips consumeCredits for a failed run with totalTokens===0) — so the
+    // disposition must be a plain release, NOT settle-partial, even though text streamed.
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-textonly' });
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.reject(new Error('usage unavailable')),
+      steps: Promise.reject(new Error('steps unavailable')),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', delta: 'A partial answer with no accounting' };
+        throw new Error('provider dropped after partial text');
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest(validBody));
+    await response.text().catch(() => undefined);
+
+    assert({
+      given: 'a mid-stream error after streaming text but with no recoverable token counts',
+      should: 'release the hold once and NOT call trackUsage (no misleading $0 settle)',
+      actual: {
+        releaseCalls: vi.mocked(releaseHold).mock.calls.length,
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        trackUsageCalls: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: { releaseCalls: 1, releasedHoldId: 'hold-textonly', trackUsageCalls: 0 },
+    });
+  });
+
+  test('L6: the setup-phase hold release is awaited before the 500 returns (not fire-and-forget)', async () => {
+    // Codex P2: the setup-error path returns a plain JSON 500 with no stream keeping the
+    // runtime alive, so the release must be awaited — a fire-and-forget release could be
+    // abandoned if a serverless runtime freezes after the response. We prove the await by
+    // resolving releaseHold only after a deferred tick and asserting it has settled by the
+    // time POST resolves.
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-awaited' });
+    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+    let released = false;
+    vi.mocked(releaseHold).mockImplementationOnce(
+      () => new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 0)),
+    );
+
+    const response = await POST(makeRequest(validBody));
+
+    assert({
+      given: 'a pre-stream setup failure whose hold release resolves on a later tick',
+      should: 'await the release so it has completed by the time the 500 response is returned',
+      actual: { status: response.status, released },
+      expected: { status: 500, released: true },
     });
   });
 });
