@@ -106,15 +106,34 @@ describe('/api/auth/ws-token', () => {
       // Act
       await POST(request);
 
-      // Assert
+      // Assert — SECURITY (L5): narrow, user-scoped, short-lived token (NOT a
+      // 90-day type:'service' mcp:* token the processor would also accept).
       expect(sessionService.createSession).toHaveBeenCalledWith({
         userId: 'test-user-id',
-        type: 'service',
-        scopes: ['mcp:*'],
-        expiresInMs: 90 * 24 * 60 * 60 * 1000,
+        type: 'mcp',
+        scopes: ['mcp:ws'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
         createdByService: 'desktop',
         createdByIp: '192.168.1.100',
       });
+    });
+
+    it('POST_doesNotMintServiceTypeOrWildcardScopeOr90DayTtl', async () => {
+      // Arrange
+      const request = new Request('http://localhost/api/auth/ws-token', {
+        method: 'POST',
+        headers: { Cookie: 'session=valid-token' },
+      });
+
+      // Act
+      await POST(request);
+
+      // Assert — regression guard against the L5 finding
+      const args = vi.mocked(sessionService.createSession).mock.calls[0][0];
+      expect(args.type).not.toBe('service');
+      expect(args.scopes).not.toContain('mcp:*');
+      expect(args.scopes).not.toContain('*');
+      expect(args.expiresInMs).toBeLessThan(90 * 24 * 60 * 60 * 1000);
     });
 
     it('POST_withValidSession_checksRateLimitForUser', async () => {

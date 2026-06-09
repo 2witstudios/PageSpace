@@ -33,6 +33,12 @@ vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 
+// Device-token revocation seam (M9)
+vi.mock('@pagespace/lib/auth/device-auth-utils', () => ({
+  revokeDeviceTokenByValue: vi.fn().mockResolvedValue(true),
+  revokeDeviceTokensByDevice: vi.fn().mockResolvedValue(1),
+}));
+
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
@@ -67,6 +73,10 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import {
+  revokeDeviceTokenByValue,
+  revokeDeviceTokensByDevice,
+} from '@pagespace/lib/auth/device-auth-utils';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -268,6 +278,126 @@ describe('/api/auth/logout', () => {
       // Should not log when no user ID
       expect(auditRequest).not.toHaveBeenCalled();
       expect(trackAuthEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('device token revocation on logout (M9)', () => {
+    it('revokes the device token by value when the client sends one', async () => {
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceToken: 'ps_dev_caller_token' }),
+      });
+
+      await POST(request);
+
+      expect(revokeDeviceTokenByValue).toHaveBeenCalledWith('ps_dev_caller_token', 'logout');
+      expect(revokeDeviceTokensByDevice).not.toHaveBeenCalled();
+    });
+
+    it('revokes by userId + deviceId + platform when no token value is sent (desktop logout)', async () => {
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: 'device-abc', platform: 'desktop' }),
+      });
+
+      await POST(request);
+
+      expect(revokeDeviceTokensByDevice).toHaveBeenCalledWith(
+        'test-user-id',
+        'device-abc',
+        'desktop',
+        'logout'
+      );
+      expect(revokeDeviceTokenByValue).not.toHaveBeenCalled();
+    });
+
+    it('emits a device token.revoked audit event when a device token is revoked', async () => {
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: 'device-abc', platform: 'desktop' }),
+      });
+
+      await POST(request);
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({
+          eventType: 'auth.token.revoked',
+          userId: 'test-user-id',
+          details: { tokenType: 'device', reason: 'user_logout' },
+        })
+      );
+    });
+
+    it('does not revoke any device token for a plain web logout (no device context)', async () => {
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      await POST(request);
+
+      expect(revokeDeviceTokenByValue).not.toHaveBeenCalled();
+      expect(revokeDeviceTokensByDevice).not.toHaveBeenCalled();
+    });
+
+    it('still logs out successfully (200) if device token revocation throws', async () => {
+      vi.mocked(revokeDeviceTokenByValue).mockRejectedValueOnce(new Error('db down'));
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceToken: 'ps_dev_caller_token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+      expect(appendClearCookies).toHaveBeenCalledTimes(1);
+    });
+
+    it('revokes the device token by value even when the session cookie is missing/expired', async () => {
+      // SECURITY (M9): an expired session must not block revoking the still-valid
+      // long-lived device token — by-value revocation needs no active session.
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceToken: 'ps_dev_orphaned_token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+      // Device token revoked by value despite no session…
+      expect(revokeDeviceTokenByValue).toHaveBeenCalledWith('ps_dev_orphaned_token', 'logout');
+      // …and no session revoke attempted (there was none).
+      expect(sessionService.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it('does not attempt device revocation when there is no valid session/user', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // deviceId+platform present but no token value → would be by-device,
+        // which requires a userId we don't have.
+        body: JSON.stringify({ deviceId: 'device-abc', platform: 'desktop' }),
+      });
+
+      await POST(request);
+
+      expect(revokeDeviceTokensByDevice).not.toHaveBeenCalled();
     });
   });
 

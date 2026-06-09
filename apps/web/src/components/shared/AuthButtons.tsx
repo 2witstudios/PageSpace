@@ -1,30 +1,17 @@
 "use client";
 
 import { useAuth } from "@/hooks/useAuth";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { post } from '@/lib/auth/auth-fetch';
 
 export default function AuthButtons() {
-  const { isAuthenticated, user } = useAuth();
-  const router = useRouter();
+  const { isAuthenticated, user, actions } = useAuth();
 
-  const handleSignOut = async () => {
-    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-    let body = {};
-
-    if (isDesktop && window.electron) {
-      const deviceInfo = await window.electron.auth.getDeviceInfo();
-      body = {
-        deviceId: deviceInfo.deviceId,
-        platform: 'desktop' as const,
-      };
-    }
-
-    await post('/api/auth/logout', body);
-    router.push('/auth/signin');
-  };
+  // Delegate to the shared logout action so sign-out runs the full client
+  // teardown (device-context send for M9 server-side device-token revocation,
+  // secure-storage/localStorage clear, store reset, redirect) in one place
+  // instead of a parallel, less-complete copy.
+  const handleSignOut = () => actions.logout();
 
   if (isAuthenticated && user) {
     return (

@@ -162,6 +162,11 @@
       "import": "./dist/auth/device-auth-utils.js",
       "require": "./dist/auth/device-auth-utils.js"
     },
+    "./auth/token-lifecycle-policy": {
+      "types": "./dist/auth/token-lifecycle-policy.d.ts",
+      "import": "./dist/auth/token-lifecycle-policy.js",
+      "require": "./dist/auth/token-lifecycle-policy.js"
+    },
     "./auth/device-fingerprint-utils": {
       "types": "./dist/auth/device-fingerprint-utils.d.ts",
       "import": "./dist/auth/device-fingerprint-utils.js",

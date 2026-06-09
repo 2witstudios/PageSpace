@@ -105,7 +105,6 @@ vi.mock('@/lib/auth', () => ({
 
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -277,77 +276,44 @@ describe('POST /api/auth/device/refresh', () => {
       );
     });
 
-    it('corrects legacy unknown deviceId', async () => {
+    // SECURITY (L4): a legacy 'unknown' / missing stored deviceId is a HARD
+    // failure (force full re-auth), NOT an auto-rebind to the supplied id.
+    it('returns 401 and forces re-auth for legacy "unknown" deviceId (no rebind)', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
-
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
+      const body = await response.json();
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(401);
+      expect(body.error).toContain('re-register');
+      expect(sessionService.createSession).not.toHaveBeenCalled();
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Correcting device token deviceId from OAuth migration',
-        {
-          deviceTokenId: 'device-token-record-id',
-          oldDeviceId: 'unknown',
-          newDeviceId: 'device-123',
+        'Device token has no bound deviceId - forcing re-auth',
+        expect.objectContaining({
+          storedDeviceId: 'unknown',
+          providedDeviceId: 'device-123',
           userId: 'user-123',
-        }
+        })
       );
     });
 
-    it('corrects legacy null/empty deviceId', async () => {
+    it('returns 401 and forces re-auth for legacy null/empty stored deviceId (no rebind)', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         deviceId: null,
       } as never);
 
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
-
-      const request = createRefreshRequest(validRefreshPayload);
-      const response = await POST(request);
-
-      expect(response.status).toBe(200);
-    });
-
-    it('returns 500 when legacy device update returns no result', async () => {
-      vi.mocked(validateDeviceToken).mockResolvedValue({
-        ...mockDeviceRecord,
-        deviceId: 'unknown',
-      } as never);
-
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue(null);
-
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
       const body = await response.json();
 
-      expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to update device');
-    });
-
-    it('returns 500 when legacy device update throws', async () => {
-      vi.mocked(validateDeviceToken).mockResolvedValue({
-        ...mockDeviceRecord,
-        deviceId: 'unknown',
-      } as never);
-
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockRejectedValueOnce(new Error('DB error'));
-
-      const request = createRefreshRequest(validRefreshPayload);
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to update device');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Error correcting device token deviceId',
-        expect.objectContaining({ error: expect.objectContaining({ message: 'DB error' }) })
-      );
+      expect(response.status).toBe(401);
+      expect(body.error).toContain('re-register');
+      expect(sessionService.createSession).not.toHaveBeenCalled();
     });
   });
 

@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { verifyAuth, getClientIP } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { getWsTokenPolicy } from '@pagespace/lib/auth/token-lifecycle-policy';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
-// WS tokens for desktop/mobile persistent connections need long TTL to match device sessions.
-// The connection is persistent and authenticated - we don't want to kick users mid-interaction.
-// Security is maintained through: session validation, fingerprint checks, and stale connection cleanup.
-const WS_TOKEN_EXPIRY_MS = 90 * 24 * 60 * 60 * 1000; // 90 days - matches device session lifetime
+// SECURITY (L5): ws-tokens are narrow, user-scoped, short-lived tokens dedicated
+// to desktop websocket auth — NOT a 90-day `type:'service'` `mcp:*` token (which
+// the processor's service-to-service middleware would also accept). The desktop
+// client re-fetches a fresh ws-token automatically on (re)connect, so a short
+// TTL costs nothing operationally. See getWsTokenPolicy().
 
 // Rate limit: 10 token requests per minute per user
 const WS_TOKEN_RATE_LIMIT = {
@@ -43,11 +45,12 @@ export async function POST(request: Request) {
   }
 
   const clientIP = getClientIP(request);
+  const wsPolicy = getWsTokenPolicy();
   const token = await sessionService.createSession({
     userId: user.id,
-    type: 'service',
-    scopes: ['mcp:*'],
-    expiresInMs: WS_TOKEN_EXPIRY_MS,
+    type: wsPolicy.type,
+    scopes: wsPolicy.scopes,
+    expiresInMs: wsPolicy.ttlMs,
     createdByService: 'desktop',
     createdByIp: clientIP,
   });
