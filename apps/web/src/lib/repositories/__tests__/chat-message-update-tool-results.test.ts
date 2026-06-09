@@ -11,7 +11,6 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
-  lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: {
