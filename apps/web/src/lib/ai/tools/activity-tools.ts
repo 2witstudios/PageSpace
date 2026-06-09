@@ -607,6 +607,7 @@ When summarizing multiple changes, group them thematically and describe the over
         let cursor: { timestamp: Date; id: string } | null = null;
         let scanned = 0;
         let lastBatchSize = FETCH_BATCH; // assume a full batch so the loop is entered
+        let lastRequestedBatchSize = FETCH_BATCH; // what we asked the DB for (may be clamped)
 
         while (
           shouldContinuePaging({
@@ -615,10 +616,17 @@ When summarizing multiple changes, group them thematically and describe the over
             scanned,
             maxScanned: MAX_SCANNED,
             lastBatchSize,
-            batchSize: FETCH_BATCH,
+            // Compare exhaustion against what we actually requested — the final
+            // batch is clamped to the remaining scan budget below.
+            batchSize: lastRequestedBatchSize,
           })
         ) {
-          const batch = await fetchActivityBatch(cursor, FETCH_BATCH);
+          // Clamp the final fetch so we never overshoot MAX_SCANNED by up to a
+          // full batch (shouldContinuePaging guarantees scanned < MAX_SCANNED
+          // here, so `take` is always >= 1).
+          const take = Math.min(FETCH_BATCH, MAX_SCANNED - scanned);
+          lastRequestedBatchSize = take;
+          const batch = await fetchActivityBatch(cursor, take);
           lastBatchSize = batch.length;
           if (batch.length === 0) break;
           scanned += batch.length;
