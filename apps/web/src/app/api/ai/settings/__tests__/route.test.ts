@@ -183,6 +183,20 @@ describe('AI settings route', () => {
       expect((await response.json()).providers.glm.isAvailable).toBe(true);
     });
 
+    it('reports the public zai provider available when the OpenRouter key is set', async () => {
+      // zai is OpenRouter-backed; without it in ALL_PROVIDER_NAMES the availability
+      // map omits it and the picker/agent-config show "Setup Required".
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.zai.isAvailable).toBe(true);
+    });
+
+    it('reports the public zai provider unavailable when the OpenRouter key is unset', async () => {
+      delete process.env.OPENROUTER_DEFAULT_API_KEY;
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.zai.isAvailable).toBe(false);
+    });
+
     it('does not expose a paid `openrouter` or `pagespace` provider key', async () => {
       process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 

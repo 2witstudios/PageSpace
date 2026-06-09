@@ -75,6 +75,7 @@ export const ALL_PROVIDER_NAMES = [
   'ai21',
   'inception',
   'writer',
+  'zai', // public OpenRouter-backed GLM family (z-ai/glm-*); distinct from admin-only `glm`
   // Local / on-prem
   'ollama',
   'lmstudio',
