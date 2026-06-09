@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
+import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { driveRoles } from '@pagespace/db/schema/members';
+import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 
 export type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 export type PagePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
@@ -47,6 +47,16 @@ export async function fetchCustomRolePermissions(
     permissions: result[0].permissions,
     driveWidePermissions: result[0].driveWidePermissions as PagePerm | null,
   };
+}
+
+// Returns the customRoleId assigned to the user in this drive, or null if none / not a member.
+export async function getMemberCustomRoleId(driveId: string, userId: string): Promise<string | null> {
+  const result = await db
+    .select({ customRoleId: driveMembers.customRoleId })
+    .from(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)))
+    .limit(1);
+  return result.length > 0 ? (result[0].customRoleId ?? null) : null;
 }
 
 // Returns true only when the custom role exists and belongs to the specified drive.

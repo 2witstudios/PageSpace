@@ -117,6 +117,7 @@ export async function POST(
       roleName: newRole.name,
       driveId,
       permissions: permissionsSummary,
+      driveWidePermissions: driveWidePermissions ?? null,
     }, actorInfo);
 
     auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleName: newRole.name, operation: 'create' } });

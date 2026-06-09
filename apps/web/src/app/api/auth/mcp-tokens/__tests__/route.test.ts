@@ -71,11 +71,17 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
+  getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+}));
+
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { getMemberCustomRoleId, customRoleBelongsToDrive } from '@pagespace/lib/permissions/membership-queries';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 
@@ -120,6 +126,9 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       role: 'OWNER',
     } as never);
 
+    // Default: custom role belongs to drive, caller has no custom role assigned
+    vi.mocked(customRoleBelongsToDrive).mockResolvedValue(true);
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue(null);
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
@@ -227,6 +236,61 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         // Repository should be called with deduplicated drives
         const createArgs = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0][0];
         expect(createArgs.drives).toEqual([{ id: 'drive-1', role: 'MEMBER', customRoleId: undefined }]);
+      });
+    });
+
+    describe('custom role privilege escalation', () => {
+      it('returns 403 when a MEMBER specifies a custom role not assigned to them', async () => {
+        vi.mocked(getDriveAccess).mockResolvedValue({
+          isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
+        } as never);
+        vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-assigned');
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'role-other' }] }),
+        });
+
+        const response = await POST(request);
+        const body = await response.json();
+        expect(response.status).toBe(403);
+        expect(body.error).toContain('custom role');
+        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      });
+
+      it('allows a MEMBER to mint a token with their own assigned custom role', async () => {
+        vi.mocked(getDriveAccess).mockResolvedValue({
+          isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
+        } as never);
+        vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-xyz');
+        vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([{ id: 'drive-1', name: 'Drive' }] as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'role-xyz' }] }),
+        });
+
+        const response = await POST(request);
+        expect(response.status).toBe(200);
+      });
+
+      it('allows an ADMIN to mint a token with any custom role without checking their own role', async () => {
+        vi.mocked(getDriveAccess).mockResolvedValue({
+          isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
+        } as never);
+        vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([{ id: 'drive-1', name: 'Drive' }] as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'any-role' }] }),
+        });
+
+        const response = await POST(request);
+        expect(response.status).toBe(200);
+        expect(getMemberCustomRoleId).not.toHaveBeenCalled();
       });
     });
 

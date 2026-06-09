@@ -937,6 +937,8 @@ export function logRoleActivity(
     driveName?: string;
     permissions?: Record<string, boolean>;
     previousPermissions?: Record<string, boolean>;
+    driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
+    previousDriveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
     // For reorder operations
     previousOrder?: string[];
     newOrder?: string[];
@@ -954,10 +956,15 @@ export function logRoleActivity(
     previousValues = data.previousOrder ? { order: data.previousOrder } : undefined;
     newValues = data.newOrder ? { order: data.newOrder } : undefined;
   } else {
-    previousValues = data.previousPermissions
-      ? { permissions: data.previousPermissions }
-      : undefined;
-    newValues = data.permissions ? { permissions: data.permissions } : undefined;
+    const newValuesObj: Record<string, unknown> = {};
+    if (data.permissions !== undefined) newValuesObj.permissions = data.permissions;
+    if (data.driveWidePermissions !== undefined) newValuesObj.driveWidePermissions = data.driveWidePermissions;
+    newValues = Object.keys(newValuesObj).length > 0 ? newValuesObj : undefined;
+
+    const prevValuesObj: Record<string, unknown> = {};
+    if (data.previousPermissions !== undefined) prevValuesObj.permissions = data.previousPermissions;
+    if (data.previousDriveWidePermissions !== undefined) prevValuesObj.driveWidePermissions = data.previousDriveWidePermissions;
+    previousValues = Object.keys(prevValuesObj).length > 0 ? prevValuesObj : undefined;
   }
 
   logActivity({

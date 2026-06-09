@@ -136,6 +136,8 @@ export async function PATCH(
       driveId,
       permissions: permissions ? summarizePermissions(permissions) : undefined,
       previousPermissions: summarizePermissions(existingRole.permissions),
+      driveWidePermissions: driveWidePermissions !== undefined ? (driveWidePermissions ?? null) : undefined,
+      previousDriveWidePermissions: existingRole.driveWidePermissions ?? null,
     }, actorInfo);
 
     auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleId, operation: 'update' } });

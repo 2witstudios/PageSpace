@@ -7,7 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { customRoleBelongsToDrive } from '@pagespace/lib/permissions/membership-queries';
+import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       const invalidDriveIds: string[] = [];
       const unauthorizedRoles: string[] = [];
       const invalidCustomRoles: string[] = [];
+      const unauthorizedCustomRoles: string[] = [];
 
       for (const scope of uniqueDriveScopes) {
         const access = await getDriveAccess(scope.id, userId);
@@ -57,6 +58,14 @@ export async function POST(req: NextRequest) {
         // Prevent using a custom role that belongs to a different drive
         if (scope.customRoleId && !await customRoleBelongsToDrive(scope.customRoleId, scope.id)) {
           invalidCustomRoles.push(scope.id);
+          continue;
+        }
+        // Non-admins can only mint tokens with their own assigned custom role
+        if (scope.customRoleId && !access.isAdmin && !access.isOwner) {
+          const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
+          if (scope.customRoleId !== callerCustomRoleId) {
+            unauthorizedCustomRoles.push(scope.id);
+          }
         }
       }
 
@@ -76,6 +85,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { error: 'Custom role does not belong to the specified drive: ' + invalidCustomRoles.join(', ') },
           { status: 400 }
+        );
+      }
+      if (unauthorizedCustomRoles.length > 0) {
+        return NextResponse.json(
+          { error: 'You may only mint tokens with your own assigned custom role in these drives: ' + unauthorizedCustomRoles.join(', ') },
+          { status: 403 }
         );
       }
     }
