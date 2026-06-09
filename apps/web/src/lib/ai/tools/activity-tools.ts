@@ -605,9 +605,12 @@ When summarizing multiple changes, group them thematically and describe the over
         // through the window in batches, applying the access filter, until we
         // have up to `limit` VISIBLE rows or run out of rows / hit a scan
         // ceiling that bounds DB work.
-        const FETCH_BATCH = Math.min(200, Math.max(limit, limit * 4));
+        // Over-fetch up to 4× the cap per batch (clamped) — usually one batch
+        // already yields `limit` visible rows; MAX_SCANNED bounds worst-case work.
+        const FETCH_BATCH = Math.min(200, limit * 4);
         const MAX_SCANNED = 2000;
         const adminDriveCache = new Map<string, boolean>();
+        const seenIds = new Set<string>(); // guard against offset drift from concurrent writes
         const collected: ActivityRow[] = [];
         let offset = 0;
         let scanned = 0;
@@ -630,7 +633,11 @@ When summarizing multiple changes, group them thematically and describe the over
           offset += batch.length;
 
           const batchAccessible = await buildAccessiblePageIdSet(userId, batch, adminDriveCache);
-          collected.push(...filterAccessibleActivities(batch, batchAccessible));
+          for (const row of filterAccessibleActivities(batch, batchAccessible)) {
+            if (seenIds.has(row.id)) continue; // de-dupe rows shifted across batch boundaries
+            seenIds.add(row.id);
+            collected.push(row);
+          }
         }
 
         // Honor the caller's requested cap on VISIBLE rows.
