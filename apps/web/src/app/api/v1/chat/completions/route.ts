@@ -135,7 +135,10 @@ export async function POST(request: Request): Promise<Response> {
         // the unlikely TOCTOU case where two requests race on the same new UUID.
         await conversationRepository.createConversation(incomingConversationId, authResult.userId, pageId);
         const owned = await conversationRepository.getConversation(incomingConversationId);
-        if (!owned || owned.userId !== authResult.userId) {
+        if (!owned || !owned.isActive) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
+        if (owned.userId !== authResult.userId) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 });
         }
       }

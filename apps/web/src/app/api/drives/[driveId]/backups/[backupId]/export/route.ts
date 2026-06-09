@@ -32,15 +32,33 @@ export async function GET(
     userId: auth.userId,
     resourceType: 'drive',
     resourceId: driveId,
-    details: { operation: 'export_backup', backupId },
+    details: { operation: 'export_backup_started', backupId },
   });
 
   const readable = new ReadableStream<Buffer>({
     async start(controller) {
-      for await (const chunk of stream) {
-        controller.enqueue(chunk);
+      try {
+        for await (const chunk of stream) {
+          controller.enqueue(chunk);
+        }
+        auditRequest(request, {
+          eventType: 'data.read',
+          userId: auth.userId,
+          resourceType: 'drive',
+          resourceId: driveId,
+          details: { operation: 'export_backup_completed', backupId },
+        });
+        controller.close();
+      } catch (err) {
+        auditRequest(request, {
+          eventType: 'data.read',
+          userId: auth.userId,
+          resourceType: 'drive',
+          resourceId: driveId,
+          details: { operation: 'export_backup_failed', backupId, error: (err as Error).message },
+        });
+        controller.error(err);
       }
-      controller.close();
     },
   });
 

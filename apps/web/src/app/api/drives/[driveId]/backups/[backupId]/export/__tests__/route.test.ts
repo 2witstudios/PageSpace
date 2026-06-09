@@ -112,13 +112,25 @@ describe('GET /api/drives/[driveId]/backups/[backupId]/export', () => {
     expect(streamBackupExport).toHaveBeenCalledWith(backupId, driveId, userId);
   });
 
-  it('calls auditRequest with operation: export_backup on success', async () => {
+  it('calls auditRequest with operation: export_backup_started on success', async () => {
     await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(auditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         eventType: 'data.read',
-        details: expect.objectContaining({ operation: 'export_backup', backupId }),
+        details: expect.objectContaining({ operation: 'export_backup_started', backupId }),
+      }),
+    );
+  });
+
+  it('calls auditRequest with operation: export_backup_completed when stream is consumed', async () => {
+    const res = await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
+    await res.arrayBuffer();
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'data.read',
+        details: expect.objectContaining({ operation: 'export_backup_completed', backupId }),
       }),
     );
   });
