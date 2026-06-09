@@ -1,15 +1,20 @@
 import { promises as dnsPromises } from 'dns';
+import { Agent } from 'undici';
 import { tool } from 'ai';
 import { z } from 'zod';
 import TurndownService from 'turndown';
 import type { ToolExecutionContext } from '../core/types';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { isPublicIp, isAllowedFetchTarget, isIpLiteral, PRIVATE_HOST_MESSAGE } from './web-fetch-ssrf';
 
 const webSearchLogger = loggers.ai.child({ module: 'web-search-tools' });
 
 const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 const MAX_FETCH_BYTES = 5 * 1024 * 1024; // 5 MB hard cap on buffered response
+const MAX_REDIRECTS = 5; // cap on manually-followed redirect hops
+const FETCH_TIMEOUT_MS = 15000;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function safeHostname(url: string): string {
   try { return new URL(url).hostname; } catch { return ''; }
@@ -125,36 +130,25 @@ async function performWebSearch({
   }
 }
 
-/** Returns true for any IP that must not be fetched (loopback, RFC1918, link-local, IPv6 private). */
-function isPrivateIp(ip: string): boolean {
-  const h = ip.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h === '0.0.0.0') return true;
-  // IPv6
-  if (h === '::1') return true;
-  if (h.startsWith('fe80:')) return true;                   // fe80::/10 link-local
-  if (h.startsWith('fc') || h.startsWith('fd')) return true; // fc00::/7 unique-local
-  if (h.startsWith('::ffff:')) return isPrivateIp(h.slice(7)); // IPv4-mapped
-  // IPv4
-  const ipv4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
-    if (a === 10) return true;                          // 10.0.0.0/8
-    if (a === 127) return true;                         // 127.0.0.0/8 loopback
-    if (a === 169 && b === 254) return true;            // 169.254.0.0/16 link-local + cloud metadata
-    if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
-    if (a === 192 && b === 168) return true;            // 192.168.0.0/16
-  }
-  return false;
+interface ResolvedAddress {
+  address: string;
+  family: number;
 }
 
 /**
- * Resolves hostname to all addresses and rejects if any is private.
- * Catches public hostnames that resolve to internal IPs (DNS rebinding mitigation).
+ * Resolves a hostname to all addresses and rejects if ANY is non-public
+ * (DNS-rebinding mitigation). IP literals are already validated by
+ * {@link isAllowedFetchTarget}, so they skip DNS. Returns the validated
+ * addresses so the connection can be pinned to them.
  * Throws on block or DNS failure (fail-closed).
  */
-async function validatePublicHost(hostname: string): Promise<void> {
-  if (isPrivateIp(hostname)) throw new Error('Fetching private or internal hosts is not allowed');
-  let addresses: { address: string; family: number }[];
+async function resolveValidatedAddresses(hostname: string): Promise<ResolvedAddress[]> {
+  const bare = hostname.replace(/^\[|\]$/g, '');
+  if (isIpLiteral(bare)) {
+    return [{ address: bare, family: bare.includes(':') ? 6 : 4 }];
+  }
+
+  let addresses: ResolvedAddress[];
   try {
     addresses = await dnsPromises.lookup(hostname, { all: true });
   } catch {
@@ -162,8 +156,99 @@ async function validatePublicHost(hostname: string): Promise<void> {
   }
   if (!addresses.length) throw new Error('Hostname resolved to no addresses');
   for (const { address } of addresses) {
-    if (isPrivateIp(address)) throw new Error('Fetching private or internal hosts is not allowed');
+    if (!isPublicIp(address)) throw new Error(PRIVATE_HOST_MESSAGE);
   }
+  return addresses;
+}
+
+/**
+ * Builds an undici dispatcher that pins outbound connections to the already
+ * validated addresses, closing the TOCTOU window between DNS validation and
+ * connect (a public hostname cannot re-resolve to a private IP at connect time).
+ * The TLS servername stays the original hostname, preserving SNI/cert checks.
+ * Returns undefined if a dispatcher cannot be constructed (revalidation still
+ * applies on every hop).
+ */
+function createPinnedDispatcher(addresses: ResolvedAddress[]): Agent | undefined {
+  if (!addresses.length) return undefined;
+  try {
+    return new Agent({
+      connect: {
+        lookup: (_hostname, options, callback) => {
+          if (options && options.all) {
+            callback(null, addresses.map((a) => ({ address: a.address, family: a.family })));
+          } else {
+            callback(null, addresses[0].address, addresses[0].family);
+          }
+        },
+      },
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+async function closeDispatcher(dispatcher: Agent | undefined): Promise<void> {
+  try {
+    await dispatcher?.close();
+  } catch {
+    /* best-effort cleanup */
+  }
+}
+
+type PinnedFetchInit = RequestInit & { dispatcher?: Agent };
+
+interface SafeFetchResult {
+  response: Response;
+  dispatcher: Agent | undefined;
+  finalUrl: string;
+}
+
+/**
+ * SSRF-safe fetch: follows redirects MANUALLY (redirect: 'manual'), revalidating
+ * scheme + host and re-resolving + pinning DNS on EVERY hop. This closes the M2
+ * bypass where an allowed initial URL 302s to cloud-metadata/internal hosts.
+ * The caller owns the returned dispatcher and must close it after reading the body.
+ */
+async function ssrfSafeFetch(initialUrl: string, headers: Record<string, string>): Promise<SafeFetchResult> {
+  let currentUrl = initialUrl;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const decision = isAllowedFetchTarget(currentUrl);
+    if (!decision.ok) throw new Error(decision.reason ?? PRIVATE_HOST_MESSAGE);
+
+    const addresses = await resolveValidatedAddresses(new URL(currentUrl).hostname);
+    const dispatcher = createPinnedDispatcher(addresses);
+
+    const init: PinnedFetchInit = {
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    };
+    if (dispatcher) init.dispatcher = dispatcher;
+
+    const response = await fetch(currentUrl, init);
+
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return { response, dispatcher, finalUrl: currentUrl };
+    }
+
+    // Redirect: discard this hop's body + dispatcher, validate the next target.
+    const location = response.headers.get('location');
+    await response.body?.cancel().catch(() => { /* ignore */ });
+    await closeDispatcher(dispatcher);
+
+    if (!location) throw new Error('Redirect response missing Location header');
+    let next: URL;
+    try {
+      next = new URL(location, currentUrl);
+    } catch {
+      throw new Error('Invalid redirect Location');
+    }
+    currentUrl = next.toString();
+  }
+
+  throw new Error('Too many redirects');
 }
 
 export const webSearchTools = {
@@ -271,24 +356,26 @@ Returns the page content converted to readable markdown.`,
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) throw new Error('User authentication required');
 
+      // Pure scheme + literal-IP gate (no DNS, no network) before doing any work.
+      const targetDecision = isAllowedFetchTarget(url);
+      if (!targetDecision.ok) {
+        return {
+          success: false,
+          url,
+          error: targetDecision.reason ?? PRIVATE_HOST_MESSAGE,
+          content: '',
+          nextSteps: ['Provide a publicly accessible https:// URL'],
+        };
+      }
+
+      let dispatcher: Agent | undefined;
       try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== 'https:') {
-          return { success: false, url, error: 'Only HTTPS URLs are supported', content: '', nextSteps: ['Use an https:// URL'] };
-        }
-
-        try {
-          await validatePublicHost(parsed.hostname);
-        } catch (e) {
-          return { success: false, url, error: (e as Error).message, content: '', nextSteps: ['Provide a publicly accessible URL'] };
-        }
-
         webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url: redactUrl(url) });
 
-        const response = await fetch(url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' },
-          signal: AbortSignal.timeout(15000),
-        });
+        // Follows redirects manually, revalidating + IP-pinning each hop (SSRF-safe).
+        const safe = await ssrfSafeFetch(url, { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' });
+        const response = safe.response;
+        dispatcher = safe.dispatcher;
 
         if (!response.ok) {
           throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
@@ -381,6 +468,8 @@ Returns the page content converted to readable markdown.`,
             'Try web_search to find an alternative source',
           ],
         };
+      } finally {
+        await closeDispatcher(dispatcher);
       }
     },
   }),

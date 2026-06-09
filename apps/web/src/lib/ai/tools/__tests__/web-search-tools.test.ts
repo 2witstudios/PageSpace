@@ -300,6 +300,19 @@ function mockFetchResponse(
   };
 }
 
+/** Build a redirect Response (manual mode) with a Location header and an empty body. */
+function mockRedirectResponse(location: string, status = 302) {
+  const headers = new Map<string, string>([['location', location]]);
+  const stream = new ReadableStream<Uint8Array>({ start(c) { c.close(); } });
+  return {
+    ok: false,
+    status,
+    statusText: 'Found',
+    headers: { get: (name: string) => headers.get(name) ?? null },
+    body: stream,
+  };
+}
+
 describe('web_fetch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -449,6 +462,98 @@ describe('web_fetch', () => {
       ) as Record<string, unknown>;
       expect(result.success).toBe(true);
       expect(result.truncated).toBe(false);
+    });
+  });
+
+  describe('redirect SSRF protection (M2)', () => {
+    it('uses manual redirect handling (does not delegate redirects to fetch)', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockFetchResponse('<p>ok</p>')
+      );
+      await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      );
+      const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(init.redirect).toBe('manual');
+    });
+
+    it('follows a public → public redirect and returns the final content', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockRedirectResponse('https://www.example.com/final'))
+        .mockResolvedValueOnce(mockFetchResponse('<h1>Final</h1>'));
+
+      const result = await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(true);
+      expect(String(result.content)).toContain('Final');
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
+    });
+
+    it('blocks a redirect to the cloud-metadata IP literal', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockRedirectResponse('https://169.254.169.254/latest/meta-data/'));
+
+      const result = await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(String(result.error)).toMatch(/private|internal/i);
+      // Only the first hop is fetched; the metadata hop is rejected before connect.
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it('blocks a redirect to a non-https (http) metadata URL', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockRedirectResponse('http://169.254.169.254/latest/meta-data/'));
+
+      const result = await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(String(result.error)).toMatch(/https/i);
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it('blocks a redirect to a public-looking host that resolves to a private IP (rebinding)', async () => {
+      mockLookupFn.mockImplementation(async (hostname: string) =>
+        hostname.includes('evil')
+          ? [{ address: '10.0.0.1', family: 4 }]
+          : [{ address: '93.184.216.34', family: 4 }]
+      );
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(mockRedirectResponse('https://evil.example.com/internal'));
+
+      const result = await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(String(result.error)).toMatch(/private|internal/i);
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it('rejects after exceeding the redirect cap', async () => {
+      let n = 0;
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () =>
+        mockRedirectResponse(`https://hop${n++}.example.com/`)
+      );
+
+      const result = await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(String(result.error)).toMatch(/too many redirects/i);
     });
   });
 });
