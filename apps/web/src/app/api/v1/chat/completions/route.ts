@@ -507,11 +507,23 @@ export async function POST(request: Request): Promise<Response> {
           controller.close();
         } catch (err) {
           const aborted = abortController.signal.aborted;
-          // Gather whatever partial usage/spend the stream produced before failing so the
-          // disposition can bill it rather than drop it. totalUsage/steps reject if the
-          // stream never produced them — treat that as "nothing burned".
+          // Gather whatever partial usage/spend the stream produced before failing.
+          // totalUsage/steps reject if the stream never produced them — treat that as
+          // "nothing burned".
           const totalUsage = await aiResult.totalUsage.catch(() => undefined);
           const steps = await aiResult.steps.catch(() => undefined);
+
+          if (aborted) {
+            // Some providers surface an abort as a thrown AbortError instead of ending the
+            // stream gracefully. Treat it as a clean stop: settle the partial usage the same
+            // way the normal finish path does (resolveHoldDisposition would return 'handed-off'
+            // for an aborted streaming phase).
+            loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
+            await settle({ aborted: true, text: assistantText || undefined, totalUsage, steps });
+            controller.close();
+            return;
+          }
+
           // "Billable usage" is strictly real token counts. For a FAILED run, trackUsage only
           // reaches consumeCredits when totalTokens > 0 (ai-monitoring.ts:942) and otherwise
           // just releases the hold. So streamed text or provider cost WITHOUT token counts
@@ -524,17 +536,7 @@ export async function POST(request: Request): Promise<Response> {
             (totalUsage.cachedInputTokens ?? 0) > 0 ||
             (totalUsage.reasoningTokens ?? 0) > 0
           ));
-          const disposition = resolveHoldDisposition({ phase: 'streaming', aborted, usage: hasUsage });
-
-          if (aborted) {
-            // Some providers surface an abort as a thrown AbortError instead of ending the
-            // stream gracefully. Treat it as a clean stop: settle the partial usage the same
-            // way the normal finish path does (disposition === 'handed-off').
-            loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
-            await settle({ aborted: true, text: assistantText || undefined, totalUsage, steps });
-            controller.close();
-            return;
-          }
+          const disposition = resolveHoldDisposition({ phase: 'streaming', aborted: false, usage: hasUsage });
 
           loggers.ai.error('OpenAI API: stream failed', err as Error);
           if (disposition === 'settle-partial') {
