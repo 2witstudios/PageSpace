@@ -146,6 +146,15 @@ echo "-------------------------"
 run_test_suite "MCP WebSocket Route Security" "web" "src/app/api/mcp-ws/__tests__/route.security.test.ts"
 
 # =============================================================================
+# AI Tool Security Tests
+# =============================================================================
+echo "🤖 AI Tool Security"
+echo "-------------------"
+
+run_test_suite "web_fetch SSRF Decision (pure)" "web" "src/lib/ai/tools/__tests__/web-fetch-ssrf.test.ts"
+run_test_suite "web_fetch SSRF (redirect/rebind)" "web" "src/lib/ai/tools/__tests__/web-search-tools.test.ts"
+
+# =============================================================================
 # Processor Security Tests
 # =============================================================================
 echo "⚙️ Processor Security"
