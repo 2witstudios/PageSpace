@@ -445,6 +445,36 @@ describe('computeMonthlyRefill', () => {
     expect(computeMonthlyRefill('enterprise' as SubscriptionTier, ALLOWANCE))
       .toEqual({ monthlyRemainingCents: 50, monthlyAllowanceCents: 50, debtCents: 0 });
   });
+
+  it('treats a negative debt input as no debt (no phantom credit from a negative)', () => {
+    // A negative debt must not inflate the carry. netCarried = max(0, -100) ignored →
+    // 100 remaining + 500 allowance = 600, identical to passing 0 debt.
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, -100)).toEqual({
+      monthlyRemainingCents: 600,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, -100))
+      .toEqual(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 0));
+  });
+
+  it('exactly nets debt to zero carry, then adds the allowance (period rollover boundary)', () => {
+    // 500¢ remaining exactly cancels 500¢ debt → net carry 0 → 0 + 500 allowance = 500.
+    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 500, 500)).toEqual({
+      monthlyRemainingCents: 500,
+      monthlyAllowanceCents: 500,
+      debtCents: 0,
+    });
+  });
+
+  it('rolls a large carried balance forward across the period (accumulation, no cap)', () => {
+    // Credits never expire: 100_000¢ carried + 1500 pro allowance = 101_500.
+    expect(computeMonthlyRefill('pro', ALLOWANCE, 100_000)).toEqual({
+      monthlyRemainingCents: 101_500,
+      monthlyAllowanceCents: 1500,
+      debtCents: 0,
+    });
+  });
 });
 
 describe('applyPaymentToDebt', () => {

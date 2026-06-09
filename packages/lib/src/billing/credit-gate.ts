@@ -16,7 +16,7 @@
 
 import { db } from '@pagespace/db/db';
 import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
-import { and, eq, gt, gte, lt, or, isNull, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import {
   evaluateGate,
@@ -136,17 +136,54 @@ export async function canConsumeAI(
   // subscription-backed balance here would over-grant if a renewal invoice is late
   // or retried after the period end — the gate would refill, the user could spend,
   // then the webhook would refill again. A paid user with an expired window is
-  // therefore (correctly) blocked until their renewal lands. The UPDATE re-checks
-  // the same predicate in its WHERE, so a concurrent reset/refill that rolled the
-  // window forward between our read and write matches zero rows and we re-read.
+  // therefore (correctly) blocked until their renewal lands.
+  //
+  // The unlocked `row` read above is only a cheap pre-check: it decides whether a
+  // reset is even worth attempting (don't open a transaction when the window is
+  // clearly still active). The authoritative balance read + refill computation happen
+  // INSIDE the transaction under `FOR UPDATE`, mirroring applyMonthlyRefill in
+  // credit-funding.ts. Computing the refill from this pre-transaction snapshot races
+  // any concurrent mutation committed between the read and the write: a concurrent
+  // settle would have its spend silently un-billed (the reset would overwrite the
+  // drawn-down balance with stale_remaining + allowance), and a concurrent
+  // debt-clearing top-up would have its debt collected twice (the reset re-nets the
+  // already-paid debt). Reading the row under the lock closes both interleavings.
   if (tier === 'free' && row && (row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now)) {
-    // Pass the current remaining so unspent credits roll over into the new period
-    // (matching the paid invoice.paid path). The WHERE re-checks the predicate to
-    // handle a concurrent reset that already rolled the window forward.
-    const refill = computeMonthlyRefill(tier, TIER_MONTHLY_ALLOWANCE_CENTS, row.monthlyRemainingCents ?? 0, row.debtCents ?? 0);
     const newEnd = addOneMonth(now);
     await db.transaction(async (tx) => {
-      const updated = await tx
+      // Lock the balance row and RE-READ the current monthly/debt values inside the
+      // transaction. The lock serialises concurrent resets for this user and forces
+      // us to observe any settle/top-up that committed since the unlocked pre-check.
+      const lockedRows = await tx
+        .select({
+          monthlyRemainingCents: creditBalances.monthlyRemainingCents,
+          debtCents: creditBalances.debtCents,
+          monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+        })
+        .from(creditBalances)
+        .where(eq(creditBalances.userId, userId))
+        .for('update');
+      const locked = lockedRows[0] ?? null;
+
+      // Re-check the reset predicate against the LOCKED row. A concurrent reset may
+      // have rolled the window forward (or the row may have vanished) between our
+      // unlocked pre-check and acquiring the lock; if the window is no longer expired,
+      // that other request already granted this period — skip to avoid a double grant.
+      if (!locked || !(locked.monthlyPeriodEnd === null || locked.monthlyPeriodEnd < now)) {
+        return;
+      }
+
+      // Compute the refill from the LOCKED, current balance so unspent credits roll
+      // over and outstanding debt is netted against the up-to-date carry (matching the
+      // paid invoice.paid path), not against the stale pre-transaction snapshot.
+      const refill = computeMonthlyRefill(
+        tier,
+        TIER_MONTHLY_ALLOWANCE_CENTS,
+        locked.monthlyRemainingCents ?? 0,
+        locked.debtCents ?? 0,
+      );
+
+      await tx
         .update(creditBalances)
         .set({
           monthlyRemainingCents: refill.monthlyRemainingCents,
@@ -157,27 +194,22 @@ export async function canConsumeAI(
           monthlyPeriodStart: now,
           monthlyPeriodEnd: newEnd,
         })
-        .where(and(
-          eq(creditBalances.userId, userId),
-          or(isNull(creditBalances.monthlyPeriodEnd), lt(creditBalances.monthlyPeriodEnd, now)),
-        ))
-        .returning({ userId: creditBalances.userId });
-      // Only record the grant when this call won the race — if a concurrent reset
-      // already rolled the window forward, updated is empty and we skip the ledger
-      // write to avoid a phantom grant entry.
-      if (updated.length > 0) {
-        await tx
-          .insert(creditLedger)
-          .values({
-            userId,
-            entryType: 'monthly_grant',
-            bucket: 'monthly',
-            amountCents: refill.monthlyAllowanceCents,
-            stripeRef: `free-reset-${userId}-${now.toISOString()}`,
-            consumeStatus: 'applied',
-          })
-          .onConflictDoNothing(STRIPE_REF_ARBITER);
-      }
+        .where(eq(creditBalances.userId, userId));
+
+      // Record the grant. We only reach here holding the lock with a confirmed-expired
+      // window, so this call owns the reset; onConflictDoNothing on the period-keyed
+      // stripeRef is a belt-and-suspenders guard against a same-instant duplicate key.
+      await tx
+        .insert(creditLedger)
+        .values({
+          userId,
+          entryType: 'monthly_grant',
+          bucket: 'monthly',
+          amountCents: refill.monthlyAllowanceCents,
+          stripeRef: `free-reset-${userId}-${now.toISOString()}`,
+          consumeStatus: 'applied',
+        })
+        .onConflictDoNothing(STRIPE_REF_ARBITER);
     });
     row = await readBalance();
   }
