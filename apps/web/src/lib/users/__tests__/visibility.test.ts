@@ -18,10 +18,15 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
   or: vi.fn(),
   inArray: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'drives.id', ownerId: 'drives.ownerId' } }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { userId: 'driveMembers.userId', driveId: 'driveMembers.driveId' },
+  driveMembers: {
+    userId: 'driveMembers.userId',
+    driveId: 'driveMembers.driveId',
+    acceptedAt: 'driveMembers.acceptedAt',
+  },
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
   connections: {
@@ -33,6 +38,7 @@ vi.mock('@pagespace/db/schema/social', () => ({
 
 import { callerCanViewUser } from '../visibility';
 import { db } from '@pagespace/db/db';
+import { isNotNull } from '@pagespace/db/operators';
 
 function queueSelectResults(results: unknown[][]) {
   let i = 0;
@@ -108,5 +114,19 @@ describe('callerCanViewUser', () => {
     expect(await callerCanViewUser('u1', 'u2')).toBe(false);
     // 1 connection select + 2 drive-id selects; the shared-drive checks are skipped.
     expect(db.select).toHaveBeenCalledTimes(3);
+  });
+
+  it('gates driveMembers reads on isNotNull(acceptedAt) so pending invitations do not grant visibility (P1)', async () => {
+    queueSelectResults([
+      [], // no connection
+      [{ id: 'drive_a' }], // caller owns drive_a
+      [], // caller member of none (accepted)
+      [], // target not an accepted member of caller's drives
+      [], // target owns none of caller's drives
+    ]);
+    await callerCanViewUser('u1', 'u2');
+    // Both the caller's member-drive lookup and the target shared-membership
+    // lookup must compose the acceptedAt gate.
+    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
   });
 });

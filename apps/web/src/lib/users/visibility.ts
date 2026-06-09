@@ -9,19 +9,26 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, or, inArray } from '@pagespace/db/operators';
+import { eq, and, or, inArray, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 
-/** Drive ids the user owns or is a member of. */
+/**
+ * Drive ids the user owns or is an ACCEPTED member of.
+ *
+ * `driveMembers` reads used for an authorization decision must gate on
+ * `isNotNull(acceptedAt)` (repo convention — see drive-member-gate-coverage):
+ * a pending, unaccepted invitation is not an established shared context, so it
+ * must not let the invitee resolve other members' identities (nor vice versa).
+ */
 async function getUserDriveIds(userId: string): Promise<string[]> {
   const [owned, member] = await Promise.all([
     db.select({ id: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
     db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
-      .where(eq(driveMembers.userId, userId)),
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt))),
   ]);
   return Array.from(
     new Set<string>([...owned.map((d) => d.id), ...member.map((m) => m.driveId)]),
@@ -60,7 +67,11 @@ export async function callerCanViewUser(
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
     .where(
-      and(eq(driveMembers.userId, targetId), inArray(driveMembers.driveId, callerDriveIds)),
+      and(
+        eq(driveMembers.userId, targetId),
+        inArray(driveMembers.driveId, callerDriveIds),
+        isNotNull(driveMembers.acceptedAt),
+      ),
     )
     .limit(1);
   if (sharedMembership.length > 0) return true;
