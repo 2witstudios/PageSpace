@@ -6,7 +6,7 @@ import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { fetchAndComputeRestoreDiff } from '@/services/api/restore-diff-service';
 import { planPageRestoreOps, applyPageRestoreOps } from '@/services/api/restore-pages-service';
@@ -62,6 +62,7 @@ export async function POST(
     }
 
     const changeGroupId = createChangeGroupId();
+    const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
 
     // 5. Restore transaction
     const counts = await db.transaction(async tx => {
@@ -126,7 +127,7 @@ export async function POST(
       ]);
 
       const ops = planPageRestoreOps(diff, backupPageMap);
-      await applyPageRestoreOps(ops, driveId, auth.userId, backupId, changeGroupId, tx as never);
+      await applyPageRestoreOps(ops, driveId, auth.userId, backupId, changeGroupId, changeGroupType, tx as never);
 
       const permOps = planPermissionRestoreOps(backupPermRows as never[], currentPermRows, affectedPageIds);
       const memberOps = planMemberRestoreOps(backupMemberRows as never[], currentMemberRows);

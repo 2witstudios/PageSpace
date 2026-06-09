@@ -181,6 +181,7 @@ export const SPECIAL_HANDLED_TOOLS: Set<string> = new Set<string>([
 
 // pi uses lowercase tool names — these must match exactly what the pi coding agent sends.
 export const CLI_TOOL_NAMES = ['read', 'write', 'edit', 'bash', 'find', 'grep', 'ls'] as const;
+export const CLI_TOOL_SET = new Set<string>(CLI_TOOL_NAMES);
 
 export const toolRenderers: Record<string, ToolRenderer> = {
   // === DRIVE TOOLS ===
@@ -942,10 +943,9 @@ export function renderToolContent(ctx: {
   // (output != null) — otherwise a pending write/edit would show a premature
   // success card before the client has executed the tool. Server tool renderers
   // only run when parsedOutput is present for the same reason.
-  const CLI_SET = new Set<string>(CLI_TOOL_NAMES);
   const renderer = toolRenderers[toolName];
   if (renderer) {
-    const isCliTool = CLI_SET.has(toolName);
+    const isCliTool = CLI_TOOL_SET.has(toolName);
     if ((isCliTool && output != null) || parsedOutput) {
       const node = renderer({ toolName, parsedInput, parsedOutput: parsedOutput ?? {}, output, error });
       if (node != null) return node;

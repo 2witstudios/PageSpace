@@ -55,6 +55,13 @@ const fetcher = async (url: string): Promise<BackupListResponse> => {
   return r.json();
 };
 
+function sourceLabel(source: string): string {
+  if (source === 'pre_restore') return 'Safety snapshot';
+  if (source === 'scheduled') return 'Scheduled';
+  if (source === 'system') return 'System';
+  return source;
+}
+
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'ready') return 'default';
   if (status === 'failed') return 'destructive';
@@ -335,7 +342,7 @@ export default function BackupsPage() {
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>
-                        <Badge variant="outline">{backup.source}</Badge>
+                        <Badge variant="outline">{sourceLabel(backup.source)}</Badge>
                         {backup.driveName && (
                           <span className="text-sm text-muted-foreground">{backup.driveName}</span>
                         )}
