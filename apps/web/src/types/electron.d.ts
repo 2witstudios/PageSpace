@@ -30,6 +30,14 @@ export interface ElectronAPI {
       deviceToken?: string | null;
     } | null>;
     /**
+     * Begins a desktop-initiated auth flow, recording a single-use state so the
+     * returning `pagespace://auth-exchange` deep link is bound to a login this
+     * instance actually started (CSRF / session-fixation protection). Call this
+     * immediately before triggering any desktop sign-in handoff.
+     * @returns The opaque state value, or null if not on desktop / untrusted.
+     */
+    beginExchange?: () => Promise<string | null>;
+    /**
      * Persists the current authentication session in the native secure storage.
      */
     storeSession: (session: {

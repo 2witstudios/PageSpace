@@ -65,6 +65,10 @@ vi.mock('../logger', () => ({
 }));
 
 import { handleDeepLink } from '../deep-links';
+import {
+  beginAuthExchangeFlow,
+  clearAuthExchangeState,
+} from '../auth-exchange-state';
 
 describe('handleDeepLink dispatcher', () => {
   beforeEach(() => {
@@ -80,6 +84,7 @@ describe('handleDeepLink dispatcher', () => {
       mocks.state.current = mocks.mainWindow;
     });
     mocks.state.current = mocks.mainWindow;
+    clearAuthExchangeState();
   });
 
   afterEach(() => {
@@ -131,7 +136,7 @@ describe('handleDeepLink dispatcher', () => {
   });
 
   describe('given pagespace://auth-exchange (regression)', () => {
-    it('should still POST to /api/auth/desktop/exchange and never broadcast passkey:registered', async () => {
+    it('should still POST to /api/auth/desktop/exchange when a desktop flow is in progress', async () => {
       const fetchSpy = vi.fn(async () => ({
         ok: true,
         json: async () => ({
@@ -142,6 +147,8 @@ describe('handleDeepLink dispatcher', () => {
       }));
       vi.stubGlobal('fetch', fetchSpy);
 
+      // A desktop-initiated login is in progress (e.g. via auth:open-external).
+      beginAuthExchangeFlow();
       await handleDeepLink('pagespace://auth-exchange?code=code123&provider=google');
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -151,6 +158,59 @@ describe('handleDeepLink dispatcher', () => {
       );
 
       expect(mocks.webContents.send).not.toHaveBeenCalledWith('passkey:registered');
+    });
+  });
+
+  describe('given pagespace://auth-exchange with no flow in progress (L9 CSRF guard)', () => {
+    it('rejects the unsolicited exchange without making any token request', async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      // No beginAuthExchangeFlow() — simulates a drive-by deep link.
+      await handleDeepLink('pagespace://auth-exchange?code=attacker-code&provider=google');
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mocks.webContents.send).toHaveBeenCalledWith(
+        'auth-error',
+        expect.objectContaining({ error: expect.stringContaining('blocked') }),
+      );
+    });
+
+    it('rejects an exchange whose state does not match the in-progress flow', async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      beginAuthExchangeFlow(); // stored state is random; attacker guesses wrong
+      await handleDeepLink(
+        'pagespace://auth-exchange?code=c&provider=google&state=not-the-real-state',
+      );
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mocks.webContents.send).toHaveBeenCalledWith(
+        'auth-error',
+        expect.objectContaining({ error: expect.stringContaining('blocked') }),
+      );
+    });
+
+    it('consumes the flow so a replayed deep link is rejected', async () => {
+      const fetchSpy = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          sessionToken: 'sess_abc',
+          csrfToken: 'csrf_abc',
+          deviceToken: 'dev_abc',
+        }),
+      }));
+      vi.stubGlobal('fetch', fetchSpy);
+
+      beginAuthExchangeFlow();
+      await handleDeepLink('pagespace://auth-exchange?code=code123&provider=google');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // Replay: the flow was single-use, so the second attempt is rejected.
+      fetchSpy.mockClear();
+      await handleDeepLink('pagespace://auth-exchange?code=code123&provider=google');
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 

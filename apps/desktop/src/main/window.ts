@@ -5,6 +5,7 @@ import { getAppUrl } from './app-url';
 import { mainWindow, setMainWindow, isQuitting } from './state';
 import { injectDesktopStyles, injectDoubleClickHandler } from './window-injections';
 import { setupAutoUpdater } from './updater';
+import { isAllowedNavigation } from '../shared/navigation-guard';
 
 const storeAny = store as any;
 
@@ -89,12 +90,34 @@ export function createWindow(): void {
     setMainWindow(null);
   });
 
+  // Hard-block any renderer-initiated navigation away from the configured app
+  // origin (security finding H5). An XSS in the web app must not be able to
+  // point the privileged renderer at an attacker origin (which would then have
+  // the preload bridge: raw session token + MCP exec). Off-origin http(s) links
+  // are opened in the system browser instead; everything else is dropped.
+  const guardNavigation = (event: Electron.Event, url: string): void => {
+    const appOrigin = new URL(getAppUrl()).origin;
+    if (isAllowedNavigation(url, appOrigin)) return;
+    event.preventDefault();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      void shell.openExternal(url);
+    } else {
+      console.warn('[Navigation] Blocked navigation to non-app URL:', url);
+    }
+  };
+
+  window.webContents.on('will-navigate', guardNavigation);
+  window.webContents.on('will-redirect', guardNavigation);
+
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
-      shell.openExternal(url);
-      return { action: 'deny' };
+      void shell.openExternal(url);
+    } else {
+      console.warn('[Navigation] Blocked window.open for non-http(s) URL:', url);
     }
-    return { action: 'allow' };
+    // Never let the renderer spawn a new privileged window; external links open
+    // in the system browser, all other schemes are denied.
+    return { action: 'deny' };
   });
 
   if (process.env.NODE_ENV !== 'development') {

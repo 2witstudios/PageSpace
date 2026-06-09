@@ -40,7 +40,18 @@ export function useDesktopExchangeHandler() {
     newUrl.search = params.toString();
     window.history.replaceState({}, '', newUrl.toString());
 
-    // Trigger deep link
-    window.location.href = buildDesktopExchangeDeepLink(code);
+    // Bind the exchange to a flow this desktop instance starts (finding L9) so
+    // the main process accepts the returning deep link. The deep link is only
+    // fired after the flow is registered; on web (or older desktop builds) the
+    // begin call is a no-op and we fall through to firing the deep link.
+    const fire = () => {
+      window.location.href = buildDesktopExchangeDeepLink(code);
+    };
+    const beginExchange = window.electron?.auth?.beginExchange;
+    if (beginExchange) {
+      void beginExchange().finally(fire);
+    } else {
+      fire();
+    }
   }, []);
 }
