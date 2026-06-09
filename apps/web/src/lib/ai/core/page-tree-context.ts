@@ -8,8 +8,7 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
-import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
+import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildTree, formatTreeAsMarkdown, filterToSubtree, filterTreeNodesByAccess } from '@pagespace/lib/content/tree-utils';
 
@@ -83,11 +82,15 @@ export async function getPageTreeContext(
     }
 
     // Drive access alone does NOT authorize seeing every page's title/type/id:
-    // restrict the tree to the actor's per-page accessible set (the same
-    // canonical source the AI search tools use) so private-page structure never
-    // leaks into the system prompt. Ancestor-gated: an inaccessible page hides
-    // its whole subtree.
-    const accessibleIds = new Set(await accessiblePageIds(userId));
+    // restrict the tree to the user's per-page accessible set so private-page
+    // structure never leaks into the system prompt. We use the SAME source the
+    // AI search tools use (getActorAccessiblePagesInDrive → this fn) and that
+    // the page-view entry gate (getUserAccessLevel) honors — including custom
+    // drive-role grants on private pages and custom-role denials of otherwise-
+    // public pages — so the tree exactly matches what the user can actually see.
+    // Ancestor-gated: an inaccessible page hides its whole subtree.
+    const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+    const accessibleIds = new Set(accessiblePages.map(p => p.id));
     const beforeFilter = nodes.length;
     nodes = filterTreeNodesByAccess(nodes, accessibleIds);
     loggers.ai.debug('Filtered page tree by per-page access', {
