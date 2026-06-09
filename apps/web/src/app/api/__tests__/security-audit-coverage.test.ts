@@ -40,6 +40,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- Internal system endpoints ---
   ['internal/*', 'Internal service-to-service endpoints'],
+  ['cron/scheduled-backups', 'HMAC-signed internal cron job — no user session, authenticated by shared secret, executes pre-authorized backup schedules'],
   ['memory/cron', 'Internal memory cron job'],
   ['desktop-bridge/status', 'Desktop app connection status check'],
   ['provisioning-status/[slug]', 'Tenant provisioning status polling'],
@@ -99,6 +100,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
 
   // --- Drive backup sub-routes ---
+  ['drives/[driveId]/backups/schedule', 'Backup schedule GET/PATCH — owner/admin-gated settings, tier enforcement audited via isDriveOwnerOrAdmin; no sensitive data written beyond schedule config'],
   ['drives/[driveId]/backups/[backupId]', 'Read-only backup detail (pages/members/roles/files) — no data written, covered by isDriveOwnerOrAdmin check'],
   ['drives/[driveId]/backups/[backupId]/diff', 'Read-only diff preview — no data written, covered by parent backup auth'],
   ['drives/[driveId]/backups/[backupId]/download', 'Read-only JSON download — no data written, covered by getDriveBackupDetail authz'],

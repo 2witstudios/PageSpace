@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, validateDriveWidePermissions } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -66,7 +66,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { name, description, color, isDefault, permissions } = body;
+    const { name, description, color, isDefault, permissions, driveWidePermissions } = body;
 
     if (!name || !permissions) {
       return NextResponse.json({ error: 'Name and permissions are required' }, { status: 400 });
@@ -81,12 +81,17 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
 
+    if (driveWidePermissions !== undefined && !validateDriveWidePermissions(driveWidePermissions)) {
+      return NextResponse.json({ error: 'Invalid driveWidePermissions structure' }, { status: 400 });
+    }
+
     const newRole = await createDriveRole(driveId, {
       name: trimmedName,
       description,
       color,
       isDefault,
       permissions,
+      driveWidePermissions: driveWidePermissions ?? null,
     });
 
     // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
@@ -112,6 +117,7 @@ export async function POST(
       roleName: newRole.name,
       driveId,
       permissions: permissionsSummary,
+      driveWidePermissions: driveWidePermissions ?? null,
     }, actorInfo);
 
     auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleName: newRole.name, operation: 'create' } });

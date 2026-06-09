@@ -4,7 +4,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId' },
+  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   mcpTokenDrives: {
@@ -79,10 +79,31 @@ describe('getAppAccessLevel — page targets', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
       canView: true, canEdit: true, canShare: false, canDelete: false,
+    });
+  });
+
+  it('denies MCP token with driveWidePermissions:{canView:true} and no per-page entry access to a PRIVATE page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
+
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
+  });
+
+  it('grants MCP token with driveWidePermissions AND explicit per-page entry access to a PRIVATE page', async () => {
+    const perms = { [PAGE_ID]: { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
+
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
+      canView: true, canEdit: false, canShare: false, canDelete: false,
     });
   });
 });
@@ -113,7 +134,7 @@ describe('getAppAccessLevel — drive-as-root-node', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     expect(await getAppAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
       canView: false, canEdit: false, canShare: false, canDelete: false,

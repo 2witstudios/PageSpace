@@ -892,6 +892,22 @@ describe('activity-logger', () => {
       expect(capturedState.insertValues?.resourceId).toBe('d1');
     });
 
+    it('should include driveWidePermissions in newValues when passed on create', async () => {
+      const dwp = { canView: true, canEdit: false, canShare: false };
+      logRoleActivity('u1', 'create', { roleId: 'r1', driveId: 'd1', permissions: { p1: true }, driveWidePermissions: dwp }, { actorEmail: 'a@b.com' });
+      await flush();
+      expect(capturedState.insertValues?.newValues).toEqual({ permissions: { p1: true }, driveWidePermissions: dwp });
+    });
+
+    it('should include previousDriveWidePermissions in previousValues when passed on update', async () => {
+      const prevDwp = { canView: false, canEdit: false, canShare: false };
+      const newDwp = { canView: true, canEdit: true, canShare: false };
+      logRoleActivity('u1', 'update', { roleId: 'r1', driveId: 'd1', driveWidePermissions: newDwp, previousDriveWidePermissions: prevDwp }, { actorEmail: 'a@b.com' });
+      await flush();
+      expect(capturedState.insertValues?.newValues).toEqual({ driveWidePermissions: newDwp });
+      expect(capturedState.insertValues?.previousValues).toEqual({ driveWidePermissions: prevDwp });
+    });
+
     it('should not set metadata for non-reorder operations', async () => {
       logRoleActivity('u1', 'delete', { roleId: 'r1', driveId: 'd1' }, { actorEmail: 'a@b.com' });
       await flush();
