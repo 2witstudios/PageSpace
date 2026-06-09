@@ -96,7 +96,15 @@ export function createWindow(): void {
   // the preload bridge: raw session token + MCP exec). Off-origin http(s) links
   // are opened in the system browser instead; everything else is dropped.
   const guardNavigation = (event: Electron.Event, url: string): void => {
-    const appOrigin = new URL(getAppUrl()).origin;
+    let appOrigin: string;
+    try {
+      appOrigin = new URL(getAppUrl()).origin;
+    } catch {
+      // Configured app URL is unparseable — fail closed and block.
+      event.preventDefault();
+      console.warn('[Navigation] Blocked navigation; app origin unresolved for URL:', url);
+      return;
+    }
     if (isAllowedNavigation(url, appOrigin)) return;
     event.preventDefault();
     if (url.startsWith('http://') || url.startsWith('https://')) {
