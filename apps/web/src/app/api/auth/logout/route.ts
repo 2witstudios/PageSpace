@@ -52,12 +52,7 @@ export async function POST(req: Request) {
   // By-value revocation needs no authenticated session; by-device requires the
   // session-derived userId (so it only fires for the caller's own device).
   // A failure here must never break logout itself.
-  const revocationPlan = planLogoutDeviceRevocation({
-    deviceToken: typeof deviceToken === 'string' ? deviceToken : null,
-    userId,
-    deviceId: typeof deviceId === 'string' ? deviceId : null,
-    platform,
-  });
+  const revocationPlan = planLogoutDeviceRevocation({ deviceToken, userId, deviceId, platform });
 
   if (revocationPlan.strategy !== 'none') {
     try {
@@ -74,12 +69,20 @@ export async function POST(req: Request) {
         deviceTokensRevoked = count > 0;
       }
 
-      if (deviceTokensRevoked && userId) {
-        auditRequest(req, {
-          eventType: 'auth.token.revoked',
-          userId,
-          details: { tokenType: 'device', reason: 'user_logout' },
-        });
+      if (deviceTokensRevoked) {
+        if (userId) {
+          auditRequest(req, {
+            eventType: 'auth.token.revoked',
+            userId,
+            details: { tokenType: 'device', reason: 'user_logout' },
+          });
+        } else {
+          // By-value revocation without an active session (expired-session
+          // logout). No userId for an audit row, but record a trail.
+          loggers.auth.info('Device token revoked on logout without active session', {
+            strategy: revocationPlan.strategy,
+          });
+        }
       }
     } catch (error) {
       loggers.auth.error('Failed to revoke device token on logout', {

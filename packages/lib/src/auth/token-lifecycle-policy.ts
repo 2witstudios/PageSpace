@@ -80,11 +80,14 @@ export function shouldAllowDeviceRefresh(
 
 /**
  * TTL for desktop websocket tokens. Substantially shorter than the previous
- * 90-day lifetime: the desktop client re-fetches a ws-token automatically on
- * (re)connect, so a short-lived token costs nothing operationally while sharply
- * limiting the blast radius of a leaked token.
+ * 90-day lifetime (~13× shorter) while avoiding frequent reconnects on
+ * always-on desktops: the server already revalidates every live ws connection
+ * against the session store every few minutes, so an actual revocation/logout
+ * is detected long before this cap regardless of its value — the TTL is just
+ * the hard ceiling on a leaked token's blast radius. The desktop client
+ * re-fetches a ws-token automatically on (re)connect.
  */
-export const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const WS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /** Narrow scope dedicated to desktop websocket auth (not the `mcp:*` wildcard). */
 export const WS_TOKEN_SCOPE = 'mcp:ws';
@@ -117,12 +120,14 @@ export function getWsTokenPolicy(): WsTokenPolicy {
 // ---------------------------------------------------------------------------
 
 export interface LogoutRevocationInput {
-  /** Raw device token value, if the client sends it on logout. */
-  deviceToken?: string | null;
+  /** Raw device token value, if the client sends it on logout. Accepts
+   * `unknown` so callers can pass un-narrowed request-body fields directly —
+   * this function does all the type narrowing. */
+  deviceToken?: unknown;
   /** Authenticated user id from the session. */
   userId?: string | null;
   /** Device fingerprint the client claims to be logging out. */
-  deviceId?: string | null;
+  deviceId?: unknown;
   /** Device platform the client claims to be logging out. */
   platform?: unknown;
 }

@@ -112,7 +112,7 @@ describe('/api/auth/ws-token', () => {
         userId: 'test-user-id',
         type: 'mcp',
         scopes: ['mcp:ws'],
-        expiresInMs: 24 * 60 * 60 * 1000,
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
         createdByService: 'desktop',
         createdByIp: '192.168.1.100',
       });
