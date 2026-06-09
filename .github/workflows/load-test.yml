@@ -95,7 +95,7 @@ jobs:
             grafana/k6 run /scripts/tests/load/auth-baseline.k6.js
 
       - name: Upload load test results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
           name: load-test-results-${{ github.run_id }}
