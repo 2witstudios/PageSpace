@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Agent } from 'undici';
 
 // Mock dependencies
 const mockLookupFn = vi.hoisted(() => vi.fn());
@@ -554,6 +555,22 @@ describe('web_fetch', () => {
 
       expect(result.success).toBe(false);
       expect(String(result.error)).toMatch(/too many redirects/i);
+    });
+
+    it('closes the pinned dispatcher when fetch rejects (no socket/agent leak)', async () => {
+      const closeSpy = vi.spyOn(Agent.prototype, 'close');
+      (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNRESET'));
+
+      const result = await webSearchTools.web_fetch!.execute!(
+        { url: 'https://example.com', maxLength: 20000 },
+        mockContext('user-123')
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      // The per-hop dispatcher is created then closed on the fetch rejection path,
+      // not leaked (the caller's finally never sees it because we never returned).
+      expect(closeSpy).toHaveBeenCalled();
+      closeSpy.mockRestore();
     });
   });
 });

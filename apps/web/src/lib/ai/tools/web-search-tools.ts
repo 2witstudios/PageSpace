@@ -228,7 +228,16 @@ async function ssrfSafeFetch(
     const init: PinnedFetchInit = { headers, redirect: 'manual', signal };
     if (dispatcher) init.dispatcher = dispatcher;
 
-    const response = await fetch(currentUrl, init);
+    let response: Response;
+    try {
+      response = await fetch(currentUrl, init);
+    } catch (err) {
+      // fetch rejected (timeout/TLS/connection reset): this hop's dispatcher is
+      // still local and would leak — the caller only owns the dispatcher we
+      // return on success. Close it here before propagating.
+      await closeDispatcher(dispatcher);
+      throw err;
+    }
 
     if (!REDIRECT_STATUSES.has(response.status)) {
       return { response, dispatcher };
