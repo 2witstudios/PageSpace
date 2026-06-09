@@ -69,10 +69,14 @@ export async function POST(
       if (!diffResult.ok) throw new Error('Failed to compute diff');
       const { diff, backupPageMap } = diffResult;
 
+      // Include unchanged pages so their ACLs are also replaced — page hashes
+      // don't capture permissions, so a page with unchanged content can still
+      // have stale ACLs from after the backup was taken.
       const affectedPageIds = [
         ...diff.toCreate.map(p => p.pageId),
         ...diff.toOverwrite.map(p => p.pageId),
         ...diff.toOrphan.map(p => p.pageId),
+        ...diff.unchanged.map(p => p.pageId),
       ];
 
       // Fetch backup and current perm/member/role data in parallel before applying writes
@@ -91,6 +95,9 @@ export async function POST(
           canEdit: driveBackupPermissions.canEdit,
           canShare: driveBackupPermissions.canShare,
           canDelete: driveBackupPermissions.canDelete,
+          grantedBy: driveBackupPermissions.grantedBy,
+          note: driveBackupPermissions.note,
+          expiresAt: driveBackupPermissions.expiresAt,
         }).from(driveBackupPermissions).where(eq(driveBackupPermissions.backupId, backupId)),
         tx.select({
           userId: driveBackupMembers.userId,
@@ -125,7 +132,7 @@ export async function POST(
       const memberOps = planMemberRestoreOps(backupMemberRows as never[], currentMemberRows);
       const roleOps = planRoleRestoreOps(backupRoleRows as never[], currentRoleRows);
 
-      const { skippedMembers } = await applyPermRestoreOps(
+      const { skippedMembers, skippedPermissions } = await applyPermRestoreOps(
         permOps,
         memberOps,
         roleOps,
@@ -138,6 +145,7 @@ export async function POST(
         pagesOverwritten: diff.toOverwrite.length,
         pagesOrphaned: diff.toOrphan.length,
         skippedMembers,
+        skippedPermissions,
       };
     });
 

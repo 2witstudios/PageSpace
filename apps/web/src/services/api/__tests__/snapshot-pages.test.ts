@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSnapshotPageTree, sortSnapshotNodes } from '../snapshot-pages-service';
-import type { SnapshotPageNode } from '../snapshot-pages-service';
+import { buildSnapshotPageTree } from '../snapshot-pages-service';
 
 // ============================================================================
 // buildSnapshotPageTree — pure function tests (zero mocks, zero I/O)
@@ -71,45 +70,6 @@ describe('buildSnapshotPageTree', () => {
   });
 });
 
-// ============================================================================
-// sortSnapshotNodes — pure function tests
-// ============================================================================
-
-const node = (pageId: string, position: number, children: SnapshotPageNode[] = []): SnapshotPageNode => ({
-  pageId,
-  title: null,
-  type: 'document',
-  parentId: null,
-  position,
-  isTrashed: false,
-  stateHash: null,
-  children,
-});
-
-describe('sortSnapshotNodes', () => {
-  it('empty array → []', () => {
-    expect(sortSnapshotNodes([])).toEqual([]);
-  });
-
-  it('sorts root nodes by position ascending', () => {
-    const result = sortSnapshotNodes([node('b', 2), node('a', 1)]);
-    expect(result[0].pageId).toBe('a');
-    expect(result[1].pageId).toBe('b');
-  });
-
-  it('recurses into children', () => {
-    const parent = node('parent', 0, [node('c2', 2), node('c1', 1)]);
-    const result = sortSnapshotNodes([parent]);
-    expect(result[0].children[0].pageId).toBe('c1');
-    expect(result[0].children[1].pageId).toBe('c2');
-  });
-
-  it('does not mutate input array', () => {
-    const input = [node('b', 2), node('a', 1)];
-    sortSnapshotNodes(input);
-    expect(input[0].pageId).toBe('b');
-  });
-});
 
 // ============================================================================
 // Route tests — see apps/web/src/app/api/drives/[driveId]/backups/[backupId]/pages/__tests__/route.test.ts

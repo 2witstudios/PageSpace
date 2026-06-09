@@ -6,6 +6,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
@@ -18,6 +21,7 @@ import { GET } from '../route';
 import { getExportContentDisposition } from '../utils';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { streamBackupExport } from '@/services/api/backup-export-service';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -106,5 +110,22 @@ describe('GET /api/drives/[driveId]/backups/[backupId]/export', () => {
   it('calls streamBackupExport with correct backupId, driveId, userId', async () => {
     await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(streamBackupExport).toHaveBeenCalledWith(backupId, driveId, userId);
+  });
+
+  it('calls auditRequest with operation: export_backup on success', async () => {
+    await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'data.read',
+        details: expect.objectContaining({ operation: 'export_backup', backupId }),
+      }),
+    );
+  });
+
+  it('does not call auditRequest when streamBackupExport throws', async () => {
+    vi.mocked(streamBackupExport).mockRejectedValue(Object.assign(new Error('Access denied'), { status: 403 }));
+    await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
+    expect(auditRequest).not.toHaveBeenCalled();
   });
 });

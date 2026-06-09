@@ -50,12 +50,19 @@ export async function GET(
 
   const url = new URL(request.url);
   const includeContent = url.searchParams.get('includeContent') === 'true';
+  const filterPageId = url.searchParams.get('pageId') ?? null;
 
   type RowWithContent = (typeof pageRows)[number] & { content?: string };
   const rowsWithContent: RowWithContent[] = pageRows.map(r => ({ ...r }));
 
   if (includeContent) {
-    const queue = [...rowsWithContent];
+    // When a specific pageId is requested, only fetch content for that page to
+    // avoid loading the entire drive's content on every row click in the UI.
+    const rowsToFetch = filterPageId
+      ? rowsWithContent.filter(r => r.pageId === filterPageId)
+      : rowsWithContent;
+
+    const queue = [...rowsToFetch];
     const workers = Array.from({ length: Math.min(CONCURRENCY_CAP, queue.length) }, async () => {
       while (queue.length > 0) {
         const row = queue.shift();

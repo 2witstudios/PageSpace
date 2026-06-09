@@ -11,7 +11,7 @@ describe('validateInferenceRequest', () => {
       given: 'a valid ps-agent model URI and non-empty messages array',
       should: 'return ok:true with the parsed pageId, messages, stream:true, and no driveContext',
       actual: result,
-      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined, clientTools: undefined, disableServerTools: false } },
+      expected: { ok: true, data: { pageId: 'page-123', model: 'ps-agent://page-123', messages, stream: true, driveContext: undefined, clientTools: undefined, disableServerTools: false, clientManagesHistory: false, conversationId: undefined } },
     });
   });
 

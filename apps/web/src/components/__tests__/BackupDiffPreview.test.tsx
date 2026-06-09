@@ -115,5 +115,13 @@ describe('BackupDiffPreview', () => {
     fireEvent.click(screen.getByText('Preview restore'));
     expect(screen.queryByText('Restore now')).toBeNull();
   });
+
+  it('shows toast.error on fetch failure and returns to idle', async () => {
+    vi.mocked(global.fetch).mockRejectedValue(new Error('network error'));
+    render(<BackupDiffPreview driveId={driveId} backup={{ id: backupId, status: 'ready' }} onRestore={vi.fn()} />);
+    fireEvent.click(screen.getByText('Preview restore'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to load diff preview'));
+    expect(screen.queryByText('Restore now')).toBeNull();
+  });
 });
 */

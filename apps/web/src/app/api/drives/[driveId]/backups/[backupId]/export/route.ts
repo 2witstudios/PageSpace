@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { streamBackupExport } from '@/services/api/backup-export-service';
 import { getExportContentDisposition } from './utils';
 
@@ -25,6 +26,14 @@ export async function GET(
     }
     return NextResponse.json({ error: 'Export failed' }, { status: 500 });
   }
+
+  auditRequest(request, {
+    eventType: 'data.read',
+    userId: auth.userId,
+    resourceType: 'drive',
+    resourceId: driveId,
+    details: { operation: 'export_backup', backupId },
+  });
 
   const readable = new ReadableStream<Buffer>({
     async start(controller) {

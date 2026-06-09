@@ -81,7 +81,7 @@ export default function SnapshotPage({
     setLoadingContent(true);
     try {
       const r = await fetchWithAuth(
-        `/api/drives/${driveId}/backups/${resolvedBackupId}/pages?includeContent=true`,
+        `/api/drives/${driveId}/backups/${resolvedBackupId}/pages?includeContent=true&pageId=${node.pageId}`,
       );
       if (!r.ok) return;
       const result = (await r.json()) as PagesResponse;

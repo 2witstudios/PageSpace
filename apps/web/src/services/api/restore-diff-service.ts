@@ -17,6 +17,7 @@ export type BackupPageRow = {
   parentId: string | null;
   position: number | null;
   isTrashed: boolean;
+  trashedAt: Date | null;
   pageVersionId: string | null;
   contentRef: string | null;
   stateHash: string | null;
@@ -107,6 +108,7 @@ export async function fetchAndComputeRestoreDiff(
       parentId: driveBackupPages.parentId,
       position: driveBackupPages.position,
       isTrashed: driveBackupPages.isTrashed,
+      trashedAt: driveBackupPages.trashedAt,
       pageVersionId: driveBackupPages.pageVersionId,
       contentRef: pageVersions.contentRef,
       stateHash: pageVersions.stateHash,
@@ -125,7 +127,7 @@ export async function fetchAndComputeRestoreDiff(
       position: pages.position,
     })
     .from(pages)
-    .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+    .where(eq(pages.driveId, driveId));
 
   const backupPageMap = new Map<string, BackupPageRow>(
     backupPageRows.map(row => [row.pageId, row as BackupPageRow]),

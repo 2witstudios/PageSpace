@@ -92,14 +92,28 @@ export async function applyPermRestoreOps(
     await tx.insert(pagePermissions).values(perm);
   }
 
-  // 3. Delete current drive members
+  // 3. Delete current drive members (releases FK dep on driveRoles.customRoleId)
   if (memberOps.toDelete.length > 0) {
     await tx.delete(driveMembers).where(
       and(eq(driveMembers.driveId, driveId), inArray(driveMembers.userId, memberOps.toDelete)),
     );
   }
 
-  // 4. Insert backup members (skip if user no longer exists)
+  // 4. Delete current drive roles — done before inserting backup members so that
+  //    members with a customRoleId referencing restored roles can be inserted safely.
+  if (roleOps.toDelete.length > 0) {
+    await tx.delete(driveRoles).where(
+      and(eq(driveRoles.driveId, driveId), inArray(driveRoles.id, roleOps.toDelete)),
+    );
+  }
+
+  // 5. Insert backup roles — map roleId → id to match the live driveRoles schema
+  for (const role of roleOps.toInsert) {
+    const { roleId, ...rest } = role as { roleId: string; [key: string]: unknown };
+    await tx.insert(driveRoles).values({ id: roleId, driveId, ...rest });
+  }
+
+  // 6. Insert backup members — roles are present now, so customRoleId FKs resolve
   for (const member of memberOps.toInsert) {
     const existing = await tx.select().from(users).where(eq(users.id, member.userId));
     if (!existing || existing.length === 0) {
@@ -107,19 +121,6 @@ export async function applyPermRestoreOps(
       continue;
     }
     await tx.insert(driveMembers).values({ driveId, ...member });
-  }
-
-  // 5. Delete current drive roles
-  if (roleOps.toDelete.length > 0) {
-    await tx.delete(driveRoles).where(
-      and(eq(driveRoles.driveId, driveId), inArray(driveRoles.id, roleOps.toDelete)),
-    );
-  }
-
-  // 6. Insert backup roles — map roleId → id to match the live driveRoles schema
-  for (const role of roleOps.toInsert) {
-    const { roleId, ...rest } = role as { roleId: string; [key: string]: unknown };
-    await tx.insert(driveRoles).values({ id: roleId, driveId, ...rest });
   }
 
   return { skippedMembers, skippedPermissions };

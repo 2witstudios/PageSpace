@@ -67,7 +67,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools } = validation.data;
+  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools, clientManagesHistory } = validation.data;
 
   // Build the caller's client-side tool set. Tools registered without `execute` are returned
   // to the caller as native tool_calls — the SDK pauses, the caller executes locally, and the
@@ -114,11 +114,33 @@ export async function POST(request: Request): Promise<Response> {
   // 5b. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
   // into another user's thread.
+  //
+  // client_manages_history callers (e.g. pi) manage their own context window and may
+  // supply a brand-new conversation_id. When the row doesn't exist yet we auto-create it
+  // here (not deferred) so we can immediately re-read and catch a TOCTOU race where two
+  // requests collide on the same new ID. We still 403 on wrong owner and 404 on inactive.
   if (incomingConversationId) {
     const conv = await conversationRepository.getConversation(incomingConversationId);
-    const convAccess = validateConversationAccess(conv, authResult.userId);
-    if (!convAccess.ok) {
-      return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
+    if (clientManagesHistory) {
+      if (conv) {
+        if (!conv.isActive) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
+        if (conv.userId !== authResult.userId) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        }
+      } else {
+        await conversationRepository.createConversation(incomingConversationId, authResult.userId, pageId);
+        const owned = await conversationRepository.getConversation(incomingConversationId);
+        if (!owned || owned.userId !== authResult.userId) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        }
+      }
+    } else {
+      const convAccess = validateConversationAccess(conv, authResult.userId);
+      if (!convAccess.ok) {
+        return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
+      }
     }
   }
 
@@ -217,7 +239,7 @@ export async function POST(request: Request): Promise<Response> {
   const userMessage = messages[messages.length - 1];
 
   let inferenceMessages = messages;
-  if (isThreadMode) {
+  if (isThreadMode && !clientManagesHistory) {
     const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
     inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
   }

@@ -73,6 +73,7 @@ const successTxResult = {
   pagesOverwritten: 0,
   pagesOrphaned: 0,
   skippedMembers: [],
+  skippedPermissions: [],
 };
 
 describe('POST /api/drives/[driveId]/backups/[backupId]/restore', () => {
@@ -152,8 +153,16 @@ describe('POST /api/drives/[driveId]/backups/[backupId]/restore', () => {
         pagesOverwritten: expect.any(Number),
         pagesOrphaned: expect.any(Number),
         skippedMembers: expect.any(Array),
+        skippedPermissions: expect.any(Array),
       }),
     });
+  });
+
+  it('response counts includes skippedPermissions array', async () => {
+    vi.mocked(db.transaction).mockResolvedValue({ ...successTxResult, skippedPermissions: ['u-ghost'] } as never);
+    const res = await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
+    const body = await res.json();
+    expect(body.counts.skippedPermissions).toEqual(['u-ghost']);
   });
 
   it('calls auditRequest with operation: restore_backup on success', async () => {

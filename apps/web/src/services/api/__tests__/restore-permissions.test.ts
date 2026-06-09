@@ -160,4 +160,44 @@ describe('applyPermRestoreOps', () => {
     expect(tx.delete).toHaveBeenCalled();
     expect(tx.insert).toHaveBeenCalled();
   });
+
+  it('roles are inserted before members (FK ordering for customRoleId)', async () => {
+    const permOps = { toDelete: [], toInsert: [] };
+    const memberOps = { toDelete: [], toInsert: [{ userId: 'u1', role: 'MEMBER' }] };
+    const roleOps = { toDelete: [], toInsert: [{ roleId: 'r1', name: 'Admin' }] };
+    const tx = makeTx(true);
+
+    await applyPermRestoreOps(permOps, memberOps, roleOps, driveId, tx as never);
+
+    // All insert().values() calls share the same mock values fn — check call order
+    const valuesArgs = tx.insert.mock.results[0].value.values.mock.calls.map(
+      (c: unknown[]) => c[0] as Record<string, unknown>,
+    );
+    const roleIdx = valuesArgs.findIndex((a: Record<string, unknown>) => a.id === 'r1');
+    const memberIdx = valuesArgs.findIndex((a: Record<string, unknown>) => a.userId === 'u1');
+    expect(roleIdx).not.toBe(-1);
+    expect(memberIdx).not.toBe(-1);
+    expect(roleIdx).toBeLessThan(memberIdx);
+  });
+
+  it('inserted permission preserves grantedBy, note, expiresAt from backup row', async () => {
+    const expiresAt = new Date('2025-12-31');
+    const permOps = {
+      toDelete: [],
+      toInsert: [{
+        pageId: 'page-a', userId: 'u1', canView: true, canEdit: false, canShare: false, canDelete: false,
+        grantedBy: 'admin-1', note: 'restored from backup', expiresAt,
+      }],
+    };
+    const memberOps = { toDelete: [], toInsert: [] };
+    const roleOps = { toDelete: [], toInsert: [] };
+    const tx = makeTx(true);
+
+    await applyPermRestoreOps(permOps, memberOps, roleOps, driveId, tx as never);
+
+    const insertedPerm = tx.insert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
+    expect(insertedPerm.grantedBy).toBe('admin-1');
+    expect(insertedPerm.note).toBe('restored from backup');
+    expect(insertedPerm.expiresAt).toBe(expiresAt);
+  });
 });

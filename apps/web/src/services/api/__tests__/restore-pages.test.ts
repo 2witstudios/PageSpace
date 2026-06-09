@@ -27,20 +27,21 @@ const makeDiff = (overrides: Partial<RestoreDiff> = {}): RestoreDiff => ({
   ...overrides,
 });
 
-const makeRow = (pageId: string, contentRef: string | null = 'ref-1'): BackupPageRow => ({
+const makeRow = (pageId: string, contentRef: string | null = 'ref-1', isTrashed = false): BackupPageRow => ({
   pageId,
   title: 'Test Page',
   type: 'document',
   parentId: null,
   position: 0,
-  isTrashed: false,
+  isTrashed,
+  trashedAt: isTrashed ? new Date('2024-01-01') : null,
   pageVersionId: contentRef ? 'pv-1' : null,
   contentRef,
   stateHash: 'hash-1',
 });
 
 describe('planPageRestoreOps', () => {
-  it('toCreate → op create with correct fields', () => {
+  it('toCreate → op create with correct fields including isTrashed', () => {
     const diff = makeDiff({ toCreate: [{ pageId: 'p1', title: 'Page 1', type: 'document' }] });
     const map = new Map([['p1', makeRow('p1', 'ref-1')]]);
     const ops = planPageRestoreOps(diff, map);
@@ -51,7 +52,17 @@ describe('planPageRestoreOps', () => {
       title: 'Test Page',
       type: 'document',
       contentRef: 'ref-1',
+      isTrashed: false,
+      trashedAt: null,
     });
+  });
+
+  it('toCreate with trashed backup row → propagates isTrashed: true and trashedAt', () => {
+    const diff = makeDiff({ toCreate: [{ pageId: 'p1', title: 'Page 1', type: 'document' }] });
+    const map = new Map([['p1', makeRow('p1', 'ref-1', true)]]);
+    const ops = planPageRestoreOps(diff, map);
+    expect(ops[0]).toMatchObject({ op: 'create', isTrashed: true });
+    expect((ops[0] as { trashedAt: Date | null }).trashedAt).not.toBeNull();
   });
 
   it('toOverwrite → op overwrite', () => {
@@ -136,9 +147,21 @@ describe('applyPageRestoreOps', () => {
     });
   });
 
+  const makeOp = (overrides: Partial<Parameters<typeof planPageRestoreOps>[0]['toCreate'][0]> & { op: 'create' | 'overwrite'; pageId: string; isTrashed?: boolean; trashedAt?: Date | null; contentRef?: string | null } = { op: 'create', pageId: 'p1' }) => ({
+    op: overrides.op,
+    pageId: overrides.pageId,
+    title: 'T',
+    type: 'document',
+    parentId: null,
+    position: 0,
+    contentRef: overrides.contentRef !== undefined ? overrides.contentRef : 'ref-1',
+    isTrashed: overrides.isTrashed ?? false,
+    trashedAt: overrides.trashedAt ?? null,
+  });
+
   it('create with non-null contentRef → readPageContent called, createPageVersion called with source restore', async () => {
     vi.mocked(readPageContent).mockResolvedValue('page content');
-    const ops = [{ op: 'create' as const, pageId: 'p1', title: 'T', type: 'document', parentId: null, position: 0, contentRef: 'ref-1' }];
+    const ops = [makeOp({ op: 'create', pageId: 'p1', contentRef: 'ref-1' })];
     const tx = makeTx();
 
     await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
@@ -151,7 +174,7 @@ describe('applyPageRestoreOps', () => {
   });
 
   it('create with null contentRef → readPageContent not called, createPageVersion called with empty content', async () => {
-    const ops = [{ op: 'create' as const, pageId: 'p2', title: 'T', type: 'document', parentId: null, position: 0, contentRef: null }];
+    const ops = [makeOp({ op: 'create', pageId: 'p2', contentRef: null })];
     const tx = makeTx();
 
     await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
@@ -163,18 +186,44 @@ describe('applyPageRestoreOps', () => {
     );
   });
 
-  it('overwrite → tx.update called, createPageVersion called', async () => {
+  it('overwrite → tx.update called with stateHash, createPageVersion called', async () => {
     vi.mocked(readPageContent).mockResolvedValue('content');
-    const ops = [{ op: 'overwrite' as const, pageId: 'p3', title: 'T', type: 'document', parentId: null, position: 0, contentRef: 'ref-3' }];
+    const ops = [makeOp({ op: 'overwrite', pageId: 'p3', contentRef: 'ref-3' })];
     const tx = makeTx();
 
     await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
 
     expect(tx.update).toHaveBeenCalled();
+    const setArgs = tx.update.mock.results[0].value.set.mock.calls[0][0] as Record<string, unknown>;
+    expect(setArgs).toHaveProperty('stateHash');
     expect(createPageVersion).toHaveBeenCalledWith(
       expect.objectContaining({ pageId: 'p3', source: 'restore' }),
       expect.anything(),
     );
+  });
+
+  it('create → tx.insert called with stateHash from computePageStateHash', async () => {
+    vi.mocked(readPageContent).mockResolvedValue('content');
+    const ops = [makeOp({ op: 'create', pageId: 'p1' })];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+
+    const insertArgs = tx.insert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
+    expect(insertArgs).toHaveProperty('stateHash', 'hash-xyz');
+  });
+
+  it('create with isTrashed: true → insert propagates isTrashed and trashedAt', async () => {
+    vi.mocked(readPageContent).mockResolvedValue('');
+    const trashedAt = new Date('2024-03-01');
+    const ops = [makeOp({ op: 'create', pageId: 'p1', contentRef: null, isTrashed: true, trashedAt })];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+
+    const insertArgs = tx.insert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
+    expect(insertArgs.isTrashed).toBe(true);
+    expect(insertArgs.trashedAt).toBe(trashedAt);
   });
 
   it('soft-delete → tx.update sets isTrashed true, readPageContent and createPageVersion not called', async () => {
@@ -188,13 +237,16 @@ describe('applyPageRestoreOps', () => {
     expect(createPageVersion).not.toHaveBeenCalled();
   });
 
-  it('readPageContent rejects → applyPageRestoreOps rejects (no swallowing)', async () => {
+  it('readPageContent rejects during prefetch → uses empty content (S3 failures are tolerated)', async () => {
     vi.mocked(readPageContent).mockRejectedValue(new Error('S3 error'));
-    const ops = [{ op: 'create' as const, pageId: 'p5', title: 'T', type: 'document', parentId: null, position: 0, contentRef: 'ref-5' }];
+    const ops = [makeOp({ op: 'create', pageId: 'p5', contentRef: 'ref-5' })];
     const tx = makeTx();
 
-    await expect(
-      applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never),
-    ).rejects.toThrow('S3 error');
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+
+    expect(createPageVersion).toHaveBeenCalledWith(
+      expect.objectContaining({ pageId: 'p5', content: '' }),
+      expect.anything(),
+    );
   });
 });

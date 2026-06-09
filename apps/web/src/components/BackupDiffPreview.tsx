@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { RestoreDiff } from '@/services/api/restore-diff-service';
@@ -46,12 +47,14 @@ export function BackupDiffPreview({ driveId, backup, onRestore }: BackupDiffPrev
         `/api/drives/${driveId}/backups/${backup.id}/diff`,
       );
       if (!res.ok) {
+        toast.error('Failed to load diff preview');
         setPhase({ name: 'idle' });
         return;
       }
       const { diff } = (await res.json()) as { diff: RestoreDiff };
       setPhase({ name: 'loaded', diff, summary: buildDiffSummary(diff) });
     } catch {
+      toast.error('Failed to load diff preview');
       setPhase({ name: 'idle' });
     }
   }

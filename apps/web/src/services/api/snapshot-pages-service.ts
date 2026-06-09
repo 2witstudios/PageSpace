@@ -57,9 +57,3 @@ function sortInPlace(nodes: SnapshotPageNode[]): void {
     sortInPlace(node.children);
   }
 }
-
-export function sortSnapshotNodes(nodes: SnapshotPageNode[]): SnapshotPageNode[] {
-  return [...nodes]
-    .sort((a, b) => a.position - b.position)
-    .map(node => ({ ...node, children: sortSnapshotNodes(node.children) }));
-}

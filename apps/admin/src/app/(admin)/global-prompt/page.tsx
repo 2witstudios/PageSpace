@@ -5,6 +5,7 @@ import { MessageSquare, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export default function AdminGlobalPromptPage() {
+  // NEXT_PUBLIC_WEB_APP_URL is baked in at build time; falls back to localhost for local dev only.
   const webAppUrl = process.env.NEXT_PUBLIC_WEB_APP_URL ?? 'http://localhost:3000';
 
   return (

@@ -127,31 +127,27 @@ export async function streamBackupExport(
     archive.pipe(passthrough);
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
 
-    const contentMap = new Map<string, Buffer>();
-
+    // Append each page's content directly inside the bounded worker loop so
+    // memory usage stays proportional to CONCURRENCY_CAP × max-page-size rather
+    // than the entire backup.  archiver.append() is synchronous (enqueues an
+    // entry internally), so concurrent calls from workers are safe.
     await withConcurrencyLimit(
       pageRows,
       async row => {
+        let content: Buffer;
         if (!row.contentRef) {
-          contentMap.set(row.pageId, Buffer.from('', 'utf-8'));
-          return;
+          content = Buffer.from('', 'utf-8');
+        } else {
+          try {
+            content = Buffer.from(await readPageContent(row.contentRef), 'utf-8');
+          } catch (err) {
+            content = Buffer.from(JSON.stringify({ error: (err as Error).message }), 'utf-8');
+          }
         }
-        try {
-          const content = await readPageContent(row.contentRef);
-          contentMap.set(row.pageId, Buffer.from(content, 'utf-8'));
-        } catch (err) {
-          const errorContent = JSON.stringify({ error: (err as Error).message });
-          contentMap.set(row.pageId, Buffer.from(errorContent, 'utf-8'));
-        }
+        archive.append(content, { name: `${row.pageId}.txt` });
       },
       CONCURRENCY_CAP,
     );
-
-    for (const row of pageRows) {
-      archive.append(contentMap.get(row.pageId) ?? Buffer.from('', 'utf-8'), {
-        name: `${row.pageId}.txt`,
-      });
-    }
 
     archive.finalize();
 

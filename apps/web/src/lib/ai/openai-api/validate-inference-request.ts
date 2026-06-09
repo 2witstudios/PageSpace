@@ -19,6 +19,7 @@ export interface ValidatedInferenceRequest {
   conversationId?: string;
   clientTools?: OpenAIToolDefinition[];
   disableServerTools?: boolean;
+  clientManagesHistory?: boolean;
 }
 
 export type ValidationResult =
@@ -241,6 +242,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
   }
 
   const disableServerTools = raw.disable_server_tools === true;
+  const clientManagesHistory = raw.client_manages_history === true;
 
   return {
     ok: true,
@@ -253,6 +255,7 @@ export const validateInferenceRequest = (body: unknown): ValidationResult => {
       conversationId,
       clientTools,
       disableServerTools,
+      clientManagesHistory,
     },
   };
 };
