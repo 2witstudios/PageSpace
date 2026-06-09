@@ -46,6 +46,10 @@ export function getManagedProviderKey(provider: string): ManagedProviderKey | nu
       const baseUrl = process.env.AZURE_OPENAI_ENDPOINT;
       return apiKey && baseUrl ? { apiKey, baseUrl } : null;
     }
+    case 'glm': {
+      const apiKey = process.env.GLM_CODER_DEFAULT_API_KEY;
+      return apiKey ? { apiKey } : null;
+    }
     default:
       return null;
   }
@@ -75,6 +79,8 @@ export const ALL_PROVIDER_NAMES = [
   'ollama',
   'lmstudio',
   'azure_openai',
+  // Direct providers (own credentials, not OpenRouter-backed)
+  'glm',
 ] as const;
 export type ProviderName = (typeof ALL_PROVIDER_NAMES)[number];
 

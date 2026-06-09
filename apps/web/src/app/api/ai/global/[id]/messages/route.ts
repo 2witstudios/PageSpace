@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { requiresProSubscription, createSubscriptionRequiredResponse } from '@/lib/subscription/rate-limit-middleware';
+import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -419,6 +420,9 @@ export async function POST(
 
     // Free users are limited to the free-model allowlist; defends against a model id
     // submitted directly in the request bypassing the settings-time gate.
+    if (ADMIN_ONLY_PROVIDERS.has(currentProvider) && auth.role !== 'admin') {
+      return createAdminRestrictedResponse();
+    }
     if (requiresProSubscription(currentProvider, currentModel, userSubscriptionTier, auth.role === 'admin')) {
       loggers.api.warn('Global Assistant Chat API: paid plan required for model', {
         userId: maskIdentifier(userId),

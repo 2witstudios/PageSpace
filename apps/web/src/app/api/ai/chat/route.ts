@@ -10,7 +10,7 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
@@ -455,9 +455,13 @@ export async function POST(request: Request) {
       .catch(() => [] as { displayName: string | null }[]);
 
     // Subscription gate: free users are limited to the free-model allowlist.
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    const { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
     const isAdminUser = user?.role === 'admin';
+
+    if (ADMIN_ONLY_PROVIDERS.has(currentProvider) && !isAdminUser) {
+      return createAdminRestrictedResponse();
+    }
 
     // Check if the selected model requires a paid plan
     if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier, isAdminUser)) {
@@ -1300,6 +1304,9 @@ async function validateProviderModel(
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const isAdminUser = user?.role === 'admin';
+    if (ADMIN_ONLY_PROVIDERS.has(provider) && !isAdminUser) {
+      return { valid: false, reason: 'This provider is restricted to administrators.' };
+    }
     if (requiresProSubscription(provider, model, user?.subscriptionTier, isAdminUser)) {
       return {
         valid: false,

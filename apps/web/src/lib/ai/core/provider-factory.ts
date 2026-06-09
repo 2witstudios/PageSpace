@@ -173,6 +173,15 @@ export async function createAIProvider(
         baseURL: managed.baseUrl,
       });
       model = azureProvider(currentModel);
+    } else if (currentProvider === 'glm') {
+      const managed = getManagedProviderKey('glm');
+      if (!managed?.apiKey) return notConfigured('GLM Coder Plan');
+      const glmProvider = createOpenAICompatible({
+        name: 'glm',
+        apiKey: managed.apiKey,
+        baseURL: 'https://api.z.ai/api/coding/paas/v4',
+      });
+      model = glmProvider(currentModel);
     } else {
       // Every cloud vendor is served through OpenRouter. The model id already
       // carries its vendor prefix (openai/…, anthropic/…) and is forwarded as-is.

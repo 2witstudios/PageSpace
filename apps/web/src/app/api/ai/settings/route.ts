@@ -7,9 +7,9 @@ import {
   buildProviderAvailabilityMap,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidModel } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidModel, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -49,6 +49,7 @@ export async function GET(request: Request) {
       currentProvider: user?.currentAiProvider || DEFAULT_PROVIDER,
       currentModel: user?.currentAiModel || DEFAULT_MODEL,
       userSubscriptionTier: user?.subscriptionTier || 'free',
+      isAdmin: auth.role === 'admin',
       providers,
       isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
     });
@@ -133,6 +134,10 @@ export async function PATCH(request: Request) {
         { error: 'User not found' },
         { status: 404 }
       );
+    }
+
+    if (ADMIN_ONLY_PROVIDERS.has(provider) && auth.role !== 'admin') {
+      return createAdminRestrictedResponse();
     }
 
     if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined, auth.role === 'admin')) {
