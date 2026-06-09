@@ -1,8 +1,8 @@
 import { z } from 'zod/v4';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionRepository } from '@/lib/repositories/session-repository';
 import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { shouldAllowDeviceRefresh } from '@pagespace/lib/auth/token-lifecycle-policy';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import {
   checkDistributedRateLimit,
@@ -64,48 +64,32 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Invalid or expired device token.' }, { status: 401 });
     }
 
-    if (deviceRecord.deviceId !== deviceId) {
-      // Check if this is a legacy device from OAuth with 'unknown' deviceId
-      // Allow one-time correction if the device token is otherwise valid
-      if (deviceRecord.deviceId === 'unknown' || !deviceRecord.deviceId) {
-        loggers.auth.warn('Correcting device token deviceId from OAuth migration', {
+    // SECURITY (L4): strict device-binding check. A stored deviceId that is
+    // missing or the legacy 'unknown' sentinel is a HARD failure — we force a
+    // full re-auth rather than silently rebinding the token to whatever deviceId
+    // the request supplies (which would defeat the stolen-token binding check).
+    const refreshDecision = shouldAllowDeviceRefresh(deviceRecord, deviceId);
+    if (!refreshDecision.ok) {
+      if (refreshDecision.reason === 'unknown_stored_device') {
+        loggers.auth.warn('Device token has no bound deviceId - forcing re-auth', {
           deviceTokenId: deviceRecord.id,
-          oldDeviceId: deviceRecord.deviceId,
-          newDeviceId: deviceId,
-          userId: deviceRecord.userId,
-        });
-
-        // Update device record with correct deviceId (one-time migration)
-        try {
-          const updatedDevice = await sessionRepository.updateDeviceTokenDeviceId(
-            deviceRecord.id,
-            deviceId
-          );
-
-          if (!updatedDevice) {
-            loggers.auth.error('Failed to update device token deviceId', {
-              deviceTokenId: deviceRecord.id,
-            });
-            return Response.json({ error: 'Failed to update device.' }, { status: 500 });
-          }
-
-          // Update local deviceRecord for continued processing
-          deviceRecord.deviceId = deviceId;
-        } catch (error) {
-          loggers.auth.error('Error correcting device token deviceId', { error: error as Error });
-          return Response.json({ error: 'Failed to update device.' }, { status: 500 });
-        }
-
-        // Continue with refresh using corrected device
-      } else {
-        // Strict mismatch - different device attempting to use this token
-        loggers.auth.warn('Device token mismatch detected - possible stolen token', {
-          tokenDeviceId: deviceRecord.deviceId,
+          storedDeviceId: deviceRecord.deviceId,
           providedDeviceId: deviceId,
           userId: deviceRecord.userId,
         });
-        return Response.json({ error: 'Device token does not match this device.' }, { status: 401 });
+        return Response.json(
+          { error: 'Device must be re-registered. Please sign in again.' },
+          { status: 401 }
+        );
       }
+
+      // Mismatch (or missing supplied id) - different device attempting to use this token
+      loggers.auth.warn('Device token mismatch detected - possible stolen token', {
+        tokenDeviceId: deviceRecord.deviceId,
+        providedDeviceId: deviceId,
+        userId: deviceRecord.userId,
+      });
+      return Response.json({ error: 'Device token does not match this device.' }, { status: 401 });
     }
 
     const user = await authRepository.findUserById(deviceRecord.userId);

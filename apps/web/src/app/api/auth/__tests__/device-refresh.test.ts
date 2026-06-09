@@ -357,8 +357,10 @@ describe('/api/auth/device/refresh', () => {
       expect(body.error).toBe('Device token does not match this device.');
     });
 
-    it('allows deviceId correction for legacy OAuth devices with "unknown" deviceId', async () => {
-      // Arrange - legacy device from OAuth migration
+    it('rejects legacy "unknown" deviceId tokens with 401 instead of rebinding (L4)', async () => {
+      // Arrange - legacy device from OAuth migration with an unbound deviceId.
+      // SECURITY (L4): this must be a HARD failure (force full re-auth), NOT an
+      // auto-rebind to the attacker-supplied deviceId.
       const legacyDeviceRecord = { ...mockDeviceRecord, deviceId: 'unknown' };
       vi.mocked(validateDeviceToken).mockResolvedValue(legacyDeviceRecord as never);
 
@@ -373,17 +375,19 @@ describe('/api/auth/device/refresh', () => {
 
       // Act
       const response = await POST(request);
+      const body = await response.json();
 
-      // Assert
-      expect(response.status).toBe(200);
+      // Assert - forced re-auth, no session minted, no rebind
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Device must be re-registered. Please sign in again.');
+      expect(sessionService.createSession).not.toHaveBeenCalled();
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Correcting device token deviceId from OAuth migration',
-        {
-          deviceTokenId: 'device-token-record-id',
-          oldDeviceId: 'unknown',
-          newDeviceId: 'new-device-id',
+        'Device token has no bound deviceId - forcing re-auth',
+        expect.objectContaining({
+          storedDeviceId: 'unknown',
+          providedDeviceId: 'new-device-id',
           userId: 'test-user-id',
-        }
+        })
       );
     });
 

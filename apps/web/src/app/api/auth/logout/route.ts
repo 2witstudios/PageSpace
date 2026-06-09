@@ -1,4 +1,9 @@
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import {
+  revokeDeviceTokenByValue,
+  revokeDeviceTokensByDevice,
+} from '@pagespace/lib/auth/device-auth-utils';
+import { planLogoutDeviceRevocation } from '@pagespace/lib/auth/token-lifecycle-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
@@ -21,6 +26,15 @@ export async function POST(req: Request) {
   const sessionClaims = await sessionService.validateSession(sessionToken);
   const userId = sessionClaims?.userId;
 
+  // The client may include device context so we can revoke the long-lived
+  // device token alongside the session (M9). Web logout sends no body.
+  const body = await req.json().catch(() => ({}));
+  const { deviceToken, deviceId, platform } = (body ?? {}) as {
+    deviceToken?: unknown;
+    deviceId?: unknown;
+    platform?: unknown;
+  };
+
   // Revoke the session
   let revokeSucceeded = false;
   try {
@@ -32,6 +46,47 @@ export async function POST(req: Request) {
       error: error instanceof Error ? error.message : String(error),
       userId,
     });
+  }
+
+  // SECURITY (M9): logout must also revoke the caller's 90-day device token,
+  // otherwise device/refresh can silently re-mint sessions after "logout".
+  // A failure here must never break logout itself.
+  const revocationPlan = planLogoutDeviceRevocation({
+    deviceToken: typeof deviceToken === 'string' ? deviceToken : null,
+    userId,
+    deviceId: typeof deviceId === 'string' ? deviceId : null,
+    platform,
+  });
+
+  if (revocationPlan.strategy !== 'none') {
+    try {
+      let deviceTokensRevoked = false;
+      if (revocationPlan.strategy === 'by-value') {
+        deviceTokensRevoked = await revokeDeviceTokenByValue(revocationPlan.deviceToken, 'logout');
+      } else {
+        const count = await revokeDeviceTokensByDevice(
+          revocationPlan.userId,
+          revocationPlan.deviceId,
+          revocationPlan.platform,
+          'logout',
+        );
+        deviceTokensRevoked = count > 0;
+      }
+
+      if (deviceTokensRevoked && userId) {
+        auditRequest(req, {
+          eventType: 'auth.token.revoked',
+          userId,
+          details: { tokenType: 'device', reason: 'user_logout' },
+        });
+      }
+    } catch (error) {
+      loggers.auth.error('Failed to revoke device token on logout', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+        strategy: revocationPlan.strategy,
+      });
+    }
   }
 
   // Only emit audit/track events after a successful revoke
