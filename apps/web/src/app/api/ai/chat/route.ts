@@ -94,6 +94,12 @@ export async function POST(request: Request) {
   // Hoisted to outer scope so the catch-path trackUsage call bills on the real
   // backend model id rather than the client-supplied alias (selectedModel).
   let resolvedModelName: string | undefined;
+  // The provider that ACTUALLY ran, post catalog-substitution (factory's resolution).
+  // Billing settles on this — not the raw requested provider — so the metering
+  // exemption at settle agrees with the credit gate (both key on the resolved
+  // provider). A `glm` + invalid-model request resolves to the metered default, so
+  // it must bill, not be exempted.
+  let resolvedProvider: string | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
@@ -542,10 +548,11 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    // Use the resolved model name for billing. providerResult.modelName is the
-    // real OpenRouter model id sent to the backend.
+    // Use the resolved (provider, model) for billing. providerResult carries the
+    // real backend provider/model after the factory's catalog substitution.
     const { model } = providerResult;
     resolvedModelName = providerResult.modelName;
+    resolvedProvider = providerResult.provider;
 
     const onStepFinishForCredits =
       creditAbortController && availableBalanceCents !== null
@@ -1078,7 +1085,7 @@ export async function POST(request: Request) {
             // Use enhanced AI monitoring with token usage from SDK
             await AIMonitoring.trackUsage({
               userId: userId!,
-              provider: currentProvider,
+              provider: resolvedProvider ?? currentProvider,
               model: resolvedModelName!,
               source: 'chat',
               inputTokens,
@@ -1192,7 +1199,7 @@ export async function POST(request: Request) {
     // Note: conversationId might not be available in error path, use chatId as fallback
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
-      provider: selectedProvider || 'unknown',
+      provider: (resolvedProvider ?? selectedProvider) || 'unknown',
       model: resolvedModelName ?? selectedModel ?? 'unknown',
       source: 'chat',
       inputTokens: usage?.inputTokens ?? undefined,
