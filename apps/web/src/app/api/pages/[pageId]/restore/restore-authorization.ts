@@ -1,10 +1,10 @@
 /**
  * Pure authorization decision for page restore (security finding H1).
  *
- * The restore endpoint historically performed NO resource authorization: it
- * authenticated the caller, ran a no-op MCP scope check for session auth, and
- * then restored the page. Any authenticated user could restore any trashed page
- * in any drive (IDOR).
+ * The restore endpoint historically performed NO resource (delete) authorization:
+ * it authenticated the caller and checked only MCP token scope — which is a no-op
+ * for session auth (sessions get full access) — then restored the page. Any
+ * authenticated user could restore any trashed page in any drive (IDOR).
  *
  * This module isolates the security DECISION into a pure, side-effect-free
  * function. The route shell resolves the facts (await params, authenticate,

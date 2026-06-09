@@ -115,6 +115,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     // authenticated caller could restore any trashed page in any drive (IDOR).
     // The decision itself is the pure `canRestorePage`; this shell only resolves
     // the facts it consumes.
+    // `withinTokenScope` is always true here because `checkMCPPageScope` above
+    // already returned on an out-of-scope token; we still pass it so the pure
+    // decision models the full rule (defense-in-depth) rather than assuming it.
     const canDelete = await canUserDeletePage(auth.userId, pageId);
     if (!canRestorePage({ canDelete, withinTokenScope: scopeError === null })) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
