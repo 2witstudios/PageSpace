@@ -52,7 +52,6 @@ export default function SnapshotPage({
   params: Promise<{ backupId: string }>;
 }) {
   const router = useRouter();
-
   const [resolvedBackupId, setResolvedBackupId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<(SnapshotPageNode & { depth: number }) | null>(null);
   const [contentMap, setContentMap] = useState<Map<string, string>>(new Map());
