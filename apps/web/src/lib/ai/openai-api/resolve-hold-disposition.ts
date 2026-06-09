@@ -22,7 +22,12 @@ export interface HoldDispositionInput {
   phase: HoldPhase;
   /** Whether the consumer aborted the connection (vs a genuine error). */
   aborted: boolean;
-  /** Whether any partial usage/spend was captured and is worth billing. */
+  /**
+   * Whether real, billable token usage was captured. This must reflect token counts the
+   * failed-run billing path will actually charge (trackUsage only bills an unsuccessful run
+   * when totalTokens > 0) — NOT streamed text or provider cost without tokens, which would
+   * settle a misleading $0 row. When false, the hold is released directly instead.
+   */
   usage: boolean;
 }
 

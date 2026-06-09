@@ -1015,4 +1015,58 @@ describe('POST /api/v1/chat/completions', () => {
       expected: { releaseCalls: 1, releasedHoldId: 'hold-empty', trackUsageCalls: 0 },
     });
   });
+
+  test('L7: streamed text with no token counts releases the hold instead of settling a $0 row', async () => {
+    // Codex P1: a partial-output error where text was emitted but the usage/steps promises
+    // reject leaves NO billable token counts. Settling here would record a misleading $0 usage
+    // row (trackUsage skips consumeCredits for a failed run with totalTokens===0) — so the
+    // disposition must be a plain release, NOT settle-partial, even though text streamed.
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-textonly' });
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.reject(new Error('usage unavailable')),
+      steps: Promise.reject(new Error('steps unavailable')),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'text-delta', id: 't1', delta: 'A partial answer with no accounting' };
+        throw new Error('provider dropped after partial text');
+      },
+    })) as unknown as typeof streamText);
+
+    const response = await POST(makeRequest(validBody));
+    await response.text().catch(() => undefined);
+
+    assert({
+      given: 'a mid-stream error after streaming text but with no recoverable token counts',
+      should: 'release the hold once and NOT call trackUsage (no misleading $0 settle)',
+      actual: {
+        releaseCalls: vi.mocked(releaseHold).mock.calls.length,
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        trackUsageCalls: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: { releaseCalls: 1, releasedHoldId: 'hold-textonly', trackUsageCalls: 0 },
+    });
+  });
+
+  test('L6: the setup-phase hold release is awaited before the 500 returns (not fire-and-forget)', async () => {
+    // Codex P2: the setup-error path returns a plain JSON 500 with no stream keeping the
+    // runtime alive, so the release must be awaited — a fire-and-forget release could be
+    // abandoned if a serverless runtime freezes after the response. We prove the await by
+    // resolving releaseHold only after a deferred tick and asserting it has settled by the
+    // time POST resolves.
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-awaited' });
+    vi.mocked(saveMessageToDatabase).mockRejectedValueOnce(new Error('db write failed'));
+    let released = false;
+    vi.mocked(releaseHold).mockImplementationOnce(
+      () => new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 0)),
+    );
+
+    const response = await POST(makeRequest(validBody));
+
+    assert({
+      given: 'a pre-stream setup failure whose hold release resolves on a later tick',
+      should: 'await the release so it has completed by the time the 500 response is returned',
+      actual: { status: response.status, released },
+      expected: { status: 500, released: true },
+    });
+  });
 });

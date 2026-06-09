@@ -512,10 +512,18 @@ export async function POST(request: Request): Promise<Response> {
           // stream never produced them — treat that as "nothing burned".
           const totalUsage = await aiResult.totalUsage.catch(() => undefined);
           const steps = await aiResult.steps.catch(() => undefined);
-          const hasUsage =
-            !!(totalUsage && (totalUsage.inputTokens || totalUsage.outputTokens || totalUsage.cachedInputTokens || totalUsage.reasoningTokens)) ||
-            (Array.isArray(steps) && steps.length > 0) ||
-            assistantText.length > 0;
+          // "Billable usage" is strictly real token counts. For a FAILED run, trackUsage only
+          // reaches consumeCredits when totalTokens > 0 (ai-monitoring.ts:942) and otherwise
+          // just releases the hold. So streamed text or provider cost WITHOUT token counts
+          // would settle a misleading $0 row and release anyway — no better than a plain
+          // release, but noisier. We therefore only settle-partial when tokens were actually
+          // captured; with none, we release the hold directly (Codex P1).
+          const hasUsage = !!(totalUsage && (
+            (totalUsage.inputTokens ?? 0) > 0 ||
+            (totalUsage.outputTokens ?? 0) > 0 ||
+            (totalUsage.cachedInputTokens ?? 0) > 0 ||
+            (totalUsage.reasoningTokens ?? 0) > 0
+          ));
           const disposition = resolveHoldDisposition({ phase: 'streaming', aborted, usage: hasUsage });
 
           if (aborted) {
@@ -566,9 +574,12 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Failed to process chat request. Please try again.' }, { status: 500 });
   } finally {
     // Setup-phase disposition is always 'release' (resolveHoldDisposition); only act when the
-    // stream never took ownership of the hold. Idempotent and best-effort.
+    // stream never took ownership of the hold. AWAIT the release here: this path returns a
+    // plain JSON 500 with no stream to keep the runtime alive, so a fire-and-forget release
+    // could be abandoned if a serverless runtime freezes after the response — the exact leak
+    // this change closes (Codex P2). Idempotent and best-effort.
     if (holdId && !holdHandedOff && resolveHoldDisposition({ phase: 'setup', aborted: false, usage: false }) === 'release') {
-      void releaseHold(holdId).catch(() => {});
+      await releaseHold(holdId).catch(() => {});
     }
   }
 }
