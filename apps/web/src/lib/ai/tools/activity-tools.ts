@@ -182,6 +182,85 @@ function createCompactDelta(
   return Object.keys(delta).length > 0 ? delta : undefined;
 }
 
+/**
+ * Pure access-control decision for activity rows (security finding H2).
+ *
+ * `get_activity` previously authorized only at the DRIVE level, so a plain
+ * member received `resourceTitle`, `pageId`, and content deltas for EVERY row
+ * in the drive — including pages they cannot view. Drive membership is not
+ * page-level view access.
+ *
+ * Given the actor's set of viewable page IDs, drop every row that targets a
+ * page outside that set, before any title / delta / content diff is emitted.
+ *
+ * Policy for rows with NO pageId (null or absent): RETAINED. These are
+ * drive-scoped activities (membership / permission / drive operations) that
+ * carry no page content and are already authorized by the drive-level gate
+ * upstream. Filtering them out would silently hide legitimate drive activity.
+ *
+ * Pure: no I/O, no mutation of the input array.
+ */
+export function filterAccessibleActivities<T extends { pageId: string | null }>(
+  rows: readonly T[],
+  accessiblePageIds: ReadonlySet<string>,
+): T[] {
+  return rows.filter((row) =>
+    row.pageId == null ? true : accessiblePageIds.has(row.pageId)
+  );
+}
+
+/**
+ * Shell (impure): resolves the actor's set of viewable page IDs across the
+ * pages referenced by `activities`, reusing the same per-page view check the
+ * content-diff path already applies.
+ *
+ * `getBatchPagePermissions` excludes trashed pages even for owners/admins, so
+ * (as elsewhere in this file) we add an owner/admin override to keep their full
+ * visibility into their own drives — including trash/delete activity.
+ */
+async function buildAccessiblePageIdSet(
+  userId: string,
+  activities: { pageId: string | null; driveId: string | null }[],
+): Promise<Set<string>> {
+  const uniquePageIds = [
+    ...new Set(activities.map((a) => a.pageId).filter((id): id is string => Boolean(id))),
+  ];
+
+  if (uniquePageIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const permissions = await getBatchPagePermissions(userId, uniquePageIds);
+  const accessible = new Set<string>(
+    Array.from(permissions.entries())
+      .filter(([, perm]) => perm?.canView)
+      .map(([pageId]) => pageId)
+  );
+
+  // Drive owners/admins can view every page in their drives (incl. private and
+  // trashed). getBatchPagePermissions drops trashed rows, so re-add them here.
+  const uniqueDriveIds = [
+    ...new Set(
+      activities
+        .filter((a) => a.pageId)
+        .map((a) => a.driveId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+
+  for (const driveId of uniqueDriveIds) {
+    if (await isDriveOwnerOrAdmin(userId, driveId)) {
+      for (const a of activities) {
+        if (a.driveId === driveId && a.pageId) {
+          accessible.add(a.pageId);
+        }
+      }
+    }
+  }
+
+  return accessible;
+}
+
 export const activityTools = {
   /**
    * Get recent activity across workspaces
@@ -475,12 +554,21 @@ When summarizing multiple changes, group them thematically and describe the over
           limit,
         });
 
+        // Security (H2): the drive-level gate above is NOT page-level view
+        // access. Resolve the actor's accessible page set and drop rows for
+        // pages they cannot view BEFORE any title / delta / content diff is
+        // emitted. Everything downstream (actors, drive groups, content diffs,
+        // totals) is derived from this filtered list, so the filter is applied
+        // once here at the source.
+        const accessiblePageIds = await buildAccessiblePageIdSet(userId, activities);
+        const visibleActivities = filterAccessibleActivities(activities, accessiblePageIds);
+
         // Build actor index for deduplication (saves tokens by not repeating actor info)
         // Store actor reference directly so count updates are shared
         const actorMap = new Map<string, { idx: number; actor: CompactActor }>();
         const actorsList: CompactActor[] = [];
 
-        for (const activity of activities) {
+        for (const activity of visibleActivities) {
           const email = activity.actorEmail;
           let entry = actorMap.get(email);
           if (!entry) {
@@ -502,7 +590,7 @@ When summarizing multiple changes, group them thematically and describe the over
         // Group activities by drive using compact format
         const driveGroupsMap = new Map<string, CompactDriveGroup>();
 
-        for (const activity of activities) {
+        for (const activity of visibleActivities) {
           if (!activity.driveId || !activity.drive) continue;
 
           let group = driveGroupsMap.get(activity.driveId);
@@ -575,47 +663,17 @@ When summarizing multiple changes, group them thematically and describe the over
           // P2 Budget: Use maxOutputChars parameter to calculate proportional budget
           const diffBudget = calculateDiffBudget(maxOutputChars);
 
-          // Collect all activities with page content changes
-          let pageActivities = activities.filter(
+          // Collect all activities with page content changes.
+          // Source list is `visibleActivities`, already filtered to pages the
+          // actor can view (security finding H2), so no per-page re-check is
+          // needed here — drive membership alone never reaches this point.
+          const pageActivities = visibleActivities.filter(
             (a) =>
               a.pageId &&
               a.resourceType === 'page' &&
               (a.operation === 'update' || a.operation === 'create') &&
               (a.contentRef || a.contentSnapshot)
           );
-
-          // P1 Security: Filter to pages user has permission to view
-          // Drive membership alone doesn't grant page-level content access
-          if (pageActivities.length > 0) {
-            const uniquePageIds = [...new Set(pageActivities.map(a => a.pageId).filter(Boolean))] as string[];
-            const permissions = await getBatchPagePermissions(userId, uniquePageIds);
-
-            // Filter to pages user can view
-            const viewablePageIds = new Set(
-              Array.from(permissions.entries())
-                .filter(([, perm]) => perm?.canView)
-                .map(([pageId]) => pageId)
-            );
-
-            // Drive admins have view access to all pages in their drives
-            const uniqueDriveIds = [...new Set(
-              pageActivities.map(a => a.driveId).filter(Boolean)
-            )] as string[];
-
-            for (const driveId of uniqueDriveIds) {
-              if (await isDriveOwnerOrAdmin(userId, driveId)) {
-                for (const activity of pageActivities) {
-                  if (activity.driveId === driveId && activity.pageId) {
-                    viewablePageIds.add(activity.pageId);
-                  }
-                }
-              }
-            }
-
-            pageActivities = pageActivities.filter(
-              a => a.pageId && viewablePageIds.has(a.pageId)
-            );
-          }
 
           if (pageActivities.length > 0) {
             // Convert to ActivityForDiff format
@@ -752,9 +810,9 @@ When summarizing multiple changes, group them thematically and describe the over
           }
         }
 
-        // Calculate overall summary
-        const totalActivities = activities.length;
-        const totalAiGenerated = activities.filter((a) => a.isAiGenerated).length;
+        // Calculate overall summary (over the access-filtered list)
+        const totalActivities = visibleActivities.length;
+        const totalAiGenerated = visibleActivities.filter((a) => a.isAiGenerated).length;
 
         // Build initial response
         const response: {

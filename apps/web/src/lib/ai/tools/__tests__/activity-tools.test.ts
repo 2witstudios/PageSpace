@@ -16,7 +16,7 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
     readPageContent: vi.fn(),
 }));
 
-import { activityTools } from '../activity-tools';
+import { activityTools, filterAccessibleActivities } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -113,6 +113,85 @@ describe('activity-tools', () => {
       await expect(
         activityTools.get_activity.execute!(createTestInput({ includeContentDiffs: true }), context)
       ).rejects.toThrow('User authentication required');
+    });
+  });
+
+  // Security finding H2: get_activity authorized only at the DRIVE level, so a
+  // plain member received titles + content deltas for pages they cannot view.
+  // The access decision is isolated in this pure function and exhaustively
+  // unit-tested here; the execute() shell just builds the accessible-page set.
+  describe('filterAccessibleActivities', () => {
+    type Row = { id: string; pageId: string | null; driveId?: string | null };
+    const row = (id: string, pageId: string | null): Row => ({ id, pageId, driveId: 'drive-1' });
+
+    it('removes rows whose pageId is NOT in the accessible set (the leak)', () => {
+      const rows = [row('a', 'page-public'), row('b', 'page-private')];
+      const accessible = new Set(['page-public']);
+
+      const result = filterAccessibleActivities(rows, accessible);
+
+      expect(result.map((r) => r.id)).toEqual(['a']);
+      expect(result.some((r) => r.pageId === 'page-private')).toBe(false);
+    });
+
+    it('keeps rows whose pageId IS in the accessible set', () => {
+      const rows = [row('a', 'page-1'), row('b', 'page-2')];
+      const accessible = new Set(['page-1', 'page-2']);
+
+      const result = filterAccessibleActivities(rows, accessible);
+
+      expect(result.map((r) => r.id)).toEqual(['a', 'b']);
+    });
+
+    it('RETAINS rows with a null pageId — drive-scoped activity has no page content to leak', () => {
+      const rows = [row('member-add', null), row('perm-change', null)];
+      const accessible = new Set<string>(); // empty: the actor can view no pages
+
+      const result = filterAccessibleActivities(rows, accessible);
+
+      expect(result.map((r) => r.id)).toEqual(['member-add', 'perm-change']);
+    });
+
+    it('RETAINS rows with an absent (undefined) pageId per the same policy', () => {
+      const rows = [{ id: 'no-page' } as Row];
+      const result = filterAccessibleActivities(rows, new Set(['page-1']));
+      expect(result.map((r) => r.id)).toEqual(['no-page']);
+    });
+
+    it('drops ALL page-scoped rows when the accessible set is empty, but keeps drive-scoped rows', () => {
+      const rows = [row('a', 'page-1'), row('b', null), row('c', 'page-2')];
+
+      const result = filterAccessibleActivities(rows, new Set<string>());
+
+      expect(result.map((r) => r.id)).toEqual(['b']);
+    });
+
+    it('handles a mixed batch: viewable pages pass, private pages dropped, drive rows kept', () => {
+      const rows = [
+        row('view-1', 'p1'),
+        row('private', 'p-secret'),
+        row('drive-op', null),
+        row('view-2', 'p2'),
+      ];
+      const accessible = new Set(['p1', 'p2']);
+
+      const result = filterAccessibleActivities(rows, accessible);
+
+      expect(result.map((r) => r.id)).toEqual(['view-1', 'drive-op', 'view-2']);
+    });
+
+    it('returns a new array and does not mutate its input', () => {
+      const rows = [row('a', 'p1'), row('b', 'p-secret')];
+      const snapshot = [...rows];
+
+      const result = filterAccessibleActivities(rows, new Set(['p1']));
+
+      expect(result).not.toBe(rows);
+      expect(rows).toEqual(snapshot); // input untouched
+    });
+
+    it('returns an empty array for empty input', () => {
+      expect(filterAccessibleActivities([], new Set(['p1']))).toEqual([]);
     });
   });
 });
