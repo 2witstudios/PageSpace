@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth, verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
+import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   getUserStorageQuota,
@@ -24,17 +24,15 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const shouldReconcile = searchParams.get('reconcile') === 'true';
 
-    // Reconcile if requested. H4: `?reconcile=true` rewrites stored usage from a
-    // recomputed total; even with the accounting basis fixed, expose it only to
-    // admins as defense-in-depth so a user can't trigger their own quota rewrite.
+    // Reconcile the caller's OWN stored usage if requested (the user-facing
+    // "Reconcile" button in StorageUsageCard). H4: this recomputes usage from the
+    // same population the charge path bills — the user's `files` rows
+    // (createdBy = user), including trashed-but-unpurged — so it can only correct
+    // the stored total to the TRUE value. It can no longer be abused to wipe quota
+    // (the trash→reconcile→restore loop is closed by counting trashed-unpurged
+    // files), which is why the accounting-basis fix supersedes the earlier interim
+    // admin-gate and reconcile stays available to the owning user.
     if (shouldReconcile) {
-      const adminResult = await verifyAdminAuth(request);
-      if (isAdminAuthError(adminResult)) {
-        return NextResponse.json(
-          { error: 'Forbidden: admin access required to reconcile storage' },
-          { status: 403 },
-        );
-      }
       try {
         const reconcileResult = await reconcileStorageUsage(user.id);
         console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);
