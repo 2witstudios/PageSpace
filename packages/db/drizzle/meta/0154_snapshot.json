@@ -3169,6 +3169,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "drive_wide_permissions": {
+          "name": "drive_wide_permissions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "NULL"
+        },
         "position": {
           "name": "position",
           "type": "integer",
@@ -7679,6 +7686,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "drive_wide_permissions": {
+          "name": "drive_wide_permissions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "NULL"
         },
         "position": {
           "name": "position",
