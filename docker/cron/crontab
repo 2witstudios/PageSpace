@@ -62,3 +62,7 @@
 # rate_limit_buckets in PR3). Short cadence matches the 5-minute default
 # service-token lifetime so the table never grows more than a few cycles deep.
 */15 * * * * cron-curl GET __WEB_URL__/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1
+
+# Scheduled drive backups - Hourly
+# Fires automated drive backups for pro+ users whose nextRunAt is due
+0 * * * * cron-curl POST __WEB_URL__/api/cron/scheduled-backups >> /var/log/cron/scheduled-backups.log 2>&1

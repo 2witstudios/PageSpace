@@ -2,20 +2,44 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Plus, Loader2 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { ChevronLeft, Shield, Plus, Loader2, Lock } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, patch } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 import { format, formatDistanceToNow } from 'date-fns';
 
 const PAGE_SIZE = 10;
+
+// ============================================================================
+// Types
+// ============================================================================
+
+type BackupFrequency = 'daily' | 'weekly' | 'monthly';
+
+type BackupSchedule = {
+  available: boolean;
+  enabled: boolean;
+  frequency: BackupFrequency;
+  timezone: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+};
 
 type SerializedBackup = {
   id: string;
@@ -36,6 +60,10 @@ type CreateBackupResult = {
   counts: { pages: number; permissions: number; members: number; roles: number; files: number };
 };
 
+// ============================================================================
+// Fetchers
+// ============================================================================
+
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'ready') return 'default';
   if (status === 'failed') return 'destructive';
@@ -47,6 +75,130 @@ const fetcher = (url: string) =>
     if (!r.ok) throw new Error('Failed to fetch backups');
     return r.json();
   });
+
+const scheduleFetcher = (url: string) =>
+  fetchWithAuth(url).then((r) => {
+    if (!r.ok) throw new Error('Failed to fetch schedule');
+    return r.json() as Promise<BackupSchedule>;
+  });
+
+// ============================================================================
+// AutomaticBackups component
+// ============================================================================
+
+function AutomaticBackups({ driveId }: { driveId: string }) {
+  const scheduleKey = `/api/drives/${driveId}/backups/schedule`;
+  const { data, isLoading, error, mutate } = useSWR<BackupSchedule>(
+    scheduleKey,
+    scheduleFetcher,
+    { revalidateOnFocus: false }
+  );
+
+  const handleToggle = async (enabled: boolean) => {
+    try {
+      await mutate(
+        patch<BackupSchedule>(scheduleKey, {
+          enabled,
+          frequency: data?.frequency ?? 'daily',
+          timezone: data?.timezone ?? 'UTC',
+        }),
+        { optimisticData: data ? { ...data, enabled } : undefined, rollbackOnError: true }
+      );
+    } catch {
+      toast.error('Failed to update backup schedule');
+    }
+  };
+
+  const handleFrequencyChange = async (frequency: BackupFrequency) => {
+    try {
+      await mutate(
+        patch<BackupSchedule>(scheduleKey, {
+          enabled: data?.enabled ?? true,
+          frequency,
+          timezone: data?.timezone ?? 'UTC',
+        }),
+        { optimisticData: data ? { ...data, frequency } : undefined, rollbackOnError: true }
+      );
+    } catch {
+      toast.error('Failed to update backup frequency');
+    }
+  };
+
+  if (isLoading) {
+    return <Skeleton className="h-28 w-full" />;
+  }
+
+  if (error || !data) {
+    return null;
+  }
+
+  const { available, enabled, frequency, nextRunAt, lastRunAt } = data;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+        <div>
+          <div className="flex items-center gap-2">
+            {!available && <Lock className="h-4 w-4 text-muted-foreground" />}
+            <CardTitle>Automatic Backups</CardTitle>
+          </div>
+          {!available && (
+            <CardDescription className="mt-1">
+              <Link href="/settings/plan" className="underline hover:text-foreground">
+                Upgrade to enable
+              </Link>{' '}
+              daily, weekly, or monthly snapshots.
+            </CardDescription>
+          )}
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={handleToggle}
+          disabled={!available}
+        />
+      </CardHeader>
+      <CardContent className={!available ? 'opacity-50 pointer-events-none' : undefined}>
+        {available && enabled && (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Frequency</Label>
+              <Select value={frequency} onValueChange={handleFrequencyChange}>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {nextRunAt && (
+              <p
+                className="text-sm text-muted-foreground"
+                title={format(new Date(nextRunAt), 'PPpp')}
+              >
+                Next backup {formatDistanceToNow(new Date(nextRunAt), { addSuffix: true })}
+              </p>
+            )}
+            {lastRunAt && (
+              <p
+                className="text-sm text-muted-foreground"
+                title={format(new Date(lastRunAt), 'PPpp')}
+              >
+                Last backup {formatDistanceToNow(new Date(lastRunAt), { addSuffix: true })}
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================================================
+// Page
+// ============================================================================
 
 export default function DriveBackupsPage() {
   const params = useParams();
@@ -174,6 +326,8 @@ export default function DriveBackupsPage() {
           Create and restore snapshots of this drive&apos;s pages, members, and roles.
         </p>
       </div>
+
+      <AutomaticBackups driveId={driveId} />
 
       <Card>
         <CardHeader className="flex flex-row items-start justify-between space-y-0">
