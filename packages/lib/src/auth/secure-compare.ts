@@ -36,6 +36,13 @@ export function secureCompare(a: string, b: string): boolean {
     return false;
   }
 
+  // CodeQL's js/insufficient-password-hash flags these createHash calls. That is
+  // a FALSE POSITIVE here (tracked/dismissed for the prior SHA-256 form as alerts
+  // #160/#161): this is a deterministic constant-time comparison of HIGH-ENTROPY
+  // secrets (API keys, HMAC signatures, opaque device tokens), not at-rest storage
+  // of low-entropy user passwords. A slow salted KDF (bcrypt/scrypt/argon2) is
+  // inapplicable — it is non-deterministic, so two independently-derived digests
+  // could never be compared for equality, and it would only add latency.
   const hashA = crypto.createHash('sha3-256').update(a, 'utf8').digest();
   const hashB = crypto.createHash('sha3-256').update(b, 'utf8').digest();
 
