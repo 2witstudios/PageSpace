@@ -66,7 +66,7 @@ export async function POST(
     // 5. Restore transaction
     const counts = await db.transaction(async tx => {
       const diffResult = await fetchAndComputeRestoreDiff(backupId, driveId, tx as never);
-      if (!diffResult.ok) throw new Error('Failed to compute diff');
+      if (!diffResult.ok) throw new Error(`Failed to compute diff: ${diffResult.reason}`);
       const { diff, backupPageMap } = diffResult;
 
       // Include unchanged pages so their ACLs are also replaced — page hashes
