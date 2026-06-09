@@ -17,6 +17,14 @@ export interface OpenAIMessage {
   created_at: number;
 }
 
+export interface OpenAIToolResultMessage {
+  id: string;
+  role: 'tool';
+  tool_call_id: string;
+  content: string;
+  created_at: number;
+}
+
 export interface ConversationRow {
   id: string;
   userId: string;
@@ -163,7 +171,31 @@ function parseRawToolCalls(
   );
 }
 
-export function serializeMessageToOpenAI(row: MessageRow): OpenAIMessage {
+function parseRawToolResults(
+  raw: unknown,
+): Array<{ toolCallId: string; output: unknown }> {
+  if (!raw) return [];
+  const arr: unknown[] = Array.isArray(raw)
+    ? raw
+    : (() => {
+        try {
+          const parsed = JSON.parse(raw as string);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      })();
+  return arr.filter(
+    (tr): tr is { toolCallId: string; output: unknown } =>
+      typeof tr === 'object' &&
+      tr !== null &&
+      typeof (tr as Record<string, unknown>).toolCallId === 'string',
+  );
+}
+
+export function serializeMessageRowToMessages(
+  row: MessageRow,
+): Array<OpenAIMessage | OpenAIToolResultMessage> {
   const role = row.role as 'user' | 'assistant' | 'system';
   const text = extractPlainText(row.content);
 
@@ -189,5 +221,19 @@ export function serializeMessageToOpenAI(row: MessageRow): OpenAIMessage {
     msg.tool_calls = toolCalls;
   }
 
-  return msg;
+  const result: Array<OpenAIMessage | OpenAIToolResultMessage> = [msg];
+
+  if (role === 'assistant') {
+    for (const tr of parseRawToolResults(row.toolResults)) {
+      result.push({
+        id: `${row.id}:${tr.toolCallId}`,
+        role: 'tool',
+        tool_call_id: tr.toolCallId,
+        content: typeof tr.output === 'string' ? tr.output : JSON.stringify(tr.output ?? null),
+        created_at: Math.floor(row.createdAt.getTime() / 1000),
+      });
+    }
+  }
+
+  return result;
 }

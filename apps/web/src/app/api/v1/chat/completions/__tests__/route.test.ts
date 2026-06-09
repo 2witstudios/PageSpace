@@ -90,6 +90,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
+  extractToolResults: vi.fn().mockReturnValue([]),
 }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {},
@@ -115,7 +116,10 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: { getMessagesForPage: vi.fn().mockResolvedValue([]) },
+  chatMessageRepository: {
+    getMessagesForPage: vi.fn().mockResolvedValue([]),
+    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
@@ -157,7 +161,7 @@ import { db } from '@pagespace/db/db';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
-import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase, extractToolResults } from '@/lib/ai/core/message-utils';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -856,6 +860,92 @@ describe('POST /api/v1/chat/completions', () => {
         toolResults: assistantSave?.[0]?.toolResults,
       },
       expected: { toolCalls: undefined, toolResults: undefined },
+    });
+  });
+
+  test('client_manages_history: back-fills tool results for prior assistant messages with output-available parts', async () => {
+    const fakeResults = [{ toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' as const }];
+    // extractToolResults returns results for the prior assistant message only
+    vi.mocked(extractToolResults).mockImplementation((msg: UIMessage) =>
+      msg.id === 'asst-prior' ? fakeResults : []
+    );
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+
+    const fullHistory = [
+      { role: 'user', id: 'u-0', parts: [{ type: 'text', text: 'What is in foo.ts?' }] },
+      // Prior assistant turn with a completed tool call
+      { role: 'assistant', id: 'asst-prior', parts: [
+        { type: 'tool-Read', toolCallId: 'tc-1', toolName: 'Read', input: { path: 'foo.ts' }, state: 'output-available', output: 'file contents' },
+      ]},
+      { role: 'user', id: 'u-1', parts: [{ type: 'text', text: 'Summarise it' }] },
+    ];
+
+    const response = await POST(makeRequest({
+      model: 'ps-agent://page-123',
+      messages: fullHistory,
+      conversation_id: 'conv-abc',
+      client_manages_history: true,
+    }));
+    await response.text();
+
+    const backFillCalls = vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls;
+    assert({
+      given: 'client_manages_history=true with a prior assistant message carrying output-available tool parts',
+      should: 'call updateMessageToolResults with the message ID and extracted results',
+      actual: {
+        called: backFillCalls.length,
+        messageId: backFillCalls[0]?.[0],
+        resultsCount: backFillCalls[0]?.[1]?.length,
+      },
+      expected: { called: 1, messageId: 'asst-prior', resultsCount: 1 },
+    });
+  });
+
+  test('client_manages_history: does not call updateMessageToolResults when no prior messages have tool results', async () => {
+    vi.mocked(extractToolResults).mockReturnValue([]);
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+
+    const fullHistory = [
+      { role: 'user', id: 'u-0', parts: [{ type: 'text', text: 'Hello' }] },
+      { role: 'assistant', id: 'a-0', parts: [{ type: 'text', text: 'Hi' }] },
+      { role: 'user', id: 'u-1', parts: [{ type: 'text', text: 'Continue' }] },
+    ];
+
+    const response = await POST(makeRequest({
+      model: 'ps-agent://page-123',
+      messages: fullHistory,
+      conversation_id: 'conv-abc',
+      client_manages_history: true,
+    }));
+    await response.text();
+
+    assert({
+      given: 'client_manages_history=true but no prior assistant messages have output-available tool parts',
+      should: 'not call updateMessageToolResults at all',
+      actual: vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls.length,
+      expected: 0,
     });
   });
 

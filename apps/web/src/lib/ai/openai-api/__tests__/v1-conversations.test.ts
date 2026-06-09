@@ -4,7 +4,7 @@ import {
   buildCreateConversationPayload,
   buildConversationListQuery,
   validateConversationAccess,
-  serializeMessageToOpenAI,
+  serializeMessageRowToMessages,
   type ConversationRow,
   type MessageRow,
 } from '../v1-conversations';
@@ -296,9 +296,9 @@ describe('validateConversationAccess', () => {
   });
 });
 
-// ─── serializeMessageToOpenAI ─────────────────────────────────────────────────
+// ─── serializeMessageRowToMessages ───────────────────────────────────────────
 
-describe('serializeMessageToOpenAI', () => {
+describe('serializeMessageRowToMessages', () => {
   const makeRow = (overrides: Partial<MessageRow> = {}): MessageRow => ({
     id: 'msg-1',
     role: 'user',
@@ -311,12 +311,12 @@ describe('serializeMessageToOpenAI', () => {
   });
 
   test('plain text user message serializes to OpenAI format', () => {
-    const result = serializeMessageToOpenAI(makeRow({ content: 'Hello' }));
+    const result = serializeMessageRowToMessages(makeRow({ content: 'Hello' }));
     assert({
       given: 'a plain text user message',
-      should: 'return OpenAI message with role, content, and unix created_at',
-      actual: { role: result.role, content: result.content, created_at: result.created_at },
-      expected: { role: 'user', content: 'Hello', created_at: FIXED_UNIX },
+      should: 'return a single-element array with role, content, and unix created_at',
+      actual: { count: result.length, role: result[0].role, content: result[0].content, created_at: result[0].created_at },
+      expected: { count: 1, role: 'user', content: 'Hello', created_at: FIXED_UNIX },
     });
   });
 
@@ -326,11 +326,11 @@ describe('serializeMessageToOpenAI', () => {
       partsOrder: [{ index: 0, type: 'text' }],
       originalContent: 'Structured text',
     });
-    const result = serializeMessageToOpenAI(makeRow({ content: structured }));
+    const result = serializeMessageRowToMessages(makeRow({ content: structured }));
     assert({
       given: 'a message with structured JSON content',
       should: 'extract the text from originalContent',
-      actual: result.content,
+      actual: result[0].content,
       expected: 'Structured text',
     });
   });
@@ -339,11 +339,12 @@ describe('serializeMessageToOpenAI', () => {
     const toolCallsRaw = JSON.stringify([
       { toolCallId: 'call-1', toolName: 'read_page', input: { pageId: 'p-1' }, state: 'output-available' },
     ]);
-    const result = serializeMessageToOpenAI(makeRow({ role: 'assistant', content: '', toolCalls: toolCallsRaw }));
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: '', toolCalls: toolCallsRaw }));
+    const msg = result[0];
     assert({
       given: 'an assistant message with serialized tool calls',
       should: 'include tool_calls in the output with the OpenAI function format',
-      actual: result.tool_calls?.[0],
+      actual: 'tool_calls' in msg ? msg.tool_calls?.[0] : undefined,
       expected: {
         id: 'call-1',
         type: 'function',
@@ -353,11 +354,11 @@ describe('serializeMessageToOpenAI', () => {
   });
 
   test('message without tool calls has no tool_calls field', () => {
-    const result = serializeMessageToOpenAI(makeRow({ toolCalls: null }));
+    const result = serializeMessageRowToMessages(makeRow({ toolCalls: null }));
     assert({
       given: 'a message with no tool calls',
       should: 'not include a tool_calls key in the output',
-      actual: 'tool_calls' in result,
+      actual: 'tool_calls' in result[0],
       expected: false,
     });
   });
@@ -366,43 +367,116 @@ describe('serializeMessageToOpenAI', () => {
     const toolCallsArray = [
       { toolCallId: 'call-2', toolName: 'create_page', input: { title: 'T' }, state: 'output-available' },
     ];
-    const result = serializeMessageToOpenAI(makeRow({ role: 'assistant', content: '', toolCalls: toolCallsArray }));
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: '', toolCalls: toolCallsArray }));
+    const msg = result[0];
     assert({
       given: 'tool calls stored as a JS array (not a JSON string)',
       should: 'still produce the correct tool_calls output',
-      actual: result.tool_calls?.[0]?.function.name,
+      actual: 'tool_calls' in msg ? msg.tool_calls?.[0]?.function.name : undefined,
       expected: 'create_page',
     });
   });
 
   test('empty content becomes null', () => {
-    const result = serializeMessageToOpenAI(makeRow({ content: '' }));
+    const result = serializeMessageRowToMessages(makeRow({ content: '' }));
     assert({
       given: 'an empty content string',
       should: 'return content:null',
-      actual: result.content,
+      actual: result[0].content,
       expected: null,
     });
   });
 
   test('createdAt is converted to unix timestamp in seconds', () => {
     const date = new Date('2024-06-01T12:00:00.000Z');
-    const result = serializeMessageToOpenAI(makeRow({ createdAt: date }));
+    const result = serializeMessageRowToMessages(makeRow({ createdAt: date }));
     assert({
       given: 'a specific createdAt date',
       should: 'convert to seconds since epoch',
-      actual: result.created_at,
+      actual: result[0].created_at,
       expected: Math.floor(date.getTime() / 1000),
     });
   });
 
   test('message id is preserved', () => {
-    const result = serializeMessageToOpenAI(makeRow({ id: 'specific-msg-id' }));
+    const result = serializeMessageRowToMessages(makeRow({ id: 'specific-msg-id' }));
     assert({
       given: 'a message with a specific id',
       should: 'preserve the id in the output',
-      actual: result.id,
+      actual: result[0].id,
       expected: 'specific-msg-id',
+    });
+  });
+
+  test('assistant message with string tool result emits a role:tool message', () => {
+    const toolResults = JSON.stringify([
+      { toolCallId: 'tc-1', toolName: 'Read', output: 'file contents here', state: 'output-available' },
+    ]);
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: 'Done', toolResults }));
+    assert({
+      given: 'an assistant message row with a string tool result in toolResults JSONB',
+      should: 'return [assistantMsg, toolResultMsg] with role:tool and the raw string as content',
+      actual: {
+        count: result.length,
+        secondRole: result[1].role,
+        toolCallId: result[1].role === 'tool' ? result[1].tool_call_id : undefined,
+        content: result[1].role === 'tool' ? result[1].content : undefined,
+      },
+      expected: { count: 2, secondRole: 'tool', toolCallId: 'tc-1', content: 'file contents here' },
+    });
+  });
+
+  test('assistant message with object tool result JSON-stringifies the output', () => {
+    const output = { exitCode: 0, stdout: 'hello' };
+    const toolResults = JSON.stringify([
+      { toolCallId: 'tc-2', toolName: 'Bash', output, state: 'output-available' },
+    ]);
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: '', toolResults }));
+    assert({
+      given: 'an assistant message row with an object tool result',
+      should: 'JSON.stringify the output as the tool message content',
+      actual: result[1].role === 'tool' ? result[1].content : undefined,
+      expected: JSON.stringify(output),
+    });
+  });
+
+  test('assistant message with multiple tool results emits multiple role:tool messages', () => {
+    const toolResults = JSON.stringify([
+      { toolCallId: 'tc-1', toolName: 'Read', output: 'content', state: 'output-available' },
+      { toolCallId: 'tc-2', toolName: 'Bash', output: 'exit 0', state: 'output-available' },
+    ]);
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: 'ok', toolResults }));
+    assert({
+      given: 'an assistant message with two tool results',
+      should: 'return 3 messages: 1 assistant + 2 role:tool',
+      actual: {
+        count: result.length,
+        roles: result.map(m => m.role),
+      },
+      expected: { count: 3, roles: ['assistant', 'tool', 'tool'] },
+    });
+  });
+
+  test('user message with toolResults does not emit role:tool messages', () => {
+    const toolResults = JSON.stringify([
+      { toolCallId: 'tc-1', toolName: 'Read', output: 'x', state: 'output-available' },
+    ]);
+    const result = serializeMessageRowToMessages(makeRow({ role: 'user', toolResults }));
+    assert({
+      given: 'a user-role message row that somehow has toolResults',
+      should: 'return only 1 message (role:tool emission is assistant-only)',
+      actual: result.length,
+      expected: 1,
+    });
+  });
+
+  test('assistant message with null toolResults emits no role:tool messages', () => {
+    const result = serializeMessageRowToMessages(makeRow({ role: 'assistant', content: 'hi', toolResults: null }));
+    assert({
+      given: 'an assistant message with null toolResults',
+      should: 'return exactly 1 message',
+      actual: result.length,
+      expected: 1,
     });
   });
 });

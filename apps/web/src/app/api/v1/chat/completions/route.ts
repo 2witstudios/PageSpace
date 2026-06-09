@@ -17,7 +17,7 @@ import {
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
@@ -245,6 +245,21 @@ export async function POST(request: Request): Promise<Response> {
   if (isThreadMode && !clientManagesHistory) {
     const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
     inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
+  }
+
+  // Back-fill: when the client manages full history, sweep all prior assistant messages
+  // for completed tool results and persist them. normalizeMessages collapses role:tool
+  // pairs into assistant UIMessages with output-available parts — those results were
+  // executed by the client on earlier turns but never reached the DB.
+  if (clientManagesHistory && isThreadMode) {
+    const priorMessages = messages.slice(0, -1);
+    for (const msg of priorMessages) {
+      if (msg.role !== 'assistant') continue;
+      const toolResults = extractToolResults(msg);
+      if (toolResults.length === 0) continue;
+      chatMessageRepository.updateMessageToolResults(msg.id, toolResults)
+        .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
+    }
   }
 
   const userMessageId = userMessage.id;

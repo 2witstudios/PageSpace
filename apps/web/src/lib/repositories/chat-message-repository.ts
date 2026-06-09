@@ -9,6 +9,14 @@ import { eq, and, lt } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 
+export interface ToolResult {
+  toolCallId: string;
+  toolName: string;
+  output: unknown;
+  state: 'output-available' | 'output-error';
+  errorText?: string;
+}
+
 // Types for repository operations
 export interface ChatMessage {
   id: string;
@@ -165,6 +173,22 @@ export const chatMessageRepository = {
       .orderBy(chatMessages.createdAt);
 
     return result as ChatMessage[];
+  },
+
+  /**
+   * Update only the toolResults column for an existing message.
+   * Used to back-fill client-side tool results that arrive in subsequent requests.
+   * No-op when toolResults is empty — nothing to persist.
+   */
+  async updateMessageToolResults(
+    messageId: string,
+    toolResults: ToolResult[]
+  ): Promise<void> {
+    if (toolResults.length === 0) return;
+    await db
+      .update(chatMessages)
+      .set({ toolResults: JSON.stringify(toolResults) })
+      .where(eq(chatMessages.id, messageId));
   },
 
   /**

@@ -60,8 +60,11 @@ describe('tool renderer coverage', () => {
 
   it('does not register renderers for unknown tools', () => {
     // Guards against typos / stale entries drifting from the real tool set.
+    // PascalCase entries are intentional CLI tool renderers (pi / pagespace-cli)
+    // for client-side tools — they are not in the PageSpace server tool set.
     const known = new Set(toolNames);
-    const orphanRegistry = Object.keys(toolRenderers).filter((name) => !known.has(name));
+    const isCliTool = (name: string) => /^[A-Z]/.test(name);
+    const orphanRegistry = Object.keys(toolRenderers).filter((name) => !known.has(name) && !isCliTool(name));
     expect(orphanRegistry, `Registry entries for non-existent tools: ${orphanRegistry.join(', ')}`).toEqual([]);
   });
 });

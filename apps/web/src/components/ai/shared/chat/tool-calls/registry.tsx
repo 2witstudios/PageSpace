@@ -838,6 +838,69 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       errorMessage={parsedOutput.error as string | undefined}
     />
   ),
+
+  // === CLI TOOLS (pi / pagespace-cli) ===
+  // pi tools return plain strings, not JSON objects, so `output` carries the content
+  // and `parsedOutput` is {}. Renderers must read from `output` directly.
+
+  Read: ({ parsedInput, output }) => {
+    const path = parsedInput?.file_path as string | undefined;
+    const content = typeof output === 'string' ? output : null;
+    if (!content) return null;
+    const lines = content.split('\n');
+    const preview = lines.slice(0, 20).join('\n') + (lines.length > 20 ? '\n…' : '');
+    return <RichContentRenderer title={path ?? 'File'} content={preview} />;
+  },
+
+  Write: ({ parsedInput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={true}
+      title={parsedInput?.file_path as string | undefined}
+    />
+  ),
+
+  Edit: ({ parsedInput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={true}
+      title={parsedInput?.file_path as string | undefined}
+    />
+  ),
+
+  MultiEdit: ({ parsedInput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={true}
+      title={parsedInput?.file_path as string | undefined}
+    />
+  ),
+
+  Bash: ({ parsedInput, output }) => {
+    const command = parsedInput?.command as string | undefined;
+    const stdout = typeof output === 'string' ? output : null;
+    if (!command && !stdout) return null;
+    const lines = stdout?.split('\n') ?? [];
+    const preview = lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n…' : '');
+    const content = [command ? `$ ${command}` : null, stdout ? preview : null]
+      .filter(Boolean)
+      .join('\n');
+    return <RichContentRenderer title="Bash" content={content} />;
+  },
+
+  Glob: ({ parsedInput, output }) => {
+    const pattern = parsedInput?.pattern as string | undefined;
+    const content = typeof output === 'string' ? output : null;
+    if (!content) return null;
+    return <RichContentRenderer title={pattern ? `Glob: ${pattern}` : 'Glob'} content={content} />;
+  },
+
+  Grep: ({ parsedInput, output }) => {
+    const pattern = parsedInput?.pattern as string | undefined;
+    const content = typeof output === 'string' ? output : null;
+    if (!content) return null;
+    return <RichContentRenderer title={pattern ? `Grep: ${pattern}` : 'Grep'} content={content} />;
+  },
 };
 
 /**
@@ -865,13 +928,16 @@ export function renderToolContent(ctx: {
     );
   }
 
-  if (!parsedOutput) return null;
-
+  // Registry renderers are tried before the parsedOutput null guard because
+  // client-side tools (e.g. pi) return plain strings, not JSON objects, so their
+  // parsedOutput is {}. Renderers that need parsedOutput check it themselves.
   const renderer = toolRenderers[toolName];
   if (renderer) {
-    const node = renderer({ toolName, parsedInput, parsedOutput, output, error });
+    const node = renderer({ toolName, parsedInput, parsedOutput: parsedOutput ?? {}, output, error });
     if (node != null) return node;
   }
+
+  if (!parsedOutput) return null;
 
   // Generic success/failure for any tool exposing a boolean `success`.
   if (typeof parsedOutput.success === 'boolean') {
