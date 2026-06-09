@@ -32,6 +32,7 @@ const {
   mockInsert,
   mockLimit,
   mockWhere,
+  mockInnerJoin,
   mockFrom,
 } = vi.hoisted(() => {
   const mockOnConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
@@ -39,8 +40,9 @@ const {
   const mockInsert = vi.fn(() => ({ values: mockValues }));
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-  const mockFrom = vi.fn(() => ({ where: mockWhere }));
-  return { mockOnConflictDoUpdate, mockValues, mockInsert, mockLimit, mockWhere, mockFrom };
+  const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
+  const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
+  return { mockOnConflictDoUpdate, mockValues, mockInsert, mockLimit, mockWhere, mockInnerJoin, mockFrom };
 });
 
 vi.mock('@pagespace/db/db', () => ({
@@ -51,6 +53,7 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
+vi.mock('@pagespace/db/schema/core', () => ({ drives: {} }));
 vi.mock('@pagespace/db/schema/versioning', () => ({ driveBackupSchedules: {} }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 

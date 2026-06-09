@@ -19,7 +19,12 @@ function computeNextRunAt(frequency: BackupFrequency, after: Date = new Date()):
   } else if (frequency === 'weekly') {
     next.setDate(next.getDate() + 7);
   } else {
+    // Clamp to last day of target month to avoid overflow (e.g. Jan 31 + 1 month → Feb 28)
+    const day = next.getDate();
+    next.setDate(1);
     next.setMonth(next.getMonth() + 1);
+    const daysInMonth = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+    next.setDate(Math.min(day, daysInMonth));
   }
   return next;
 }

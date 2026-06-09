@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
 import { driveBackupSchedules } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
@@ -23,7 +24,12 @@ function computeNextRunAt(frequency: BackupFrequency, after: Date = new Date()):
   } else if (frequency === 'weekly') {
     next.setDate(next.getDate() + 7);
   } else {
+    // Clamp to last day of target month to avoid overflow (e.g. Jan 31 + 1 month → Feb 28)
+    const day = next.getDate();
+    next.setDate(1);
     next.setMonth(next.getMonth() + 1);
+    const daysInMonth = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+    next.setDate(Math.min(day, daysInMonth));
   }
   return next;
 }
@@ -40,9 +46,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const [canManage, userRow, schedule] = await Promise.all([
+    const [canManage, ownerRow, schedule] = await Promise.all([
       isDriveOwnerOrAdmin(auth.userId, driveId),
-      db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, auth.userId)).limit(1),
+      db.select({ tier: users.subscriptionTier }).from(drives).innerJoin(users, eq(drives.ownerId, users.id)).where(eq(drives.id, driveId)).limit(1),
       db.select().from(driveBackupSchedules).where(eq(driveBackupSchedules.driveId, driveId)).limit(1),
     ]);
 
@@ -50,7 +56,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ driv
       return NextResponse.json({ error: 'Only drive owners and admins can access backup settings' }, { status: 403 });
     }
 
-    const tier = (userRow[0]?.tier ?? 'free') as SubscriptionTier;
+    const tier = (ownerRow[0]?.tier ?? 'free') as SubscriptionTier;
     const available = MEMORY_PAYING_TIERS.includes(tier);
     const row = schedule[0];
 
@@ -83,13 +89,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ dr
       return NextResponse.json({ error: 'Only drive owners and admins can change backup settings' }, { status: 403 });
     }
 
-    const [userRow] = await db
+    // Tier enforcement uses the drive owner's subscription — the cron job does the same,
+    // so admin-configured schedules for a free owner's drive will not silently execute.
+    const [ownerRow] = await db
       .select({ tier: users.subscriptionTier })
-      .from(users)
-      .where(eq(users.id, auth.userId))
+      .from(drives)
+      .innerJoin(users, eq(drives.ownerId, users.id))
+      .where(eq(drives.id, driveId))
       .limit(1);
 
-    const tier = (userRow?.tier ?? 'free') as SubscriptionTier;
+    const tier = (ownerRow?.tier ?? 'free') as SubscriptionTier;
     if (!MEMORY_PAYING_TIERS.includes(tier)) {
       return NextResponse.json({ error: 'pro_required', message: 'Automatic backups require a Pro plan or higher' }, { status: 402 });
     }
