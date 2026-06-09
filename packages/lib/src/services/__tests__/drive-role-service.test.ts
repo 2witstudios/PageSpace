@@ -226,6 +226,23 @@ describe('drive-role-service', () => {
       const result = await createDriveRole('drive-1', { name: 'Default', isDefault: true, permissions: {} });
       expect(result.isDefault).toBe(true);
     });
+
+    it('should throw when driveWidePermissions is malformed', async () => {
+      await expect(
+        createDriveRole('drive-1', { name: 'X', permissions: {}, driveWidePermissions: { invalid: true } as never })
+      ).rejects.toThrow('Invalid driveWidePermissions structure');
+    });
+
+    it('should accept null driveWidePermissions', async () => {
+      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([]);
+      mockDb.insert.mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: 'r1', driveWidePermissions: null }]),
+        }),
+      });
+      const result = await createDriveRole('drive-1', { name: 'X', permissions: {}, driveWidePermissions: null });
+      expect(result.driveWidePermissions).toBeNull();
+    });
   });
 
   describe('updateDriveRole', () => {
@@ -268,6 +285,12 @@ describe('drive-role-service', () => {
 
       const result = await updateDriveRole('drive-1', 'r1', { isDefault: true });
       expect(result.role.isDefault).toBe(true);
+    });
+
+    it('should throw when driveWidePermissions is malformed', async () => {
+      await expect(
+        updateDriveRole('drive-1', 'r1', { driveWidePermissions: { bad: 'field' } as never })
+      ).rejects.toThrow('Invalid driveWidePermissions structure');
     });
   });
 
