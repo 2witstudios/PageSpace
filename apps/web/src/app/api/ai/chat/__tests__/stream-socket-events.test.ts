@@ -237,6 +237,10 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  resolveProviderModel: vi.fn((sp: string, sm: string) => ({
+    provider: sp && sm ? sp : 'openai',
+    model: sm || 'openai/gpt-5.3-chat',
+  })),
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({

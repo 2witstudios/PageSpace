@@ -10,7 +10,7 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
@@ -18,6 +18,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { makeOnStepFinishHandler } from './step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -93,6 +94,12 @@ export async function POST(request: Request) {
   // Hoisted to outer scope so the catch-path trackUsage call bills on the real
   // backend model id rather than the client-supplied alias (selectedModel).
   let resolvedModelName: string | undefined;
+  // The provider that ACTUALLY ran, post catalog-substitution (factory's resolution).
+  // Billing settles on this — not the raw requested provider — so the metering
+  // exemption at settle agrees with the credit gate (both key on the resolved
+  // provider). A `glm` + invalid-model request resolves to the metered default, so
+  // it must bill, not be exempted.
+  let resolvedProvider: string | undefined;
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
@@ -341,24 +348,34 @@ export async function POST(request: Request) {
     // unlimited) and lazy-inits balances. On an allowed request it places a hold
     // (reservation + in-flight marker) whose id is threaded to billing and released
     // at settle; out_of_credits -> 402, the free-tier in-flight cap -> 429.
-    const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
-      estCostCents: estimateChatHoldCentsForModel(selectedModel),
-      maxInFlight: MAX_CHAT_INFLIGHT,
-    });
-    if (!creditGate.allowed) {
-      loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
-      return creditGateErrorResponse(creditGate.reason);
-    }
-    holdId = creditGate.holdId;
-
-    const creditAbortController = holdId ? new AbortController() : null;
+    // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+    // subscription, so skip the credit gate entirely — no hold, no balance check —
+    // and never debit at settle (see isMeteringExempt in trackAIUsage). Key the skip
+    // on the RESOLVED provider (what actually runs): `glm` + an invalid model resolves
+    // to the metered default, which must still be gated.
+    const { provider: gateProvider } = resolveProviderModel(
+      selectedProvider, selectedModel, user?.currentAiProvider, user?.currentAiModel);
     // Net spendable after all holds (including this request's) — already computed by
     // the gate so no extra DB read is needed. Each stream guards against its own slice,
     // not the gross balance, preventing concurrent streams from collectively overshooting.
-    const availableBalanceCents =
-      holdId && creditGate.balanceSnapshot
-        ? creditGate.balanceSnapshot.netSpendableCents
-        : null;
+    let availableBalanceCents: number | null = null;
+    if (!isMeteringExempt(gateProvider)) {
+      const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        estCostCents: estimateChatHoldCentsForModel(selectedModel),
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
+      if (!creditGate.allowed) {
+        loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
+        return creditGateErrorResponse(creditGate.reason);
+      }
+      holdId = creditGate.holdId;
+      availableBalanceCents =
+        holdId && creditGate.balanceSnapshot
+          ? creditGate.balanceSnapshot.netSpendableCents
+          : null;
+    }
+
+    const creditAbortController = holdId ? new AbortController() : null;
 
     // Eagerly ensure a conversations row exists so the creator can always see
     // their own conversation. isShared defaults to false (private). Idempotent
@@ -531,10 +548,11 @@ export async function POST(request: Request) {
       return createProviderErrorResponse(providerResult);
     }
 
-    // Use the resolved model name for billing. providerResult.modelName is the
-    // real OpenRouter model id sent to the backend.
+    // Use the resolved (provider, model) for billing. providerResult carries the
+    // real backend provider/model after the factory's catalog substitution.
     const { model } = providerResult;
     resolvedModelName = providerResult.modelName;
+    resolvedProvider = providerResult.provider;
 
     const onStepFinishForCredits =
       creditAbortController && availableBalanceCents !== null
@@ -1067,7 +1085,7 @@ export async function POST(request: Request) {
             // Use enhanced AI monitoring with token usage from SDK
             await AIMonitoring.trackUsage({
               userId: userId!,
-              provider: currentProvider,
+              provider: resolvedProvider ?? currentProvider,
               model: resolvedModelName!,
               source: 'chat',
               inputTokens,
@@ -1181,7 +1199,7 @@ export async function POST(request: Request) {
     // Note: conversationId might not be available in error path, use chatId as fallback
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
-      provider: selectedProvider || 'unknown',
+      provider: (resolvedProvider ?? selectedProvider) || 'unknown',
       model: resolvedModelName ?? selectedModel ?? 'unknown',
       source: 'chat',
       inputTokens: usage?.inputTokens ?? undefined,

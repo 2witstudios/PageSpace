@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   ONPREM_ALLOWED_PROVIDERS,
+  ADMIN_ONLY_PROVIDERS,
   AI_PROVIDERS,
   FREE_TIER_MODELS,
   DEFAULT_PROVIDER,
@@ -13,6 +14,7 @@ import {
   getVisibleProviders,
   isDynamicModelProvider,
   validateAgentModelSelection,
+  resolveProviderModel,
 } from '../ai-providers-config';
 
 describe('ai-providers-config', () => {
@@ -26,24 +28,36 @@ describe('ai-providers-config', () => {
       expect(AI_PROVIDERS).not.toHaveProperty('openrouter_free');
     });
 
-    it('includes the glm direct provider with Coder Plan models', () => {
+    it('includes the admin glm direct provider with Coder Plan models', () => {
+      // Admin-only direct Z.ai Coder Plan connection: bare glm-* native ids.
       expect(AI_PROVIDERS).toHaveProperty('glm');
+      expect(AI_PROVIDERS.glm.name).toBe('Z.ai (Admin)');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.1');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5-turbo');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.7');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.5-air');
     });
 
+    it('includes the public zai provider with OpenRouter z-ai/ models', () => {
+      // Public, OpenRouter-backed GLM family — metered normally, available to all.
+      expect(AI_PROVIDERS).toHaveProperty('zai');
+      expect(AI_PROVIDERS.zai.name).toBe('Z.ai');
+      expect(AI_PROVIDERS.zai.models).toHaveProperty('z-ai/glm-5.1');
+      expect(AI_PROVIDERS.zai.models).toHaveProperty('z-ai/glm-4.6');
+      expect(AI_PROVIDERS.zai.models).toHaveProperty('z-ai/glm-4.5v');
+      // Public zai keys are vendor-prefixed; every key carries the z-ai/ prefix.
+      expect(Object.keys(AI_PROVIDERS.zai.models).every((m) => m.startsWith('z-ai/'))).toBe(true);
+    });
+
+    it('gates the admin glm provider, not the public zai provider', () => {
+      expect(ADMIN_ONLY_PROVIDERS.has('glm')).toBe(true);
+      expect(ADMIN_ONLY_PROVIDERS.has('zai')).toBe(false);
+    });
+
     it('uses full OpenRouter model ids as keys for cloud vendors', () => {
       expect(AI_PROVIDERS.openai.models).toHaveProperty('openai/gpt-5.3-chat');
       expect(AI_PROVIDERS.anthropic.models).toHaveProperty('anthropic/claude-haiku-4.5');
       expect(AI_PROVIDERS.minimax.models).toHaveProperty('minimax/minimax-m3');
-    });
-
-    it('has no z-ai/ OpenRouter-prefixed model ids in the catalog', () => {
-      // Cloud vendors use vendor/model-id format; glm direct uses bare glm-* native ids
-      const allModels = Object.values(AI_PROVIDERS).flatMap((p) => Object.keys(p.models));
-      expect(allModels.some((m) => m.startsWith('z-ai/'))).toBe(false);
     });
   });
 
@@ -102,6 +116,10 @@ describe('ai-providers-config', () => {
       expect(getBackendProvider('minimax')).toBe('openrouter');
     });
 
+    it('routes the public zai provider through openrouter', () => {
+      expect(getBackendProvider('zai')).toBe('openrouter');
+    });
+
     it('passes local providers through', () => {
       expect(getBackendProvider('ollama')).toBe('ollama');
       expect(getBackendProvider('lmstudio')).toBe('lmstudio');
@@ -110,6 +128,61 @@ describe('ai-providers-config', () => {
 
     it('routes glm direct (not through openrouter)', () => {
       expect(getBackendProvider('glm')).toBe('glm');
+    });
+  });
+
+  describe('resolveProviderModel', () => {
+    it('uses the request pair when both are present and valid', () => {
+      expect(resolveProviderModel('anthropic', 'anthropic/claude-opus-4.8')).toEqual({
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+    });
+
+    it('keeps the admin glm provider when the model is a valid glm model', () => {
+      expect(resolveProviderModel('glm', 'glm-4.7')).toEqual({ provider: 'glm', model: 'glm-4.7' });
+    });
+
+    it('SUBSTITUTES the metered default when glm is paired with an invalid model (the P1 gate-bypass)', () => {
+      // This is the exact vector Codex flagged: `glm` + an invalid model must NOT
+      // resolve to glm (which would skip the credit gate) — it falls back to the
+      // metered default, so the gate runs.
+      const resolved = resolveProviderModel('glm', 'not-a-real-model');
+      expect(resolved).toEqual({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL });
+    });
+
+    it('substitutes the default for any unknown (provider, model) pair', () => {
+      expect(resolveProviderModel('openai', 'openai/hallucinated')).toEqual({
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+      });
+    });
+
+    it('falls back to the stored pair when the request pair is incomplete', () => {
+      expect(resolveProviderModel(undefined, undefined, 'anthropic', 'anthropic/claude-opus-4.8')).toEqual({
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+      // A partial request (provider only) does not combine with a stored model.
+      expect(resolveProviderModel('glm', undefined, 'anthropic', 'anthropic/claude-opus-4.8')).toEqual({
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+    });
+
+    it('falls back to the default pair when nothing valid is provided', () => {
+      expect(resolveProviderModel(undefined, undefined)).toEqual({
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+      });
+    });
+
+    it('preserves local/dynamic providers without catalog validation', () => {
+      // ollama serves runtime-discovered models, so its bare model id is not substituted.
+      expect(resolveProviderModel('ollama', 'llama3.1:70b-custom')).toEqual({
+        provider: 'ollama',
+        model: 'llama3.1:70b-custom',
+      });
     });
   });
 

@@ -11,7 +11,8 @@ import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/a
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
@@ -21,6 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -216,19 +218,40 @@ export async function POST(request: Request) {
     // Prepaid credit gate: block out-of-credits users before any model invocation.
     // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
     const [gateUser] = await db
-      .select({ subscriptionTier: users.subscriptionTier })
+      .select({ subscriptionTier: users.subscriptionTier, role: users.role })
       .from(users)
       .where(eq(users.id, userId));
-    const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
-      estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
-      maxInFlight: MAX_CHAT_INFLIGHT,
-    });
-    if (!creditGate.allowed) {
-      loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
-      return creditGateErrorResponse(creditGate.reason);
+
+    // Resolve the provider that will ACTUALLY run (mirrors getConfiguredModel below):
+    // an agent configured with `glm` + an invalid model resolves to the metered
+    // default, so both the admin gate and the credit gate must key off this, not the
+    // raw agent config.
+    const { provider: effectiveProvider } = resolveProviderModel(agent.aiProvider, agent.aiModel);
+
+    // Admin-only providers (the direct Z.ai Coder Plan) are unmetered and must never
+    // be reachable by a non-admin — otherwise any viewer of a glm-configured shared
+    // agent could consume the admin subscription for free. The interactive chat routes
+    // enforce this; the consult + v1 routes must too.
+    if (ADMIN_ONLY_PROVIDERS.has(effectiveProvider) && gateUser?.role !== 'admin') {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'admin_only_provider', provider: effectiveProvider, action: 'consult', method: 'POST' }, riskScore: 0.5 });
+      return createAdminRestrictedResponse();
     }
-    // The gate's reservation for this call, released when usage is billed below.
-    holdId = creditGate.holdId;
+
+    // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
+    // subscription, so skip the gate entirely — no hold, no balance check — and never
+    // debit at settle (see isMeteringExempt in trackAIUsage).
+    if (!isMeteringExempt(effectiveProvider)) {
+      const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        estCostCents: estimateChatHoldCentsForModel(agent.aiModel ?? undefined),
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
+      if (!creditGate.allowed) {
+        loggers.api.warn('Agent consultation: AI credit gate denied', { userId, agentId, reason: creditGate.reason });
+        return creditGateErrorResponse(creditGate.reason);
+      }
+      // The gate's reservation for this call, released when usage is billed below.
+      holdId = creditGate.holdId;
+    }
 
     // Get the drive information for context awareness
     const [drive] = await db
