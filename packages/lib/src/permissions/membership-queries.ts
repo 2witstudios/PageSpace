@@ -34,13 +34,17 @@ export async function fetchDriveIdForPage(targetPageId: string): Promise<string>
 export async function fetchCustomRolePermissions(
   customRoleId: string,
   driveId: string,
-): Promise<CustomRolePerms | null> {
+): Promise<{ permissions: CustomRolePerms; driveWidePermissions: PagePerm | null } | null> {
   const result = await db
-    .select({ permissions: driveRoles.permissions })
+    .select({ permissions: driveRoles.permissions, driveWidePermissions: driveRoles.driveWidePermissions })
     .from(driveRoles)
     .where(and(eq(driveRoles.id, customRoleId), eq(driveRoles.driveId, driveId)))
     .limit(1);
-  return result.length > 0 ? result[0].permissions : null;
+  if (result.length === 0) return null;
+  return {
+    permissions: result[0].permissions,
+    driveWidePermissions: result[0].driveWidePermissions as PagePerm | null,
+  };
 }
 
 // Returns true only when the custom role exists and belongs to the specified drive.

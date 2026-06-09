@@ -4,7 +4,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators/id-validators';
-import { fetchCustomRolePermissions, type CustomRolePerms } from './membership-queries';
+import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
 import { resolveRolePermissions } from './resolve-role-permissions';
 
 /**
@@ -231,10 +231,12 @@ export async function getUserAccessLevel(
 
     if (permission.length === 0) {
       if (memberCustomRoleId && pageData.driveId) {
-        const rolePerms = await fetchCustomRolePermissions(memberCustomRoleId, pageData.driveId);
-        if (rolePerms && (rolePerms as CustomRolePerms)[validPageId] !== undefined) {
-          const resolved = resolveRolePermissions('MEMBER', rolePerms as CustomRolePerms, validPageId);
-          return resolved.canView ? resolved : null;
+        const role = await fetchCustomRolePermissions(memberCustomRoleId, pageData.driveId);
+        if (role) {
+          const resolved = resolveCustomRolePermissions(role, validPageId);
+          if (resolved !== null) {
+            return resolved.canView ? { ...resolved, canDelete: false } : null;
+          }
         }
       }
 
@@ -423,8 +425,9 @@ export async function getUserAccessiblePagesInDrive(
     for (const p of nonPrivatePages) pageIdSet.add(p.id);
 
     if (memberRow.customRoleId) {
-      const rolePerms = await fetchCustomRolePermissions(memberRow.customRoleId, driveId);
-      if (rolePerms) {
+      const role = await fetchCustomRolePermissions(memberRow.customRoleId, driveId);
+      if (role) {
+        const { permissions: rolePerms } = role;
         const visiblePageIds = Object.entries(rolePerms)
           .filter(([, p]) => p.canView)
           .map(([id]) => id);
@@ -582,8 +585,23 @@ export async function getUserAccessiblePagesInDriveWithDetails(
 
   const memberCustomRoleId = memberCheck[0]?.customRoleId ?? null;
   if (memberCustomRoleId) {
-    const rolePerms = await fetchCustomRolePermissions(memberCustomRoleId, driveId);
-    if (rolePerms) {
+    const role = await fetchCustomRolePermissions(memberCustomRoleId, driveId);
+    if (role) {
+      const { permissions: rolePerms, driveWidePermissions } = role;
+
+      // Apply driveWidePermissions as default for non-private pages already in the map
+      // that don't have an explicit per-page entry (per-page wins over drive-wide)
+      if (driveWidePermissions) {
+        for (const [pageId, pageData] of pageMap.entries()) {
+          if (rolePerms[pageId] === undefined) {
+            pageMap.set(pageId, {
+              ...pageData,
+              permissions: { ...driveWidePermissions, canDelete: false },
+            });
+          }
+        }
+      }
+
       const visiblePageIds = Object.entries(rolePerms)
         .filter(([, p]) => p.canView)
         .map(([id]) => id);
@@ -601,9 +619,10 @@ export async function getUserAccessiblePagesInDriveWithDetails(
         .where(and(inArray(pages.id, visiblePageIds), eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
 
         for (const page of rolePages) {
+          const resolved = resolveCustomRolePermissions(role, page.id);
           pageMap.set(page.id, {
             ...page,
-            permissions: resolveRolePermissions('MEMBER', rolePerms, page.id),
+            permissions: { ...(resolved ?? rolePerms[page.id]!), canDelete: false },
           });
         }
       }
@@ -966,6 +985,7 @@ export async function getBatchPagePermissions(
         explicitCanShare: pagePermissions.canShare,
         explicitCanDelete: pagePermissions.canDelete,
         customRolePerms: driveRoles.permissions,
+        customRoleDriveWidePerms: driveRoles.driveWidePermissions,
       })
       .from(pages)
       .leftJoin(drives, eq(drives.id, pages.driveId))
@@ -1028,9 +1048,13 @@ export async function getBatchPagePermissions(
 
       if (row.customRolePerms) {
         const perms = row.customRolePerms as CustomRolePerms;
-        const entry = perms[row.pageId];
-        if (entry !== undefined) {
-          results.set(row.pageId, resolveRolePermissions('MEMBER', perms, row.pageId));
+        const driveWide = row.customRoleDriveWidePerms as PagePerm | null;
+        const resolved = resolveCustomRolePermissions(
+          { permissions: perms, driveWidePermissions: driveWide },
+          row.pageId,
+        );
+        if (resolved !== null) {
+          results.set(row.pageId, { ...resolved, canDelete: false });
           continue;
         }
       }

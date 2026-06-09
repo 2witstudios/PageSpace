@@ -79,7 +79,7 @@ describe('getAppAccessLevel — page targets', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
       canView: true, canEdit: true, canShare: false, canDelete: false,
@@ -113,7 +113,7 @@ describe('getAppAccessLevel — drive-as-root-node', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     expect(await getAppAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
       canView: false, canEdit: false, canShare: false, canDelete: false,

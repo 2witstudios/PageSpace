@@ -125,7 +125,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 4. non-private pages
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // 6. DB validation of canView=true IDs (filters stale/trashed/wrong-drive pages)
       .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'private-page' }]))
       // 7. explicit permissions
@@ -147,7 +147,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 4. non-private pages (none)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // 6. DB validation — stale-page doesn't pass (e.g., trashed or wrong drive)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 7. explicit permissions (none)
@@ -170,7 +170,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 4. non-private pages (none)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // 6. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
@@ -191,7 +191,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 4. non-private pages (includes page that role will deny)
       .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'non-private-page' }]))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // 6. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
@@ -239,7 +239,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 4. non-private pages (page-1)
       .mockReturnValueOnce(mockChainWhereNoLimit(nonPrivatePages))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // 6. role pages query (inArray)
       .mockReturnValueOnce(mockChainWhereInArray(nonPrivatePages))
       // 7. explicit pages (none)
@@ -266,7 +266,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 4. non-private pages (includes page that role will deny)
       .mockReturnValueOnce(mockChainWhereNoLimit(nonPrivatePage))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // no role pages query — no canView=true entries
       // 6. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
@@ -291,7 +291,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 4. non-private pages (none — private-1 is private)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
-      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms }]))
+      .mockReturnValueOnce(mockChainWhere([{ permissions: rolePerms, driveWidePermissions: null }]))
       // 6. role pages query (inArray)
       .mockReturnValueOnce(mockChainWhereInArray(privatePage))
       // 7. explicit pages (none)

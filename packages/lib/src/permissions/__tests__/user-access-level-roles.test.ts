@@ -100,7 +100,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain([]))
-      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms }]));
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -112,7 +112,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain([]))
-      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms }]));
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
@@ -124,7 +124,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain([]))
-      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms }]));
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: true, canDelete: false });
@@ -136,7 +136,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain([]))
-      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms }]));
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
@@ -148,7 +148,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(false)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain([]))
-      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms }]));
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -160,7 +160,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(false)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain([]))
-      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms }]));
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();

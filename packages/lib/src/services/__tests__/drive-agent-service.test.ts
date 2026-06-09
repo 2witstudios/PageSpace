@@ -344,10 +344,10 @@ describe('recapAgentMembershipsGrantedBy', () => {
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))            // granter now role_b
       .mockReturnValueOnce(stubJoinSelect([{ id: 'm6', agentPageId: 'a6', role: 'MEMBER', customRoleId: 'role_a' }]));
     vi.mocked(fetchCustomRolePermissions)
-      .mockResolvedValueOnce({ pageX: { canView: true, canEdit: false, canShare: false } })     // role_a (agent)
-      .mockResolvedValueOnce({                                                                  // role_b (cap) ⊇ role_a
-        pageX: { canView: true, canEdit: true, canShare: false },
-        pageY: { canView: true, canEdit: false, canShare: false },
+      .mockResolvedValueOnce({ permissions: { pageX: { canView: true, canEdit: false, canShare: false } }, driveWidePermissions: null })     // role_a (agent)
+      .mockResolvedValueOnce({                                                                                                               // role_b (cap) ⊇ role_a
+        permissions: { pageX: { canView: true, canEdit: true, canShare: false }, pageY: { canView: true, canEdit: false, canShare: false } },
+        driveWidePermissions: null,
       });
     stubUpdate([]);
     stubDelete();
@@ -367,8 +367,8 @@ describe('recapAgentMembershipsGrantedBy', () => {
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_c' }]))            // granter now role_c
       .mockReturnValueOnce(stubJoinSelect([{ id: 'm7', agentPageId: 'a7', role: 'MEMBER', customRoleId: 'role_a' }]));
     vi.mocked(fetchCustomRolePermissions)
-      .mockResolvedValueOnce({ pageX: { canView: true, canEdit: false, canShare: false } })     // role_a (agent)
-      .mockResolvedValueOnce({ pageZ: { canView: true, canEdit: false, canShare: false } });    // role_c (cap), no pageX
+      .mockResolvedValueOnce({ permissions: { pageX: { canView: true, canEdit: false, canShare: false } }, driveWidePermissions: null })     // role_a (agent)
+      .mockResolvedValueOnce({ permissions: { pageZ: { canView: true, canEdit: false, canShare: false } }, driveWidePermissions: null });    // role_c (cap), no pageX
     stubUpdate([]);
     const where = stubDelete();
 

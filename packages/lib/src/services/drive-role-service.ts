@@ -9,12 +9,14 @@ import { db } from '@pagespace/db/db';
 import { eq, and, asc } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
+import type { PagePerm } from '../permissions/membership-queries';
+
+// Re-export canonical type so callers can import from one place
+export type { PagePerm };
 
 // ============================================================================
 // Types
 // ============================================================================
-
-export type DriveWidePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
 
 export interface DriveRole {
   id: string;
@@ -24,7 +26,7 @@ export interface DriveRole {
   color: string | null;
   isDefault: boolean;
   permissions: RolePermissions;
-  driveWidePermissions: DriveWidePerm | null;
+  driveWidePermissions: PagePerm | null;
   position: number;
   createdAt: Date;
   updatedAt: Date;
@@ -38,7 +40,7 @@ export interface CreateRoleInput {
   color?: string | null;
   isDefault?: boolean;
   permissions: RolePermissions;
-  driveWidePermissions?: DriveWidePerm | null;
+  driveWidePermissions?: PagePerm | null;
 }
 
 export interface UpdateRoleInput {
@@ -47,7 +49,7 @@ export interface UpdateRoleInput {
   color?: string | null;
   isDefault?: boolean;
   permissions?: RolePermissions;
-  driveWidePermissions?: DriveWidePerm | null;
+  driveWidePermissions?: PagePerm | null;
 }
 
 export interface DriveRoleAccessInfo {
@@ -314,6 +316,20 @@ export async function reorderDriveRoles(
         ));
     }
   });
+}
+
+/**
+ * Validate driveWidePermissions structure (null = clear, object = set)
+ */
+export function validateDriveWidePermissions(perms: unknown): perms is PagePerm | null {
+  if (perms === null || perms === undefined) return true;
+  if (typeof perms !== 'object' || Array.isArray(perms)) return false;
+  const p = perms as Record<string, unknown>;
+  return (
+    typeof p.canView === 'boolean' &&
+    typeof p.canEdit === 'boolean' &&
+    typeof p.canShare === 'boolean'
+  );
 }
 
 /**

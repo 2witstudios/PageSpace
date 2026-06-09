@@ -248,6 +248,9 @@ export const driveBackupRoles = pgTable('drive_backup_roles', {
   color: text('color'),
   isDefault: boolean('isDefault').default(false).notNull(),
   permissions: jsonb('permissions'),
+  driveWidePermissions: jsonb('drive_wide_permissions')
+    .$type<{ canView: boolean; canEdit: boolean; canShare: boolean } | null>()
+    .default(sql`NULL`),
   position: real('position'),
 }, (table) => ({
   pk: primaryKey({ columns: [table.backupId, table.roleId] }),

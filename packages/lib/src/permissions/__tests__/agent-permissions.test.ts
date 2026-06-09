@@ -107,7 +107,7 @@ describe('getAgentAccessLevel — page targets', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
@@ -136,7 +136,7 @@ describe('getAgentAccessLevel — page targets', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -182,7 +182,7 @@ describe('getAgentAccessLevel — drive targets (drive-as-root-node)', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
@@ -193,7 +193,7 @@ describe('getAgentAccessLevel — drive targets (drive-as-root-node)', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -204,7 +204,7 @@ describe('getAgentAccessLevel — drive targets (drive-as-root-node)', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([]))
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms }]));
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
     expect(result).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });

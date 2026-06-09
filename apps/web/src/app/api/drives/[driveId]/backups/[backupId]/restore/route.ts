@@ -114,6 +114,7 @@ export async function POST(
           color: driveBackupRoles.color,
           isDefault: driveBackupRoles.isDefault,
           permissions: driveBackupRoles.permissions,
+          driveWidePermissions: driveBackupRoles.driveWidePermissions,
           position: driveBackupRoles.position,
         }).from(driveBackupRoles).where(eq(driveBackupRoles.backupId, backupId)),
         affectedPageIds.length > 0

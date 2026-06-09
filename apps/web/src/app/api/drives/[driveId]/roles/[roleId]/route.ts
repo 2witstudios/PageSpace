@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, validateDriveWidePermissions } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -92,7 +92,7 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { name, description, color, isDefault, permissions } = body;
+    const { name, description, color, isDefault, permissions, driveWidePermissions } = body;
 
     // Validate name length if provided
     if (name !== undefined) {
@@ -107,12 +107,17 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
 
+    if (driveWidePermissions !== undefined && !validateDriveWidePermissions(driveWidePermissions)) {
+      return NextResponse.json({ error: 'Invalid driveWidePermissions structure' }, { status: 400 });
+    }
+
     const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
       name,
       description,
       color,
       isDefault,
       permissions,
+      ...(driveWidePermissions !== undefined && { driveWidePermissions }),
     });
 
     // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)

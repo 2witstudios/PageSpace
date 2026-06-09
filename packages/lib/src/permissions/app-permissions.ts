@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { mcpTokenDrives } from '@pagespace/db/schema/members';
 import { resolveRolePermissions } from './resolve-role-permissions';
-import { fetchDriveIdForPage, fetchCustomRolePermissions } from './membership-queries';
+import { fetchDriveIdForPage, fetchCustomRolePermissions, resolveCustomRolePermissions } from './membership-queries';
 import type { PermissionLevel } from './permissions';
 
 async function fetchAppMembership(tokenId: string, driveId: string) {
@@ -22,11 +22,20 @@ export async function getAppAccessLevel(
   const membership = await fetchAppMembership(tokenId, driveId);
   if (!membership) return null;
 
-  const customPerms = membership.customRoleId
+  const role = membership.customRoleId
     ? await fetchCustomRolePermissions(membership.customRoleId, driveId)
     : null;
 
-  return resolveRolePermissions(membership.role, customPerms, targetPageId);
+  if (role && membership.role !== 'ADMIN' && membership.role !== 'OWNER') {
+    const resolved = resolveCustomRolePermissions(role, targetPageId);
+    if (resolved !== null) {
+      return resolved.canView ? { ...resolved, canDelete: false } : null;
+    }
+    // No per-page or drive-wide grant — custom roles limit access to explicitly listed pages
+    return { canView: false, canEdit: false, canShare: false, canDelete: false };
+  }
+
+  return resolveRolePermissions(membership.role, role?.permissions ?? null, targetPageId);
 }
 
 export async function hasAppDriveMembership(tokenId: string, driveId: string): Promise<boolean> {
