@@ -20,7 +20,10 @@ vi.mock('@/services/api/drive-backup-service', () => ({
   createDriveBackup: vi.fn().mockResolvedValue({ success: true }),
 }));
 
-const { mockLimit, mockOrderBy, mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet, mockUpdate } =
+// Only destructure what's actually referenced outside the hoisted block.
+// mockWhere/mockInnerJoin/mockFrom/mockOrderBy stay internal — they build the
+// select chain and are captured by closure; no need to expose them.
+const { mockLimit, mockSelect, mockUpdate, mockUpdateWhere, mockSet } =
   vi.hoisted(() => {
     const mockLimit = vi.fn().mockResolvedValue([]);
     const mockOrderBy = vi.fn(() => ({ limit: mockLimit }));
@@ -35,7 +38,7 @@ const { mockLimit, mockOrderBy, mockWhere, mockInnerJoin, mockFrom, mockSelect, 
     const mockSet = vi.fn(() => ({ where: mockUpdateWhere }));
     const mockUpdate = vi.fn(() => ({ set: mockSet }));
 
-    return { mockLimit, mockOrderBy, mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet, mockUpdate };
+    return { mockLimit, mockSelect, mockUpdate, mockUpdateWhere, mockSet };
   });
 
 vi.mock('@pagespace/db/db', () => ({

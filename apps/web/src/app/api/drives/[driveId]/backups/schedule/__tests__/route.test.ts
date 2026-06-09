@@ -31,18 +31,17 @@ const {
   mockValues,
   mockInsert,
   mockLimit,
-  mockWhere,
-  mockInnerJoin,
   mockFrom,
 } = vi.hoisted(() => {
   const mockOnConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
   const mockValues = vi.fn(() => ({ onConflictDoUpdate: mockOnConflictDoUpdate }));
   const mockInsert = vi.fn(() => ({ values: mockValues }));
   const mockLimit = vi.fn();
+  // mockWhere and mockInnerJoin are internal to the select chain — no direct test refs
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
   const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
-  return { mockOnConflictDoUpdate, mockValues, mockInsert, mockLimit, mockWhere, mockInnerJoin, mockFrom };
+  return { mockOnConflictDoUpdate, mockValues, mockInsert, mockLimit, mockFrom };
 });
 
 vi.mock('@pagespace/db/db', () => ({
