@@ -68,6 +68,8 @@ const trustedEvent = { senderFrame: { url: 'https://pagespace.ai/dashboard' } };
 const untrustedEvent = { senderFrame: { url: 'https://evil.com/x' } };
 // No sender frame at all (fails closed).
 const noFrameEvent = {};
+// Build a sender event whose origin matches a given configured app URL.
+const senderFor = (appUrl: string) => ({ senderFrame: { url: appUrl } });
 
 // Extract handlers from ipcMain.handle mock
 function getRegisteredHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
@@ -97,7 +99,7 @@ describe('IPC Handlers', () => {
         deviceToken: 'ps_dev_test',
       };
 
-      const result = await handler({}, sessionData);
+      const result = await handler(senderFor('https://pagespace.ai/dashboard'), sessionData);
 
       expect(saveAuthSession).toHaveBeenCalledWith(sessionData);
       expect(session.defaultSession.cookies.set).toHaveBeenCalledWith(
@@ -119,7 +121,7 @@ describe('IPC Handlers', () => {
       vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
 
       const handler = getRegisteredHandler('auth:store-session');
-      await handler({}, { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
+      await handler(senderFor('https://pagespace.ai/dashboard'), { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
 
       expect(session.defaultSession.cookies.set).toHaveBeenCalledWith(
         expect.objectContaining({ secure: true })
@@ -132,7 +134,7 @@ describe('IPC Handlers', () => {
       vi.mocked(getAppUrl).mockReturnValue('http://pagespace.local:3000/dashboard');
 
       const handler = getRegisteredHandler('auth:store-session');
-      await handler({}, { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
+      await handler(senderFor('http://pagespace.local:3000/dashboard'), { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
 
       expect(session.defaultSession.cookies.set).toHaveBeenCalledWith(
         expect.objectContaining({ secure: false })
@@ -145,7 +147,7 @@ describe('IPC Handlers', () => {
       vi.mocked(getAppUrl).mockReturnValue('http://localhost:3000/dashboard');
 
       const handler = getRegisteredHandler('auth:store-session');
-      await handler({}, { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
+      await handler(senderFor('http://localhost:3000/dashboard'), { sessionToken: 'x', csrfToken: 'y', deviceToken: 'z' });
 
       expect(session.defaultSession.cookies.set).toHaveBeenCalledWith(
         expect.objectContaining({ secure: false })
@@ -155,15 +157,31 @@ describe('IPC Handlers', () => {
     it('should still succeed if cookie setting fails (non-blocking)', async () => {
       vi.mocked(saveAuthSession).mockResolvedValue(undefined);
       vi.mocked(session.defaultSession.cookies.set).mockRejectedValue(new Error('Cookie error'));
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
 
       const handler = getRegisteredHandler('auth:store-session');
-      const result = await handler({}, {
+      const result = await handler(senderFor('https://pagespace.ai/dashboard'), {
         sessionToken: 'ps_sess_x',
         csrfToken: 'csrf_x',
         deviceToken: 'ps_dev_x',
       });
 
       expect(result).toEqual({ success: true });
+    });
+
+    it('refuses to store a session from an untrusted sender (no injection)', async () => {
+      vi.mocked(getAppUrl).mockReturnValue('https://pagespace.ai/dashboard');
+
+      const handler = getRegisteredHandler('auth:store-session');
+      const result = await handler(untrustedEvent, {
+        sessionToken: 'attacker',
+        csrfToken: 'x',
+        deviceToken: 'y',
+      });
+
+      expect(result).toEqual({ success: false });
+      expect(saveAuthSession).not.toHaveBeenCalled();
+      expect(session.defaultSession.cookies.set).not.toHaveBeenCalled();
     });
   });
 

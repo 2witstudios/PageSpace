@@ -111,7 +111,14 @@ export function registerIPCHandlers(): void {
     return beginAuthExchangeFlow();
   });
 
-  ipcMain.handle('auth:store-session', async (_event, sessionData: StoredAuthSession) => {
+  ipcMain.handle('auth:store-session', async (event, sessionData: StoredAuthSession) => {
+    // Writing a session into native secure storage + the cookie jar is the most
+    // capability-bearing bridge call — restrict it to the trusted origin so an
+    // off-origin document cannot inject an attacker session (H5).
+    if (!isTrustedSender(event)) {
+      console.warn('[Auth IPC] Blocked auth:store-session from untrusted sender');
+      return { success: false };
+    }
     await saveAuthSession(sessionData);
 
     // Also set the session cookie on the BrowserWindow's session
@@ -135,7 +142,11 @@ export function registerIPCHandlers(): void {
     return { success: true };
   });
 
-  ipcMain.handle('auth:clear-auth', async () => {
+  ipcMain.handle('auth:clear-auth', async (event) => {
+    if (!isTrustedSender(event)) {
+      console.warn('[Auth IPC] Blocked auth:clear-auth from untrusted sender');
+      return;
+    }
     try {
       await clearAuthSession();
       await session.defaultSession.clearStorageData({
