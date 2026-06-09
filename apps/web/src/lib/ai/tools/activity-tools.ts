@@ -1,13 +1,13 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, desc, gte, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
+import { eq, and, or, desc, gte, lt, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members';
-import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -20,7 +20,7 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import type { ToolExecutionContext } from '../core/types';
-import { filterDriveIdsByMcpScope } from './actor-permissions';
+import { filterDriveIdsByMcpScope, canActorViewPage } from './actor-permissions';
 
 /**
  * Activity tools for AI agents
@@ -237,63 +237,40 @@ export function shouldContinuePaging(args: {
 }
 
 /**
- * Shell (impure): resolves the actor's set of viewable page IDs across the
- * pages referenced by `activities`, reusing the same per-page view check the
- * content-diff path already applies.
+ * Shell (impure): resolves which of the pages referenced by `rows` the ACTOR
+ * can view, returning the set of viewable page IDs.
  *
- * `getBatchPagePermissions` excludes trashed pages even for owners/admins, so
- * (as elsewhere in this file) we add an owner/admin override to keep their full
- * visibility into their own drives — including trash/delete activity.
+ * Uses `canActorViewPage` — the same actor-aware view check the other AI tools
+ * (page-read, task, agent-communication) use. This de-privileges agent actors
+ * to their own ACL (not the session user's) and applies any MCP page scope,
+ * and it is trash-agnostic: owners/admins and explicit grant-holders still see
+ * activity for pages that have since been trashed (so trash/delete rows are not
+ * silently dropped from their feed).
  *
- * `adminDriveCache` memoizes the per-drive owner/admin check so paginated calls
- * don't re-query the same drives on every batch.
+ * `viewableCache` memoizes the per-page decision so paginated calls don't
+ * re-check a page already resolved in an earlier batch.
  */
-async function buildAccessiblePageIdSet(
-  userId: string,
-  activities: { pageId: string | null; driveId: string | null }[],
-  adminDriveCache?: Map<string, boolean>,
+async function resolveActorViewablePageIds(
+  context: ToolExecutionContext,
+  rows: { pageId: string | null }[],
+  viewableCache: Map<string, boolean>,
 ): Promise<Set<string>> {
   const uniquePageIds = [
-    ...new Set(activities.map((a) => a.pageId).filter((id): id is string => Boolean(id))),
+    ...new Set(rows.map((r) => r.pageId).filter((id): id is string => Boolean(id))),
   ];
 
-  if (uniquePageIds.length === 0) {
-    return new Set<string>();
-  }
-
-  const permissions = await getBatchPagePermissions(userId, uniquePageIds);
-  const accessible = new Set<string>(
-    Array.from(permissions.entries())
-      .filter(([, perm]) => perm?.canView)
-      .map(([pageId]) => pageId)
+  // Resolve only pages not already decided in a prior batch.
+  const unresolved = uniquePageIds.filter((id) => !viewableCache.has(id));
+  await Promise.all(
+    unresolved.map(async (pageId) => {
+      viewableCache.set(pageId, await canActorViewPage(context, pageId));
+    })
   );
 
-  // Drive owners/admins can view every page in their drives (incl. private and
-  // trashed). getBatchPagePermissions drops trashed rows, so re-add them here.
-  const uniqueDriveIds = [
-    ...new Set(
-      activities
-        .filter((a) => a.pageId)
-        .map((a) => a.driveId)
-        .filter((id): id is string => Boolean(id))
-    ),
-  ];
-
-  for (const driveId of uniqueDriveIds) {
-    let isAdmin = adminDriveCache?.get(driveId);
-    if (isAdmin === undefined) {
-      isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
-      adminDriveCache?.set(driveId, isAdmin);
-    }
-    if (isAdmin) {
-      for (const a of activities) {
-        if (a.driveId === driveId && a.pageId) {
-          accessible.add(a.pageId);
-        }
-      }
-    }
+  const accessible = new Set<string>();
+  for (const pageId of uniquePageIds) {
+    if (viewableCache.get(pageId)) accessible.add(pageId);
   }
-
   return accessible;
 }
 
@@ -575,11 +552,28 @@ When summarizing multiple changes, group them thematically and describe the over
           );
         }
 
-        // Fetch a batch of activity rows at a given offset. A composite
-        // (timestamp, id) ordering makes pagination deterministic across ties.
-        const fetchActivityBatch = (offset: number, take: number) =>
+        // Fetch a batch of activity rows starting strictly after `cursor` in
+        // (timestamp desc, id desc) order. Keyset pagination (vs OFFSET) is
+        // stable under concurrent inserts/deletes: rows already returned can't
+        // shift into or out of a later page, so no row is double-counted or
+        // skipped mid-scan.
+        const fetchActivityBatch = (
+          cursor: { timestamp: Date; id: string } | null,
+          take: number,
+        ) =>
           db.query.activityLogs.findMany({
-            where: and(...conditions),
+            where: cursor
+              ? and(
+                  ...conditions,
+                  or(
+                    lt(activityLogs.timestamp, cursor.timestamp),
+                    and(
+                      eq(activityLogs.timestamp, cursor.timestamp),
+                      lt(activityLogs.id, cursor.id)
+                    )
+                  )
+                )
+              : and(...conditions),
             with: {
               user: {
                 columns: { id: true, name: true, email: true },
@@ -590,7 +584,6 @@ When summarizing multiple changes, group them thematically and describe the over
             },
             orderBy: [desc(activityLogs.timestamp), desc(activityLogs.id)],
             limit: take,
-            offset,
           });
         type ActivityRow = Awaited<ReturnType<typeof fetchActivityBatch>>[number];
 
@@ -609,10 +602,9 @@ When summarizing multiple changes, group them thematically and describe the over
         // already yields `limit` visible rows; MAX_SCANNED bounds worst-case work.
         const FETCH_BATCH = Math.min(200, limit * 4);
         const MAX_SCANNED = 2000;
-        const adminDriveCache = new Map<string, boolean>();
-        const seenIds = new Set<string>(); // guard against offset drift from concurrent writes
+        const viewableCache = new Map<string, boolean>();
         const collected: ActivityRow[] = [];
-        let offset = 0;
+        let cursor: { timestamp: Date; id: string } | null = null;
         let scanned = 0;
         let lastBatchSize = FETCH_BATCH; // assume a full batch so the loop is entered
 
@@ -626,19 +618,24 @@ When summarizing multiple changes, group them thematically and describe the over
             batchSize: FETCH_BATCH,
           })
         ) {
-          const batch = await fetchActivityBatch(offset, FETCH_BATCH);
+          const batch = await fetchActivityBatch(cursor, FETCH_BATCH);
           lastBatchSize = batch.length;
           if (batch.length === 0) break;
           scanned += batch.length;
-          offset += batch.length;
+          const tail = batch[batch.length - 1];
+          cursor = { timestamp: tail.timestamp, id: tail.id };
 
-          const batchAccessible = await buildAccessiblePageIdSet(userId, batch, adminDriveCache);
-          for (const row of filterAccessibleActivities(batch, batchAccessible)) {
-            if (seenIds.has(row.id)) continue; // de-dupe rows shifted across batch boundaries
-            seenIds.add(row.id);
-            collected.push(row);
-          }
+          const batchViewable = await resolveActorViewablePageIds(
+            context as ToolExecutionContext,
+            batch,
+            viewableCache
+          );
+          collected.push(...filterAccessibleActivities(batch, batchViewable));
         }
+
+        // True when we stopped because of the scan ceiling while still short of
+        // `limit` — the feed may be incomplete and the caller should know.
+        const scanCeilingReached = scanned >= MAX_SCANNED && collected.length < limit;
 
         // Honor the caller's requested cap on VISIBLE rows.
         const visibleActivities = collected.slice(0, limit);
@@ -906,6 +903,10 @@ When summarizing multiple changes, group them thematically and describe the over
             from: string;
             lastVisit: string | null;
             excludedSelf: boolean;
+            // Set when the access-filtered scan hit its row ceiling before
+            // collecting `limit` visible rows: the feed may be incomplete, so
+            // the caller should not treat it as "all activity in the window".
+            scanLimited?: boolean;
             truncated?: { droppedDeltas?: boolean; droppedActivities?: number; hardCapExceeded?: boolean };
           };
         } = {
@@ -919,6 +920,7 @@ When summarizing multiple changes, group them thematically and describe the over
             from: timeWindowStart.toISOString(),
             lastVisit: lastVisitTime?.toISOString() || null,
             excludedSelf: excludeOwnActivity,
+            ...(scanCeilingReached ? { scanLimited: true } : {}),
           },
         };
 
