@@ -38,9 +38,11 @@ vi.mock('@/lib/stripe', () => ({
 const mockSelectWhere = vi.fn();
 const mockSelectLimit = vi.fn();
 const mockInsertValues = vi.fn();
-const mockInsertOnConflict = vi.fn();
+const mockInsertOnConflictDoNothing = vi.fn();
+const mockInsertReturning = vi.fn();
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
+const mockDeleteWhere = vi.fn();
 
 vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
@@ -67,13 +69,18 @@ vi.mock('@pagespace/db/db', () => {
       })),
       insert: vi.fn(() => ({
         values: mockInsertValues.mockReturnValue({
-          onConflictDoUpdate: mockInsertOnConflict,
+          onConflictDoNothing: mockInsertOnConflictDoNothing.mockReturnValue({
+            returning: mockInsertReturning,
+          }),
         }),
       })),
       update: vi.fn(() => ({
         set: mockUpdateSet.mockReturnValue({
           where: mockUpdateWhere,
         }),
+      })),
+      delete: vi.fn(() => ({
+        where: mockDeleteWhere,
       })),
       transaction: vi.fn(async (callback: (tx: typeof mockTx) => Promise<void>) => {
         await callback(mockTx);
@@ -260,11 +267,15 @@ describe('POST /api/stripe/webhook', () => {
     // Setup default database responses
     mockSelectLimit.mockResolvedValue([mockUser()]);
     mockInsertValues.mockReturnValue({
-      onConflictDoUpdate: mockInsertOnConflict,
+      onConflictDoNothing: mockInsertOnConflictDoNothing.mockReturnValue({
+        returning: mockInsertReturning,
+      }),
     });
-    mockInsertOnConflict.mockResolvedValue(undefined);
+    // Default: the idempotency insert wins the race (fresh row) → event is processed.
+    mockInsertReturning.mockResolvedValue([{ id: 'evt_test' }]);
     mockUpdateWhere.mockResolvedValue(undefined);
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockDeleteWhere.mockResolvedValue(undefined);
     mockApplyStripeFunding.mockResolvedValue(undefined);
   });
 
@@ -305,14 +316,14 @@ describe('POST /api/stripe/webhook', () => {
   });
 
   describe('Idempotency', () => {
-    it('should return 200 for duplicate events', async () => {
+    it('should return 200 for a true duplicate whose prior attempt finished', async () => {
       const event = mockStripeEvent('customer.subscription.created', mockSubscription());
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
-      // Simulate duplicate event (insert throws conflict error)
-      mockInsertValues.mockImplementation(() => {
-        throw new Error('Duplicate key');
-      });
+      // Conflict: onConflictDoNothing().returning() yields no row...
+      mockInsertReturning.mockResolvedValueOnce([]);
+      // ...and the existing row shows the prior attempt already finished (processedAt set).
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: new Date('2026-06-09T00:00:00Z') }]);
 
       const request = new Request('https://example.com/api/stripe/webhook', {
         method: 'POST',
@@ -327,6 +338,51 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(body.received).toBe(true);
+    });
+
+    it('should return 500 (retry) for a duplicate whose prior attempt has NOT finished', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      // Redelivery raced an in-flight first attempt: conflict, but processedAt is still null.
+      mockInsertReturning.mockResolvedValueOnce([]);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null }]);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // Must NOT ack — funding hasn't been applied yet. 500 forces Stripe to redeliver.
+      expect(response.status).toBe(500);
+      // The funding handler must not run on a retry signal.
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+    });
+
+    it('should return 500 (retry) on a transient insert DB error — never silently ack', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      // A pool timeout / dropped connection must NOT be treated as "already processed".
+      mockInsertReturning.mockRejectedValueOnce(new Error('pool timeout'));
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
     });
   });
 

@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
+import { classifyDedupeOutcome, type DedupeOutcome } from './dedupe';
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,17 +40,62 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
     }
 
-    // Check for idempotency - insert event ID first
+    // Idempotency: claim this event id BEFORE processing. onConflictDoNothing().returning()
+    // distinguishes a TRUE duplicate (conflict → no row returned) from a transient DB fault
+    // (throws) — so we never silently ack (200) an event we actually failed to record, which
+    // would let Stripe drop the redelivery and permanently lose paid funding. The decision is
+    // a pure function (classifyDedupeOutcome) so all four cases are unit-tested without a DB.
+    let outcome: DedupeOutcome;
     try {
-      await db.insert(stripeEvents).values({
-        id: event.id,
-        type: event.type,
+      const insertedRows = await db
+        .insert(stripeEvents)
+        .values({ id: event.id, type: event.type })
+        .onConflictDoNothing({ target: stripeEvents.id })
+        .returning({ id: stripeEvents.id });
+
+      let existingProcessedAt: Date | null | undefined;
+      if (insertedRows.length === 0) {
+        // Lost the race / redelivery: inspect the prior row to see whether it finished.
+        // processedAt is null until processing completes (see stripe_events schema).
+        const existing = await db
+          .select({ processedAt: stripeEvents.processedAt })
+          .from(stripeEvents)
+          .where(eq(stripeEvents.id, event.id))
+          .limit(1);
+        existingProcessedAt = existing[0]?.processedAt ?? null;
+      }
+
+      outcome = classifyDedupeOutcome({
+        inserted: insertedRows.length > 0,
+        existingProcessedAt,
       });
-    } catch {
-      // Event already processed
+    } catch (insertError) {
+      // A genuine DB fault (pool timeout, connection drop) — never a duplicate, since
+      // onConflictDoNothing absorbs the unique violation. Force Stripe to redeliver.
+      loggers.api.error(
+        'Stripe webhook idempotency insert failed',
+        insertError instanceof Error ? insertError : undefined,
+        { eventId: event.id }
+      );
+      outcome = classifyDedupeOutcome({ inserted: false, error: insertError });
+    }
+
+    if (outcome === 'duplicate-ack') {
+      // A prior delivery already processed this event to completion.
       loggers.api.info('Event already processed', { eventId: event.id });
       return NextResponse.json({ received: true }, { status: 200 });
     }
+    if (outcome === 'retry') {
+      // Either a transient insert failure, or a prior attempt that claimed the id but has
+      // not finished (in flight or failed mid-way). 500 so Stripe redelivers instead of
+      // dropping funding. Funding is idempotent on creditLedger.stripeRef, so reprocessing
+      // credits the balance exactly once.
+      loggers.api.warn('Stripe webhook signaling retry (insert fault or unfinished prior attempt)', {
+        eventId: event.id,
+      });
+      return NextResponse.json({ error: 'Event not yet processed' }, { status: 500 });
+    }
+    // outcome === 'process' — first recording of this event; handle it below.
 
     // Process the event
     try {
