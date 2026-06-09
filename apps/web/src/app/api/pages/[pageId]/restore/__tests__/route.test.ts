@@ -20,6 +20,7 @@ const {
   mockIsAuthError,
   mockIsMCPAuthResult,
   mockCheckMCPPageScope,
+  mockCanUserDeletePage,
   mockBroadcastPageEvent,
   mockCreatePageEventPayload,
   mockPagesFindFirst,
@@ -35,6 +36,7 @@ const {
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   mockIsMCPAuthResult: vi.fn().mockReturnValue(false),
   mockCheckMCPPageScope: vi.fn().mockResolvedValue(null),
+  mockCanUserDeletePage: vi.fn().mockResolvedValue(true),
   mockBroadcastPageEvent: vi.fn(),
   mockCreatePageEventPayload: vi.fn((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
     driveId, pageId, type, ...data,
@@ -64,6 +66,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
   isMCPAuthResult: (result: unknown) => mockIsMCPAuthResult(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserDeletePage: (...args: unknown[]) => mockCanUserDeletePage(...args),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -246,6 +252,7 @@ describe('POST /api/pages/[pageId]/restore', () => {
     mockIsAuthError.mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     mockIsMCPAuthResult.mockReturnValue(false);
     mockCheckMCPPageScope.mockResolvedValue(null);
+    mockCanUserDeletePage.mockResolvedValue(true);
     mockPagesFindFirst.mockResolvedValue(mockTrashedPage);
     mockApplyPageMutation.mockResolvedValue({ deferredTrigger: null });
     mockGetActorInfo.mockResolvedValue({
@@ -279,6 +286,52 @@ describe('POST /api/pages/[pageId]/restore', () => {
       expect(response.status).toBe(403);
       const body = await response.json();
       expect(body.error).toBe('Scope denied');
+    });
+  });
+
+  describe('authorization (IDOR — finding H1)', () => {
+    it('returns 403 and performs NO restore when caller lacks delete permission', async () => {
+      mockCanUserDeletePage.mockResolvedValue(false);
+
+      const response = await POST(createRequest(), mockParams);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/forbidden/i);
+      // No mutation, no transaction, no broadcast, no trigger tracking.
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+      expect(mockBroadcastPageEvent).not.toHaveBeenCalled();
+      expect(mockTrackPageOperation).not.toHaveBeenCalled();
+    });
+
+    it('checks delete permission against the target page for the authenticated user', async () => {
+      await POST(createRequest(), mockParams);
+
+      expect(mockCanUserDeletePage).toHaveBeenCalledWith(mockUserId, mockPageId);
+    });
+
+    it('returns 200 and restores when caller has delete permission', async () => {
+      mockCanUserDeletePage.mockResolvedValue(true);
+
+      const response = await POST(createRequest(), mockParams);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toMatch(/restored/i);
+      expect(mockApplyPageMutation).toHaveBeenCalled();
+    });
+
+    it('enforces scoped MCP tokens before authorization (out-of-scope -> 403, no permission lookup)', async () => {
+      mockCheckMCPPageScope.mockResolvedValue(
+        NextResponse.json({ error: 'This token does not have access to this drive' }, { status: 403 }),
+      );
+
+      const response = await POST(createRequest(), mockParams);
+
+      expect(response.status).toBe(403);
+      expect(mockCanUserDeletePage).not.toHaveBeenCalled();
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
   });
 
