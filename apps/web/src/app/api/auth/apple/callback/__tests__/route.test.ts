@@ -25,7 +25,8 @@ import crypto from 'crypto';
 // Mock dependencies BEFORE imports
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByAppleIdOrEmail: vi.fn(),
+    findUserByAppleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -209,7 +210,8 @@ describe('POST /api/auth/apple/callback', () => {
     };
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(isSafeReturnUrl).mockReturnValue(true);
-    vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -593,7 +595,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: null,
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -610,6 +613,44 @@ describe('POST /api/auth/apple/callback', () => {
       expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
+    // SECURITY (M5): an unverified Apple email must never link to / authenticate
+    // an existing account; only a subject-id (appleId) match may.
+    it('redirects to oauth_error and never links when email matches an existing account but is unverified', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: {
+          providerId: 'attacker-apple-sub',
+          email: 'victim@example.com',
+          emailVerified: false,
+        },
+      });
+      // No appleId subject match; only the email collides with an existing account.
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
+        id: 'victim-id',
+        name: 'Victim',
+        email: 'victim@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+      // No account was linked, created, or signed in.
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+      expect(sessionService.createSession).not.toHaveBeenCalled();
+    });
+
     it('updates existing user missing name', async () => {
       const existingUser = {
         id: 'existing-id',
@@ -621,7 +662,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: 'apple-sub-123',
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -648,7 +690,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: 'apple-sub-123',
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(existingUser as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -673,7 +716,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: null,
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -1129,7 +1173,8 @@ describe('POST /api/auth/apple/callback', () => {
         tokenVersion: 0,
         appleId: null,
       };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -1152,7 +1197,8 @@ describe('POST /api/auth/apple/callback', () => {
         tokenVersion: 0,
         appleId: null,
       };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -1235,7 +1281,8 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
 
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({

@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, or, isNull, sql, type InferSelectModel, type InferInsertModel } from '@pagespace/db/operators'
+import { eq, and, isNull, sql, type InferSelectModel, type InferInsertModel } from '@pagespace/db/operators'
 import { users, deviceTokens } from '@pagespace/db/schema/auth';
 
 // Types derived from Drizzle schema - ensures type safety without manual definitions
@@ -69,21 +69,28 @@ export const authRepository = {
   },
 
   /**
-   * Find a user by Google ID or email (for OAuth login/signup)
+   * Find a user by Google subject id (OAuth provider identity).
+   *
+   * SECURITY: provider-subject and email lookups are kept SEPARATE so the
+   * account-match decision (`resolveOAuthMatch`) can require a verified email
+   * before ever linking by email. See audit finding M5.
    */
-  async findUserByGoogleIdOrEmail(googleId: string, email: string): Promise<User | null> {
+  async findUserByGoogleId(googleId: string): Promise<User | null> {
     const user = await db.query.users.findFirst({
-      where: or(eq(users.googleId, googleId), eq(users.email, email)),
+      where: eq(users.googleId, googleId),
     });
     return user ?? null;
   },
 
   /**
-   * Find a user by Apple ID or email (for OAuth login/signup)
+   * Find a user by Apple subject id (OAuth provider identity).
+   *
+   * SECURITY: see {@link findUserByGoogleId} — subject and email lookups are
+   * intentionally separate to enforce the verified-email link rule (M5).
    */
-  async findUserByAppleIdOrEmail(appleId: string, email: string): Promise<User | null> {
+  async findUserByAppleId(appleId: string): Promise<User | null> {
     const user = await db.query.users.findFirst({
-      where: or(eq(users.appleId, appleId), eq(users.email, email)),
+      where: eq(users.appleId, appleId),
     });
     return user ?? null;
   },

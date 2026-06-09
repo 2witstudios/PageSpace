@@ -23,6 +23,7 @@ import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
 import {
   consumeAllInvitesForEmail,
@@ -133,7 +134,34 @@ export async function GET(req: Request) {
 
     const userName = name || email.split('@')[0] || 'User';
 
-    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Google
+    // asserts `email_verified === true`; the subject id may always match.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'google',
+      providerId: googleId!,
+      email,
+      emailVerified: email_verified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'google',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'google_oauth_unverified_email_link_blocked' },
+      });
+      if (verifiedState.platform === 'desktop') {
+        return NextResponse.redirect('pagespace://auth-error?error=oauth_error');
+      }
+      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    }
+
+    let user = matchedUser;
     const wasNewUser = !user;
 
     if (user) {

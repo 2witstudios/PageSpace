@@ -252,6 +252,47 @@ describe('oauth-utils', () => {
       expect(db.update).toHaveBeenCalledWith(users);
     });
 
+    // SECURITY (M5): an unverified provider email that collides with an existing
+    // account must be rejected — never linked, never authenticated.
+    it('rejects when an unverified email matches an existing account and there is no subject match', async () => {
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(undefined as never) // subject-id lookup: no match
+        .mockResolvedValueOnce({ id: 'victim', email: 'victim@test.com', googleId: 'other' } as never); // email lookup: existing account
+
+      const result = await createOrLinkOAuthUser({
+        providerId: 'attacker-sub',
+        email: 'victim@test.com',
+        emailVerified: false,
+        name: 'Attacker',
+        picture: undefined,
+        provider: OAuthProvider.GOOGLE,
+      });
+
+      expect(result).toEqual({ status: 'rejected', reason: 'unverified_email_conflict' });
+      // No write side effects.
+      expect(db.update).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+
+    it('links by email when an unverified email has no existing match (fresh signup)', async () => {
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+      const mockReturning = vi.fn().mockResolvedValue([{ id: 'new-user', name: 'New', email: 'new@test.com' }]);
+      vi.mocked(db.insert).mockReturnValue({ values: vi.fn(() => ({ returning: mockReturning })) } as never);
+      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 1 }]);
+      vi.mocked(db.select).mockReturnValue({ from: vi.fn(() => ({ where: mockCountWhere })) } as never);
+
+      const result = await createOrLinkOAuthUser({
+        providerId: 'fresh-sub',
+        email: 'new@test.com',
+        emailVerified: false,
+        name: 'New',
+        picture: undefined,
+        provider: OAuthProvider.GOOGLE,
+      });
+
+      expect(result.status).toBe('linked');
+    });
+
     it('should create new user when not found', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
       const mockReturning = vi.fn().mockResolvedValue([{

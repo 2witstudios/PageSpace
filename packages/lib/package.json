@@ -487,6 +487,11 @@
       "import": "./dist/auth/secure-compare.js",
       "require": "./dist/auth/secure-compare.js"
     },
+    "./auth/oauth-account-match": {
+      "types": "./dist/auth/oauth-account-match.d.ts",
+      "import": "./dist/auth/oauth-account-match.js",
+      "require": "./dist/auth/oauth-account-match.js"
+    },
     "./auth/magic-link-service": {
       "types": "./dist/auth/magic-link-service.d.ts",
       "import": "./dist/auth/magic-link-service.js",
@@ -1168,6 +1173,9 @@
       ],
       "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"
+      ],
+      "auth/oauth-account-match": [
+        "./dist/auth/oauth-account-match.d.ts"
       ],
       "auth/magic-link-service": [
         "./dist/auth/magic-link-service.d.ts"

@@ -56,7 +56,8 @@ import {
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -272,7 +273,8 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -298,7 +300,8 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given valid idToken for existing user, should return tokens without creating user', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -319,7 +322,8 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given existing user, should not provision Getting Started drive', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -641,7 +645,8 @@ describe('POST /api/auth/google/native', () => {
 
   describe('error handling', () => {
     it('given unexpected error, should return 500', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByGoogleId).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -679,7 +684,8 @@ describe('POST /api/auth/google/native', () => {
   describe('user update scenarios', () => {
     it('given existing user without googleId, should update with googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -692,7 +698,8 @@ describe('POST /api/auth/google/native', () => {
 
     it('given existing user without name, should set name from Google payload', async () => {
       const userWithoutName = { ...mockExistingUser, googleId: null, name: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -706,7 +713,8 @@ describe('POST /api/auth/google/native', () => {
     it('given existing user with different avatar, should update image', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithOldAvatar as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -719,7 +727,8 @@ describe('POST /api/auth/google/native', () => {
 
     it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userUnverified as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -741,7 +750,8 @@ describe('POST /api/auth/google/native', () => {
         image: null, // resolveGoogleAvatarImage returns null by default
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -769,7 +779,8 @@ describe('POST /api/auth/google/native', () => {
       vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
 
     it('masks email in "Creating new user via native Google OAuth" log', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -783,7 +794,8 @@ describe('POST /api/auth/google/native', () => {
 
     it('masks email in "Updating existing user via native Google OAuth" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);

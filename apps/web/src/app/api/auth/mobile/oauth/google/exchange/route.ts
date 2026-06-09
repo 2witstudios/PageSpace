@@ -223,10 +223,30 @@ export async function POST(req: Request) {
     });
 
     const googlePictureUrl = userInfo.picture;
-    let user = await createOrLinkOAuthUser({
+    const linkResult = await createOrLinkOAuthUser({
       ...userInfo,
       picture: undefined,
     });
+
+    // SECURITY (M5): refuse sign-in when an unverified provider email collides
+    // with an existing account (the helper never links it).
+    if (linkResult.status === 'rejected') {
+      loggers.auth.warn('Blocked OAuth account link via mobile exchange: unverified email conflict', {
+        email: maskEmail(userInfo.email),
+        provider: userInfo.provider,
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        details: { reason: 'mobile_oauth_unverified_email_link_blocked' },
+      });
+      return Response.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
+    let user = linkResult.user;
 
     const resolvedImage = await resolveGoogleAvatarImage({
       userId: user.id,

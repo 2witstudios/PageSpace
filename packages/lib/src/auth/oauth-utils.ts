@@ -10,11 +10,25 @@ import appleSignIn from 'apple-signin-auth';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { db } from '@pagespace/db/db';
-import { eq, or, count } from '@pagespace/db/operators';
+import { eq, count } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { slugify } from '../utils/utils';
 import { loggers } from '../logging/logger-config';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
+import { resolveOAuthMatch } from './oauth-account-match';
+
+type UserRecord = typeof users.$inferSelect;
+
+/**
+ * Result of reconciling an OAuth identity against existing accounts.
+ *
+ * `rejected` is the M5 takeover guard: an unverified provider email collided
+ * with an existing account, so the caller MUST deny the sign-in rather than
+ * authenticate as (or create) that account.
+ */
+export type OAuthLinkResult =
+  | { status: 'linked'; user: UserRecord }
+  | { status: 'rejected'; reason: 'unverified_email_conflict' };
 
 /**
  * Verify Google ID token and extract user information
@@ -159,10 +173,18 @@ export async function verifyOAuthIdToken(
 }
 
 /**
- * Create new user or link OAuth provider to existing user
- * Returns the user record with updated OAuth information
+ * Create new user or link OAuth provider to existing user.
+ *
+ * SECURITY (M5): provider-subject and email lookups are performed SEPARATELY and
+ * reconciled through {@link resolveOAuthMatch}. An EXISTING account is matched by
+ * raw email only when the provider asserts the email is verified — an unverified
+ * email that collides with an existing account is rejected, never linked.
+ *
+ * Returns `{ status: 'linked', user }` on success, or
+ * `{ status: 'rejected', reason: 'unverified_email_conflict' }` when the caller
+ * must deny the sign-in.
  */
-export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
+export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OAuthLinkResult> {
   const { providerId, email, emailVerified, name, picture, provider } = userInfo;
 
   // Create fallback name if provider doesn't provide one
@@ -173,17 +195,31 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     : provider === OAuthProvider.APPLE ? 'apple'
     : 'email';
 
-  // Check if user exists by provider ID or email
-  let user = await db.query.users.findFirst({
-    where: or(
-      // For Google: check googleId
-      provider === OAuthProvider.GOOGLE ? eq(users.googleId, providerId) : undefined,
-      // For Apple: check appleId
-      provider === OAuthProvider.APPLE ? eq(users.appleId, providerId) : undefined,
-      // For all providers: check email
-      eq(users.email, email)
-    ),
+  // Look up the provider-subject match and the email match independently so the
+  // verified-email link rule can be enforced (never collapse them into one OR).
+  const subMatch = provider === OAuthProvider.GOOGLE
+    ? await db.query.users.findFirst({ where: eq(users.googleId, providerId) })
+    : provider === OAuthProvider.APPLE
+      ? await db.query.users.findFirst({ where: eq(users.appleId, providerId) })
+      : undefined;
+  const emailMatch = await db.query.users.findFirst({ where: eq(users.email, email) });
+
+  const decision = resolveOAuthMatch({
+    providerSubMatch: !!subMatch,
+    emailMatch: !!emailMatch,
+    emailVerified: emailVerified === true,
   });
+
+  if (decision === 'reject') {
+    loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+      provider: providerDbValue,
+    });
+    return { status: 'rejected', reason: 'unverified_email_conflict' };
+  }
+
+  let user = decision === 'use-sub' ? subMatch
+    : decision === 'use-email' ? emailMatch
+    : undefined;
 
   if (user) {
     // Update existing user with OAuth provider ID if not set
@@ -278,5 +314,5 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     });
   }
 
-  return user;
+  return { status: 'linked', user };
 }
