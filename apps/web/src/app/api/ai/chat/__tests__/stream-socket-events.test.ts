@@ -234,6 +234,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
   ONPREM_ALLOWED_PROVIDERS: new Set<string>(['ollama', 'lmstudio', 'azure_openai']),
   DYNAMIC_MODEL_PROVIDERS: new Set<string>(['ollama', 'lmstudio']),
+  ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));

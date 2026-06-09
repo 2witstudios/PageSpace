@@ -17,25 +17,33 @@ import {
 
 describe('ai-providers-config', () => {
   describe('catalog shape', () => {
-    it('groups models under real vendor providers (no pagespace/glm/openrouter)', () => {
+    it('groups models under real vendor providers (no retired pagespace/openrouter virtuals)', () => {
       expect(AI_PROVIDERS).toHaveProperty('openai');
       expect(AI_PROVIDERS).toHaveProperty('anthropic');
       expect(AI_PROVIDERS).toHaveProperty('google');
       expect(AI_PROVIDERS).not.toHaveProperty('pagespace');
       expect(AI_PROVIDERS).not.toHaveProperty('openrouter');
       expect(AI_PROVIDERS).not.toHaveProperty('openrouter_free');
-      expect(AI_PROVIDERS).not.toHaveProperty('glm');
     });
 
-    it('uses full OpenRouter model ids as keys', () => {
+    it('includes the glm direct provider with Coder Plan models', () => {
+      expect(AI_PROVIDERS).toHaveProperty('glm');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.1');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5-turbo');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.7');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.5-air');
+    });
+
+    it('uses full OpenRouter model ids as keys for cloud vendors', () => {
       expect(AI_PROVIDERS.openai.models).toHaveProperty('openai/gpt-5.3-chat');
       expect(AI_PROVIDERS.anthropic.models).toHaveProperty('anthropic/claude-haiku-4.5');
       expect(AI_PROVIDERS.minimax.models).toHaveProperty('minimax/minimax-m3');
     });
 
-    it('drops all GLM (z-ai) models', () => {
+    it('has no z-ai/ OpenRouter-prefixed model ids in the catalog', () => {
+      // Cloud vendors use vendor/model-id format; glm direct uses bare glm-* native ids
       const allModels = Object.values(AI_PROVIDERS).flatMap((p) => Object.keys(p.models));
-      expect(allModels.some((m) => m.startsWith('z-ai/') || m.startsWith('glm-'))).toBe(false);
+      expect(allModels.some((m) => m.startsWith('z-ai/'))).toBe(false);
     });
   });
 
@@ -98,6 +106,10 @@ describe('ai-providers-config', () => {
       expect(getBackendProvider('ollama')).toBe('ollama');
       expect(getBackendProvider('lmstudio')).toBe('lmstudio');
       expect(getBackendProvider('azure_openai')).toBe('azure_openai');
+    });
+
+    it('routes glm direct (not through openrouter)', () => {
+      expect(getBackendProvider('glm')).toBe('glm');
     });
   });
 

@@ -19,6 +19,7 @@ import {
   getDefaultModel,
   getVisibleProviders,
   isModelAllowedForTier,
+  ADMIN_ONLY_PROVIDERS,
 } from '@/lib/ai/core/ai-providers-config';
 
 interface ProviderStatus {
@@ -30,6 +31,7 @@ interface ProviderSettings {
   currentModel: string;
   providers: Record<string, ProviderStatus>;
   userSubscriptionTier?: string;
+  isAdmin?: boolean;
 }
 
 /** Providers served from a local server (model lists fetched at runtime). */
@@ -190,6 +192,7 @@ export function ProviderModelSelector({
   }, [provider, ollamaModels, lmstudioModels, fetchOllamaModels, fetchLMStudioModels]);
 
   const subscriptionTier = providerSettings?.userSubscriptionTier;
+  const isAdmin = providerSettings?.isAdmin ?? false;
 
   // Get display names
   const providerDisplayName = useMemo(() => {
@@ -340,7 +343,9 @@ export function ProviderModelSelector({
               {PROVIDER_GROUPS
                 .map((group) => ({
                   ...group,
-                  providers: group.providers.filter((p) => isProviderAvailable(p.id)),
+                  providers: group.providers.filter((p) =>
+                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin)
+                  ),
                 }))
                 .filter((group) => group.providers.length > 0)
                 .map((group) => (

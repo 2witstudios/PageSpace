@@ -122,6 +122,15 @@ export const AI_PRICING = {
   'mistralai/devstral-medium': { input: 0.40, output: 2.00 },
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
 
+  // Z.ai GLM direct — GLM Coder Plan supported models only (source: z.ai/guides/overview/pricing)
+  'glm-5.1':     { input: 1.40, output: 4.40 },
+  'glm-5-turbo': { input: 1.20, output: 4.00 },
+  'glm-4.7':     { input: 0.39, output: 1.90 },
+  'glm-4.5-air': { input: 0.35, output: 1.55 },
+  // Legacy fallback: historical ai_usage rows recorded under 'glm-5' before the
+  // OpenRouter migration; must stay priced so old rows don't zero-cost.
+  'glm-5':       { input: 1.00, output: 3.20 },
+
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
   'z-ai/glm-5.1': { input: 0.98, output: 3.08 },
   'z-ai/glm-5-turbo': { input: 1.20, output: 4.00 },
@@ -288,13 +297,6 @@ export const AI_PRICING = {
   'MiniMax-M2': { input: 0.30, output: 1.20 },
   'MiniMax-M2-Stable': { input: 0.30, output: 1.20 },
 
-  // Retired GLM model ids — legacy billing fallback only (no longer in the catalog;
-  // kept so historical ai_usage rows recorded under these bare ids still cost correctly).
-  'glm-5': { input: 1.00, output: 3.20 },
-  'glm-4.7': { input: 0.39, output: 1.90 },
-  'glm-4.6': { input: 0.39, output: 1.90 },
-  'glm-4.5-air': { input: 0.35, output: 1.55 },
-
   // MiniMax Direct Models (Native)
   'MiniMax-M2.5': { input: 0.30, output: 1.20 },
 
@@ -408,6 +410,13 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/codestral-2508': 32000,
   'mistralai/devstral-medium': 128000,
   'mistralai/devstral-small': 128000,
+
+  // Z.ai GLM direct — GLM Coder Plan supported models only
+  'glm-5.1':     202752,
+  'glm-5-turbo': 202752,
+  'glm-4.7':     200000,
+  'glm-4.5-air': 128000,
+  'glm-5':       202752, // legacy fallback for historical billing rows
 
   // OpenRouter Models - Chinese/Asian
   'z-ai/glm-5.1': 202752,
@@ -573,13 +582,6 @@ export const MODEL_CONTEXT_WINDOWS = {
   'MiniMax-M2.1': 128000,
   'MiniMax-M2': 128000,
   'MiniMax-M2-Stable': 128000,
-
-  // Retired GLM model ids — legacy fallback for historical rows (not in the catalog).
-  'glm-5': 200000,
-  'glm-4.7': 200000,
-  'glm-4.6': 200000,
-  'glm-4.5': 128000,
-  'glm-4.5-air': 128000,
 
   // Ollama (local) - context varies by model and configuration
   'llama3.2': 128000,

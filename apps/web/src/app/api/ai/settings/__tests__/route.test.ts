@@ -45,13 +45,19 @@ vi.mock('@pagespace/lib/deployment-mode', () => ({
 
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   requiresProSubscription: vi.fn(() => false),
+  createAdminRestrictedResponse: vi.fn(() =>
+    new Response(
+      JSON.stringify({ error: 'Provider restricted', message: 'This provider is restricted to administrators.' }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    )
+  ),
 }));
 
 import { GET, POST, PATCH, DELETE } from '../route';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 
 const ENV_KEYS = [
   'OPENROUTER_DEFAULT_API_KEY',
@@ -60,6 +66,7 @@ const ENV_KEYS = [
   'LMSTUDIO_BASE_URL',
   'AZURE_OPENAI_API_KEY',
   'AZURE_OPENAI_ENDPOINT',
+  'GLM_CODER_DEFAULT_API_KEY',
 ] as const;
 
 const mockUserId = 'user_123';
@@ -137,19 +144,43 @@ describe('AI settings route', () => {
       expect(body.pageSpaceBackend).toBeUndefined();
     });
 
-    it('exposes all vendor providers in cloud mode (no admin-only masking) when configured', async () => {
+    it('exposes all OpenRouter-backed vendor providers in cloud mode when configured', async () => {
       process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      // Cloud mode exposes every vendor provider once OpenRouter is configured —
-      // there is no per-provider admin masking anymore.
+      // Cloud mode: every OpenRouter-backed vendor shows up once the key is set.
+      // GLM (direct/admin-only) has its own separate key gate.
       expect(body.providers.anthropic.isAvailable).toBe(true);
       expect(body.providers.openai.isAvailable).toBe(true);
       expect(body.providers.google.isAvailable).toBe(true);
       expect(body.providers.xai.isAvailable).toBe(true);
       expect(body.providers.mistral.isAvailable).toBe(true);
+    });
+
+    it('returns isAdmin: false for regular users', async () => {
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).isAdmin).toBe(false);
+    });
+
+    it('returns isAdmin: true for admin users', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).isAdmin).toBe(true);
+    });
+
+    it('reports glm unavailable when GLM_CODER_DEFAULT_API_KEY is unset', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.glm.isAvailable).toBe(false);
+    });
+
+    it('reports glm available when GLM_CODER_DEFAULT_API_KEY is set', async () => {
+      process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-key';
+      const response = await GET(makeRequest('GET'));
+      expect((await response.json()).providers.glm.isAvailable).toBe(true);
     });
 
     it('does not expose a paid `openrouter` or `pagespace` provider key', async () => {
@@ -378,6 +409,37 @@ describe('AI settings route', () => {
       }));
 
       expect(response.status).toBe(200);
+    });
+
+    it('returns 403 when a non-admin selects an admin-only provider (glm)', async () => {
+      process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'glm',
+        model: 'glm-4.5-air',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.message).toContain('restricted to administrators');
+      expect(createAdminRestrictedResponse).toHaveBeenCalled();
+      expect(aiSettingsRepository.updateProviderSettings).not.toHaveBeenCalled();
+    });
+
+    it('allows an admin to select an admin-only provider (glm)', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSession(mockUserId, 'admin'));
+      process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-key';
+
+      const response = await PATCH(makeRequest('PATCH', {
+        provider: 'glm',
+        model: 'glm-4.5-air',
+      }));
+
+      expect(response.status).toBe(200);
+      expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
+        provider: 'glm',
+        model: 'glm-4.5-air',
+      });
     });
   });
 });

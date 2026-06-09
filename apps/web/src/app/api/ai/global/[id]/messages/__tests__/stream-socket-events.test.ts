@@ -285,6 +285,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   isModelAllowedForTier: vi.fn().mockReturnValue(true),
+  ADMIN_ONLY_PROVIDERS: new Set<string>([]),
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({

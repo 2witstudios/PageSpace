@@ -41,6 +41,14 @@ export const BACKGROUND_LIGHT_MODEL = 'anthropic/claude-haiku-4.5';
 export const BACKGROUND_HEAVY_MODEL = 'anthropic/claude-sonnet-4.6';
 
 /**
+ * Providers restricted to admin users. These require a separate subscription
+ * (not on PageSpace's OpenRouter quota) and route directly to the provider's API.
+ * Non-admins receive a 403 "provider restricted" response rather than a subscription
+ * upgrade prompt.
+ */
+export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
+
+/**
  * Models available to the FREE subscription tier. Every paid tier
  * (`pro`/`founder`/`business`) gets the full catalog; free users are limited to
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
@@ -245,6 +253,17 @@ export const AI_PROVIDERS = {
     name: 'Writer',
     models: {
       'writer/palmyra-x5': 'Palmyra X5',
+    },
+  },
+  glm: {
+    name: 'Z.ai (GLM)',
+    // Models officially supported by the GLM Coder Plan endpoint (api.z.ai/api/coding/paas/v4).
+    // Other GLM models are available on the general Z.ai API but not through this plan.
+    models: {
+      'glm-5.1':     'GLM-5.1',
+      'glm-5-turbo': 'GLM-5 Turbo',
+      'glm-4.7':     'GLM-4.7',
+      'glm-4.5-air': 'GLM-4.5 Air',
     },
   },
   ollama: {
