@@ -12,6 +12,10 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
+vi.mock('@/lib/auth/admin-role', () => ({
+  validateAdminAccess: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: vi.fn().mockResolvedValue({ tier: 'free', usedBytes: 0, quotaBytes: 1e9, availableBytes: 1e9 }),
   getUserFileCount: vi.fn().mockResolvedValue(0),
@@ -47,13 +51,15 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
+import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { reconcileStorageUsage } from '@pagespace/lib/services/storage-limits';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(verifyAuth).mockResolvedValue({ id: 'user_1' } as never);
+    vi.mocked(verifyAuth).mockResolvedValue({ id: 'user_1', role: 'user', adminRoleVersion: 0 } as never);
+    vi.mocked(validateAdminAccess).mockResolvedValue({ isValid: false, reason: 'not_admin' } as never);
   });
 
   it('logs audit event on successful storage info fetch', async () => {
@@ -75,31 +81,46 @@ describe('GET /api/storage/info', () => {
     expect(auditRequest).not.toHaveBeenCalled();
   });
 
-  describe('H4 — ?reconcile=true recomputes the caller\'s own usage (safe after the basis fix)', () => {
-    it('reconciles the authenticated user\'s storage when requested', async () => {
+  describe('H4 — ?reconcile=true is admin-gated (gate resolved up front, not from the request param)', () => {
+    it('returns 403 and does not reconcile for a non-admin', async () => {
+      // default mocks: role 'user', validateAdminAccess invalid
+      const request = new Request('https://example.com/api/storage/info?reconcile=true');
+      const res = await GET(request as never);
+
+      expect(res.status).toBe(403);
+      expect(reconcileStorageUsage).not.toHaveBeenCalled();
+    });
+
+    it('reconciles for a DB-verified admin', async () => {
+      vi.mocked(verifyAuth).mockResolvedValue({ id: 'user_1', role: 'admin', adminRoleVersion: 3 } as never);
+      vi.mocked(validateAdminAccess).mockResolvedValue({ isValid: true } as never);
       vi.mocked(reconcileStorageUsage).mockResolvedValue({ previousUsage: 0, actualUsage: 0, difference: 0 } as never);
 
       const request = new Request('https://example.com/api/storage/info?reconcile=true');
       const res = await GET(request as never);
 
       expect(res.status).toBe(200);
+      expect(validateAdminAccess).toHaveBeenCalledWith('user_1', 3);
       expect(reconcileStorageUsage).toHaveBeenCalledWith('user_1');
     });
 
-    it('does not reconcile when reconcile is not requested', async () => {
-      const request = new Request('https://example.com/api/storage/info');
-      await GET(request as never);
-
-      expect(reconcileStorageUsage).not.toHaveBeenCalled();
-    });
-
-    it('still returns 200 storage info if reconciliation throws (best-effort)', async () => {
-      vi.mocked(reconcileStorageUsage).mockRejectedValue(new Error('boom'));
+    it('rejects a stale admin session whose adminRoleVersion no longer validates', async () => {
+      vi.mocked(verifyAuth).mockResolvedValue({ id: 'user_1', role: 'admin', adminRoleVersion: 1 } as never);
+      vi.mocked(validateAdminAccess).mockResolvedValue({ isValid: false, reason: 'version_mismatch' } as never);
 
       const request = new Request('https://example.com/api/storage/info?reconcile=true');
       const res = await GET(request as never);
 
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(403);
+      expect(reconcileStorageUsage).not.toHaveBeenCalled();
+    });
+
+    it('does not call the admin DB validation for a non-admin normal read (short-circuit, no reconcile)', async () => {
+      const request = new Request('https://example.com/api/storage/info');
+      await GET(request as never);
+
+      expect(validateAdminAccess).not.toHaveBeenCalled();
+      expect(reconcileStorageUsage).not.toHaveBeenCalled();
     });
   });
 });
