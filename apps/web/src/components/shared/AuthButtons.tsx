@@ -11,15 +11,21 @@ export default function AuthButtons() {
   const router = useRouter();
 
   const handleSignOut = async () => {
-    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-    let body = {};
-
-    if (isDesktop && window.electron) {
-      const deviceInfo = await window.electron.auth.getDeviceInfo();
+    // SECURITY (M9): send device context so the server revokes the long-lived
+    // device token, not just the session. Prefer the token value (works on any
+    // platform); deviceId+platform is the fallback. Never block sign-out on it.
+    let body: Record<string, unknown> = {};
+    try {
+      const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+      const storage = getPlatformStorage();
+      const stored = await storage.getStoredSession();
       body = {
-        deviceId: deviceInfo.deviceId,
-        platform: 'desktop' as const,
+        deviceToken: stored?.deviceToken ?? undefined,
+        deviceId: stored?.deviceId ?? undefined,
+        platform: storage.platform,
       };
+    } catch (err) {
+      console.error('Failed to read device context for sign-out', err);
     }
 
     await post('/api/auth/logout', body);

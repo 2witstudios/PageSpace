@@ -65,7 +65,26 @@ export function useAuth(): {
   // Logout function
   const logout = useCallback(async () => {
     try {
-      await post('/api/auth/logout');
+      // SECURITY (M9): send the device context so the server can revoke the
+      // long-lived (90-day) device token, not just the session. Otherwise
+      // device/refresh could silently re-mint sessions after "logout". We
+      // prefer the device token value (works on every platform via by-value
+      // revocation) and include deviceId+platform as a fallback. Reading
+      // device context must never block logout.
+      let logoutBody: Record<string, unknown> = {};
+      try {
+        const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+        const storage = getPlatformStorage();
+        const stored = await storage.getStoredSession();
+        logoutBody = {
+          deviceToken: stored?.deviceToken ?? undefined,
+          deviceId: stored?.deviceId ?? undefined,
+          platform: storage.platform,
+        };
+      } catch (err) {
+        console.error('Failed to read device context for logout', err);
+      }
+      await post('/api/auth/logout', logoutBody);
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
