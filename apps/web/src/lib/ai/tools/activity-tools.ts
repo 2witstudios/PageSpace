@@ -1,13 +1,13 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, desc, gte, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
+import { eq, and, or, desc, gte, lt, ne, isNull, isNotNull, inArray } from '@pagespace/db/operators'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members';
-import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -20,7 +20,7 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import type { ToolExecutionContext } from '../core/types';
-import { filterDriveIdsByMcpScope } from './actor-permissions';
+import { filterDriveIdsByMcpScope, canActorViewPage } from './actor-permissions';
 
 /**
  * Activity tools for AI agents
@@ -180,6 +180,98 @@ function createCompactDelta(
   }
 
   return Object.keys(delta).length > 0 ? delta : undefined;
+}
+
+/**
+ * Pure access-control decision for activity rows (security finding H2).
+ *
+ * `get_activity` previously authorized only at the DRIVE level, so a plain
+ * member received `resourceTitle`, `pageId`, and content deltas for EVERY row
+ * in the drive — including pages they cannot view. Drive membership is not
+ * page-level view access.
+ *
+ * Given the actor's set of viewable page IDs, drop every row that targets a
+ * page outside that set, before any title / delta / content diff is emitted.
+ *
+ * Policy for rows with NO pageId (null or absent): RETAINED. These are
+ * drive-scoped activities (membership / permission / drive operations) that
+ * carry no page content and are already authorized by the drive-level gate
+ * upstream. Filtering them out would silently hide legitimate drive activity.
+ *
+ * Pure: no I/O, no mutation of the input array.
+ */
+export function filterAccessibleActivities<T extends { pageId: string | null }>(
+  rows: readonly T[],
+  accessiblePageIds: ReadonlySet<string>,
+): T[] {
+  return rows.filter((row) =>
+    row.pageId == null ? true : accessiblePageIds.has(row.pageId)
+  );
+}
+
+/**
+ * Pure paging-termination decision for the access-filtered fetch loop.
+ *
+ * Because access filtering happens AFTER the DB applies its row cap, the tool
+ * over-fetches and pages the window until it has collected up to `limit`
+ * VISIBLE rows. Stop paging when any of these hold:
+ *  - we already have `limit` visible rows;
+ *  - we've scanned the ceiling that bounds DB work;
+ *  - the previous batch came back smaller than requested (window exhausted —
+ *    a partial or empty batch means there are no more rows to page).
+ *
+ * Pure: depends only on its numeric arguments.
+ */
+export function shouldContinuePaging(args: {
+  collected: number;
+  limit: number;
+  scanned: number;
+  maxScanned: number;
+  lastBatchSize: number;
+  batchSize: number;
+}): boolean {
+  if (args.collected >= args.limit) return false;
+  if (args.scanned >= args.maxScanned) return false;
+  if (args.lastBatchSize < args.batchSize) return false;
+  return true;
+}
+
+/**
+ * Shell (impure): resolves which of the pages referenced by `rows` the ACTOR
+ * can view, returning the set of viewable page IDs.
+ *
+ * Uses `canActorViewPage` — the same actor-aware view check the other AI tools
+ * (page-read, task, agent-communication) use. This de-privileges agent actors
+ * to their own ACL (not the session user's) and applies any MCP page scope,
+ * and it is trash-agnostic: owners/admins and explicit grant-holders still see
+ * activity for pages that have since been trashed (so trash/delete rows are not
+ * silently dropped from their feed).
+ *
+ * `viewableCache` memoizes the per-page decision so paginated calls don't
+ * re-check a page already resolved in an earlier batch.
+ */
+async function resolveActorViewablePageIds(
+  context: ToolExecutionContext,
+  rows: { pageId: string | null }[],
+  viewableCache: Map<string, boolean>,
+): Promise<Set<string>> {
+  const uniquePageIds = [
+    ...new Set(rows.map((r) => r.pageId).filter((id): id is string => Boolean(id))),
+  ];
+
+  // Resolve only pages not already decided in a prior batch.
+  const unresolved = uniquePageIds.filter((id) => !viewableCache.has(id));
+  await Promise.all(
+    unresolved.map(async (pageId) => {
+      viewableCache.set(pageId, await canActorViewPage(context, pageId));
+    })
+  );
+
+  const accessible = new Set<string>();
+  for (const pageId of uniquePageIds) {
+    if (viewableCache.get(pageId)) accessible.add(pageId);
+  }
+  return accessible;
 }
 
 export const activityTools = {
@@ -460,27 +552,108 @@ When summarizing multiple changes, group them thematically and describe the over
           );
         }
 
-        // Fetch activities
-        const activities = await db.query.activityLogs.findMany({
-          where: and(...conditions),
-          with: {
-            user: {
-              columns: { id: true, name: true, email: true },
+        // Fetch a batch of activity rows starting strictly after `cursor` in
+        // (timestamp desc, id desc) order. Keyset pagination (vs OFFSET) is
+        // stable under concurrent inserts/deletes: rows already returned can't
+        // shift into or out of a later page, so no row is double-counted or
+        // skipped mid-scan.
+        const fetchActivityBatch = (
+          cursor: { timestamp: Date; id: string } | null,
+          take: number,
+        ) =>
+          db.query.activityLogs.findMany({
+            where: cursor
+              ? and(
+                  ...conditions,
+                  or(
+                    lt(activityLogs.timestamp, cursor.timestamp),
+                    and(
+                      eq(activityLogs.timestamp, cursor.timestamp),
+                      lt(activityLogs.id, cursor.id)
+                    )
+                  )
+                )
+              : and(...conditions),
+            with: {
+              user: {
+                columns: { id: true, name: true, email: true },
+              },
+              drive: {
+                columns: { id: true, name: true, slug: true, drivePrompt: true },
+              },
             },
-            drive: {
-              columns: { id: true, name: true, slug: true, drivePrompt: true },
-            },
-          },
-          orderBy: [desc(activityLogs.timestamp)],
-          limit,
-        });
+            orderBy: [desc(activityLogs.timestamp), desc(activityLogs.id)],
+            limit: take,
+          });
+        type ActivityRow = Awaited<ReturnType<typeof fetchActivityBatch>>[number];
+
+        // Security (H2): the drive-level gate above is NOT page-level view
+        // access. We must drop rows for pages the actor cannot view BEFORE any
+        // title / delta / content diff is emitted.
+        //
+        // The DB applies `limit` before that filter, so inaccessible private-
+        // page rows would otherwise consume the caller's result cap — a drive
+        // with many recent private changes could return an almost-empty feed
+        // even though older viewable activity exists in the window. So page
+        // through the window in batches, applying the access filter, until we
+        // have up to `limit` VISIBLE rows or run out of rows / hit a scan
+        // ceiling that bounds DB work.
+        // Over-fetch up to 4× the cap per batch (clamped) — usually one batch
+        // already yields `limit` visible rows; MAX_SCANNED bounds worst-case work.
+        const FETCH_BATCH = Math.min(200, limit * 4);
+        const MAX_SCANNED = 2000;
+        const viewableCache = new Map<string, boolean>();
+        const collected: ActivityRow[] = [];
+        let cursor: { timestamp: Date; id: string } | null = null;
+        let scanned = 0;
+        let lastBatchSize = FETCH_BATCH; // assume a full batch so the loop is entered
+        let lastRequestedBatchSize = FETCH_BATCH; // what we asked the DB for (may be clamped)
+
+        while (
+          shouldContinuePaging({
+            collected: collected.length,
+            limit,
+            scanned,
+            maxScanned: MAX_SCANNED,
+            lastBatchSize,
+            // Compare exhaustion against what we actually requested — the final
+            // batch is clamped to the remaining scan budget below.
+            batchSize: lastRequestedBatchSize,
+          })
+        ) {
+          // Clamp the final fetch so we never overshoot MAX_SCANNED by up to a
+          // full batch (shouldContinuePaging guarantees scanned < MAX_SCANNED
+          // here, so `take` is always >= 1).
+          const take = Math.min(FETCH_BATCH, MAX_SCANNED - scanned);
+          lastRequestedBatchSize = take;
+          const batch = await fetchActivityBatch(cursor, take);
+          lastBatchSize = batch.length;
+          if (batch.length === 0) break;
+          scanned += batch.length;
+          const tail = batch[batch.length - 1];
+          cursor = { timestamp: tail.timestamp, id: tail.id };
+
+          const batchViewable = await resolveActorViewablePageIds(
+            context as ToolExecutionContext,
+            batch,
+            viewableCache
+          );
+          collected.push(...filterAccessibleActivities(batch, batchViewable));
+        }
+
+        // True when we stopped because of the scan ceiling while still short of
+        // `limit` — the feed may be incomplete and the caller should know.
+        const scanCeilingReached = scanned >= MAX_SCANNED && collected.length < limit;
+
+        // Honor the caller's requested cap on VISIBLE rows.
+        const visibleActivities = collected.slice(0, limit);
 
         // Build actor index for deduplication (saves tokens by not repeating actor info)
         // Store actor reference directly so count updates are shared
         const actorMap = new Map<string, { idx: number; actor: CompactActor }>();
         const actorsList: CompactActor[] = [];
 
-        for (const activity of activities) {
+        for (const activity of visibleActivities) {
           const email = activity.actorEmail;
           let entry = actorMap.get(email);
           if (!entry) {
@@ -502,7 +675,7 @@ When summarizing multiple changes, group them thematically and describe the over
         // Group activities by drive using compact format
         const driveGroupsMap = new Map<string, CompactDriveGroup>();
 
-        for (const activity of activities) {
+        for (const activity of visibleActivities) {
           if (!activity.driveId || !activity.drive) continue;
 
           let group = driveGroupsMap.get(activity.driveId);
@@ -575,47 +748,17 @@ When summarizing multiple changes, group them thematically and describe the over
           // P2 Budget: Use maxOutputChars parameter to calculate proportional budget
           const diffBudget = calculateDiffBudget(maxOutputChars);
 
-          // Collect all activities with page content changes
-          let pageActivities = activities.filter(
+          // Collect all activities with page content changes.
+          // Source list is `visibleActivities`, already filtered to pages the
+          // actor can view (security finding H2), so no per-page re-check is
+          // needed here — drive membership alone never reaches this point.
+          const pageActivities = visibleActivities.filter(
             (a) =>
               a.pageId &&
               a.resourceType === 'page' &&
               (a.operation === 'update' || a.operation === 'create') &&
               (a.contentRef || a.contentSnapshot)
           );
-
-          // P1 Security: Filter to pages user has permission to view
-          // Drive membership alone doesn't grant page-level content access
-          if (pageActivities.length > 0) {
-            const uniquePageIds = [...new Set(pageActivities.map(a => a.pageId).filter(Boolean))] as string[];
-            const permissions = await getBatchPagePermissions(userId, uniquePageIds);
-
-            // Filter to pages user can view
-            const viewablePageIds = new Set(
-              Array.from(permissions.entries())
-                .filter(([, perm]) => perm?.canView)
-                .map(([pageId]) => pageId)
-            );
-
-            // Drive admins have view access to all pages in their drives
-            const uniqueDriveIds = [...new Set(
-              pageActivities.map(a => a.driveId).filter(Boolean)
-            )] as string[];
-
-            for (const driveId of uniqueDriveIds) {
-              if (await isDriveOwnerOrAdmin(userId, driveId)) {
-                for (const activity of pageActivities) {
-                  if (activity.driveId === driveId && activity.pageId) {
-                    viewablePageIds.add(activity.pageId);
-                  }
-                }
-              }
-            }
-
-            pageActivities = pageActivities.filter(
-              a => a.pageId && viewablePageIds.has(a.pageId)
-            );
-          }
 
           if (pageActivities.length > 0) {
             // Convert to ActivityForDiff format
@@ -752,9 +895,9 @@ When summarizing multiple changes, group them thematically and describe the over
           }
         }
 
-        // Calculate overall summary
-        const totalActivities = activities.length;
-        const totalAiGenerated = activities.filter((a) => a.isAiGenerated).length;
+        // Calculate overall summary (over the access-filtered list)
+        const totalActivities = visibleActivities.length;
+        const totalAiGenerated = visibleActivities.filter((a) => a.isAiGenerated).length;
 
         // Build initial response
         const response: {
@@ -768,6 +911,10 @@ When summarizing multiple changes, group them thematically and describe the over
             from: string;
             lastVisit: string | null;
             excludedSelf: boolean;
+            // Set when the access-filtered scan hit its row ceiling before
+            // collecting `limit` visible rows: the feed may be incomplete, so
+            // the caller should not treat it as "all activity in the window".
+            scanLimited?: boolean;
             truncated?: { droppedDeltas?: boolean; droppedActivities?: number; hardCapExceeded?: boolean };
           };
         } = {
@@ -781,6 +928,7 @@ When summarizing multiple changes, group them thematically and describe the over
             from: timeWindowStart.toISOString(),
             lastVisit: lastVisitTime?.toISOString() || null,
             excludedSelf: excludeOwnActivity,
+            ...(scanCeilingReached ? { scanLimited: true } : {}),
           },
         };
 
