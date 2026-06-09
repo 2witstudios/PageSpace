@@ -336,7 +336,8 @@ export function validateDriveWidePermissions(perms: unknown): perms is PagePerm 
   return (
     typeof p.canView === 'boolean' &&
     typeof p.canEdit === 'boolean' &&
-    typeof p.canShare === 'boolean'
+    typeof p.canShare === 'boolean' &&
+    Object.keys(p).every(k => ['canView', 'canEdit', 'canShare'].includes(k))
   );
 }
 

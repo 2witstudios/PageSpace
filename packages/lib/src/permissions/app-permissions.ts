@@ -18,7 +18,7 @@ export async function getAppAccessLevel(
   tokenId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
-  const driveId = await fetchDriveIdForPage(targetPageId);
+  const { driveId, isPrivate } = await fetchDriveIdForPage(targetPageId);
   const membership = await fetchAppMembership(tokenId, driveId);
   if (!membership) return null;
 
@@ -29,6 +29,8 @@ export async function getAppAccessLevel(
   if (role && membership.role !== 'ADMIN' && membership.role !== 'OWNER') {
     const resolved = resolveCustomRolePermissions(role, targetPageId);
     if (resolved !== null) {
+      // driveWidePermissions fallback must not grant access to private pages
+      if (isPrivate && role.permissions[targetPageId] === undefined) return null;
       return resolved.canView ? { ...resolved, canDelete: false } : null;
     }
     // No per-page or drive-wide grant — custom roles limit access to explicitly listed pages

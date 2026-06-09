@@ -235,6 +235,8 @@ export async function getUserAccessLevel(
         if (role) {
           const resolved = resolveCustomRolePermissions(role, validPageId);
           if (resolved !== null) {
+            // driveWidePermissions fallback must not grant access to private pages
+            if (pageData.isPrivate && role.permissions[validPageId] === undefined) return null;
             return resolved.canView ? { ...resolved, canDelete: false } : null;
           }
         }
@@ -448,6 +450,13 @@ export async function getUserAccessiblePagesInDrive(
         for (const [id, p] of Object.entries(rolePerms)) {
           if (!p.canView) pageIdSet.delete(id);
         }
+
+        // driveWidePermissions deny: remove Rule-4 pages not explicitly granted
+        if (role.driveWidePermissions?.canView === false) {
+          for (const id of [...pageIdSet]) {
+            if (rolePerms[id]?.canView !== true) pageIdSet.delete(id);
+          }
+        }
       }
     }
   }
@@ -631,6 +640,13 @@ export async function getUserAccessiblePagesInDriveWithDetails(
       for (const [id, p] of Object.entries(rolePerms)) {
         if (!p.canView) {
           pageMap.delete(id);
+        }
+      }
+
+      // driveWidePermissions deny: remove pages not covered by an explicit per-page grant
+      if (driveWidePermissions?.canView === false) {
+        for (const pageId of [...pageMap.keys()]) {
+          if (rolePerms[pageId] === undefined) pageMap.delete(pageId);
         }
       }
     }

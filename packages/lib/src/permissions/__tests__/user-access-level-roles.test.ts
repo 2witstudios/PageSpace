@@ -224,6 +224,29 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
+  it('given MEMBER with custom role with driveWidePermissions:{canView:true} and NO per-page entry on a PRIVATE page, should return null (driveWide cannot bypass private)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
+      .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(mockSelectChain([]))
+      .mockReturnValueOnce(mockSelectChain([{ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    expect(result).toBeNull();
+  });
+
+  it('given MEMBER with custom role with driveWidePermissions:{canView:true} AND explicit per-page entry on a PRIVATE page, should return access (per-page grant still works)', async () => {
+    const rolePerms = { [VALID_PAGE]: { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
+      .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(mockSelectChain([]))
+      .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
   it('given explicit pagePermissions row, it beats custom role', async () => {
     const rolePerms = { [VALID_PAGE]: { canView: true, canEdit: false, canShare: false } };
     const explicitPerm = [{ canView: true, canEdit: true, canShare: true, canDelete: false }];

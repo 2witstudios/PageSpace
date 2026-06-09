@@ -50,6 +50,8 @@ export async function getAgentAccessLevel(
   if (role && membership.role !== 'ADMIN' && membership.role !== 'OWNER') {
     const resolved = resolveCustomRolePermissions(role, targetPageId);
     if (resolved !== null) {
+      // driveWidePermissions fallback must not grant access to private pages
+      if (isPrivate && role.permissions[targetPageId] === undefined) return null;
       return resolved.canView ? { ...resolved, canDelete: false } : null;
     }
     // No per-page or drive-wide grant — custom roles limit access to explicitly listed pages

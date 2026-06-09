@@ -20,14 +20,16 @@ export function resolveCustomRolePermissions(
   return role.driveWidePermissions ?? null;
 }
 
-export async function fetchDriveIdForPage(targetPageId: string): Promise<string> {
+export async function fetchDriveIdForPage(targetPageId: string): Promise<{ driveId: string; isPrivate: boolean }> {
   const page = await db
-    .select({ driveId: pages.driveId })
+    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate })
     .from(pages)
     .where(eq(pages.id, targetPageId))
     .limit(1);
   // If no page exists, treat targetPageId itself as a drive ID (drive-as-root-node pattern).
-  return page.length > 0 ? page[0].driveId : targetPageId;
+  return page.length > 0
+    ? { driveId: page[0].driveId, isPrivate: page[0].isPrivate ?? false }
+    : { driveId: targetPageId, isPrivate: false };
 }
 
 // driveId is required to prevent a custom role from one drive being applied to another.

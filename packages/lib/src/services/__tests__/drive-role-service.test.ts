@@ -57,6 +57,7 @@ import {
   deleteDriveRole,
   reorderDriveRoles,
   validateRolePermissions,
+  validateDriveWidePermissions,
 } from '../drive-role-service';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -345,5 +346,20 @@ describe('drive-role-service', () => {
     it('should return true for valid permissions', () =>
       expect(validateRolePermissions({ p: { canView: true, canEdit: false, canShare: false } })).toBe(true));
     it('should return true for empty object', () => expect(validateRolePermissions({})).toBe(true));
+  });
+
+  describe('validateDriveWidePermissions', () => {
+    it('should return true for null', () => expect(validateDriveWidePermissions(null)).toBe(true));
+    it('should return true for undefined', () => expect(validateDriveWidePermissions(undefined)).toBe(true));
+    it('should return true for valid object', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false, canShare: false })).toBe(true));
+    it('should return false for array', () => expect(validateDriveWidePermissions([])).toBe(false));
+    it('should return false for string', () => expect(validateDriveWidePermissions('yes')).toBe(false));
+    it('should return false for missing key', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false })).toBe(false));
+    it('should return false for non-boolean value', () =>
+      expect(validateDriveWidePermissions({ canView: 1, canEdit: false, canShare: false })).toBe(false));
+    it('should return false for object with extra keys', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false, canShare: false, canDelete: true })).toBe(false));
   });
 });
