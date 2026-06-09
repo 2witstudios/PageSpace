@@ -16,7 +16,7 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Security",
-  description: "Defense-in-depth security: passkeys, magic links, OAuth PKCE, opaque session tokens with hash-only storage, per-event WebSocket authorization, distributed rate limiting, account lockout, and continuously verified audit logs.",
+  description: "Defense-in-depth security: passkeys, magic links, OAuth PKCE, opaque session tokens with hash-only storage, per-event WebSocket authorization, distributed rate limiting, and continuously verified audit logs.",
   path: "/security",
   keywords: ["security", "authentication", "passkeys", "OAuth", "encryption", "rate limiting", "session tokens", "audit log"],
 });

@@ -44,7 +44,7 @@ You don't have a password. There is no password stored for your account — ther
 ## Related
 
 - [Sharing & Permissions](/docs/features/sharing) — what signing in actually lets you see once you're in.
-- [Authentication (Security)](/docs/security/authentication) — the architecture behind passkeys, opaque tokens, account lockout, and the audit log.
+- [Authentication (Security)](/docs/security/authentication) — the architecture behind passkeys, opaque tokens, rate limiting, and the audit log.
 `;
 
 export default function HowItWorksAccountsPage() {

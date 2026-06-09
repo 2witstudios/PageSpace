@@ -3,9 +3,9 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "Authentication",
-  description: "PageSpace authentication: opaque session tokens, magic links, OAuth 2.1 with PKCE on Google and Apple, passkeys with conditional UI, device tokens, MCP tokens, account lockout, and the auth API.",
+  description: "PageSpace authentication: opaque session tokens, magic links, OAuth 2.1 with PKCE on Google and Apple, passkeys with conditional UI, device tokens, MCP tokens, and the auth API.",
   path: "/docs/security/authentication",
-  keywords: ["authentication", "session tokens", "OAuth", "PKCE", "passkeys", "magic links", "MCP tokens", "account lockout", "WebAuthn"],
+  keywords: ["authentication", "session tokens", "OAuth", "PKCE", "passkeys", "magic links", "MCP tokens", "WebAuthn"],
 });
 
 const content = `
@@ -83,16 +83,6 @@ An optional idle timeout can be enabled per deployment to expire sessions after 
 ### Rate Limiting
 
 Login, signup, magic-link send, and token refresh are rate-limited per-IP, per-email, and per-user depending on the endpoint, using a distributed sliding-window counter stored in Postgres. In production, rate-limit storage failures fail closed.
-
-### Account Lockout
-
-Rate limiting throttles traffic; account lockout targets the account under attack. After repeated failed authentication attempts against a single account, the account is temporarily locked regardless of attempt source. Because lockout state is durable:
-
-- it persists across infrastructure restarts,
-- it's unaffected by an attacker cycling IP addresses,
-- failed attempts across every auth method feed the same counter.
-
-A successful authentication clears the counter. Every failed attempt and every lock transition is recorded in the tamper-evident audit log.
 
 ## MCP Tokens
 
