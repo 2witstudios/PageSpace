@@ -10,6 +10,7 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/core/complete-request-builder';
 import { type ToolDefinitionForExtraction, extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/schema-introspection';
@@ -461,8 +462,15 @@ async function handleGlobalPrompt(userId: string, request: Request): Promise<Res
 
 export async function GET(request: Request): Promise<Response> {
   const serviceSecret = request.headers.get('x-service-secret');
-  if (serviceSecret) {
-    if (!process.env.SERVICE_API_SECRET || serviceSecret !== process.env.SERVICE_API_SECRET) {
+  // A present header (even empty) is an explicit service-auth attempt: validate
+  // it fail-closed rather than silently falling through to the admin path.
+  if (serviceSecret !== null) {
+    const expectedSecret = process.env.SERVICE_API_SECRET;
+    // Fail closed when the secret is unset/empty, and compare in timing-safe
+    // fashion: SERVICE_API_SECRET is an unhashed shared secret, and a successful
+    // match lets the caller impersonate ANY user via x-service-user-id, so a raw
+    // `!==` would leak the secret one byte at a time under timing analysis.
+    if (!expectedSecret || !secureCompare(serviceSecret, expectedSecret)) {
       return Response.json({ error: 'Forbidden' }, { status: 403 });
     }
     const userId = request.headers.get('x-service-user-id');
