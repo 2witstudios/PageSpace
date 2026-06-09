@@ -856,21 +856,27 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     return <RichContentRenderer title={path ?? 'File'} content={preview} />;
   },
 
-  write: ({ parsedInput }) => (
-    <ActionResultRenderer
-      actionType="create"
-      success={true}
-      title={parsedInput?.file_path as string | undefined}
-    />
-  ),
+  write: ({ parsedInput, output }) => {
+    if (output == null) return null;
+    return (
+      <ActionResultRenderer
+        actionType="create"
+        success={true}
+        title={parsedInput?.file_path as string | undefined}
+      />
+    );
+  },
 
-  edit: ({ parsedInput }) => (
-    <ActionResultRenderer
-      actionType="update"
-      success={true}
-      title={parsedInput?.file_path as string | undefined}
-    />
-  ),
+  edit: ({ parsedInput, output }) => {
+    if (output == null) return null;
+    return (
+      <ActionResultRenderer
+        actionType="update"
+        success={true}
+        title={parsedInput?.file_path as string | undefined}
+      />
+    );
+  },
 
   bash: ({ parsedInput, output }) => {
     const command = parsedInput?.command as string | undefined;
@@ -931,14 +937,16 @@ export function renderToolContent(ctx: {
     );
   }
 
-  // CLI tool renderers receive plain-string output so parsedOutput is always {};
-  // they must run before the null guard. Server tool renderers only run when
-  // parsedOutput is present — otherwise a pending tool would appear completed.
+  // CLI tool renderers receive plain-string output so parsedOutput is always {}.
+  // Only bypass the parsedOutput null-guard when a result is actually available
+  // (output != null) — otherwise a pending write/edit would show a premature
+  // success card before the client has executed the tool. Server tool renderers
+  // only run when parsedOutput is present for the same reason.
   const CLI_SET = new Set<string>(CLI_TOOL_NAMES);
   const renderer = toolRenderers[toolName];
   if (renderer) {
     const isCliTool = CLI_SET.has(toolName);
-    if (isCliTool || parsedOutput) {
+    if ((isCliTool && output != null) || parsedOutput) {
       const node = renderer({ toolName, parsedInput, parsedOutput: parsedOutput ?? {}, output, error });
       if (node != null) return node;
     }

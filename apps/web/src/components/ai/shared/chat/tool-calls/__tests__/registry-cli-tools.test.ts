@@ -66,9 +66,14 @@ describe('CLI tool renderers (pi)', () => {
     expect(result).not.toBeNull();
   });
 
-  it('write/edit: return non-null nodes even with null output', () => {
-    expect(toolRenderers['write'](makeCtx('write', { file_path: 'foo.ts' }, null))).not.toBeNull();
-    expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, null))).not.toBeNull();
+  it('write/edit: return null when output is null (tool still pending — no premature success card)', () => {
+    expect(toolRenderers['write'](makeCtx('write', { file_path: 'foo.ts' }, null))).toBeNull();
+    expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, null))).toBeNull();
+  });
+
+  it('write/edit: return non-null success card when output is available', () => {
+    expect(toolRenderers['write'](makeCtx('write', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
+    expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
   });
 
   it('ls: returns null when output is not a string', () => {
