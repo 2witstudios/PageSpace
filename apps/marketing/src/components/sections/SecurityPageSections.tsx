@@ -149,15 +149,15 @@ export function WebSocketSecuritySection() {
 
 export function RateLimitingSection() {
   const protections = [
-    { title: "Login protection", desc: "Per-IP and per-email sliding-window limits throttle automated login attempts" },
-    { title: "Magic-link & refresh limits", desc: "Magic-link delivery and token refresh are throttled per-IP, per-email, and per-user" },
+    { title: "Login protection", desc: "Per-IP and per-email sliding-window limits throttle credential stuffing" },
+    { title: "Account lockout", desc: "Accounts facing repeated failed authentication are temporarily locked, regardless of source IP" },
     { title: "Signup throttling", desc: "Per-IP limits on signup prevent automated account creation" },
   ];
 
   const whyDbBacked = [
-    { icon: Activity, title: "Persists across restarts", desc: "Rate-limit counters aren't lost when servers restart" },
-    { icon: ShieldCheck, title: "Works across IPs", desc: "Per-email limits can't be bypassed by changing IP addresses" },
-    { icon: Timer, title: "Automatic reset", desc: "Limits expire on their own as the sliding window advances" },
+    { icon: Activity, title: "Persists across restarts", desc: "Lockout state isn't lost when servers restart" },
+    { icon: ShieldCheck, title: "Works across IPs", desc: "Attackers can't bypass by changing IP addresses" },
+    { icon: Timer, title: "Automatic unlock", desc: "Lockout expires on its own — no manual intervention needed" },
   ];
 
   return (
@@ -186,7 +186,7 @@ export function RateLimitingSection() {
               </ul>
             </div>
             <div className="rounded-2xl border border-border bg-card p-8">
-              <h3 className="font-semibold mb-6">Why Database-Backed Rate Limiting?</h3>
+              <h3 className="font-semibold mb-6">Why Database-Backed Lockout?</h3>
               <div className="space-y-4 text-sm">
                 {whyDbBacked.map((item) => (
                   <div key={item.title} className="flex items-start gap-3">

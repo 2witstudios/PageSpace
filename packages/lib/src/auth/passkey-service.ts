@@ -481,6 +481,24 @@ export async function generateAuthenticationOptions(
 /**
  * Verify authentication response and return user info.
  */
+/**
+ * Resolve the owning user of a WebAuthn credential by its credential ID.
+ *
+ * Used by the authenticate route to apply per-account lockout *before* running
+ * the (more expensive) crypto verification, and to attribute failed attempts to
+ * the right account. Returns null when the credential is unknown — callers must
+ * treat that as "no account to lock/record" (an unknown credential is not a
+ * targeted attack on any real account).
+ */
+export async function findUserIdByCredentialId(credentialId: string): Promise<string | null> {
+  if (!credentialId) return null;
+  const passkey = await db.query.passkeys.findFirst({
+    where: eq(passkeys.credentialId, credentialId),
+    columns: { userId: true },
+  });
+  return passkey?.userId ?? null;
+}
+
 export async function verifyAuthentication(input: unknown): Promise<VerifyAuthResult> {
   const parsed = verifyAuthSchema.safeParse(input);
   if (!parsed.success) {

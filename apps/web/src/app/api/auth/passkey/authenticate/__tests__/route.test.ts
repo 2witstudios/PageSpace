@@ -19,6 +19,12 @@ vi.mock('next/server', () => ({
 
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifyAuthentication: vi.fn(),
+  findUserIdByCredentialId: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  getAccountLockoutStatus: vi.fn(),
+  recordFailedLoginAttempt: vi.fn(),
+  resetFailedLoginAttempts: vi.fn(),
 }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
@@ -107,7 +113,12 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 }));
 
 import { POST } from '../route';
-import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
+import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
+import {
+  getAccountLockoutStatus,
+  recordFailedLoginAttempt,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth/account-lockout';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
@@ -146,6 +157,15 @@ describe('POST /api/auth/passkey/authenticate', () => {
       // @ts-expect-error - partial mock data
       data: { userId: 'user-1' },
     });
+    vi.mocked(findUserIdByCredentialId).mockResolvedValue('user-1');
+    vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+      isLocked: false,
+      failedAttempts: 0,
+      lockedUntil: null,
+      remainingAttempts: 10,
+    });
+    vi.mocked(recordFailedLoginAttempt).mockResolvedValue({ success: true });
+    vi.mocked(resetFailedLoginAttempts).mockResolvedValue(undefined);
   });
 
   describe('successful authentication', () => {
@@ -280,6 +300,97 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(csrfCookie).toContain('; Secure');
 
       vi.unstubAllEnvs();
+    });
+  });
+
+  describe('account lockout (per-account layer, complements per-IP rate limiting)', () => {
+    it('rejects a locked account with 423 BEFORE verifying the assertion', async () => {
+      const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+      vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+        isLocked: true,
+        failedAttempts: 10,
+        lockedUntil,
+        remainingAttempts: 0,
+      });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(423);
+      expect(body.error).toMatch(/locked/i);
+      // The crypto verification must not run for a locked account
+      expect(verifyAuthentication).not.toHaveBeenCalled();
+      expect(findUserIdByCredentialId).toHaveBeenCalledWith('cred-1');
+    });
+
+    it('audits the lockout rejection', async () => {
+      vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+        isLocked: true,
+        failedAttempts: 10,
+        lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+        remainingAttempts: 0,
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'passkey_account_locked' }),
+        }),
+      );
+    });
+
+    it('records a failed attempt on VERIFICATION_FAILED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).toHaveBeenCalledWith('user-1');
+    });
+
+    it('records a failed attempt on COUNTER_REPLAY_DETECTED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'COUNTER_REPLAY_DETECTED' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).toHaveBeenCalledWith('user-1');
+    });
+
+    it('does NOT record a failed attempt on a benign CHALLENGE_EXPIRED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'CHALLENGE_EXPIRED' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).not.toHaveBeenCalled();
+    });
+
+    it('does NOT record a failed attempt when the credential maps to no account', async () => {
+      vi.mocked(findUserIdByCredentialId).mockResolvedValue(null);
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'CREDENTIAL_NOT_FOUND' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).not.toHaveBeenCalled();
+    });
+
+    it('resets the lockout counter on successful authentication', async () => {
+      await POST(createRequest());
+
+      expect(resetFailedLoginAttempts).toHaveBeenCalledWith('user-1');
     });
   });
 
