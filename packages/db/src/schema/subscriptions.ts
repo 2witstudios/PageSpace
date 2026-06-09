@@ -29,7 +29,11 @@ export const subscriptions = pgTable('subscriptions', {
 export const stripeEvents = pgTable('stripe_events', {
   id: text('id').primaryKey(), // Stripe event.id as primary key for idempotency
   type: text('type').notNull(),
-  processedAt: timestamp('processedAt', { mode: 'date' }).defaultNow().notNull(),
+  // Nullable + NO default: the row is INSERTed to claim the event id for idempotency,
+  // and processedAt is set only once processing actually finishes. A null processedAt
+  // therefore means "claimed but not yet processed" (in flight or failed mid-way), which
+  // the webhook uses to decide between acking a true duplicate and forcing a Stripe retry.
+  processedAt: timestamp('processedAt', { mode: 'date' }),
   error: text('error'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => {

@@ -38,9 +38,12 @@ vi.mock('@/lib/stripe', () => ({
 const mockSelectWhere = vi.fn();
 const mockSelectLimit = vi.fn();
 const mockInsertValues = vi.fn();
-const mockInsertOnConflict = vi.fn();
+const mockInsertOnConflictDoNothing = vi.fn();
+const mockInsertReturning = vi.fn();
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
+const mockUpdateReturning = vi.fn();
+const mockDeleteWhere = vi.fn();
 
 vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
@@ -67,13 +70,18 @@ vi.mock('@pagespace/db/db', () => {
       })),
       insert: vi.fn(() => ({
         values: mockInsertValues.mockReturnValue({
-          onConflictDoUpdate: mockInsertOnConflict,
+          onConflictDoNothing: mockInsertOnConflictDoNothing.mockReturnValue({
+            returning: mockInsertReturning,
+          }),
         }),
       })),
       update: vi.fn(() => ({
         set: mockUpdateSet.mockReturnValue({
           where: mockUpdateWhere,
         }),
+      })),
+      delete: vi.fn(() => ({
+        where: mockDeleteWhere,
       })),
       transaction: vi.fn(async (callback: (tx: typeof mockTx) => Promise<void>) => {
         await callback(mockTx);
@@ -83,6 +91,9 @@ vi.mock('@pagespace/db/db', () => {
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...conds: unknown[]) => ({ type: 'and', conds })),
+  isNull: vi.fn((field: unknown) => ({ field, type: 'isNull' })),
+  lte: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'lte' })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {},
@@ -260,11 +271,18 @@ describe('POST /api/stripe/webhook', () => {
     // Setup default database responses
     mockSelectLimit.mockResolvedValue([mockUser()]);
     mockInsertValues.mockReturnValue({
-      onConflictDoUpdate: mockInsertOnConflict,
+      onConflictDoNothing: mockInsertOnConflictDoNothing.mockReturnValue({
+        returning: mockInsertReturning,
+      }),
     });
-    mockInsertOnConflict.mockResolvedValue(undefined);
-    mockUpdateWhere.mockResolvedValue(undefined);
+    // Default: the idempotency insert wins the race (fresh row) → event is processed.
+    mockInsertReturning.mockResolvedValue([{ id: 'evt_test' }]);
+    // update().set().where() is awaited directly (completion/error marks) and also
+    // chains .returning() on the reclaim takeover path.
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockReturnValue({ returning: mockUpdateReturning });
+    mockUpdateReturning.mockResolvedValue([{ id: 'evt_test' }]);
+    mockDeleteWhere.mockResolvedValue(undefined);
     mockApplyStripeFunding.mockResolvedValue(undefined);
   });
 
@@ -305,14 +323,14 @@ describe('POST /api/stripe/webhook', () => {
   });
 
   describe('Idempotency', () => {
-    it('should return 200 for duplicate events', async () => {
+    it('should return 200 for a true duplicate whose prior attempt finished', async () => {
       const event = mockStripeEvent('customer.subscription.created', mockSubscription());
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
-      // Simulate duplicate event (insert throws conflict error)
-      mockInsertValues.mockImplementation(() => {
-        throw new Error('Duplicate key');
-      });
+      // Conflict: onConflictDoNothing().returning() yields no row...
+      mockInsertReturning.mockResolvedValueOnce([]);
+      // ...and the existing row shows the prior attempt already finished (processedAt set).
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: new Date('2026-06-09T00:00:00Z') }]);
 
       const request = new Request('https://example.com/api/stripe/webhook', {
         method: 'POST',
@@ -327,6 +345,104 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(body.received).toBe(true);
+    });
+
+    it('should return 500 (retry) for a duplicate whose prior attempt is still in flight (within lease)', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      // Redelivery raced an in-flight first attempt: conflict, processedAt null, claimed
+      // just now (well within the lease) → genuinely in flight → retry, NOT a takeover.
+      mockInsertReturning.mockResolvedValueOnce([]);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null, createdAt: new Date() }]);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // Must NOT ack — funding hasn't been applied yet. 500 forces Stripe to redeliver.
+      expect(response.status).toBe(500);
+      // The funding handler must not run on a retry signal, and we must not take over a live marker.
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockUpdateReturning).not.toHaveBeenCalled();
+    });
+
+    it('reclaims an abandoned marker (claim older than the lease) and reprocesses → 200', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      // Conflict, processedAt still null, but claimed 20 minutes ago (worker died mid-flight).
+      mockInsertReturning.mockResolvedValueOnce([]);
+      const staleClaim = new Date(Date.now() - 20 * 60 * 1000);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null, createdAt: staleClaim }]);
+      // Atomic takeover UPDATE wins (one row re-leased).
+      mockUpdateReturning.mockResolvedValueOnce([{ id: event.id }]);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // Takeover happened and the funding handler ran on reprocess.
+      expect(mockUpdateReturning).toHaveBeenCalled();
+      expect(mockApplyStripeFunding).toHaveBeenCalled();
+    });
+
+    it('returns 500 (retry) when the takeover loses the race to another delivery', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      mockInsertReturning.mockResolvedValueOnce([]);
+      const staleClaim = new Date(Date.now() - 20 * 60 * 1000);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null, createdAt: staleClaim }]);
+      // Another concurrent delivery already re-leased the marker → our guarded UPDATE matches 0 rows.
+      mockUpdateReturning.mockResolvedValueOnce([]);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+    });
+
+    it('should return 500 (retry) on a transient insert DB error — never silently ack', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      // A pool timeout / dropped connection must NOT be treated as "already processed".
+      mockInsertReturning.mockRejectedValueOnce(new Error('pool timeout'));
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
     });
   });
 
