@@ -27,6 +27,11 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: { API: { maxAttempts: 100, windowMs: 60000 } },
+}));
+
 // Track all chained query builder calls
 const mockLimit = vi.fn();
 const mockWhere = vi.fn();
@@ -104,6 +109,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, isNotNull } from '@pagespace/db/operators';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // ============================================================================
 // Test Helpers
@@ -156,6 +162,7 @@ describe('GET /api/users/search', () => {
       // @ts-expect-error - test mock with extra properties
       hasSessionBearerToken: false,
     });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
     setupDbChains();
   });
 
@@ -202,7 +209,9 @@ describe('GET /api/users/search', () => {
   });
 
   describe('profile search results', () => {
-    it('should return profile results when found', async () => {
+    it('should return profile results WITHOUT an email (M3 — email harvest)', async () => {
+      // The DB row deliberately still carries an email to prove the route drops
+      // it: a 2-char substring match must never surface a public profile's email.
       const profileResults = [
         {
           userId: 'user_456',
@@ -227,8 +236,31 @@ describe('GET /api/users/search', () => {
         displayName: 'Test User',
         bio: 'A bio',
         avatarUrl: 'https://example.com/avatar.png',
-        email: 'test@example.com',
       });
+      expect(body.users[0]).not.toHaveProperty('email');
+    });
+  });
+
+  describe('rate limiting (M3)', () => {
+    it('should return 429 when the per-user rate limit is exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        retryAfter: 42,
+      });
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('42');
+      expect(body.error).toBe('Too many requests');
+    });
+
+    it('should NOT count too-short queries against the rate limit', async () => {
+      const request = new Request('https://example.com/api/users/search?q=a');
+      await GET(request);
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
     });
   });
 
