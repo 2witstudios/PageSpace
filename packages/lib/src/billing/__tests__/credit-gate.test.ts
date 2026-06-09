@@ -113,25 +113,42 @@ function mockLazyInitTransaction(
 
 /**
  * Mock the reset transaction (first db.transaction call when the period has expired).
- * Captures the set payload and ledger values. `didUpdate` controls whether the
- * UPDATE .returning() reports a match (true = reset ran, false = concurrent already ran).
+ * The fixed transaction re-reads the balance under `FOR UPDATE` INSIDE the txn and
+ * computes the refill from THAT locked row — never from the unlocked pre-read. The
+ * `lockedRow` argument is what that in-transaction `select(...).for('update')`
+ * resolves to; it is the source of truth for the refill arithmetic, so a test can
+ * make it diverge from the pre-read snapshot to prove the ordering. A null/empty
+ * `lockedRow` (or one whose window is no longer expired) models a concurrent reset
+ * that already rolled the window forward: the fix must skip the UPDATE + ledger write.
+ * Captures the set payload and ledger values.
  */
 function mockResetTransaction(
-  sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {},
-  didUpdate = true,
+  sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {},
+  lockedRow: Record<string, unknown> | null = null,
 ) {
   mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
     const tx = {
-      update: vi.fn(() => ({
-        set: (v: Record<string, unknown>) => {
-          sink.set = v;
-          return {
-            where: () => ({
-              returning: () => Promise.resolve(didUpdate ? [{ userId: 'ignored' }] : []),
-            }),
-          };
-        },
+      select: vi.fn(() => ({
+        from: () => ({ where: () => ({ for: () => Promise.resolve(lockedRow ? [lockedRow] : []) }) }),
       })),
+      update: vi.fn(() => {
+        sink.updateCalled = true;
+        return {
+          set: (v: Record<string, unknown>) => {
+            sink.set = v;
+            // The fixed UPDATE targets by userId only (the row lock + post-lock predicate
+            // recheck handle the race), so it is awaited directly. Expose a thenable that
+            // also answers .returning() so a pre-fix implementation calling .returning()
+            // surfaces a clean assertion mismatch rather than a TypeError.
+            return {
+              where: () => ({
+                returning: () => Promise.resolve([{ userId: 'ignored' }]),
+                then: (resolve: (v: unknown) => unknown) => resolve(undefined),
+              }),
+            };
+          },
+        };
+      }),
       insert: vi.fn(() => ({
         values: (v: Record<string, unknown>) => {
           sink.ledgerValues = v;
@@ -312,7 +329,7 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink);
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST });
     mockTransaction({ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
@@ -385,7 +402,7 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink);
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
@@ -401,7 +418,7 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 700, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink);
+    mockResetTransaction(sink, { monthlyRemainingCents: 200, debtCents: 0, monthlyPeriodEnd: PAST });
     mockTransaction({ monthlyRemainingCents: 700, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
@@ -415,7 +432,7 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown> } = {};
-    mockResetTransaction(sink);
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: null });
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
@@ -515,7 +532,7 @@ describe('canConsumeAI', () => {
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
       .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
     const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
-    mockResetTransaction(sink);
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
     mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
 
     await canConsumeAI('u1', 'free');
@@ -531,6 +548,85 @@ describe('canConsumeAI', () => {
     // key; concurrent resets within the same millisecond de-duplicate via the index.
     expect(typeof sink.ledgerValues?.stripeRef).toBe('string');
     expect((sink.ledgerValues?.stripeRef as string).startsWith('free-reset-u1-')).toBe(true);
+  });
+
+  // ── Locked-read ordering (M7 race fix) ──────────────────────────────────────
+  // The refill MUST be computed from the balance read FOR UPDATE inside the reset
+  // transaction, never from the unlocked pre-transaction snapshot. Otherwise a
+  // mutation committed between the two reads is clobbered by the reset.
+
+  it('computes the refill from the post-lock read, NOT the unlocked pre-read snapshot', async () => {
+    // Pre-transaction snapshot is stale: it shows 200¢ remaining. A concurrent settle
+    // commits before we take the row lock, leaving only 50¢. The locked read inside the
+    // txn must drive the refill: 50 + 500 = 550 (NOT the stale 200 + 500 = 700, which
+    // would silently un-bill the concurrent spend).
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 200, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 550, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; updateCalled?: boolean } = {};
+    // Locked row diverges from the pre-read: only 50¢ left.
+    mockResetTransaction(sink, { monthlyRemainingCents: 50, debtCents: 0, monthlyPeriodEnd: PAST });
+    mockTransaction({ monthlyRemainingCents: 550, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    // 550, not 700 — proves the refill used the locked read.
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 550, monthlyAllowanceCents: 500, debtCents: 0 });
+    expect(r.allowed).toBe(true);
+  });
+
+  it('nets debt from the LOCKED row so a concurrent debt-clearing top-up is not collected twice', async () => {
+    // Pre-read snapshot shows 300¢ debt. A concurrent top-up pays it off before we lock,
+    // so the locked read shows 0 debt. The refill must net against the locked debt (0):
+    // 0 + 500 = 500. Using the stale 300¢ debt would re-collect already-paid debt
+    // (0 − 300 + 500 = 200), shorting the user 300¢.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 300, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown> } = {};
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 500, debtCents: 0 });
+    expect(r.allowed).toBe(true);
+  });
+
+  it('skips the UPDATE + grant when the locked read shows the window already rolled forward (concurrent reset won)', async () => {
+    // The unlocked pre-read still shows an expired window, so we open the reset txn —
+    // but by the time we hold the lock a concurrent reset has rolled the window into the
+    // FUTURE. We must NOT update or write a grant; just re-read and proceed.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
+    // Locked window is FUTURE → predicate recheck fails → skip.
+    mockResetTransaction(sink, { monthlyRemainingCents: 500, debtCents: 0, monthlyPeriodEnd: FUTURE });
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    expect(sink.updateCalled).toBeFalsy();
+    expect(sink.set).toBeUndefined();
+    expect(sink.ledgerValues).toBeUndefined();
+    // The post-reset re-read picks up the concurrently-rolled balance and the gate allows.
+    expect(r.allowed).toBe(true);
+  });
+
+  it('skips the UPDATE + grant when the locked read finds no row (row removed before the lock)', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
+    mockResetTransaction(sink, null); // locked read returns []
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    expect(sink.updateCalled).toBeFalsy();
+    expect(sink.ledgerValues).toBeUndefined();
+    expect(r.allowed).toBe(true);
   });
 });
 
