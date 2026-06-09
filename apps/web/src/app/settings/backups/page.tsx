@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useDriveStore } from '@/hooks/useDrive';
+import { BackupDiffPreview } from '@/components/BackupDiffPreview';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -17,11 +19,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { ArrowLeft, HardDrive, Loader2, Plus } from 'lucide-react';
+import { ArrowLeft, Download, HardDrive, Loader2, Plus } from 'lucide-react';
 import useSWR from 'swr';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { Separator } from '@/components/ui/separator';
 import { format, formatDistanceToNow } from 'date-fns';
 import type { DriveBackupWithDriveName } from '@/services/api/drive-backup-service';
+import { getExportFilename, getDownloadButtonLabel } from './utils';
 
 const PAGE_SIZE = 50;
 
@@ -60,6 +64,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
 export default function BackupsPage() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const drives = useDriveStore((s) => s.drives);
   const currentDriveId = useDriveStore((s) => s.currentDriveId);
   const fetchDrives = useDriveStore((s) => s.fetchDrives);
@@ -77,6 +82,8 @@ export default function BackupsPage() {
   const [accumulatedBackups, setAccumulatedBackups] = useState<SerializedBackup[]>([]);
   const [offset, setOffset] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -125,6 +132,51 @@ export default function BackupsPage() {
       setIsLoadingMore(false);
     }
   }, [isLoadingMore, offset]);
+
+  const handleDownload = useCallback(async (backup: SerializedBackup) => {
+    if (backup.status !== 'ready' || downloadingId) return;
+    setDownloadingId(backup.id);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${backup.driveId}/backups/${backup.id}/export`);
+      if (!res.ok) {
+        toast.error('Export failed');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = getExportFilename(backup.id, backup.label);
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Export failed');
+    } finally {
+      setDownloadingId(null);
+    }
+  }, [downloadingId]);
+
+  const restoreTargetId = searchParams.get('restore');
+  const restoreBackup = restoreTargetId
+    ? accumulatedBackups.find((b) => b.id === restoreTargetId) ?? null
+    : null;
+
+  const handleRestore = useCallback(async (backupId: string) => {
+    if (!restoreBackup || isRestoring) return;
+    setIsRestoring(true);
+    try {
+      await post(`/api/drives/${restoreBackup.driveId}/backups/${backupId}/restore`, {});
+      toast.success('Drive restored successfully');
+      router.replace('/settings/backups');
+      setAccumulatedBackups([]);
+      setOffset(0);
+      mutate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Restore failed');
+    } finally {
+      setIsRestoring(false);
+    }
+  }, [restoreBackup, isRestoring, router, mutate]);
 
   const handleCreateBackup = async () => {
     if (!createDriveId || isCreating) return;
@@ -190,6 +242,25 @@ export default function BackupsPage() {
           )}
         </CardHeader>
         <CardContent className="space-y-4">
+          {restoreBackup && (
+            <div className="p-4 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 space-y-2">
+              <p className="text-sm font-medium">
+                Restore from: <span className="font-semibold">{restoreBackup.label ?? `Backup ${restoreBackup.id.slice(0, 8)}`}</span>
+              </p>
+              <BackupDiffPreview
+                driveId={restoreBackup.driveId}
+                backup={restoreBackup}
+                onRestore={handleRestore}
+              />
+              {isRestoring && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Restoring…
+                </div>
+              )}
+            </div>
+          )}
+          {restoreBackup && <Separator />}
           {showCreateForm && (
             <div className="space-y-3 p-4 rounded-lg border bg-muted/40">
               <div className="space-y-1.5">
@@ -276,11 +347,40 @@ export default function BackupsPage() {
                         <p className="text-xs text-destructive">{backup.failureReason}</p>
                       )}
                     </div>
-                    <div
-                      className="text-right text-sm text-muted-foreground shrink-0"
-                      title={format(new Date(backup.createdAt), 'PPpp')}
-                    >
-                      {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div
+                        className="text-right text-sm text-muted-foreground"
+                        title={format(new Date(backup.createdAt), 'PPpp')}
+                      >
+                        {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
+                      </div>
+                      {backup.status !== 'ready' ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button size="sm" variant="outline" disabled aria-disabled="true">
+                                <Download className="h-3 w-3 mr-1.5" />
+                                Download
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>Backup not ready</TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!!downloadingId}
+                          onClick={() => handleDownload(backup)}
+                        >
+                          {downloadingId === backup.id ? (
+                            <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                          ) : (
+                            <Download className="h-3 w-3 mr-1.5" />
+                          )}
+                          {getDownloadButtonLabel(downloadingId === backup.id)}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}

@@ -98,6 +98,11 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
   ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
 
+  // --- Drive backup sub-routes ---
+  ['drives/[driveId]/backups/[backupId]/diff', 'Read-only diff preview — no data written, covered by parent backup auth'],
+  ['drives/[driveId]/backups/[backupId]/export', 'Read-only ZIP download — no data written, covered by streamBackupExport authz'],
+  ['drives/[driveId]/backups/[backupId]/pages', 'Read-only snapshot page tree — no data written, covered by isDriveOwnerOrAdmin check'],
+
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],
