@@ -777,5 +777,57 @@ describe('tree-utils', () => {
 
       expect(result).toHaveLength(50)
     })
+
+    it('keeps many siblings that share one accessible ancestor (memoized path)', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        ...Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, parentId: 'root' })),
+      ]
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(101)
+    })
+
+    it('drops a whole wide subtree under one inaccessible ancestor', () => {
+      const nodes = [
+        { id: 'private', parentId: null },
+        ...Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, parentId: 'private' })),
+      ]
+      // children are accessible, ancestor is not.
+      const accessible = new Set(nodes.filter(n => n.id !== 'private').map(n => n.id))
+
+      expect(filterTreeNodesByAccess(nodes, accessible)).toEqual([])
+    })
+
+    it('resolves a large deep+wide forest in linear time (no O(n^2) blowup)', () => {
+      // 2000-deep spine; each spine node also has one leaf child.
+      const nodes: { id: string; parentId: string | null }[] = []
+      for (let i = 0; i < 2000; i++) {
+        nodes.push({ id: `s${i}`, parentId: i === 0 ? null : `s${i - 1}` })
+        nodes.push({ id: `leaf${i}`, parentId: `s${i}` })
+      }
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(4000)
+    })
+
+    it('hides accessible descendants beneath a mid-spine inaccessible node in a deep tree', () => {
+      const nodes = Array.from({ length: 100 }, (_, i) => ({
+        id: `n${i}`,
+        parentId: i === 0 ? null : `n${i - 1}`,
+      }))
+      // Everything accessible EXCEPT the node at depth 50.
+      const accessible = new Set(nodes.map(n => n.id))
+      accessible.delete('n50')
+
+      const result = filterTreeNodesByAccess(nodes, accessible).map(n => n.id)
+
+      // n0..n49 visible; n50 (inaccessible) and all below hidden.
+      expect(result).toEqual(Array.from({ length: 50 }, (_, i) => `n${i}`))
+    })
   })
 })
