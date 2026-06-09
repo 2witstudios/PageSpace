@@ -201,16 +201,21 @@ type PinnedFetchInit = RequestInit & { dispatcher?: Agent };
 interface SafeFetchResult {
   response: Response;
   dispatcher: Agent | undefined;
-  finalUrl: string;
 }
 
 /**
  * SSRF-safe fetch: follows redirects MANUALLY (redirect: 'manual'), revalidating
  * scheme + host and re-resolving + pinning DNS on EVERY hop. This closes the M2
  * bypass where an allowed initial URL 302s to cloud-metadata/internal hosts.
- * The caller owns the returned dispatcher and must close it after reading the body.
+ * A single shared `signal` bounds total time across all hops (and the caller's
+ * body read), so a redirect chain cannot extend the deadline. The caller owns
+ * the returned dispatcher and must close it after reading the body.
  */
-async function ssrfSafeFetch(initialUrl: string, headers: Record<string, string>): Promise<SafeFetchResult> {
+async function ssrfSafeFetch(
+  initialUrl: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+): Promise<SafeFetchResult> {
   let currentUrl = initialUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -220,17 +225,13 @@ async function ssrfSafeFetch(initialUrl: string, headers: Record<string, string>
     const addresses = await resolveValidatedAddresses(new URL(currentUrl).hostname);
     const dispatcher = createPinnedDispatcher(addresses);
 
-    const init: PinnedFetchInit = {
-      headers,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    };
+    const init: PinnedFetchInit = { headers, redirect: 'manual', signal };
     if (dispatcher) init.dispatcher = dispatcher;
 
     const response = await fetch(currentUrl, init);
 
     if (!REDIRECT_STATUSES.has(response.status)) {
-      return { response, dispatcher, finalUrl: currentUrl };
+      return { response, dispatcher };
     }
 
     // Redirect: discard this hop's body + dispatcher, validate the next target.
@@ -373,7 +374,9 @@ Returns the page content converted to readable markdown.`,
         webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url: redactUrl(url) });
 
         // Follows redirects manually, revalidating + IP-pinning each hop (SSRF-safe).
-        const safe = await ssrfSafeFetch(url, { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' });
+        // One shared deadline bounds the whole operation, including the body read below.
+        const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+        const safe = await ssrfSafeFetch(url, { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' }, signal);
         const response = safe.response;
         dispatcher = safe.dispatcher;
 
