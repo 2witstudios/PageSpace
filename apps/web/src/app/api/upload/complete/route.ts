@@ -9,13 +9,23 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { updateActiveUploads, updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { buildS3Key, canFinalizeUpload } from '@pagespace/lib/services/upload-validation';
+import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+// Thrown inside the completion transaction to roll it back when the caller is
+// trying to link a content-addressed blob they neither uploaded nor reference
+// (H3 cross-tenant claim). Caught by the route and mapped to a 409.
+class CrossTenantClaimError extends Error {
+  constructor() {
+    super('Cross-tenant file claim rejected');
+    this.name = 'CrossTenantClaimError';
+  }
+}
 
 // The transaction executor passed to db.transaction's callback — also satisfied
 // by `db` itself. resolveUploadPosition takes this so the sibling reads run on
@@ -176,10 +186,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid or expired jobId' }, { status: 403 });
   }
   const { contentHash, driveId, fileSize, mimeType } = reserved;
-  // H3 facts captured at presign (server-trusted). Default to the safe (most
-  // restrictive) interpretation if an older slot lacks them.
+  // H3 hint captured at presign (server-trusted). The authoritative anti-claim
+  // check is the atomic `files`-row ownership claim in the transaction below;
+  // this only short-circuits the legitimate-dedup case. Default to the safe
+  // (most restrictive) value if an older slot lacks it.
   const callerAlreadyReferences = reserved.callerAlreadyReferences ?? false;
-  const existedAtPresign = reserved.existedAtPresign ?? true;
 
   // Scoped MCP tokens may only act on the drive they were granted for.
   const scopeError = checkMCPCreateScope(auth, driveId);
@@ -205,19 +216,6 @@ export async function POST(request: Request) {
     }
   }
 
-  // H3: a known content hash must not let a caller link bytes they never
-  // uploaded. Linking a pre-existing content-addressed object is allowed only
-  // when the caller already references the hash, or when this very upload created
-  // the object (it did not exist at presign). Reject the cross-tenant claim.
-  if (!canFinalizeUpload({ callerAlreadyReferences, existedAtPresign })) {
-    uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
-    return NextResponse.json(
-      { error: 'This file could not be verified for upload. Please re-upload the original file.' },
-      { status: 409 },
-    );
-  }
-
   // The UI uploads straight to S3, so /complete can be reached without the PUT
   // ever happening. Confirm the object is actually present before creating a
   // page/file record and charging storage, so a skipped or failed upload can't
@@ -236,12 +234,11 @@ export async function POST(request: Request) {
   let fileWasInserted = false;
   try {
     const result = await db.transaction(async (tx) => {
-      // Compute position inside the transaction so the sibling read and the
-      // insert share one transactional snapshot.
-      const calculatedPosition = await resolveUploadPosition(tx, resolvedParentId, position, afterNodeId);
-      const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId: resolvedParentId, position: calculatedPosition });
-      const [createdPage] = await tx.insert(pages).values(record).returning();
-
+      // H3 (race-proof): claim the content-addressed `files` row FIRST. The first
+      // completion to insert it owns the blob (createdBy). If a row already exists,
+      // linking is allowed only when the caller owns it or already references the
+      // hash — otherwise this is a cross-tenant claim (incl. a presign→complete
+      // race where another tenant created the object) and we roll back.
       const insertedFiles = await tx
         .insert(files)
         .values({
@@ -254,6 +251,26 @@ export async function POST(request: Request) {
         })
         .onConflictDoNothing()
         .returning({ id: files.id });
+      const fileWasInsertedInTx = insertedFiles.length > 0;
+
+      let ownedByCaller = false;
+      if (!fileWasInsertedInTx) {
+        const existing = await tx.query.files.findFirst({
+          where: eq(files.id, contentHash),
+          columns: { createdBy: true },
+        });
+        ownedByCaller = existing?.createdBy === userId;
+      }
+
+      if (!canLinkExistingFileRow({ fileWasInserted: fileWasInsertedInTx, ownedByCaller, callerAlreadyReferences })) {
+        throw new CrossTenantClaimError();
+      }
+
+      // Compute position inside the transaction so the sibling read and the
+      // insert share one transactional snapshot.
+      const calculatedPosition = await resolveUploadPosition(tx, resolvedParentId, position, afterNodeId);
+      const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId: resolvedParentId, position: calculatedPosition });
+      const [createdPage] = await tx.insert(pages).values(record).returning();
 
       await tx
         .insert(filePages)
@@ -263,13 +280,19 @@ export async function POST(request: Request) {
           set: { linkedBy: userId, linkedAt: new Date(), linkSource: 'presigned-upload' },
         });
 
-      return { createdPage, fileWasInserted: insertedFiles.length > 0 };
+      return { createdPage, fileWasInserted: fileWasInsertedInTx };
     });
     newPage = result.createdPage;
     fileWasInserted = result.fileWasInserted;
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await updateActiveUploads(userId, -1).catch(() => undefined);
+    if (err instanceof CrossTenantClaimError) {
+      return NextResponse.json(
+        { error: 'This file could not be verified for upload. Please re-upload the original file.' },
+        { status: 409 },
+      );
+    }
     throw err;
   }
 

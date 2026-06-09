@@ -13,6 +13,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 const mockTransaction = vi.fn();
 const mockFindFirst = vi.fn();
 const mockFindMany = vi.fn();
+const mockFilesFindFirst = vi.fn();
+// Default files-row insert result: a single row (this completion inserted it →
+// fileWasInserted=true). Individual tests override for dedup/claim scenarios.
+let filesInsertReturning: Array<{ id: string }> = [];
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -83,9 +87,9 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 
 vi.mock('@pagespace/lib/services/upload-validation', () => ({
   buildS3Key: (hash: string) => `files/${hash}/original`,
-  // Real (pure) impl of the H3 link gate.
-  canFinalizeUpload: ({ callerAlreadyReferences, existedAtPresign }: { callerAlreadyReferences: boolean; existedAtPresign: boolean }) =>
-    callerAlreadyReferences || !existedAtPresign,
+  // Real (pure) impl of the H3 atomic link gate.
+  canLinkExistingFileRow: ({ fileWasInserted, ownedByCaller, callerAlreadyReferences }: { fileWasInserted: boolean; ownedByCaller: boolean; callerAlreadyReferences: boolean }) =>
+    fileWasInserted || ownedByCaller || callerAlreadyReferences,
 }));
 
 import { POST } from '../route';
@@ -105,6 +109,9 @@ const txQuery = {
     findFirst: (...args: unknown[]) => mockFindFirst(...args),
     findMany: (...args: unknown[]) => mockFindMany(...args),
   },
+  files: {
+    findFirst: (...args: unknown[]) => mockFilesFindFirst(...args),
+  },
 };
 
 function makeTxImpl() {
@@ -116,7 +123,8 @@ function makeTxImpl() {
           if (table === 'pages') capturedPageValues = vals;
           return {
             returning: vi.fn().mockResolvedValue([MOCK_PAGE]),
-            onConflictDoNothing: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: VALID_HASH }]) }),
+            // files insert: onConflictDoNothing().returning({id}) → filesInsertReturning.
+            onConflictDoNothing: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue(filesInsertReturning) }),
             onConflictDoUpdate: vi.fn().mockResolvedValue([]),
           };
         },
@@ -148,9 +156,10 @@ const VALID_BODY = {
   parentId: null,
 };
 
-// existedAtPresign=false means THIS upload created the object → canFinalizeUpload
-// allows it regardless of references (the common new-upload path).
-const SLOT_META = { contentHash: VALID_HASH, driveId: 'drive-1', fileSize: 2048, mimeType: 'image/jpeg', callerAlreadyReferences: false, existedAtPresign: false };
+// Default: the common new-upload path. The files-row insert succeeds in the tx
+// (filesInsertReturning has a row → fileWasInserted=true), so the H3 link gate
+// allows it regardless of references.
+const SLOT_META = { contentHash: VALID_HASH, driveId: 'drive-1', fileSize: 2048, mimeType: 'image/jpeg', callerAlreadyReferences: false };
 
 const MOCK_PAGE = { id: 'page-abc', title: 'photo.jpg', type: 'FILE', driveId: 'drive-1', contentHash: VALID_HASH };
 
@@ -166,6 +175,9 @@ beforeEach(() => {
   // Default sibling lookups: empty list (new page lands at position 0).
   mockFindFirst.mockResolvedValue(undefined);
   mockFindMany.mockResolvedValue([]);
+  // Default: the files-row insert succeeds (first physical store → fileWasInserted).
+  filesInsertReturning = [{ id: VALID_HASH }];
+  mockFilesFindFirst.mockResolvedValue(undefined);
   // Default: the uploaded object is present in storage.
   mockCheckObjectExists.mockResolvedValue(true);
 
@@ -368,25 +380,38 @@ describe('POST /api/upload/complete', () => {
     });
   });
 
-  describe('H3 — cross-tenant claim defense at finalize', () => {
-    it('rejects (409) when the object pre-existed and the caller does not reference it', async () => {
-      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({
-        ...SLOT_META, callerAlreadyReferences: false, existedAtPresign: true,
-      });
+  describe('H3 — atomic cross-tenant claim defense at finalize', () => {
+    it('rejects (409, rolled back) when an existing files row is owned by another tenant and the caller does not reference it', async () => {
+      // files insert conflicts (row already exists), owned by a different user,
+      // caller does not reference → the in-tx ownership claim throws → 409.
+      filesInsertReturning = [];
+      mockFilesFindFirst.mockResolvedValue({ createdBy: 'other-tenant' });
+      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({ ...SLOT_META, callerAlreadyReferences: false });
+
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(409);
-      expect(mockTransaction).not.toHaveBeenCalled();
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
       expect(updateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      // No storage charge for a rejected claim.
+      expect(updateStorageUsage).not.toHaveBeenCalled();
     });
 
-    it('allows a referencing caller to link a pre-existing object (legit dedup)', async () => {
-      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({
-        ...SLOT_META, callerAlreadyReferences: true, existedAtPresign: true,
-      });
+    it('allows a referencing caller to link a pre-existing (foreign-owned) object (legit dedup)', async () => {
+      filesInsertReturning = [];
+      mockFilesFindFirst.mockResolvedValue({ createdBy: 'other-tenant' });
+      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({ ...SLOT_META, callerAlreadyReferences: true });
+
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(200);
-      expect(mockTransaction).toHaveBeenCalled();
+    });
+
+    it('allows the caller to re-link a pre-existing object they own (createdBy === caller)', async () => {
+      filesInsertReturning = [];
+      mockFilesFindFirst.mockResolvedValue({ createdBy: 'user-1' });
+      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({ ...SLOT_META, callerAlreadyReferences: false });
+
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(200);
     });
   });
 
@@ -396,24 +421,11 @@ describe('POST /api/upload/complete', () => {
       expect(updateStorageUsage).toHaveBeenCalledWith('user-1', 2048, expect.objectContaining({ eventType: 'upload' }));
     });
 
-    it('does NOT charge storage on a dedup completion (files row already existed)', async () => {
-      // onConflictDoNothing().returning() yields [] when the row already exists.
-      mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
-        const tx = {
-          query: txQuery,
-          insert: (table: unknown) => ({
-            values: (vals: Record<string, unknown>) => {
-              if (table === 'pages') capturedPageValues = vals;
-              return {
-                returning: vi.fn().mockResolvedValue([MOCK_PAGE]),
-                onConflictDoNothing: () => ({ returning: vi.fn().mockResolvedValue([]) }),
-                onConflictDoUpdate: vi.fn().mockResolvedValue([]),
-              };
-            },
-          }),
-        };
-        return fn(tx);
-      });
+    it('does NOT charge storage on a legit dedup completion (files row already existed, caller references)', async () => {
+      // Row already exists (insert conflict → []), caller already references it
+      // so the link is allowed, but no new bytes were stored → no charge.
+      filesInsertReturning = [];
+      mockFilesFindFirst.mockResolvedValue({ createdBy: 'user-1' });
       await POST(makeRequest(VALID_BODY));
       expect(updateStorageUsage).not.toHaveBeenCalled();
     });

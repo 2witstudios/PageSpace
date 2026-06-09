@@ -180,6 +180,8 @@ describe('upload-semaphore', () => {
       const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       vi.advanceTimersByTime(11 * 60 * 1000); // past the 10-minute slot timeout
       expect(uploadSemaphore.verifySlotOwner(slot!, 'user-1')).toBe(false);
+      // Reclamation is durable/async (DB decrement awaited before in-memory removal).
+      await vi.advanceTimersByTimeAsync(0);
       expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
     });
   });
@@ -225,11 +227,12 @@ describe('upload-semaphore', () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
 
       // Past the 10-minute slot timeout; advancing 11 minutes also fires the
-      // once-a-minute cleanup interval.
-      vi.advanceTimersByTime(11 * 60 * 1000);
+      // once-a-minute cleanup interval. Async so the durable decrement + in-memory
+      // removal microtasks flush.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 
-      expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
       expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
     });
 
     it('decrements the DB counter when an expired slot is reclaimed via verifySlotOwner', async () => {
@@ -238,6 +241,7 @@ describe('upload-semaphore', () => {
       vi.advanceTimersByTime(10 * 60 * 1000 + 1);
 
       expect(uploadSemaphore.verifySlotOwner(slot!, 'user-1')).toBe(false);
+      // The async decrement is invoked synchronously up to its await.
       expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
     });
 
@@ -246,6 +250,36 @@ describe('upload-semaphore', () => {
       uploadSemaphore.releaseUploadSlot(slot!);
 
       expect(mockUpdateActiveUploads).not.toHaveBeenCalled();
+    });
+
+    it('does NOT double-decrement: a claimed slot (taken by a completing route) is skipped by the sweep', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024, {
+        contentHash: 'a'.repeat(64), driveId: 'd', fileSize: 1024, mimeType: 'image/png',
+      });
+      // A route claims the slot for completion (it will do its own DB decrement).
+      uploadSemaphore.getSlotMetadata(slot!, 'user-1');
+
+      // The slot then times out while the route is still in flight.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      // Sweep reclaimed the in-memory permit but did NOT touch the DB counter.
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
+      expect(mockUpdateActiveUploads).not.toHaveBeenCalled();
+    });
+
+    it('keeps the slot for retry when the DB decrement fails (durable)', async () => {
+      await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+      mockUpdateActiveUploads.mockRejectedValueOnce(new Error('db down'));
+
+      // First sweep: decrement fails → slot retained.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(1);
+
+      // Next sweep (60s later): decrement succeeds → slot reclaimed.
+      mockUpdateActiveUploads.mockResolvedValue(undefined);
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
     });
   });
 });

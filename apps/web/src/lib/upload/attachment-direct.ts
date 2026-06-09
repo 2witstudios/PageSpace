@@ -173,13 +173,17 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // M8: only the first physical store of a content-addressed blob inserts the
   // `files` row; charge storage once on that insert (symmetric with the single
   // credit the reaper issues at unlink) rather than on every dedup completion.
+  // The file-row insert and target link run in ONE transaction so a link failure
+  // rolls the insert back — a retry then re-inserts and is charged, instead of
+  // leaving an orphaned, never-charged row (inserted=false forever).
   let fileWasInserted = false;
   try {
-    const saved = await attachmentUploadRepository.saveFileRecord(
-      buildAttachmentFileRecord({ contentHash, target, fileSize: resolvedSize, mimeType: storedMime, userId }),
-    );
+    const saved = await attachmentUploadRepository.saveFileRecordAndLink({
+      fileRecord: buildAttachmentFileRecord({ contentHash, target, fileSize: resolvedSize, mimeType: storedMime, userId }),
+      target,
+      userId,
+    });
     fileWasInserted = saved.inserted;
-    await attachmentUploadRepository.linkFileToTarget({ target, fileId: contentHash, userId });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await updateActiveUploads(userId, -1).catch(() => undefined);

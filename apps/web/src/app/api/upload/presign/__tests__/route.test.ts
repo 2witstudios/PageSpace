@@ -223,7 +223,6 @@ describe('POST /api/upload/presign', () => {
         fileSize: 1024,
         mimeType: 'image/jpeg',
         callerAlreadyReferences: false,
-        existedAtPresign: false,
       });
     });
 

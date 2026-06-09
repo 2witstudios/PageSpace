@@ -115,21 +115,29 @@ export function canClaimExistingObject(args: {
  *
  * Forcing the PUT at presign is not sufficient on its own: an attacker handed a
  * presigned URL can simply skip it and call /complete, where a bare
- * object-existence check would still link the pre-existing (victim's) object.
+ * object-existence check would still link the pre-existing (victim's) object —
+ * including through a presign→complete race where the object is created by a
+ * different tenant between presign and completion.
  *
- * So /complete may create the page→file link only when:
- *  - the caller already references this hash (legitimate dedup), OR
- *  - the object did NOT exist at presign time, i.e. this very upload created it
- *    (the caller demonstrably possessed the bytes to PUT them).
+ * The authoritative, race-proof proof-of-ownership is the content-addressed
+ * `files` row, claimed atomically inside the completion transaction:
+ *  - `fileWasInserted` — THIS completion inserted the `files` row, so the caller
+ *    is the first physical storer and demonstrably possessed the bytes; OR
+ *  - `ownedByCaller` — an existing `files` row was created by this caller (e.g. a
+ *    re-link of their own file after the page was deleted but before reap); OR
+ *  - `callerAlreadyReferences` — a page in the caller's drive already points at
+ *    the hash (legitimate dedup).
  *
- * Linking to an object that pre-existed and that the caller does not already
- * reference is exactly the cross-tenant claim, and is rejected.
+ * Any other case is a caller trying to link bytes they never uploaded and is
+ * rejected (the transaction rolls back). This replaces the earlier
+ * `existedAtPresign` snapshot, which a presign→complete race could defeat.
  */
-export function canFinalizeUpload(args: {
+export function canLinkExistingFileRow(args: {
+  fileWasInserted: boolean;
+  ownedByCaller: boolean;
   callerAlreadyReferences: boolean;
-  existedAtPresign: boolean;
 }): boolean {
-  return args.callerAlreadyReferences || !args.existedAtPresign;
+  return args.fileWasInserted || args.ownedByCaller || args.callerAlreadyReferences;
 }
 
 export function buildPresignParams(

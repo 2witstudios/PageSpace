@@ -20,11 +20,12 @@ export interface UploadSlotMetadata {
   fileSize: number;
   mimeType: string;
   attachmentTarget?: AttachmentTarget;
-  // H3 (page-file flow): server-trusted facts captured at presign so /complete
-  // can reject a cross-tenant claim without re-trusting the client. Optional —
-  // the attachment flow leaves them unset (it has its own verification path).
+  // H3 (page-file flow): server-trusted fact captured at presign so /complete can
+  // gate the dedup link without re-trusting the client. Optional — the attachment
+  // flow leaves it unset (it has its own verification path). The authoritative
+  // anti-claim check at /complete is the atomic `files`-row ownership claim, not
+  // this hint.
   callerAlreadyReferences?: boolean;
-  existedAtPresign?: boolean;
 }
 
 interface UploadSlot {
@@ -32,6 +33,11 @@ interface UploadSlot {
   acquiredAt: Date;
   fileSize: number;
   metadata?: UploadSlotMetadata;
+  // L8: set once a completing/cancelling route has taken ownership of this slot
+  // (via getSlotMetadata). A claimed slot's DB activeUploads decrement is owned
+  // by that route, so the stale-slot sweep must NOT also decrement it (else the
+  // counter is double-decremented if the route's work outlives the timeout).
+  claimed?: boolean;
 }
 
 class UploadSemaphore {
@@ -160,19 +166,35 @@ class UploadSemaphore {
    * upload's presign-time +1 is never paired with a route-side -1, so this path
    * MUST decrement the DB counter too — otherwise the counter ratchets up forever
    * and would eventually falsely deny the user via checkConcurrentUploads.
+   *
+   * Two correctness rules:
+   *  - A `claimed` slot is owned by an in-flight completion/cancel route that
+   *    will perform its own single decrement; skip the DB write here to avoid
+   *    double-decrementing (which would erase another upload's count).
+   *  - Make the decrement durable: confirm the DB write succeeded BEFORE
+   *    forgetting the in-memory slot, so a transient failure leaves the slot for
+   *    the next 60s sweep to retry rather than losing the counter permanently.
    */
-  private releaseStaleSlot(slotId: string): void {
+  private async releaseStaleSlot(slotId: string): Promise<void> {
     const slot = this.activeSlots.get(slotId);
     if (!slot) return;
-    const { userId } = slot;
-    this.releaseUploadSlot(slotId);
-    // Fire-and-forget: the in-memory slot is already reclaimed; a transient DB
-    // hiccup must not throw out of the once-a-minute sweep timer.
-    void updateActiveUploads(userId, -1).catch((err) => {
-      loggers.api.warn('Failed to decrement activeUploads for stale slot', {
-        slotId, userId, err: err as Error,
+
+    if (slot.claimed) {
+      // An in-flight route owns the DB decrement; just reclaim the in-memory permit.
+      this.releaseUploadSlot(slotId);
+      return;
+    }
+
+    try {
+      await updateActiveUploads(slot.userId, -1);
+    } catch (err) {
+      // Keep the slot so the next sweep retries the decrement; do not forget it.
+      loggers.api.warn('Stale-slot activeUploads decrement failed; will retry next sweep', {
+        slotId, userId: slot.userId, err: err as Error,
       });
-    });
+      return;
+    }
+    this.releaseUploadSlot(slotId);
   }
 
   private cleanupStaleSlots(): void {
@@ -190,7 +212,9 @@ class UploadSemaphore {
         staleCount: staleSlots.length,
         timeoutMinutes: this.slotTimeout / 60000,
       });
-      staleSlots.forEach(slotId => this.releaseStaleSlot(slotId));
+      // Fire each release; releaseStaleSlot is durable (keeps the slot on DB
+      // failure) and self-guards, so an unhandled rejection can't escape here.
+      staleSlots.forEach(slotId => { void this.releaseStaleSlot(slotId); });
     }
   }
 
@@ -201,7 +225,7 @@ class UploadSemaphore {
     // once-a-minute sweep — a stale jobId must not still authorize a completion.
     // Reclaim via releaseStaleSlot so the abandoned DB counter is decremented too.
     if (Date.now() - slot.acquiredAt.getTime() > this.slotTimeout) {
-      this.releaseStaleSlot(slotId);
+      void this.releaseStaleSlot(slotId);
       return false;
     }
     return true;
@@ -214,7 +238,13 @@ class UploadSemaphore {
    */
   getSlotMetadata(slotId: string, userId: string): UploadSlotMetadata | null {
     if (!this.verifySlotOwner(slotId, userId)) return null;
-    return this.activeSlots.get(slotId)?.metadata ?? null;
+    const slot = this.activeSlots.get(slotId);
+    if (!slot) return null;
+    // The caller is taking ownership of this slot to complete the upload; mark it
+    // claimed so the stale-slot sweep won't also decrement the DB counter while
+    // this (possibly long) completion is in flight (see releaseStaleSlot).
+    slot.claimed = true;
+    return slot.metadata ?? null;
   }
 
   releaseUserSlots(userId: string): void {

@@ -117,7 +117,6 @@ export async function POST(request: Request) {
     fileSize,
     mimeType,
     callerAlreadyReferences,
-    existedAtPresign: exists,
   });
   if (!jobId) {
     return NextResponse.json(
