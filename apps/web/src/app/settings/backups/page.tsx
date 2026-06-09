@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { ArrowLeft, Download, HardDrive, Loader2, Plus } from 'lucide-react';
+import { ArrowLeft, Download, Eye, HardDrive, Loader2, Plus, RotateCcw } from 'lucide-react';
 import useSWR from 'swr';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { Separator } from '@/components/ui/separator';
@@ -146,7 +146,7 @@ export default function BackupsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = getExportFilename(backup.id, backup.label);
+      a.download = getExportFilename(backup.id, backup.label, backup.driveSlug);
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -347,14 +347,62 @@ export default function BackupsPage() {
                         <p className="text-xs text-destructive">{backup.failureReason}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1 shrink-0">
                       <div
-                        className="text-right text-sm text-muted-foreground"
+                        className="text-right text-sm text-muted-foreground mr-1"
                         title={format(new Date(backup.createdAt), 'PPpp')}
                       >
                         {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
                       </div>
-                      {backup.status !== 'ready' ? (
+                      {backup.status === 'ready' && (
+                        <>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                onClick={() => router.push(`/settings/backups/${backup.id}/snapshot`)}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>View snapshot</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                disabled={!!downloadingId}
+                                onClick={() => handleDownload(backup)}
+                              >
+                                {downloadingId === backup.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Download className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{getDownloadButtonLabel(downloadingId === backup.id)}</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                onClick={() => router.push(`/settings/backups?restore=${backup.id}`)}
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Restore drive to this backup</TooltipContent>
+                          </Tooltip>
+                        </>
+                      )}
+                      {backup.status !== 'ready' && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <span>
@@ -366,20 +414,6 @@ export default function BackupsPage() {
                           </TooltipTrigger>
                           <TooltipContent>Backup not ready</TooltipContent>
                         </Tooltip>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={!!downloadingId}
-                          onClick={() => handleDownload(backup)}
-                        >
-                          {downloadingId === backup.id ? (
-                            <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                          ) : (
-                            <Download className="h-3 w-3 mr-1.5" />
-                          )}
-                          {getDownloadButtonLabel(downloadingId === backup.id)}
-                        </Button>
                       )}
                     </div>
                   </div>
