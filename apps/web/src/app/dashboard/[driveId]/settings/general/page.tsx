@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2 } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
@@ -45,6 +46,12 @@ export default function GeneralSettingsPage() {
 
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const startEditing = useEditingStore((s) => s.startEditing);
+  const endEditing = useEditingStore((s) => s.endEditing);
+
+  useEffect(() => {
+    return () => endEditing('drive-settings-rename');
+  }, [endEditing]);
 
   useEffect(() => {
     fetchDrives();
@@ -54,7 +61,7 @@ export default function GeneralSettingsPage() {
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
 
   useEffect(() => {
-    if (drive) setName(drive.name);
+    if (drive && !useEditingStore.getState().isAnyEditing()) setName(drive.name);
   }, [drive]);
 
   const { data: membersData } = useSWR<MembersResponse>(
@@ -71,10 +78,11 @@ export default function GeneralSettingsPage() {
   );
 
   const handleSave = async () => {
-    if (isSaving || !name.trim()) return;
+    const nextName = name.trim();
+    if (isSaving || !nextName || nextName === drive?.name) return;
     setIsSaving(true);
     try {
-      await patch(`/api/drives/${driveId}`, { name: name.trim() });
+      await patch(`/api/drives/${driveId}`, { name: nextName });
       await fetchDrives();
       toast.success('Drive renamed');
     } catch {
@@ -146,6 +154,8 @@ export default function GeneralSettingsPage() {
               id="drive-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onFocus={() => startEditing('drive-settings-rename', 'form', { componentName: 'GeneralSettingsPage' })}
+              onBlur={() => endEditing('drive-settings-rename')}
               onKeyDown={(e) => e.key === 'Enter' && handleSave()}
               placeholder="Drive name"
             />

@@ -71,7 +71,7 @@ export default function DriveBackupsPage() {
   const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
 
-  const swrKey = drive
+  const swrKey = drive && canManage
     ? `/api/drives/${driveId}/backups?limit=${PAGE_SIZE}&offset=0`
     : null;
   const { data, isLoading: isLoadingBackups, error, mutate } = useSWR<BackupListResponse>(
