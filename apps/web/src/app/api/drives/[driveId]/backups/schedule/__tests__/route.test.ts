@@ -216,6 +216,23 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
     });
   });
+
+  describe('owner tier vs caller tier', () => {
+    it('returns available:false when drive owner is free-tier even if caller is an admin', async () => {
+      // Caller is an admin (isDriveOwnerOrAdmin returns true), but the
+      // drive owner has a free subscription — available must reflect the owner.
+      mockLimit.mockReset();
+      mockLimit
+        .mockResolvedValueOnce([{ tier: 'free' }])  // drive owner's tier
+        .mockResolvedValueOnce([]);                   // schedule row
+
+      const res = await GET(req(), ctx(DRIVE_ID));
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.available).toBe(false);
+    });
+  });
 });
 
 // ============================================================================
@@ -266,6 +283,20 @@ describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
 
   describe('tier enforcement', () => {
     it('returns 402 with pro_required for free-tier user', async () => {
+      mockLimit.mockReset();
+      mockLimit.mockResolvedValueOnce([{ tier: 'free' }]);
+
+      const res = await PATCH(patchReq({ enabled: true }), ctx(DRIVE_ID));
+      const body = await res.json();
+
+      expect(res.status).toBe(402);
+      expect(body.error).toBe('pro_required');
+    });
+
+    it('returns 402 when caller is admin but drive owner is free-tier', async () => {
+      // ADMIN collaborator (isDriveOwnerOrAdmin = true) tries to enable a
+      // schedule on a drive whose owner has a free subscription.
+      // The gate must use the owner's tier, not the caller's.
       mockLimit.mockReset();
       mockLimit.mockResolvedValueOnce([{ tier: 'free' }]);
 
