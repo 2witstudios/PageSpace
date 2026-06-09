@@ -3,7 +3,7 @@ import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
-import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -314,14 +314,21 @@ export async function POST(
     let userSubscriptionTier: string | undefined;
     {
       const [gateUser] = await db
-        .select({ subscriptionTier: users.subscriptionTier, currentAiProvider: users.currentAiProvider })
+        .select({
+          subscriptionTier: users.subscriptionTier,
+          currentAiProvider: users.currentAiProvider,
+          currentAiModel: users.currentAiModel,
+        })
         .from(users)
         .where(eq(users.id, userId));
       userSubscriptionTier = gateUser?.subscriptionTier ?? undefined;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —
-      // and never debit at settle (see isMeteringExempt in trackAIUsage).
-      const gateProvider = selectedProvider || gateUser?.currentAiProvider;
+      // and never debit at settle (see isMeteringExempt in trackAIUsage). Key the skip
+      // on the RESOLVED provider (what actually runs): `glm` + an invalid model resolves
+      // to the metered default, which must still be gated.
+      const { provider: gateProvider } = resolveProviderModel(
+        selectedProvider, selectedModel, gateUser?.currentAiProvider, gateUser?.currentAiModel);
       if (!isMeteringExempt(gateProvider)) {
         const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
           estCostCents: estimateChatHoldCentsForModel(selectedModel),

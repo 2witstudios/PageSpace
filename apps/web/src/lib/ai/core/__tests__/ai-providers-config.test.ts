@@ -14,6 +14,7 @@ import {
   getVisibleProviders,
   isDynamicModelProvider,
   validateAgentModelSelection,
+  resolveProviderModel,
 } from '../ai-providers-config';
 
 describe('ai-providers-config', () => {
@@ -127,6 +128,61 @@ describe('ai-providers-config', () => {
 
     it('routes glm direct (not through openrouter)', () => {
       expect(getBackendProvider('glm')).toBe('glm');
+    });
+  });
+
+  describe('resolveProviderModel', () => {
+    it('uses the request pair when both are present and valid', () => {
+      expect(resolveProviderModel('anthropic', 'anthropic/claude-opus-4.8')).toEqual({
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+    });
+
+    it('keeps the admin glm provider when the model is a valid glm model', () => {
+      expect(resolveProviderModel('glm', 'glm-4.7')).toEqual({ provider: 'glm', model: 'glm-4.7' });
+    });
+
+    it('SUBSTITUTES the metered default when glm is paired with an invalid model (the P1 gate-bypass)', () => {
+      // This is the exact vector Codex flagged: `glm` + an invalid model must NOT
+      // resolve to glm (which would skip the credit gate) — it falls back to the
+      // metered default, so the gate runs.
+      const resolved = resolveProviderModel('glm', 'not-a-real-model');
+      expect(resolved).toEqual({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL });
+    });
+
+    it('substitutes the default for any unknown (provider, model) pair', () => {
+      expect(resolveProviderModel('openai', 'openai/hallucinated')).toEqual({
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+      });
+    });
+
+    it('falls back to the stored pair when the request pair is incomplete', () => {
+      expect(resolveProviderModel(undefined, undefined, 'anthropic', 'anthropic/claude-opus-4.8')).toEqual({
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+      // A partial request (provider only) does not combine with a stored model.
+      expect(resolveProviderModel('glm', undefined, 'anthropic', 'anthropic/claude-opus-4.8')).toEqual({
+        provider: 'anthropic',
+        model: 'anthropic/claude-opus-4.8',
+      });
+    });
+
+    it('falls back to the default pair when nothing valid is provided', () => {
+      expect(resolveProviderModel(undefined, undefined)).toEqual({
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+      });
+    });
+
+    it('preserves local/dynamic providers without catalog validation', () => {
+      // ollama serves runtime-discovered models, so its bare model id is not substituted.
+      expect(resolveProviderModel('ollama', 'llama3.1:70b-custom')).toEqual({
+        provider: 'ollama',
+        model: 'llama3.1:70b-custom',
+      });
     });
   });
 

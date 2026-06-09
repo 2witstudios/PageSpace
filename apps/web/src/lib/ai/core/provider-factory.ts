@@ -19,7 +19,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getManagedProviderKey } from './ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidModel } from './ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
 
 // The local/on-prem providers (ONPREM_ALLOWED_PROVIDERS = ollama/lmstudio/azure_openai)
 // serve runtime-discovered models that aren't in the static catalog, so catalog
@@ -56,26 +56,23 @@ export async function createAIProvider(
 
   const [user] = await db.select().from(users).where(eq(users.id, userId));
 
-  // Resolve (provider, model) as one atomic pair — never combine a provider from one
-  // source with a model from another. Falling each field back independently
-  // (`selectedProvider || stored || default` for each) could synthesize an impossible
-  // pair like `anthropic` + the default `openai/…` model when only one field is
-  // present, which then silently reroutes to the default below. Prefer the request
-  // pair (both present), else the stored pair (both present), else the default pair.
-  let currentProvider: string;
-  let currentModel: string;
-  if (selectedProvider && selectedModel) {
-    currentProvider = selectedProvider;
-    currentModel = selectedModel;
-  } else if (user?.currentAiProvider && user?.currentAiModel) {
-    currentProvider = user.currentAiProvider;
-    currentModel = user.currentAiModel;
-  } else {
-    currentProvider = DEFAULT_PROVIDER;
-    currentModel = DEFAULT_MODEL;
-  }
+  // Resolve (provider, model) as one atomic pair, with catalog enforcement —
+  // shared with the routes (credit gate, admin-only checks) via resolveProviderModel
+  // so every caller keys off the SAME provider that actually runs. An unknown
+  // (provider, model) is SUBSTITUTED with the default rather than forwarded — so a
+  // selection left on a removed value, or `glm` + an invalid model, degrades to the
+  // working default instead of being sent verbatim to OpenRouter. (Explicit invalid
+  // *selections* are still rejected with a 400 at the settings PATCH boundary.)
+  const resolved = resolveProviderModel(
+    selectedProvider,
+    selectedModel,
+    user?.currentAiProvider,
+    user?.currentAiModel,
+  );
+  const currentProvider = resolved.provider;
+  const currentModel = resolved.model;
 
-  // Deployment policy first: on-prem only permits the local/BAA-eligible providers.
+  // Deployment policy: on-prem only permits the local/BAA-eligible providers.
   if (
     isOnPrem() &&
     !ONPREM_ALLOWED_PROVIDERS.has(currentProvider)
@@ -84,21 +81,6 @@ export async function createAIProvider(
       error: `Provider "${currentProvider}" is not available in on-premise mode.`,
       status: 403,
     };
-  }
-
-  // Catalog enforcement at generation time: any non-local (provider, model) that
-  // isn't in AI_PROVIDERS is SUBSTITUTED with the default rather than forwarded.
-  // We fall back instead of erroring so that selections left on removed values —
-  // a pre-backfill `pagespace`/`glm-*` row, or an agent configured with a bare
-  // model id via the raw API — degrade to the working default instead of failing
-  // the request. The security goal still holds: an arbitrary/unknown model is
-  // never sent to OpenRouter, it resolves to the default. (Explicit invalid
-  // *selections* are rejected with a clear 400 at the settings PATCH boundary.)
-  // Local providers (ollama/lmstudio/azure) serve runtime-discovered models, so
-  // only their provider name is validated (on-prem allowlist + config lookups).
-  if (!ONPREM_ALLOWED_PROVIDERS.has(currentProvider) && !isValidModel(currentProvider, currentModel)) {
-    currentProvider = DEFAULT_PROVIDER;
-    currentModel = DEFAULT_MODEL;
   }
 
   try {

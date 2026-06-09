@@ -10,7 +10,7 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
@@ -344,8 +344,11 @@ export async function POST(request: Request) {
     // at settle; out_of_credits -> 402, the free-tier in-flight cap -> 429.
     // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
     // subscription, so skip the credit gate entirely — no hold, no balance check —
-    // and never debit at settle (see isMeteringExempt in trackAIUsage).
-    const gateProvider = selectedProvider || user?.currentAiProvider || DEFAULT_PROVIDER;
+    // and never debit at settle (see isMeteringExempt in trackAIUsage). Key the skip
+    // on the RESOLVED provider (what actually runs): `glm` + an invalid model resolves
+    // to the metered default, which must still be gated.
+    const { provider: gateProvider } = resolveProviderModel(
+      selectedProvider, selectedModel, user?.currentAiProvider, user?.currentAiModel);
     // Net spendable after all holds (including this request's) — already computed by
     // the gate so no extra DB read is needed. Each stream guards against its own slice,
     // not the gross balance, preventing concurrent streams from collectively overshooting.

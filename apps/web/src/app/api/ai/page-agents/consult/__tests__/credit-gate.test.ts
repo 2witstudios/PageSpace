@@ -31,7 +31,9 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
-const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: [] };
+// Single row returned for every query in this test's db mock — so it carries both
+// the agent-page fields and the gate user's subscriptionTier/role.
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
 
 vi.mock('@pagespace/db/db', () => {
   type QueryBuilder = {
@@ -79,6 +81,11 @@ vi.mock('@/lib/ai/core/personalization-utils', () => ({
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
+  resolveProviderModel: vi.fn((sp: string, sm: string) => ({
+    provider: sp && sm ? sp : 'openai',
+    model: sm || 'openai/gpt-5.3-chat',
+  })),
 }));
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })) }));
@@ -122,6 +129,10 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+    // Reset the shared row to a non-admin, public-provider default each test.
+    agentPage.aiProvider = 'openai';
+    agentPage.aiModel = 'openai/gpt-5.3-chat';
+    agentPage.role = 'user';
   });
 
   it('returns 402 out_of_credits and never configures a provider or invokes the model', async () => {
@@ -143,5 +154,32 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
 
     expect(canConsumeAI).toHaveBeenCalled();
     expect(response.status).not.toBe(402);
+  });
+
+  it('rejects a non-admin consulting an admin-only (glm) agent with 403 and never invokes the model', async () => {
+    // P1#2 — the admin Z.ai Coder Plan is unmetered; a non-admin viewer of a
+    // glm-configured shared agent must NOT be able to consume it.
+    agentPage.aiProvider = 'glm';
+    agentPage.aiModel = 'glm-4.7';
+    agentPage.role = 'user';
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin consult a glm agent and skips the credit gate (unmetered)', async () => {
+    agentPage.aiProvider = 'glm';
+    agentPage.aiModel = 'glm-4.7';
+    agentPage.role = 'admin';
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).not.toBe(403);
+    // Exempt provider: the gate is skipped entirely (no hold, no balance check).
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).toHaveBeenCalled();
   });
 });

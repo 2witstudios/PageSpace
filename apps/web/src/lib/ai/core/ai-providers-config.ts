@@ -446,3 +446,44 @@ export function validateAgentModelSelection(
   }
   return null;
 }
+
+/**
+ * Resolve the (provider, model) pair that will ACTUALLY be used for a request,
+ * exactly as `createAIProvider` does. This is the single source of truth for that
+ * resolution so callers (e.g. the credit gate and admin-only checks) can key their
+ * decisions on what truly runs — never on the raw requested values, which the
+ * factory may substitute.
+ *
+ * Resolution, mirroring the factory:
+ *  1. Atomic pair: prefer the request pair (both present), else the stored pair
+ *     (both present), else the default pair. Never combine a provider from one
+ *     source with a model from another.
+ *  2. Catalog enforcement: a non-local (provider, model) that isn't in the catalog
+ *     is SUBSTITUTED with the default rather than forwarded — so e.g. `glm` + an
+ *     invalid model resolves to the metered default, NOT to `glm`. Local/dynamic
+ *     providers serve runtime-discovered models, so only their name is gated.
+ */
+export function resolveProviderModel(
+  selectedProvider: string | null | undefined,
+  selectedModel: string | null | undefined,
+  storedProvider?: string | null,
+  storedModel?: string | null,
+): { provider: string; model: string } {
+  let provider: string;
+  let model: string;
+  if (selectedProvider && selectedModel) {
+    provider = selectedProvider;
+    model = selectedModel;
+  } else if (storedProvider && storedModel) {
+    provider = storedProvider;
+    model = storedModel;
+  } else {
+    provider = DEFAULT_PROVIDER;
+    model = DEFAULT_MODEL;
+  }
+  if (!ONPREM_ALLOWED_PROVIDERS.has(provider) && !isValidModel(provider, model)) {
+    provider = DEFAULT_PROVIDER;
+    model = DEFAULT_MODEL;
+  }
+  return { provider, model };
+}

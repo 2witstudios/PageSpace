@@ -34,6 +34,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
+import { ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
@@ -160,18 +162,33 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: providerResult.error }, { status: providerResult.status });
   }
 
+  // The resolved provider that will ACTUALLY run (post catalog-substitution): an
+  // agent configured with `glm` + an invalid model resolves to the metered default,
+  // so both the admin gate and the credit gate below key off this, not the raw config.
+  const effectiveProvider = providerResult.provider;
+
   // 6b. Prepaid credit gate: block out-of-credits users before any model invocation.
   // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
   const [gateUser] = await db
-    .select({ subscriptionTier: users.subscriptionTier })
+    .select({ subscriptionTier: users.subscriptionTier, role: users.role })
     .from(users)
     .where(eq(users.id, authResult.userId));
+
+  // Admin-only providers (the direct Z.ai Coder Plan) are unmetered and must never be
+  // reachable by a non-admin — otherwise any user able to drive a glm-configured agent
+  // could consume the admin subscription for free. The interactive chat routes enforce
+  // this; this MCP inference route must too.
+  if (ADMIN_ONLY_PROVIDERS.has(effectiveProvider) && gateUser?.role !== 'admin') {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'admin_only_provider', provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
+    return createAdminRestrictedResponse();
+  }
+
   // The gate's reservation for this call, released when usage is billed in onFinish.
   // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
   // subscription, so skip the gate entirely — no hold, no balance check — and never
   // debit at settle (see isMeteringExempt in trackAIUsage).
   let holdId: string | undefined;
-  if (!isMeteringExempt(page.aiProvider)) {
+  if (!isMeteringExempt(effectiveProvider)) {
     const creditGate = await canConsumeAI(authResult.userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
       estCostCents: estimateChatHoldCentsForModel(page.aiModel ?? undefined),
       maxInFlight: MAX_CHAT_INFLIGHT,
