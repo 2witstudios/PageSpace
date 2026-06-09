@@ -118,6 +118,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 vi.mock('@/lib/repositories/chat-message-repository', () => ({
   chatMessageRepository: {
     getMessagesForPage: vi.fn().mockResolvedValue([]),
+    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
     updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -863,12 +864,26 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
-  test('client_manages_history: back-fills tool results for prior assistant messages with output-available parts', async () => {
+  test('client_manages_history: back-fills tool results matched by tool_call_id against DB rows', async () => {
     const fakeResults = [{ toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' as const }];
-    // extractToolResults returns results for the prior assistant message only
-    vi.mocked(extractToolResults).mockImplementation((msg: UIMessage) =>
-      msg.id === 'asst-prior' ? fakeResults : []
-    );
+    vi.mocked(extractToolResults).mockReturnValue(fakeResults);
+
+    // DB row has the server-assigned ID; its toolCalls column carries toolCallId: 'tc-1'
+    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValueOnce([{
+      id: 'db-row-server-id',
+      pageId: 'page-123',
+      conversationId: 'conv-abc',
+      userId: 'user-1',
+      role: 'assistant',
+      content: '',
+      messageType: 'standard' as const,
+      isActive: true,
+      createdAt: new Date(),
+      editedAt: null,
+      toolCalls: JSON.stringify([{ toolCallId: 'tc-1', toolName: 'Read', input: {} }]),
+      toolResults: null,
+    }]);
+
     vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
       id: 'conv-abc',
       userId: 'user-1',
@@ -884,7 +899,6 @@ describe('POST /api/v1/chat/completions', () => {
 
     const fullHistory = [
       { role: 'user', id: 'u-0', parts: [{ type: 'text', text: 'What is in foo.ts?' }] },
-      // Prior assistant turn with a completed tool call
       { role: 'assistant', id: 'asst-prior', parts: [
         { type: 'tool-Read', toolCallId: 'tc-1', toolName: 'Read', input: { path: 'foo.ts' }, state: 'output-available', output: 'file contents' },
       ]},
@@ -898,18 +912,88 @@ describe('POST /api/v1/chat/completions', () => {
       client_manages_history: true,
     }));
     await response.text();
+    // Flush the async back-fill promise chain
+    await new Promise(r => setTimeout(r, 0));
 
     const backFillCalls = vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls;
     assert({
       given: 'client_manages_history=true with a prior assistant message carrying output-available tool parts',
-      should: 'call updateMessageToolResults with the message ID, conversation ID, and extracted results',
+      should: 'back-fill using the DB row ID matched via tool_call_id, not the UIMessage id',
       actual: {
         called: backFillCalls.length,
         messageId: backFillCalls[0]?.[0],
         conversationId: backFillCalls[0]?.[1],
         resultsCount: (backFillCalls[0]?.[2] as unknown[])?.length,
       },
-      expected: { called: 1, messageId: 'asst-prior', conversationId: 'conv-abc', resultsCount: 1 },
+      expected: { called: 1, messageId: 'db-row-server-id', conversationId: 'conv-abc', resultsCount: 1 },
+    });
+  });
+
+  test('client_manages_history: back-fills using DB row ID when messages lack explicit IDs (pi/OpenAI format)', async () => {
+    // pagespace-cli sends OpenAI-format messages with no `id` field.
+    // normalizeMessages assigns createId() = 'test-id-123' — a random ID that
+    // will never match the server-assigned DB row ID.
+    // The fix must correlate via tool_call_id against DB rows, not via msg.id.
+    const fakeResults = [{ toolCallId: 'tc-1', toolName: 'Read', output: 'file contents', state: 'output-available' as const }];
+    vi.mocked(extractToolResults).mockReturnValue(fakeResults);
+
+    // DB row has the server-assigned ID, NOT the random UIMessage id
+    vi.mocked(chatMessageRepository.getMessagesByConversationId).mockResolvedValueOnce([{
+      id: 'db-row-server-id',
+      pageId: 'page-123',
+      conversationId: 'conv-abc',
+      userId: 'user-1',
+      role: 'assistant',
+      content: '',
+      messageType: 'standard' as const,
+      isActive: true,
+      createdAt: new Date(),
+      editedAt: null,
+      toolCalls: JSON.stringify([{ toolCallId: 'tc-1', toolName: 'Read', input: {} }]),
+      toolResults: null,
+    }]);
+
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+
+    // Send messages in OpenAI format — no `id` fields, just like pagespace-cli does
+    const fullHistory = [
+      { role: 'user', content: 'What is in foo.ts?' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'tc-1', type: 'function', function: { name: 'Read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'tc-1', content: 'file contents' },
+      { role: 'user', content: 'Summarise it' },
+    ];
+
+    const response = await POST(makeRequest({
+      model: 'ps-agent://page-123',
+      messages: fullHistory,
+      conversation_id: 'conv-abc',
+      client_manages_history: true,
+    }));
+    await response.text();
+
+    // Allow the async back-fill promise to resolve
+    await new Promise(r => setTimeout(r, 0));
+
+    const backFillCalls = vi.mocked(chatMessageRepository.updateMessageToolResults).mock.calls;
+    assert({
+      given: 'client_manages_history=true with OpenAI-format messages that have no id fields',
+      should: 'back-fill using the server-assigned DB row ID, not the random UIMessage id',
+      actual: {
+        called: backFillCalls.length > 0,
+        messageId: backFillCalls[0]?.[0],
+      },
+      expected: { called: true, messageId: 'db-row-server-id' },
     });
   });
 

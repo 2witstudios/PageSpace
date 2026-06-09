@@ -247,18 +247,44 @@ export async function POST(request: Request): Promise<Response> {
     inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
   }
 
-  // Back-fill: when the client manages full history, sweep all prior assistant messages
-  // for completed tool results and persist them. normalizeMessages collapses role:tool
-  // pairs into assistant UIMessages with output-available parts — those results were
-  // executed by the client on earlier turns but never reached the DB.
+  // Back-fill: when the client manages full history, persist tool results that arrived
+  // in role:tool messages (normalizeMessages collapsed them into assistant UIMessage parts).
+  // We cannot use msg.id — pagespace-cli sends OpenAI-format messages without id fields, so
+  // normalizeMessages assigns a random createId(). Instead we match DB assistant rows by
+  // tool_call_id, which is a stable key present in both the request body and the DB toolCalls.
   if (clientManagesHistory && isThreadMode) {
-    const priorMessages = messages.slice(0, -1);
-    for (const msg of priorMessages) {
+    const resultsByCallId = new Map<string, ReturnType<typeof extractToolResults>[number]>();
+    for (const msg of messages.slice(0, -1)) {
       if (msg.role !== 'assistant') continue;
-      const toolResults = extractToolResults(msg);
-      if (toolResults.length === 0) continue;
-      chatMessageRepository.updateMessageToolResults(msg.id, conversationId, toolResults)
-        .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
+      for (const result of extractToolResults(msg)) {
+        resultsByCallId.set(result.toolCallId, result);
+      }
+    }
+    if (resultsByCallId.size > 0) {
+      chatMessageRepository.getMessagesByConversationId(conversationId)
+        .then(dbRows => {
+          for (const row of dbRows) {
+            if (row.role !== 'assistant' || !row.isActive) continue;
+            const rawArr: unknown[] = Array.isArray(row.toolCalls)
+              ? row.toolCalls
+              : (() => {
+                  try { const p = JSON.parse(row.toolCalls as string); return Array.isArray(p) ? p : []; }
+                  catch { return []; }
+                })();
+            const matched = rawArr
+              .filter((tc): tc is Record<string, unknown> =>
+                typeof tc === 'object' && tc !== null &&
+                typeof (tc as Record<string, unknown>).toolCallId === 'string' &&
+                resultsByCallId.has((tc as Record<string, unknown>).toolCallId as string)
+              )
+              .map(tc => resultsByCallId.get(tc.toolCallId as string)!);
+            if (matched.length > 0) {
+              chatMessageRepository.updateMessageToolResults(row.id, conversationId, matched)
+                .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
+            }
+          }
+        })
+        .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to load rows for tool-result back-fill', err as Error));
     }
   }
 
