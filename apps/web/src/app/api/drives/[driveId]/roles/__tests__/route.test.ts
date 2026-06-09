@@ -463,6 +463,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
         color: '#ff0000',
         isDefault: true,
         permissions,
+        driveWidePermissions: null,
       });
     });
   });

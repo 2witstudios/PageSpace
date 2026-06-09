@@ -178,6 +178,10 @@ export async function createDriveRole(
   driveId: string,
   input: CreateRoleInput
 ): Promise<DriveRole> {
+  if (!validateDriveWidePermissions(input.driveWidePermissions)) {
+    throw new Error('Invalid driveWidePermissions structure');
+  }
+
   // Get the highest position to add new role at the end
   const existingRoles = await db.query.driveRoles.findMany({
     where: eq(driveRoles.driveId, driveId),
@@ -218,6 +222,10 @@ export async function updateDriveRole(
   roleId: string,
   input: UpdateRoleInput
 ): Promise<{ role: DriveRole; wasDefault: boolean }> {
+  if (input.driveWidePermissions !== undefined && !validateDriveWidePermissions(input.driveWidePermissions)) {
+    throw new Error('Invalid driveWidePermissions structure');
+  }
+
   // Get existing role
   const existingRole = await db.query.driveRoles.findFirst({
     where: and(
