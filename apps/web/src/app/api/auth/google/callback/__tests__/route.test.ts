@@ -53,7 +53,8 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -334,7 +335,8 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -625,7 +627,8 @@ describe('GET /api/auth/google/callback', () => {
   describe('user update scenarios', () => {
     it('updates existing user without googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -636,7 +639,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('updates existing user without name', async () => {
       const userWithoutName = { ...mockExistingUser, name: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -648,7 +652,8 @@ describe('GET /api/auth/google/callback', () => {
     it('updates existing user with different avatar', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithOldAvatar as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -667,7 +672,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('updates existing user with unverified email when email_verified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userUnverified as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -687,7 +693,8 @@ describe('GET /api/auth/google/callback', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
@@ -697,7 +704,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('handles re-fetch returning null after update (falls back to original user)', async () => {
       const existingUser = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -1256,7 +1264,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('masks email in "Updating existing user" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -1270,7 +1279,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('does not include name in "User updated" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -1363,7 +1373,8 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
 
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({

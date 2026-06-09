@@ -155,7 +155,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       success: true,
       userInfo: mockUserInfo,
     } as never);
-    vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser as never);
+    vi.mocked(createOrLinkOAuthUser).mockResolvedValue({ status: 'linked', user: mockUser } as never);
     vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
     } as never);

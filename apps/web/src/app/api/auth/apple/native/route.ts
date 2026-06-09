@@ -18,6 +18,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthMatch } from '@pagespace/lib/auth/oauth-account-match';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 import {
   consumeAllInvitesForEmail,
@@ -109,8 +110,42 @@ export async function POST(req: Request) {
     // Apple only sends the name on first authorization
     const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
 
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Apple
+    // asserts the email is verified; the subject id (appleId) may always match.
+    const subMatch = await authRepository.findUserByAppleId(appleId);
+    const emailMatch = await authRepository.findUserByEmail(email);
+    const matchDecision = resolveOAuthMatch({
+      providerSubMatch: !!subMatch,
+      emailMatch: !!emailMatch,
+      emailVerified: emailVerified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'apple-native',
+        platform,
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'apple_native_unverified_email_link_blocked' },
+      });
+      return Response.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
     // Find or create user
-    let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
+    let user =
+      matchDecision === 'use-sub'
+        ? subMatch
+        : matchDecision === 'use-email'
+          ? emailMatch
+          : null;
 
     let isNewUser = false;
     if (user) {

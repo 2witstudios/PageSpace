@@ -74,7 +74,16 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn().mockResolvedValue({
+    findUserByGoogleId: vi.fn().mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'google',
+    }),
+    findUserByEmail: vi.fn().mockResolvedValue({
       id: 'user-123',
       name: 'Test User',
       email: 'test@example.com',

@@ -20,6 +20,7 @@ import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthMatch } from '@pagespace/lib/auth/oauth-account-match';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 import {
   consumeAllInvitesForEmail,
@@ -128,8 +129,42 @@ export async function POST(req: Request) {
     // Create fallback name if Google doesn't provide one
     const userName = name || email.split('@')[0] || 'User';
 
-    // Check if user exists by Google ID or email
-    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): the Google subject id (`googleId`) is the strong identity and
+    // may always match; an EXISTING account may only be matched by raw email when
+    // Google asserts `email_verified === true`. An unverified email that collides
+    // with a magic-link / passkey account is refused — never linked.
+    const subMatch = await authRepository.findUserByGoogleId(googleId!);
+    const emailMatch = await authRepository.findUserByEmail(email);
+    const matchDecision = resolveOAuthMatch({
+      providerSubMatch: !!subMatch,
+      emailMatch: !!emailMatch,
+      emailVerified: email_verified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'google-one-tap',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'google_one_tap_unverified_email_link_blocked' },
+      });
+      return NextResponse.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
+    let user =
+      matchDecision === 'use-sub'
+        ? subMatch
+        : matchDecision === 'use-email'
+          ? emailMatch
+          : null;
 
     let isNewUser = false;
 

@@ -23,7 +23,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock dependencies BEFORE imports
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByAppleIdOrEmail: vi.fn(),
+    findUserByAppleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -184,7 +185,8 @@ describe('POST /api/auth/apple/native', () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv, APPLE_CLIENT_ID: 'com.example.app' };
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
-    vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -424,7 +426,8 @@ describe('POST /api/auth/apple/native', () => {
     };
 
     it('updates existing user when appleId is missing', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
 
       const response = await POST(createNativeRequest(validPayload));
@@ -439,7 +442,8 @@ describe('POST /api/auth/apple/native', () => {
 
     it('updates existing user when name is missing', async () => {
       const userWithoutName = { ...existingUser, appleId: null, name: null };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, appleId: 'apple-sub-123', name: 'John Doe' } as never);
 
       const response = await POST(createNativeRequest(validPayload));
@@ -453,7 +457,8 @@ describe('POST /api/auth/apple/native', () => {
 
     it('does not update user when no update is needed', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(completeUser as never);
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -463,7 +468,8 @@ describe('POST /api/auth/apple/native', () => {
 
     it('does not provision drive for existing users', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(completeUser as never);
 
       await POST(createNativeRequest(validPayload));
 
@@ -471,7 +477,8 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('handles re-fetch returning null after update', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const response = await POST(createNativeRequest(validPayload));
@@ -702,7 +709,8 @@ describe('POST /api/auth/apple/native', () => {
       vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
 
     it('masks email in "Creating new user via native Apple OAuth" log', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       vi.mocked(authRepository.createUser).mockResolvedValue({
         id: 'new-user-id',
         name: 'Test',
@@ -733,7 +741,8 @@ describe('POST /api/auth/apple/native', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'Joe', appleId: 'apple-sub-123' } as never);
 
       await POST(createNativeRequest({ ...validPayload, givenName: 'Joe' }));

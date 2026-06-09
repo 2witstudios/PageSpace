@@ -22,6 +22,7 @@ import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthMatch } from '@pagespace/lib/auth/oauth-account-match';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
 import {
   consumeAllInvitesForEmail,
@@ -139,8 +140,41 @@ export async function POST(req: Request) {
     const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
     const userName = name || email.split('@')[0] || 'User';
 
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Apple
+    // asserts the email is verified; the subject id (appleId) may always match.
+    const subMatch = await authRepository.findUserByAppleId(appleId);
+    const emailMatch = await authRepository.findUserByEmail(email);
+    const matchDecision = resolveOAuthMatch({
+      providerSubMatch: !!subMatch,
+      emailMatch: !!emailMatch,
+      emailVerified: emailVerified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'apple',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'apple_oauth_unverified_email_link_blocked' },
+      });
+      if (platform === 'desktop') {
+        return NextResponse.redirect('pagespace://auth-error?error=oauth_error');
+      }
+      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    }
+
     // Find or create user
-    let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
+    let user =
+      matchDecision === 'use-sub'
+        ? subMatch
+        : matchDecision === 'use-email'
+          ? emailMatch
+          : null;
     const wasNewUser = !user;
 
     if (user) {

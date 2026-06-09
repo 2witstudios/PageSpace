@@ -35,7 +35,8 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -160,7 +161,8 @@ describe('/api/auth/google/callback redirect', () => {
       created: true,
     });
 
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue({
       id: 'user-123',
@@ -193,7 +195,15 @@ describe('/api/auth/google/callback redirect', () => {
       driveId: 'existing-drive',
       created: false,
     });
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue({
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue({
+      id: 'user-123',
+      name: 'Existing User',
+      email: 'test@example.com',
+      googleId: 'google-id',
+      tokenVersion: 0,
+      role: 'user',
+    } as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
       id: 'user-123',
       name: 'Existing User',
       email: 'test@example.com',

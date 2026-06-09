@@ -30,7 +30,8 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -209,7 +210,8 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
     // Default to existing user
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
     vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockExistingUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
