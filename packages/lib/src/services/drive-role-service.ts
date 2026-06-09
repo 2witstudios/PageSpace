@@ -14,6 +14,8 @@ import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 // Types
 // ============================================================================
 
+export type DriveWidePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
+
 export interface DriveRole {
   id: string;
   driveId: string;
@@ -22,6 +24,7 @@ export interface DriveRole {
   color: string | null;
   isDefault: boolean;
   permissions: RolePermissions;
+  driveWidePermissions: DriveWidePerm | null;
   position: number;
   createdAt: Date;
   updatedAt: Date;
@@ -35,6 +38,7 @@ export interface CreateRoleInput {
   color?: string | null;
   isDefault?: boolean;
   permissions: RolePermissions;
+  driveWidePermissions?: DriveWidePerm | null;
 }
 
 export interface UpdateRoleInput {
@@ -43,6 +47,7 @@ export interface UpdateRoleInput {
   color?: string | null;
   isDefault?: boolean;
   permissions?: RolePermissions;
+  driveWidePermissions?: DriveWidePerm | null;
 }
 
 export interface DriveRoleAccessInfo {
@@ -195,6 +200,7 @@ export async function createDriveRole(
     color: input.color,
     isDefault: input.isDefault || false,
     permissions: input.permissions,
+    driveWidePermissions: input.driveWidePermissions ?? null,
     position: maxPosition,
     updatedAt: new Date(),
   }).returning();
@@ -236,6 +242,7 @@ export async function updateDriveRole(
       ...(input.color !== undefined && { color: input.color }),
       ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
       ...(input.permissions !== undefined && { permissions: input.permissions }),
+      ...(input.driveWidePermissions !== undefined && { driveWidePermissions: input.driveWidePermissions }),
       updatedAt: new Date(),
     })
     .where(and(
