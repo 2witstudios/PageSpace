@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
-import { eq, and, lte } from '@pagespace/db/operators';
+import { eq, and, lte, asc } from '@pagespace/db/operators';
 import { driveBackupSchedules } from '@pagespace/db/schema/versioning';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
@@ -29,7 +29,7 @@ function computeNextRunAt(frequency: BackupFrequency, after: Date = new Date()):
   return next;
 }
 
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 10;
 
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);
@@ -37,35 +37,37 @@ export async function GET(request: Request) {
 
   try {
     const now = new Date();
-
-    const dueSchedules = await db
-      .select({
-        id: driveBackupSchedules.id,
-        driveId: driveBackupSchedules.driveId,
-        frequency: driveBackupSchedules.frequency,
-        ownerId: drives.ownerId,
-        ownerTier: users.subscriptionTier,
-      })
-      .from(driveBackupSchedules)
-      .innerJoin(drives, eq(driveBackupSchedules.driveId, drives.id))
-      .innerJoin(users, eq(drives.ownerId, users.id))
-      .where(and(
-        eq(driveBackupSchedules.enabled, true),
-        lte(driveBackupSchedules.nextRunAt, now)
-      ));
-
-    if (dueSchedules.length === 0) {
-      return NextResponse.json({ success: true, fired: 0, skipped: 0 });
-    }
-
     let fired = 0;
     let skipped = 0;
 
-    for (let i = 0; i < dueSchedules.length; i += BATCH_SIZE) {
-      const batch = dueSchedules.slice(i, i + BATCH_SIZE);
+    // Paginate at DB level — process BATCH_SIZE at a time until no due rows remain.
+    // Each processed row advances nextRunAt past now, so it won't reappear.
+    while (true) {
+      const batch = await db
+        .select({
+          id: driveBackupSchedules.id,
+          driveId: driveBackupSchedules.driveId,
+          frequency: driveBackupSchedules.frequency,
+          nextRunAt: driveBackupSchedules.nextRunAt,
+          ownerId: drives.ownerId,
+          ownerTier: users.subscriptionTier,
+        })
+        .from(driveBackupSchedules)
+        .innerJoin(drives, eq(driveBackupSchedules.driveId, drives.id))
+        .innerJoin(users, eq(drives.ownerId, users.id))
+        .where(and(
+          eq(driveBackupSchedules.enabled, true),
+          lte(driveBackupSchedules.nextRunAt, now)
+        ))
+        .orderBy(asc(driveBackupSchedules.nextRunAt))
+        .limit(BATCH_SIZE);
+
+      if (batch.length === 0) break;
 
       await Promise.all(batch.map(async (schedule) => {
-        const nextRunAt = computeNextRunAt(schedule.frequency as BackupFrequency, now);
+        // Advance from the scheduled time (not wall-clock now) to preserve cadence
+        const prevNextRunAt = schedule.nextRunAt ?? now;
+        const nextRunAt = computeNextRunAt(schedule.frequency as BackupFrequency, prevNextRunAt);
         const runAt = new Date();
 
         const isProPlus = MEMORY_PAYING_TIERS.includes(schedule.ownerTier as SubscriptionTier);

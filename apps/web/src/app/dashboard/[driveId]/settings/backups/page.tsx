@@ -152,6 +152,7 @@ function AutomaticBackups({ driveId }: { driveId: string }) {
           )}
         </div>
         <Switch
+          aria-label="Enable automatic backups"
           checked={enabled}
           onCheckedChange={handleToggle}
           disabled={!available}

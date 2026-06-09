@@ -20,9 +20,11 @@ vi.mock('@/services/api/drive-backup-service', () => ({
   createDriveBackup: vi.fn().mockResolvedValue({ success: true }),
 }));
 
-const { mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet, mockUpdate } =
+const { mockLimit, mockOrderBy, mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet, mockUpdate } =
   vi.hoisted(() => {
-    const mockWhere = vi.fn().mockResolvedValue([]);
+    const mockLimit = vi.fn().mockResolvedValue([]);
+    const mockOrderBy = vi.fn(() => ({ limit: mockLimit }));
+    const mockWhere = vi.fn(() => ({ orderBy: mockOrderBy }));
     const mockInnerJoin = vi.fn();
     const chainable = { where: mockWhere, innerJoin: mockInnerJoin };
     mockInnerJoin.mockReturnValue(chainable);
@@ -33,7 +35,7 @@ const { mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet
     const mockSet = vi.fn(() => ({ where: mockUpdateWhere }));
     const mockUpdate = vi.fn(() => ({ set: mockSet }));
 
-    return { mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet, mockUpdate };
+    return { mockLimit, mockOrderBy, mockWhere, mockInnerJoin, mockFrom, mockSelect, mockUpdateWhere, mockSet, mockUpdate };
   });
 
 vi.mock('@pagespace/db/db', () => ({
@@ -53,6 +55,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   lte: vi.fn(),
+  asc: vi.fn(),
 }));
 
 import { GET } from '../route';
@@ -69,6 +72,7 @@ type ScheduleRow = {
   id: string;
   driveId: string;
   frequency: 'daily' | 'weekly' | 'monthly';
+  nextRunAt: Date | null;
   ownerId: string;
   ownerTier: string;
 };
@@ -77,6 +81,7 @@ const makeSchedule = (overrides: Partial<ScheduleRow> = {}): ScheduleRow => ({
   id: 'sched_1',
   driveId: 'drive_1',
   frequency: 'daily',
+  nextRunAt: null,
   ownerId: 'user_1',
   ownerTier: 'pro',
   ...overrides,
@@ -89,8 +94,8 @@ const makeSchedule = (overrides: Partial<ScheduleRow> = {}): ScheduleRow => ({
 describe('GET /api/cron/scheduled-backups', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockWhere.mockReset();
-    mockWhere.mockResolvedValue([]);
+    mockLimit.mockReset();
+    mockLimit.mockResolvedValue([]);
     mockUpdateWhere.mockResolvedValue(undefined);
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     vi.mocked(createDriveBackup).mockResolvedValue({ success: true } as never);
@@ -109,7 +114,7 @@ describe('GET /api/cron/scheduled-backups', () => {
 
   describe('no due schedules', () => {
     it('returns { success: true, fired: 0, skipped: 0 }', async () => {
-      mockWhere.mockResolvedValue([]);
+      mockLimit.mockResolvedValue([]);
 
       const res = await GET(req());
       const body = await res.json();
@@ -122,7 +127,7 @@ describe('GET /api/cron/scheduled-backups', () => {
   describe('pro+ drive owner', () => {
     it('calls createDriveBackup with source scheduled and increments fired', async () => {
       const schedule = makeSchedule({ ownerTier: 'pro' });
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       const res = await GET(req());
       const body = await res.json();
@@ -139,7 +144,7 @@ describe('GET /api/cron/scheduled-backups', () => {
 
     it('updates lastRunAt and advances nextRunAt for daily frequency', async () => {
       const schedule = makeSchedule({ frequency: 'daily' });
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       const before = Date.now();
       await GET(req());
@@ -158,7 +163,7 @@ describe('GET /api/cron/scheduled-backups', () => {
 
     it('advances nextRunAt by 7 days for weekly frequency', async () => {
       const schedule = makeSchedule({ frequency: 'weekly' });
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       const before = Date.now();
       await GET(req());
@@ -171,25 +176,47 @@ describe('GET /api/cron/scheduled-backups', () => {
     });
 
     it('advances nextRunAt by ~1 month for monthly frequency', async () => {
-      const schedule = makeSchedule({ frequency: 'monthly' });
-      mockWhere.mockResolvedValue([schedule]);
+      // Freeze time to a mid-month date to make the assertion deterministic
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-15T12:00:00.000Z'));
 
-      const before = new Date();
+      const prevNextRunAt = new Date('2026-03-15T12:00:00.000Z');
+      const schedule = makeSchedule({ frequency: 'monthly', nextRunAt: prevNextRunAt });
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
+
+      await GET(req());
+
+      vi.useRealTimers();
+
+      const setArg = (vi.mocked(mockSet).mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      const nextRun = setArg.nextRunAt as Date;
+
+      // Should advance from March 15 to April 15
+      expect(nextRun.getUTCFullYear()).toBe(2026);
+      expect(nextRun.getUTCMonth()).toBe(3); // April = 3
+      expect(nextRun.getUTCDate()).toBe(15);
+    });
+
+    it('advances nextRunAt from schedule.nextRunAt (not wall-clock now) to preserve cadence', async () => {
+      // Schedule was due at 2am; cron fires 3 hours late at 5am
+      const scheduledTime = new Date('2026-06-10T02:00:00.000Z');
+      const schedule = makeSchedule({ frequency: 'daily', nextRunAt: scheduledTime });
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
+
       await GET(req());
 
       const setArg = (vi.mocked(mockSet).mock.calls as unknown[][])[0][0] as Record<string, unknown>;
       const nextRun = setArg.nextRunAt as Date;
 
-      // nextRunAt should be approximately 1 month ahead
-      const expectedMonth = before.getMonth() === 11 ? 0 : before.getMonth() + 1;
-      expect(nextRun.getMonth()).toBe(expectedMonth);
+      // Next run should be exactly 1 day after the scheduled time (not after now)
+      expect(nextRun.getTime()).toBe(scheduledTime.getTime() + 24 * 60 * 60 * 1000);
     });
   });
 
   describe('free-tier drive owner (tier downgrade)', () => {
     it('does not call createDriveBackup and increments skipped', async () => {
       const schedule = makeSchedule({ ownerTier: 'free' });
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       const res = await GET(req());
       const body = await res.json();
@@ -201,7 +228,7 @@ describe('GET /api/cron/scheduled-backups', () => {
 
     it('still advances nextRunAt on skip', async () => {
       const schedule = makeSchedule({ ownerTier: 'free' });
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       await GET(req());
 
@@ -215,7 +242,7 @@ describe('GET /api/cron/scheduled-backups', () => {
     it('increments skipped and still advances nextRunAt when backup returns { success: false }', async () => {
       vi.mocked(createDriveBackup).mockResolvedValue({ success: false } as never);
       const schedule = makeSchedule();
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       const res = await GET(req());
       const body = await res.json();
@@ -228,7 +255,7 @@ describe('GET /api/cron/scheduled-backups', () => {
     it('catches thrown errors, still advances nextRunAt, never crashes cron', async () => {
       vi.mocked(createDriveBackup).mockRejectedValue(new Error('backup exploded'));
       const schedule = makeSchedule();
-      mockWhere.mockResolvedValue([schedule]);
+      mockLimit.mockResolvedValueOnce([schedule]).mockResolvedValue([]);
 
       const res = await GET(req());
       const body = await res.json();
@@ -247,7 +274,7 @@ describe('GET /api/cron/scheduled-backups', () => {
         makeSchedule({ id: 's2', driveId: 'd2', ownerId: 'u2', ownerTier: 'free' }),
         makeSchedule({ id: 's3', driveId: 'd3', ownerId: 'u3', ownerTier: 'pro' }),
       ];
-      mockWhere.mockResolvedValue(schedules);
+      mockLimit.mockResolvedValueOnce(schedules).mockResolvedValue([]);
 
       const res = await GET(req());
       const body = await res.json();
