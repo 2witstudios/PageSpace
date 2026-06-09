@@ -1,14 +1,12 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, isNotNull, not, desc, sql } from '@pagespace/db/operators'
+import { eq, and, inArray, isNotNull, desc, sql } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
-import type { PageTypeEnum } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members'
 import { files } from '@pagespace/db/schema/storage'
-import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles, pageVersions } from '@pagespace/db/schema/versioning';
+import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
-import { readPageContent } from '@pagespace/lib/services/page-content-store'
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
 
@@ -72,13 +70,6 @@ export interface DriveBackupDetail extends DriveBackupSummary {
   files: { fileId: string; mimeType: string | null; sizeBytes: number | null }[];
 }
 
-export interface RestoreDriveBackupResult {
-  success: boolean;
-  preRestoreBackupId?: string;
-  restoredPages?: number;
-  error?: string;
-  status?: number;
-}
 
 export async function listAllUserBackups(
   userId: string,
@@ -490,166 +481,3 @@ export async function getDriveBackupDetail(
   };
 }
 
-export async function restoreDriveToBackup(
-  backupId: string,
-  driveId: string,
-  userId: string,
-): Promise<RestoreDriveBackupResult> {
-  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
-  if (!canManage) {
-    return { success: false, error: 'Only drive owners and admins can restore backups', status: 403 };
-  }
-
-  const [backup] = await db
-    .select()
-    .from(driveBackups)
-    .where(and(eq(driveBackups.id, backupId), eq(driveBackups.driveId, driveId)));
-
-  if (!backup) return { success: false, error: 'Backup not found', status: 404 };
-  if (backup.status !== 'ready') return { success: false, error: 'Backup is not ready', status: 400 };
-
-  // Always snapshot current state before overwriting
-  const preRestore = await createDriveBackup(driveId, userId, {
-    source: 'pre_restore',
-    reason: `Pre-restore snapshot before restoring backup ${backupId}`,
-  });
-  if (!preRestore.success) {
-    return { success: false, error: 'Failed to create pre-restore backup', status: 500 };
-  }
-
-  return db.transaction(async (tx) => {
-    const [bPages, bMembers, bRoles, bPermissions] = await Promise.all([
-      tx.select().from(driveBackupPages).where(eq(driveBackupPages.backupId, backupId)),
-      tx.select().from(driveBackupMembers).where(eq(driveBackupMembers.backupId, backupId)),
-      tx.select().from(driveBackupRoles).where(eq(driveBackupRoles.backupId, backupId)),
-      tx.select().from(driveBackupPermissions).where(eq(driveBackupPermissions.backupId, backupId)),
-    ]);
-
-    const currentPages = await tx
-      .select({ id: pages.id })
-      .from(pages)
-      .where(eq(pages.driveId, driveId));
-
-    const currentPageIds = new Set(currentPages.map((p) => p.id));
-    const backupPageIds = new Set(bPages.map((p) => p.pageId));
-
-    // Fetch content for pages that have a version reference
-    const versionIds = bPages.flatMap((p) => p.pageVersionId ? [p.pageVersionId] : []);
-    const contentByVersionId = new Map<string, string>();
-
-    if (versionIds.length > 0) {
-      const versions = await tx
-        .select({ id: pageVersions.id, contentRef: pageVersions.contentRef })
-        .from(pageVersions)
-        .where(inArray(pageVersions.id, versionIds));
-
-      await Promise.all(
-        versions.map(async (v) => {
-          if (!v.contentRef) return;
-          try {
-            const content = await readPageContent(v.contentRef);
-            contentByVersionId.set(v.id, content);
-          } catch {
-            // Version content expired — restore structure only
-          }
-        })
-      );
-    }
-
-    // Restore each backed-up page
-    for (const bp of bPages) {
-      const content = bp.pageVersionId ? (contentByVersionId.get(bp.pageVersionId) ?? '') : '';
-      const commonFields = {
-        title: bp.title ?? 'Untitled',
-        parentId: bp.parentId,
-        originalParentId: bp.originalParentId,
-        position: bp.position ?? 0,
-        isTrashed: bp.isTrashed,
-        trashedAt: bp.trashedAt,
-        content,
-      };
-
-      if (currentPageIds.has(bp.pageId)) {
-        await tx
-          .update(pages)
-          .set({ ...commonFields, revision: sql`revision + 1` })
-          .where(and(eq(pages.id, bp.pageId), eq(pages.driveId, driveId)));
-      } else {
-        await tx.insert(pages).values({
-          id: bp.pageId,
-          driveId,
-          type: (bp.type ?? 'DOCUMENT') as PageTypeEnum,
-          revision: 0,
-          ...commonFields,
-        });
-      }
-    }
-
-    // Trash pages that exist now but were not in the backup
-    const idsToTrash = [...currentPageIds].filter((id) => !backupPageIds.has(id));
-    if (idsToTrash.length > 0) {
-      await tx
-        .update(pages)
-        .set({ isTrashed: true, trashedAt: new Date() })
-        .where(and(eq(pages.driveId, driveId), inArray(pages.id, idsToTrash)));
-    }
-
-    // Restore page permissions: drop current, insert backup
-    if (bPermissions.length > 0) {
-      const affectedPageIds = [...new Set(bPermissions.map((p) => p.pageId))];
-      await tx.delete(pagePermissions).where(inArray(pagePermissions.pageId, affectedPageIds));
-      await tx.insert(pagePermissions).values(
-        bPermissions.map((p) => ({
-          pageId: p.pageId,
-          userId: p.userId,
-          canView: p.canView,
-          canEdit: p.canEdit,
-          canShare: p.canShare,
-          canDelete: p.canDelete,
-          grantedBy: p.grantedBy,
-          note: p.note,
-          expiresAt: p.expiresAt,
-        }))
-      );
-    }
-
-    // Restore drive members
-    await tx.delete(driveMembers).where(eq(driveMembers.driveId, driveId));
-    if (bMembers.length > 0) {
-      await tx.insert(driveMembers).values(
-        bMembers.map((m) => ({
-          driveId,
-          userId: m.userId,
-          role: (m.role ?? 'MEMBER') as 'OWNER' | 'ADMIN' | 'MEMBER',
-          customRoleId: m.customRoleId,
-          invitedBy: m.invitedBy,
-          invitedAt: m.invitedAt ?? new Date(),
-          acceptedAt: m.acceptedAt,
-        }))
-      );
-    }
-
-    // Restore custom roles
-    await tx.delete(driveRoles).where(eq(driveRoles.driveId, driveId));
-    if (bRoles.length > 0) {
-      await tx.insert(driveRoles).values(
-        bRoles.map((r) => ({
-          id: r.roleId,
-          driveId,
-          name: r.name ?? 'Untitled Role',
-          description: r.description,
-          color: r.color,
-          isDefault: r.isDefault,
-          permissions: (r.permissions ?? {}) as Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>,
-          position: Math.round(r.position ?? 0),
-        }))
-      );
-    }
-
-    return {
-      success: true,
-      preRestoreBackupId: preRestore.backupId,
-      restoredPages: bPages.length,
-    };
-  });
-}
