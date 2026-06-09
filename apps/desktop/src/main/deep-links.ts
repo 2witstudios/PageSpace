@@ -7,6 +7,11 @@ import { getAppUrl } from './app-url';
 import { logger } from './logger';
 import { handlePasskeyRegistered as handlePasskeyRegisteredPure } from './passkey-deep-link';
 import { createWindow } from './window';
+import {
+  evaluateAuthExchangeBinding,
+  peekAuthExchangeState,
+  clearAuthExchangeState,
+} from './auth-exchange-state';
 
 export function setupProtocolClient(): void {
   if (process.defaultApp) {
@@ -31,12 +36,32 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     const code = urlObj.searchParams.get('code');
     const provider = urlObj.searchParams.get('provider') || 'unknown';
     const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
+    const receivedState = urlObj.searchParams.get('state');
 
     if (!code) {
       logger.error('[Auth Exchange] Missing code in deep link');
       mainWindow?.webContents.send('auth-error', { error: 'Missing exchange code' });
       return true;
     }
+
+    // CSRF / session-fixation guard (security finding L9): only honor an
+    // exchange that this app instance actually started. An unsolicited deep
+    // link (no auth flow in progress) — or one whose state does not match the
+    // in-progress flow — is rejected before any token-bearing request is made.
+    const expectedState = peekAuthExchangeState();
+    const decision = evaluateAuthExchangeBinding(receivedState, expectedState);
+    if (!decision.accepted) {
+      logger.warn('[Auth Exchange] Rejected unbound exchange deep link', {
+        provider,
+        reason: decision.reason,
+      });
+      mainWindow?.webContents.send('auth-error', {
+        error: 'Unexpected sign-in request was blocked',
+      });
+      return true;
+    }
+    // Single-use: consume the in-progress flow now that it is accepted.
+    clearAuthExchangeState();
 
     logger.info('[Auth Exchange] Processing OAuth exchange', { provider });
 

@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld('electron', {
   auth: {
     getSessionToken: () => ipcRenderer.invoke('auth:get-session-token'),
     getSession: () => ipcRenderer.invoke('auth:get-session'),
+    // Begin a desktop-initiated auth flow (binds the returning
+    // pagespace://auth-exchange deep link to this instance — finding L9).
+    beginExchange: () => ipcRenderer.invoke('auth:begin-exchange'),
     storeSession: (session: {
       sessionToken: string;
       csrfToken?: string | null;
@@ -147,6 +150,7 @@ export interface ElectronAPI {
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
+    beginExchange: () => Promise<string | null>;
     storeSession: (session: {
       sessionToken: string;
       csrfToken?: string | null;

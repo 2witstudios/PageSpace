@@ -17,6 +17,18 @@ describe('buildDesktopExchangeDeepLink', () => {
     expect(url).toContain('code=abc123');
     expect(url).toContain('provider=magic-link');
   });
+
+  it('omits state when none is provided (web / older desktop builds)', () => {
+    expect(buildDesktopExchangeDeepLink('abc123')).not.toContain('state=');
+    expect(buildDesktopExchangeDeepLink('abc123', null)).not.toContain('state=');
+    expect(buildDesktopExchangeDeepLink('abc123', '')).not.toContain('state=');
+  });
+
+  it('forwards the desktop-instance state for exact-match binding (L9)', () => {
+    const url = buildDesktopExchangeDeepLink('abc123', 'deadbeef');
+    expect(url).toContain('state=deadbeef');
+    expect(url).toContain('code=abc123');
+  });
 });
 
 describe('extractDesktopExchangeCode', () => {
