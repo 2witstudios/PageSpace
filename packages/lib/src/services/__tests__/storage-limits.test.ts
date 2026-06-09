@@ -5,7 +5,8 @@ vi.mock('../storage-repository', () => ({
     findUserForStorage: vi.fn(),
     findUserForUploads: vi.fn(),
     findUserDriveIds: vi.fn(),
-    sumFileSize: vi.fn(),
+    findFilesByCreator: vi.fn(),
+    userReferencesContentHash: vi.fn(),
     countFiles: vi.fn(),
     updateActiveUploads: vi.fn(),
     updateStorageInTx: vi.fn(),
@@ -39,6 +40,11 @@ import {
   calculateActualStorageUsage,
   getUserFileCount,
   reconcileStorageUsage,
+  userReferencesContentHash,
+  toByteCount,
+  sumStorageBytes,
+  shouldChargeForStore,
+  computeStorageCreditOnUnlink,
   formatBytes,
   parseBytes,
   STORAGE_TIERS,
@@ -295,24 +301,45 @@ describe('storage-limits', () => {
     });
   });
 
-  describe('calculateActualStorageUsage', () => {
-    it('calculateActualStorageUsage_withNoDrives_returnsZero', async () => {
-      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue([]);
+  describe('calculateActualStorageUsage (H4 — reconcile basis = files.createdBy)', () => {
+    it('returns 0 when the user created no files', async () => {
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([]);
 
       const result = await calculateActualStorageUsage('user-1');
 
       expect(result).toBe(0);
-      expect(storageRepository.sumFileSize).not.toHaveBeenCalled();
+      expect(storageRepository.findFilesByCreator).toHaveBeenCalledWith('user-1');
     });
 
-    it('calculateActualStorageUsage_withDrives_returnsTotalFileSize', async () => {
-      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue(['drive-1']);
-      vi.mocked(storageRepository.sumFileSize).mockResolvedValue(1024);
+    it('sums the byte sizes of every file the user created (the charge population)', async () => {
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([
+        { sizeBytes: 1024 },
+        { sizeBytes: 2048 },
+      ]);
 
       const result = await calculateActualStorageUsage('user-1');
 
-      expect(result).toBe(1024);
-      expect(storageRepository.sumFileSize).toHaveBeenCalledWith(['drive-1']);
+      expect(result).toBe(3072);
+    });
+
+    it('does NOT scope to owned drives (cross-drive uploads are still the uploader\'s bytes)', async () => {
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 500 }]);
+
+      await calculateActualStorageUsage('user-1');
+
+      // The owner-drive query is the H4 bug; reconcile must not use it.
+      expect(storageRepository.findUserDriveIds).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('userReferencesContentHash (H3)', () => {
+    it('delegates to the repository with user, hash, and drive', async () => {
+      vi.mocked(storageRepository.userReferencesContentHash).mockResolvedValue(true);
+
+      const result = await userReferencesContentHash('user-1', 'a'.repeat(64), 'drive-1');
+
+      expect(result).toBe(true);
+      expect(storageRepository.userReferencesContentHash).toHaveBeenCalledWith('user-1', 'a'.repeat(64), 'drive-1');
     });
   });
 
@@ -381,6 +408,83 @@ describe('storage-limits', () => {
 
     it('parseBytes_withNullInput_throwsError', () => {
       expect(() => parseBytes(null as unknown as string)).toThrow('Invalid size parameter');
+    });
+  });
+
+  describe('toByteCount', () => {
+    it('passes through a positive integer', () => {
+      expect(toByteCount(1024)).toBe(1024);
+    });
+
+    it('coerces a BIGINT-as-string to a number', () => {
+      expect(toByteCount('2048')).toBe(2048);
+    });
+
+    it('floors a fractional value to an integer', () => {
+      expect(toByteCount(1024.9)).toBe(1024);
+    });
+
+    it('treats null/undefined/negative/NaN as 0', () => {
+      expect(toByteCount(null)).toBe(0);
+      expect(toByteCount(undefined)).toBe(0);
+      expect(toByteCount(-5)).toBe(0);
+      expect(toByteCount('not-a-number')).toBe(0);
+    });
+  });
+
+  describe('sumStorageBytes (H4)', () => {
+    it('returns 0 for an empty population', () => {
+      expect(sumStorageBytes([])).toBe(0);
+    });
+
+    it('sums numeric byte sizes', () => {
+      expect(sumStorageBytes([{ sizeBytes: 100 }, { sizeBytes: 200 }, { sizeBytes: 300 }])).toBe(600);
+    });
+
+    it('sums BIGINT-as-string byte sizes (Postgres bigint mode)', () => {
+      expect(sumStorageBytes([{ sizeBytes: '100' }, { sizeBytes: '250' }])).toBe(350);
+    });
+
+    it('ignores null/garbage rows so one bad row cannot poison the total', () => {
+      expect(sumStorageBytes([{ sizeBytes: 100 }, { sizeBytes: null }, { sizeBytes: 'x' as unknown as string }])).toBe(100);
+    });
+  });
+
+  describe('shouldChargeForStore (M8 — charge once, on first physical store)', () => {
+    it('charges when the files row was newly inserted', () => {
+      expect(shouldChargeForStore(true)).toBe(true);
+    });
+
+    it('does not charge on a dedup completion (row already existed)', () => {
+      expect(shouldChargeForStore(false)).toBe(false);
+    });
+  });
+
+  describe('computeStorageCreditOnUnlink (M8 — credit once, to the uploader)', () => {
+    const base = { createdBy: 'u1', sizeBytes: 2048, deletedByThisCall: true, hadPhysicalBlob: true };
+
+    it('credits the uploader the negative byte delta when this call deleted the row', () => {
+      expect(computeStorageCreditOnUnlink(base)).toEqual({ userId: 'u1', deltaBytes: -2048 });
+    });
+
+    it('coerces BIGINT-as-string sizes and negates them', () => {
+      expect(computeStorageCreditOnUnlink({ ...base, sizeBytes: '4096' })).toEqual({ userId: 'u1', deltaBytes: -4096 });
+    });
+
+    it('returns null when another reap already deleted the row (race-safe)', () => {
+      expect(computeStorageCreditOnUnlink({ ...base, deletedByThisCall: false })).toBeNull();
+    });
+
+    it('returns null for a DB-only stub whose bytes were never persisted', () => {
+      expect(computeStorageCreditOnUnlink({ ...base, hadPhysicalBlob: false })).toBeNull();
+    });
+
+    it('returns null when createdBy was nulled by a user-delete cascade', () => {
+      expect(computeStorageCreditOnUnlink({ ...base, createdBy: null })).toBeNull();
+    });
+
+    it('returns null for a zero / invalid byte size', () => {
+      expect(computeStorageCreditOnUnlink({ ...base, sizeBytes: 0 })).toBeNull();
     });
   });
 

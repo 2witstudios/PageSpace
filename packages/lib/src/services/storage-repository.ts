@@ -7,6 +7,7 @@ import { db } from '@pagespace/db/db';
 import { eq, sql, and, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
+import { files } from '@pagespace/db/schema/storage';
 
 export type DrizzleTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -44,16 +45,42 @@ export const storageRepository = {
     return userDrives.map((d: { id: string }) => d.id);
   },
 
-  sumFileSize: async (driveIds: string[]): Promise<number> => {
-    const result = await db
-      .select({ totalSize: sql<number>`COALESCE(SUM(CAST(${pages.fileSize} AS BIGINT)), 0)` })
-      .from(pages)
-      .where(and(
-        inArray(pages.driveId, driveIds),
-        eq(pages.type, 'FILE'),
-        eq(pages.isTrashed, false),
-      ));
-    return Number(result[0]?.totalSize ?? 0);
+  /**
+   * H4: the reconcile population — every `files` row the user uploaded
+   * (createdBy = userId), across all drives, including trashed-but-unpurged
+   * files (the `files` row outlives a trashed page until the reaper deletes it).
+   * Returns raw byte values; the pure `sumStorageBytes` does the integer-safe sum.
+   */
+  findFilesByCreator: async (userId: string): Promise<Array<{ sizeBytes: number }>> => {
+    const rows = await db
+      .select({ sizeBytes: files.sizeBytes })
+      .from(files)
+      .where(eq(files.createdBy, userId));
+    return rows.map((r: { sizeBytes: number | string | null }) => ({
+      sizeBytes: typeof r.sizeBytes === 'string' ? Number(r.sizeBytes) : (r.sizeBytes ?? 0),
+    }));
+  },
+
+  /**
+   * H3: does the caller already legitimately reference this content hash?
+   * True when the caller uploaded the blob before (files.createdBy = userId, in
+   * any drive) OR a FILE page in the target drive already points at the hash.
+   * Only such callers may take the dedup fast-path / link a pre-existing object.
+   */
+  userReferencesContentHash: async (
+    userId: string,
+    contentHash: string,
+    driveId: string,
+  ): Promise<boolean> => {
+    const result = await db.execute(sql`
+      SELECT 1 WHERE EXISTS (
+        SELECT 1 FROM files WHERE id = ${contentHash} AND "createdBy" = ${userId}
+      ) OR EXISTS (
+        SELECT 1 FROM pages
+        WHERE "contentHash" = ${contentHash} AND "driveId" = ${driveId} AND type = 'FILE'
+      )
+    `);
+    return result.rows.length > 0;
   },
 
   countFiles: async (driveIds: string[]): Promise<number> => {

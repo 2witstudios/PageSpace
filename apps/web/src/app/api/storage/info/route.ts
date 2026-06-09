@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { verifyAuth, verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   getUserStorageQuota,
@@ -24,8 +24,17 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const shouldReconcile = searchParams.get('reconcile') === 'true';
 
-    // Reconcile if requested
+    // Reconcile if requested. H4: `?reconcile=true` rewrites stored usage from a
+    // recomputed total; even with the accounting basis fixed, expose it only to
+    // admins as defense-in-depth so a user can't trigger their own quota rewrite.
     if (shouldReconcile) {
+      const adminResult = await verifyAdminAuth(request);
+      if (isAdminAuthError(adminResult)) {
+        return NextResponse.json(
+          { error: 'Forbidden: admin access required to reconcile storage' },
+          { status: 403 },
+        );
+      }
       try {
         const reconcileResult = await reconcileStorageUsage(user.id);
         console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);

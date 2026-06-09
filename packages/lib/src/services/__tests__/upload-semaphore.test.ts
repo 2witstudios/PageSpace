@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const mockUpdateActiveUploads = vi.fn();
+
 vi.mock('../storage-limits', () => ({
   STORAGE_TIERS: {
     free: { maxConcurrentUploads: 2 },
@@ -7,6 +9,7 @@ vi.mock('../storage-limits', () => ({
     pro: { maxConcurrentUploads: 5 },
     enterprise: { maxConcurrentUploads: 10 },
   },
+  updateActiveUploads: (...args: unknown[]) => mockUpdateActiveUploads(...args),
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -21,6 +24,8 @@ describe('upload-semaphore', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
+    mockUpdateActiveUploads.mockReset();
+    mockUpdateActiveUploads.mockResolvedValue(undefined);
 
     // UPLOAD_MAX_PERMITS controls global limit; default in tests is env var or 20
     process.env.UPLOAD_MAX_PERMITS = '3';
@@ -212,6 +217,35 @@ describe('upload-semaphore', () => {
       const status = uploadSemaphore.getStatus();
       expect(status.activeSlots).toBe(0);
       expect(status.globalSlotsAvailable).toBe(3);
+    });
+  });
+
+  describe('L8 — stale-slot sweep decrements the DB activeUploads counter', () => {
+    it('decrements the DB counter for a slot abandoned past the timeout (cron sweep)', async () => {
+      await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+
+      // Past the 10-minute slot timeout; advancing 11 minutes also fires the
+      // once-a-minute cleanup interval.
+      vi.advanceTimersByTime(11 * 60 * 1000);
+
+      expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
+      expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    });
+
+    it('decrements the DB counter when an expired slot is reclaimed via verifySlotOwner', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+      // Do not cross a full cleanup tick; reclaim happens through verifySlotOwner.
+      vi.advanceTimersByTime(10 * 60 * 1000 + 1);
+
+      expect(uploadSemaphore.verifySlotOwner(slot!, 'user-1')).toBe(false);
+      expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    });
+
+    it('does NOT decrement the DB counter on a normal release (the route does that)', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+      uploadSemaphore.releaseUploadSlot(slot!);
+
+      expect(mockUpdateActiveUploads).not.toHaveBeenCalled();
     });
   });
 });

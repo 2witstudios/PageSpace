@@ -14,7 +14,12 @@ import type { AttachmentTarget, FileRecordInput } from './attachment-upload-core
 
 export type { FileRecordInput };
 
-async function saveFileRecord(input: FileRecordInput): Promise<void> {
+/**
+ * Persist the content-addressed `files` row. Returns whether THIS call inserted
+ * the row (first physical store) so the caller can charge storage exactly once
+ * per blob (M8) instead of on every dedup completion.
+ */
+async function saveFileRecord(input: FileRecordInput): Promise<{ inserted: boolean }> {
   const inserted = await db
     .insert(files)
     .values(input)
@@ -28,7 +33,9 @@ async function saveFileRecord(input: FileRecordInput): Promise<void> {
     if (!existing) {
       throw new Error('Failed to load existing file metadata');
     }
+    return { inserted: false };
   }
+  return { inserted: true };
 }
 
 export interface LinkFileToTargetInput {

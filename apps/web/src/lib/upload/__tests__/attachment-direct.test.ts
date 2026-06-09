@@ -10,6 +10,8 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   checkStorageQuota: (...a: unknown[]) => mockCheckStorageQuota(...a),
   updateActiveUploads: (...a: unknown[]) => mockUpdateActiveUploads(...a),
   updateStorageUsage: (...a: unknown[]) => mockUpdateStorageUsage(...a),
+  // Real (pure) impl: charge iff the files row was newly inserted (M8).
+  shouldChargeForStore: (inserted: boolean) => inserted,
 }));
 
 const mockAcquire = vi.fn();
@@ -146,7 +148,7 @@ describe('completeAttachment', () => {
     vi.clearAllMocks();
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: 'drive-1', attachmentTarget: PAGE_TARGET });
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
-    mockSaveFileRecord.mockResolvedValue(undefined);
+    mockSaveFileRecord.mockResolvedValue({ inserted: true });
     mockLinkFileToTarget.mockResolvedValue(undefined);
     mockUpdateActiveUploads.mockResolvedValue(undefined);
     mockUpdateStorageUsage.mockResolvedValue(undefined);
@@ -212,6 +214,14 @@ describe('completeAttachment', () => {
     expect(res.body).toMatchObject({ file: { size: 1024 } });
     expect(mockSaveFileRecord).toHaveBeenCalledWith(expect.objectContaining({ sizeBytes: 1024 }));
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('user-1', 1024, expect.anything());
+  });
+
+  it('M8: does not charge storage on a dedup completion (files row already existed)', async () => {
+    mockSaveFileRecord.mockResolvedValue({ inserted: false });
+    const res = await completeAttachment(completeArgs());
+    expect(res.status).toBe(200);
+    expect(mockLinkFileToTarget).toHaveBeenCalled();
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
   });
 
   it('releases the slot and returns a retryable 503 when the verify call throws', async () => {

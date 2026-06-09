@@ -7,9 +7,9 @@ import { pages } from '@pagespace/db/schema/core';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { updateActiveUploads, updateStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { updateActiveUploads, updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { buildS3Key } from '@pagespace/lib/services/upload-validation';
+import { buildS3Key, canFinalizeUpload } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
@@ -176,6 +176,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid or expired jobId' }, { status: 403 });
   }
   const { contentHash, driveId, fileSize, mimeType } = reserved;
+  // H3 facts captured at presign (server-trusted). Default to the safe (most
+  // restrictive) interpretation if an older slot lacks them.
+  const callerAlreadyReferences = reserved.callerAlreadyReferences ?? false;
+  const existedAtPresign = reserved.existedAtPresign ?? true;
 
   // Scoped MCP tokens may only act on the drive they were granted for.
   const scopeError = checkMCPCreateScope(auth, driveId);
@@ -201,6 +205,19 @@ export async function POST(request: Request) {
     }
   }
 
+  // H3: a known content hash must not let a caller link bytes they never
+  // uploaded. Linking a pre-existing content-addressed object is allowed only
+  // when the caller already references the hash, or when this very upload created
+  // the object (it did not exist at presign). Reject the cross-tenant claim.
+  if (!canFinalizeUpload({ callerAlreadyReferences, existedAtPresign })) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await updateActiveUploads(userId, -1).catch(() => undefined);
+    return NextResponse.json(
+      { error: 'This file could not be verified for upload. Please re-upload the original file.' },
+      { status: 409 },
+    );
+  }
+
   // The UI uploads straight to S3, so /complete can be reached without the PUT
   // ever happening. Confirm the object is actually present before creating a
   // page/file record and charging storage, so a skipped or failed upload can't
@@ -213,15 +230,19 @@ export async function POST(request: Request) {
   }
 
   let newPage: typeof pages.$inferSelect;
+  // M8: storage is content-addressed — only the FIRST physical store of a blob
+  // inserts a `files` row (createdBy = uploader). Charge once, on that insert, so
+  // dedup completes don't N-charge while the reaper only ever credits once.
+  let fileWasInserted = false;
   try {
-    newPage = await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       // Compute position inside the transaction so the sibling read and the
       // insert share one transactional snapshot.
       const calculatedPosition = await resolveUploadPosition(tx, resolvedParentId, position, afterNodeId);
       const record = buildPageRecord({ contentHash, driveId, title, mimeType, fileSize, userId, parentId: resolvedParentId, position: calculatedPosition });
       const [createdPage] = await tx.insert(pages).values(record).returning();
 
-      await tx
+      const insertedFiles = await tx
         .insert(files)
         .values({
           id: contentHash,
@@ -231,7 +252,8 @@ export async function POST(request: Request) {
           storagePath: contentHash,
           createdBy: userId,
         })
-        .onConflictDoNothing();
+        .onConflictDoNothing()
+        .returning({ id: files.id });
 
       await tx
         .insert(filePages)
@@ -241,8 +263,10 @@ export async function POST(request: Request) {
           set: { linkedBy: userId, linkedAt: new Date(), linkSource: 'presigned-upload' },
         });
 
-      return createdPage;
+      return { createdPage, fileWasInserted: insertedFiles.length > 0 };
     });
+    newPage = result.createdPage;
+    fileWasInserted = result.fileWasInserted;
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await updateActiveUploads(userId, -1).catch(() => undefined);
@@ -263,7 +287,12 @@ export async function POST(request: Request) {
       console.error('Failed to enqueue processor job:', err);
     }
 
-    await updateStorageUsage(userId, fileSize, { pageId: newPage.id, driveId, eventType: 'upload' });
+    // M8: charge only on the first physical store of the blob (symmetric with the
+    // single credit the reaper issues at unlink). Dedup completes store no new
+    // bytes and must not be charged.
+    if (shouldChargeForStore(fileWasInserted)) {
+      await updateStorageUsage(userId, fileSize, { pageId: newPage.id, driveId, eventType: 'upload' });
+    }
 
     auditRequest(request, {
       eventType: 'data.write',

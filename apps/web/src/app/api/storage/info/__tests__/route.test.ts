@@ -10,6 +10,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
+  verifyAdminAuth: vi.fn(),
+  isAdminAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && '__error' in (r as object)),
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
@@ -46,8 +48,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
+import { verifyAuth, verifyAdminAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { reconcileStorageUsage } from '@pagespace/lib/services/storage-limits';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {
@@ -72,5 +75,36 @@ describe('GET /api/storage/info', () => {
     await GET(request as never);
 
     expect(auditRequest).not.toHaveBeenCalled();
+  });
+
+  describe('H4 — ?reconcile=true is admin-gated', () => {
+    it('returns 403 and does not reconcile for a non-admin', async () => {
+      vi.mocked(verifyAdminAuth).mockResolvedValue({ __error: true } as never);
+
+      const request = new Request('https://example.com/api/storage/info?reconcile=true');
+      const res = await GET(request as never);
+
+      expect(res.status).toBe(403);
+      expect(reconcileStorageUsage).not.toHaveBeenCalled();
+    });
+
+    it('runs reconcile for an admin', async () => {
+      vi.mocked(verifyAdminAuth).mockResolvedValue({ id: 'user_1', role: 'admin' } as never);
+      vi.mocked(reconcileStorageUsage).mockResolvedValue({ previousUsage: 0, actualUsage: 0, difference: 0 } as never);
+
+      const request = new Request('https://example.com/api/storage/info?reconcile=true');
+      const res = await GET(request as never);
+
+      expect(res.status).toBe(200);
+      expect(reconcileStorageUsage).toHaveBeenCalledWith('user_1');
+    });
+
+    it('does not reconcile or require admin when reconcile is not requested', async () => {
+      const request = new Request('https://example.com/api/storage/info');
+      await GET(request as never);
+
+      expect(verifyAdminAuth).not.toHaveBeenCalled();
+      expect(reconcileStorageUsage).not.toHaveBeenCalled();
+    });
   });
 });

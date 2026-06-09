@@ -1,4 +1,4 @@
-import { STORAGE_TIERS } from './storage-limits';
+import { STORAGE_TIERS, updateActiveUploads } from './storage-limits';
 import { loggers } from '../logging/logger-config';
 import type { AttachmentTarget } from './attachment-upload-core';
 
@@ -20,6 +20,11 @@ export interface UploadSlotMetadata {
   fileSize: number;
   mimeType: string;
   attachmentTarget?: AttachmentTarget;
+  // H3 (page-file flow): server-trusted facts captured at presign so /complete
+  // can reject a cross-tenant claim without re-trusting the client. Optional —
+  // the attachment flow leaves them unset (it has its own verification path).
+  callerAlreadyReferences?: boolean;
+  existedAtPresign?: boolean;
 }
 
 interface UploadSlot {
@@ -149,6 +154,27 @@ class UploadSemaphore {
     };
   }
 
+  /**
+   * L8: release a slot abandoned past its timeout. Unlike the normal-completion
+   * path (where the route decrements users.activeUploads itself), an abandoned
+   * upload's presign-time +1 is never paired with a route-side -1, so this path
+   * MUST decrement the DB counter too — otherwise the counter ratchets up forever
+   * and would eventually falsely deny the user via checkConcurrentUploads.
+   */
+  private releaseStaleSlot(slotId: string): void {
+    const slot = this.activeSlots.get(slotId);
+    if (!slot) return;
+    const { userId } = slot;
+    this.releaseUploadSlot(slotId);
+    // Fire-and-forget: the in-memory slot is already reclaimed; a transient DB
+    // hiccup must not throw out of the once-a-minute sweep timer.
+    void updateActiveUploads(userId, -1).catch((err) => {
+      loggers.api.warn('Failed to decrement activeUploads for stale slot', {
+        slotId, userId, err: err as Error,
+      });
+    });
+  }
+
   private cleanupStaleSlots(): void {
     const now = Date.now();
     const staleSlots: string[] = [];
@@ -164,7 +190,7 @@ class UploadSemaphore {
         staleCount: staleSlots.length,
         timeoutMinutes: this.slotTimeout / 60000,
       });
-      staleSlots.forEach(slotId => this.releaseUploadSlot(slotId));
+      staleSlots.forEach(slotId => this.releaseStaleSlot(slotId));
     }
   }
 
@@ -173,8 +199,9 @@ class UploadSemaphore {
     if (!slot || slot.userId !== userId) return false;
     // Reject (and reclaim) slots past the timeout rather than waiting for the
     // once-a-minute sweep — a stale jobId must not still authorize a completion.
+    // Reclaim via releaseStaleSlot so the abandoned DB counter is decremented too.
     if (Date.now() - slot.acquiredAt.getTime() > this.slotTimeout) {
-      this.releaseUploadSlot(slotId);
+      this.releaseStaleSlot(slotId);
       return false;
     }
     return true;

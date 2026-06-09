@@ -50,6 +50,8 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateActiveUploads: vi.fn(),
   updateStorageUsage: vi.fn(),
+  // Real (pure) impl: charge iff the files row was newly inserted.
+  shouldChargeForStore: (inserted: boolean) => inserted,
 }));
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
@@ -81,13 +83,16 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 
 vi.mock('@pagespace/lib/services/upload-validation', () => ({
   buildS3Key: (hash: string) => `files/${hash}/original`,
+  // Real (pure) impl of the H3 link gate.
+  canFinalizeUpload: ({ callerAlreadyReferences, existedAtPresign }: { callerAlreadyReferences: boolean; existedAtPresign: boolean }) =>
+    callerAlreadyReferences || !existedAtPresign,
 }));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { updateActiveUploads, updateStorageUsage } from '@pagespace/lib/services/storage-limits';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 
 // Captures the values passed to tx.insert(pages).values(...) for assertion
@@ -143,7 +148,9 @@ const VALID_BODY = {
   parentId: null,
 };
 
-const SLOT_META = { contentHash: VALID_HASH, driveId: 'drive-1', fileSize: 2048, mimeType: 'image/jpeg' };
+// existedAtPresign=false means THIS upload created the object → canFinalizeUpload
+// allows it regardless of references (the common new-upload path).
+const SLOT_META = { contentHash: VALID_HASH, driveId: 'drive-1', fileSize: 2048, mimeType: 'image/jpeg', callerAlreadyReferences: false, existedAtPresign: false };
 
 const MOCK_PAGE = { id: 'page-abc', title: 'photo.jpg', type: 'FILE', driveId: 'drive-1', contentHash: VALID_HASH };
 
@@ -358,6 +365,57 @@ describe('POST /api/upload/complete', () => {
       mockFindFirst.mockResolvedValue({ id: 'last', position: 9 });
       await POST(makeRequest({ ...VALID_BODY, position: 'before', afterNodeId: 'ghost' }));
       expect(capturedPageValues?.position).toBe(10);
+    });
+  });
+
+  describe('H3 — cross-tenant claim defense at finalize', () => {
+    it('rejects (409) when the object pre-existed and the caller does not reference it', async () => {
+      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({
+        ...SLOT_META, callerAlreadyReferences: false, existedAtPresign: true,
+      });
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(409);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
+      expect(updateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    });
+
+    it('allows a referencing caller to link a pre-existing object (legit dedup)', async () => {
+      vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({
+        ...SLOT_META, callerAlreadyReferences: true, existedAtPresign: true,
+      });
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(200);
+      expect(mockTransaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('M8 — charge only on first physical store', () => {
+    it('charges storage when the files row was newly inserted', async () => {
+      await POST(makeRequest(VALID_BODY));
+      expect(updateStorageUsage).toHaveBeenCalledWith('user-1', 2048, expect.objectContaining({ eventType: 'upload' }));
+    });
+
+    it('does NOT charge storage on a dedup completion (files row already existed)', async () => {
+      // onConflictDoNothing().returning() yields [] when the row already exists.
+      mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+        const tx = {
+          query: txQuery,
+          insert: (table: unknown) => ({
+            values: (vals: Record<string, unknown>) => {
+              if (table === 'pages') capturedPageValues = vals;
+              return {
+                returning: vi.fn().mockResolvedValue([MOCK_PAGE]),
+                onConflictDoNothing: () => ({ returning: vi.fn().mockResolvedValue([]) }),
+                onConflictDoUpdate: vi.fn().mockResolvedValue([]),
+              };
+            },
+          }),
+        };
+        return fn(tx);
+      });
+      await POST(makeRequest(VALID_BODY));
+      expect(updateStorageUsage).not.toHaveBeenCalled();
     });
   });
 

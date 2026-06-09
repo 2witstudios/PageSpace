@@ -14,6 +14,7 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: vi.fn(),
   updateActiveUploads: vi.fn(),
   checkStorageQuota: vi.fn(),
+  userReferencesContentHash: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
@@ -34,7 +35,7 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, updateActiveUploads, checkStorageQuota } from '@pagespace/lib/services/storage-limits';
+import { getUserStorageQuota, updateActiveUploads, checkStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 
@@ -76,6 +77,9 @@ beforeEach(() => {
   vi.mocked(issuePresignedPutUrl).mockResolvedValue(MOCK_URL);
   vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(MOCK_SLOT);
   vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
+  // Default: caller already references the hash, so the dedup fast-path stays
+  // available for the existing dedup tests. H3-specific tests override this.
+  vi.mocked(userReferencesContentHash).mockResolvedValue(true);
 });
 
 describe('POST /api/upload/presign', () => {
@@ -209,19 +213,62 @@ describe('POST /api/upload/presign', () => {
       expect(typeof body.expiresAt).toBe('string');
     });
 
-    it('reserves an upload slot via acquireUploadSlot', async () => {
+    it('reserves an upload slot via acquireUploadSlot with the server-trusted H3 facts', async () => {
+      vi.mocked(checkObjectExists).mockResolvedValue(false);
+      vi.mocked(userReferencesContentHash).mockResolvedValue(false);
       await POST(makeRequest(VALID_BODY));
       expect(uploadSemaphore.acquireUploadSlot).toHaveBeenCalledWith('user-1', 'free', 1024, {
         contentHash: VALID_HASH,
         driveId: 'drive-1',
         fileSize: 1024,
         mimeType: 'image/jpeg',
+        callerAlreadyReferences: false,
+        existedAtPresign: false,
       });
     });
 
     it('increments activeUploads after acquiring the slot', async () => {
       await POST(makeRequest(VALID_BODY));
       expect(updateActiveUploads).toHaveBeenCalledWith('user-1', 1);
+    });
+  });
+
+  describe('H3 — cross-tenant file claim defense', () => {
+    it('honors the dedup fast-path when the object exists AND the caller already references the hash', async () => {
+      vi.mocked(checkObjectExists).mockResolvedValue(true);
+      vi.mocked(userReferencesContentHash).mockResolvedValue(true);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.alreadyExists).toBe(true);
+      expect(issuePresignedPutUrl).not.toHaveBeenCalled();
+    });
+
+    it('rejects (409) when the object exists but the caller does not reference the hash — no claim, no PUT URL', async () => {
+      vi.mocked(checkObjectExists).mockResolvedValue(true);
+      vi.mocked(userReferencesContentHash).mockResolvedValue(false);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(409);
+      // Never hand out a canonical-key PUT URL to a non-possessor (corruption risk).
+      expect(issuePresignedPutUrl).not.toHaveBeenCalled();
+      // Rejected before reserving a slot.
+      expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+    });
+
+    it('issues a real PUT URL (no fast-path) when the object does not yet exist, even for a non-referencing caller', async () => {
+      vi.mocked(checkObjectExists).mockResolvedValue(false);
+      vi.mocked(userReferencesContentHash).mockResolvedValue(false);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.url).toBe(MOCK_URL);
+      expect(body.alreadyExists).toBeUndefined();
+    });
+
+    it('checks references against the canonicalized (lowercased) hash', async () => {
+      vi.mocked(checkObjectExists).mockResolvedValue(false);
+      await POST(makeRequest({ ...VALID_BODY, contentHash: 'A'.repeat(64) }));
+      expect(userReferencesContentHash).toHaveBeenCalledWith('user-1', 'a'.repeat(64), 'drive-1');
     });
   });
 

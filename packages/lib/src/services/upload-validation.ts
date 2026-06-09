@@ -89,6 +89,49 @@ export function buildS3Key(hash: string): string {
   return `files/${hash}/original`;
 }
 
+/**
+ * H3 — cross-tenant file-claim defense (presign fast-path gate).
+ *
+ * Storage is content-addressed in a GLOBAL namespace (`files/${hash}/original`),
+ * so a content hash a caller scraped from a presigned URL or a `contentHash` API
+ * field is enough to find that another tenant's bytes already exist in S3. The
+ * old presign returned `{ alreadyExists: true }` purely on object existence,
+ * letting any caller skip the PUT and then /complete a FILE page in THEIR drive
+ * pointing at the foreign object — a permanent, revocation-surviving claim.
+ *
+ * The dedup fast-path (skip the proof-of-possession PUT) is therefore honored
+ * ONLY when the same user/drive already references the hash. Everyone else is
+ * routed through an actual presigned PUT so they must possess the bytes.
+ */
+export function canClaimExistingObject(args: {
+  contentHash: string;
+  callerAlreadyReferences: boolean;
+}): boolean {
+  return args.callerAlreadyReferences;
+}
+
+/**
+ * H3 — cross-tenant file-claim defense (/complete link gate).
+ *
+ * Forcing the PUT at presign is not sufficient on its own: an attacker handed a
+ * presigned URL can simply skip it and call /complete, where a bare
+ * object-existence check would still link the pre-existing (victim's) object.
+ *
+ * So /complete may create the page→file link only when:
+ *  - the caller already references this hash (legitimate dedup), OR
+ *  - the object did NOT exist at presign time, i.e. this very upload created it
+ *    (the caller demonstrably possessed the bytes to PUT them).
+ *
+ * Linking to an object that pre-existed and that the caller does not already
+ * reference is exactly the cross-tenant claim, and is rejected.
+ */
+export function canFinalizeUpload(args: {
+  callerAlreadyReferences: boolean;
+  existedAtPresign: boolean;
+}): boolean {
+  return args.callerAlreadyReferences || !args.existedAtPresign;
+}
+
 export function buildPresignParams(
   hash: string,
   driveId: string,

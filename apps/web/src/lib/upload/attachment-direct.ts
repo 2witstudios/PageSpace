@@ -13,6 +13,7 @@ import {
   checkStorageQuota,
   updateActiveUploads,
   updateStorageUsage,
+  shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
@@ -169,10 +170,15 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // under-report storage / forge the file row.
   const resolvedSize = verify.size;
 
+  // M8: only the first physical store of a content-addressed blob inserts the
+  // `files` row; charge storage once on that insert (symmetric with the single
+  // credit the reaper issues at unlink) rather than on every dedup completion.
+  let fileWasInserted = false;
   try {
-    await attachmentUploadRepository.saveFileRecord(
+    const saved = await attachmentUploadRepository.saveFileRecord(
       buildAttachmentFileRecord({ contentHash, target, fileSize: resolvedSize, mimeType: storedMime, userId }),
     );
+    fileWasInserted = saved.inserted;
     await attachmentUploadRepository.linkFileToTarget({ target, fileId: contentHash, userId });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
@@ -187,10 +193,12 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // retry and double-charge storage).
   try {
     await updateActiveUploads(userId, -1);
-    await updateStorageUsage(userId, resolvedSize, {
-      driveId: attachmentFileDriveId(target) ?? undefined,
-      eventType: 'upload',
-    });
+    if (shouldChargeForStore(fileWasInserted)) {
+      await updateStorageUsage(userId, resolvedSize, {
+        driveId: attachmentFileDriveId(target) ?? undefined,
+        eventType: 'upload',
+      });
+    }
     auditRequest(request, {
       eventType: 'data.write',
       userId,
