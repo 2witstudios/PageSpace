@@ -4,6 +4,7 @@ import {
   isAllowedNavigation,
   isAllowedAppUrl,
   isTrustedSenderUrl,
+  classifyNavigation,
 } from '../navigation-guard';
 
 describe('isAllowedNavigation', () => {
@@ -86,6 +87,41 @@ describe('isAllowedAppUrl', () => {
   it('ignores unparseable allowlist entries', () => {
     expect(isAllowedAppUrl('https://pagespace.ai', ['', 'garbage', 'https://pagespace.ai'])).toBe(true);
     expect(isAllowedAppUrl('https://pagespace.ai', ['', 'garbage'])).toBe(false);
+  });
+});
+
+describe('classifyNavigation', () => {
+  const appOrigin = 'https://pagespace.ai';
+
+  it('allows same-origin navigation', () => {
+    expect(classifyNavigation('https://pagespace.ai/dashboard', appOrigin)).toBe('allow');
+  });
+
+  it('passes the app deep-link scheme through to the OS handler', () => {
+    expect(classifyNavigation('pagespace://auth-exchange?code=x&state=y', appOrigin)).toBe('deep-link');
+    expect(classifyNavigation('pagespace://passkey-registered', appOrigin)).toBe('deep-link');
+  });
+
+  it('routes off-origin web links to the system browser', () => {
+    expect(classifyNavigation('https://evil.com/phish', appOrigin)).toBe('open-external');
+    expect(classifyNavigation('http://example.com/', appOrigin)).toBe('open-external');
+  });
+
+  it('blocks file:// and other custom schemes', () => {
+    expect(classifyNavigation('file:///etc/passwd', appOrigin)).toBe('block');
+    expect(classifyNavigation('javascript:alert(1)', appOrigin)).toBe('block');
+    expect(classifyNavigation('mailto:a@b.c', appOrigin)).toBe('block');
+  });
+
+  it('blocks unparseable input', () => {
+    expect(classifyNavigation('not a url', appOrigin)).toBe('block');
+    expect(classifyNavigation('', appOrigin)).toBe('block');
+  });
+
+  it('does not allow a foreign origin even when the app origin is unparseable', () => {
+    // Caller fails closed on a bad origin; this fn must never return "allow".
+    expect(classifyNavigation('https://evil.com', 'garbage')).toBe('open-external');
+    expect(classifyNavigation('https://pagespace.ai', 'garbage')).not.toBe('allow');
   });
 });
 

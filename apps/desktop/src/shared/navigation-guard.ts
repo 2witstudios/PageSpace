@@ -76,3 +76,42 @@ export function isTrustedSenderUrl(senderUrl: string | undefined | null, appOrig
   if (!senderUrl) return false;
   return isAllowedNavigation(senderUrl, appOrigin);
 }
+
+/** The app's own deep-link scheme, used by the OS deep-link handler. */
+export const APP_DEEP_LINK_SCHEME = 'pagespace:';
+
+/**
+ * Outcome of evaluating a renderer-initiated navigation:
+ * - `allow`        — same-origin app navigation; let it proceed.
+ * - `deep-link`    — the app's own custom scheme; let it reach the OS handler.
+ * - `open-external`— off-origin http(s); block in-renderer, open in the browser.
+ * - `block`        — anything else (file://, other schemes, junk); drop it.
+ */
+export type NavigationDecision = 'allow' | 'deep-link' | 'open-external' | 'block';
+
+/**
+ * PURE. Classify a renderer-initiated navigation for the H5 guard. Same-origin
+ * http(s) is allowed; the app's own deep-link scheme is passed to the OS so the
+ * exchange handoff still works (it is independently CSRF-bound — see L9);
+ * off-origin http(s) is opened in the system browser; everything else is
+ * blocked. Callers must handle an unparseable app origin (fail closed) before
+ * calling — with a bad origin, same-origin can never match, so an off-origin
+ * value here would still be classified, not silently allowed.
+ */
+export function classifyNavigation(
+  targetUrl: string,
+  appOrigin: string,
+  deepLinkScheme: string = APP_DEEP_LINK_SCHEME,
+): NavigationDecision {
+  if (isAllowedNavigation(targetUrl, appOrigin)) return 'allow';
+
+  let protocol: string | null = null;
+  try {
+    protocol = new URL(targetUrl).protocol;
+  } catch {
+    protocol = null;
+  }
+  if (protocol === deepLinkScheme) return 'deep-link';
+  if (protocol === 'http:' || protocol === 'https:') return 'open-external';
+  return 'block';
+}

@@ -5,7 +5,7 @@ import { getAppUrl } from './app-url';
 import { mainWindow, setMainWindow, isQuitting } from './state';
 import { injectDesktopStyles, injectDoubleClickHandler } from './window-injections';
 import { setupAutoUpdater } from './updater';
-import { isAllowedNavigation } from '../shared/navigation-guard';
+import { classifyNavigation } from '../shared/navigation-guard';
 
 const storeAny = store as any;
 
@@ -105,12 +105,25 @@ export function createWindow(): void {
       console.warn('[Navigation] Blocked navigation; app origin unresolved for URL:', url);
       return;
     }
-    if (isAllowedNavigation(url, appOrigin)) return;
-    event.preventDefault();
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      void shell.openExternal(url);
-    } else {
-      console.warn('[Navigation] Blocked navigation to non-app URL:', url);
+    switch (classifyNavigation(url, appOrigin)) {
+      case 'allow':
+        // Same-origin app navigation — let it proceed.
+        return;
+      case 'deep-link':
+        // The app's own scheme must reach the OS deep-link handler; blocking it
+        // would break the magic-link exchange handoff (already CSRF-bound, L9).
+        return;
+      case 'open-external':
+        // Off-origin web link — keep it out of the privileged renderer, open in
+        // the system browser instead.
+        event.preventDefault();
+        void shell.openExternal(url);
+        return;
+      case 'block':
+      default:
+        event.preventDefault();
+        console.warn('[Navigation] Blocked navigation to non-app URL:', url);
+        return;
     }
   };
 
