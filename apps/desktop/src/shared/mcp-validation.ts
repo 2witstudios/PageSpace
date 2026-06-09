@@ -45,9 +45,38 @@ function commandBasename(command: string): string {
 }
 
 /**
+ * Inline-code-evaluation flags per runtime. Real MCP servers launch a script
+ * file or package (`node dist/index.js`, `npx -y @scope/server`, `python -m
+ * server`) — none pass inline source. Rejecting these flags closes the
+ * `node -e <payload>` / `python -c <payload>` execution vectors with no
+ * false-positives, while keeping the check runtime-aware (e.g. `node -c` is a
+ * harmless syntax check, NOT an eval flag, so it is not blocked). Package
+ * runtimes (npx/bunx/uv/uvx) have no inline-eval flag.
+ */
+const INLINE_EVAL_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  node: ['-e', '--eval', '-p', '--print'],
+  bun: ['-e', '--eval', '-p', '--print'],
+  deno: ['-e', '--eval', '-p', '--print'],
+  python: ['-c'],
+  python3: ['-c'],
+};
+
+/** True when an arg is an inline-eval flag (exact or `--flag=value` form). */
+function isInlineEvalArg(arg: string, flags: readonly string[]): boolean {
+  return flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
+/**
  * PURE. Validate a single MCP server config's launcher. Rejects empty/non-string
- * commands, control characters, and any command whose basename is not an
- * allowed runtime. Args, when present, must be an array of strings.
+ * commands, control characters, any command whose basename is not an allowed
+ * runtime, and inline-code-eval flags on interpreter runtimes. Args, when
+ * present, must be an array of strings.
+ *
+ * NOTE: package runtimes (`npx <pkg>` / `node <script>`) inherently execute the
+ * code they are pointed at — that is the MCP feature itself. This validator
+ * raises the bar (no direct shells, no inline eval) but cannot make MCP-server
+ * configuration non-RCE; that capability is gated by the trusted-origin check
+ * on `mcp:update-config` and is an explicit, user-initiated local action.
  */
 export function validateMcpServerConfig(cfg: unknown): McpServerConfigValidation {
   if (cfg === null || typeof cfg !== 'object') {
@@ -61,15 +90,25 @@ export function validateMcpServerConfig(cfg: unknown): McpServerConfigValidation
   if (CONTROL_CHARACTERS.test(command)) {
     return { ok: false, reason: 'Command contains forbidden control characters' };
   }
-  if (!ALLOWED_MCP_COMMANDS.includes(commandBasename(command))) {
+  const basename = commandBasename(command);
+  if (!ALLOWED_MCP_COMMANDS.includes(basename)) {
     return {
       ok: false,
       reason: `Command "${command}" is not an allowed MCP runtime (allowed: ${ALLOWED_MCP_COMMANDS.join(', ')})`,
     };
   }
-  if (args !== undefined) {
-    if (!Array.isArray(args) || !args.every((a) => typeof a === 'string')) {
-      return { ok: false, reason: 'Args must be an array of strings' };
+  if (args !== undefined && (!Array.isArray(args) || !args.every((a) => typeof a === 'string'))) {
+    return { ok: false, reason: 'Args must be an array of strings' };
+  }
+  const argList: string[] = Array.isArray(args) ? args : [];
+  const evalFlags = INLINE_EVAL_FLAGS[basename];
+  if (evalFlags) {
+    const offending = argList.find((arg) => isInlineEvalArg(arg, evalFlags));
+    if (offending) {
+      return {
+        ok: false,
+        reason: `Inline-code flag "${offending}" is not allowed for runtime "${basename}"`,
+      };
     }
   }
   return { ok: true };

@@ -70,6 +70,34 @@ describe('validateMcpServerConfig (pure)', () => {
   it('allows omitting args entirely', () => {
     expect(validateMcpServerConfig({ command: 'node' })).toEqual({ ok: true });
   });
+
+  it('rejects inline-code-eval flags on interpreter runtimes', () => {
+    const cases: Array<[string, string[]]> = [
+      ['node', ['-e', 'require("child_process").exec("rm -rf /")']],
+      ['node', ['--eval=process.exit()']],
+      ['node', ['-p', '1+1']],
+      ['bun', ['-e', 'Bun.spawn(["sh"])']],
+      ['deno', ['--eval', 'Deno.run({cmd:["sh"]})']],
+      ['python', ['-c', 'import os; os.system("id")']],
+      ['python3', ['-c', 'print(1)']],
+    ];
+    for (const [command, args] of cases) {
+      const result = validateMcpServerConfig({ command, args });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/Inline-code flag/);
+    }
+  });
+
+  it('does NOT block node -c (syntax check is not an eval flag)', () => {
+    expect(validateMcpServerConfig({ command: 'node', args: ['-c', 'server.js'] })).toEqual({ ok: true });
+  });
+
+  it('allows legitimate MCP server launches (script/package/module)', () => {
+    expect(validateMcpServerConfig({ command: 'node', args: ['dist/index.js'] })).toEqual({ ok: true });
+    expect(validateMcpServerConfig({ command: 'npx', args: ['-y', '@scope/mcp-server'] })).toEqual({ ok: true });
+    expect(validateMcpServerConfig({ command: 'python3', args: ['-m', 'my_server'] })).toEqual({ ok: true });
+    expect(validateMcpServerConfig({ command: 'uvx', args: ['some-mcp'] })).toEqual({ ok: true });
+  });
 });
 
 describe('schema integration rejects malicious commands', () => {
