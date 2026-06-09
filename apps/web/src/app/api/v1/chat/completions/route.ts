@@ -261,6 +261,8 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
     if (resultsByCallId.size > 0) {
+      // Fire-and-forget — the response does not wait for back-fill to complete.
+      // Best-effort: a failure is logged but does not affect the streaming reply.
       chatMessageRepository.getMessagesByConversationId(conversationId)
         .then(dbRows => {
           for (const row of dbRows) {

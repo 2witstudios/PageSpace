@@ -22,12 +22,17 @@ describe('CLI tool renderers (pi)', () => {
   });
 
   it('Read: returns null when output is not a string', () => {
-    const result = toolRenderers['Read'](makeCtx('Read', { file_path: 'foo.ts' }, null));
+    const result = toolRenderers['Read'](makeCtx('Read', { path: 'foo.ts' }, null));
     expect(result).toBeNull();
   });
 
-  it('Read: returns non-null node for valid string output', () => {
-    const result = toolRenderers['Read'](makeCtx('Read', { file_path: 'foo.ts' }, 'line 1\nline 2'));
+  it('Read: returns non-null node for valid string output (pi uses path key)', () => {
+    const result = toolRenderers['Read'](makeCtx('Read', { path: 'foo.ts' }, 'line 1\nline 2'));
+    expect(result).not.toBeNull();
+  });
+
+  it('Read: falls back to file_path key when path is absent', () => {
+    const result = toolRenderers['Read'](makeCtx('Read', { file_path: 'bar.ts' }, 'content'));
     expect(result).not.toBeNull();
   });
 

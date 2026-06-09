@@ -846,7 +846,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   // and `parsedOutput` is {}. Renderers must read from `output` directly.
 
   Read: ({ parsedInput, output }) => {
-    const path = parsedInput?.file_path as string | undefined;
+    const path = (parsedInput?.path ?? parsedInput?.file_path) as string | undefined;
     const content = typeof output === 'string' ? output : null;
     if (!content) return null;
     const lines = content.split('\n');

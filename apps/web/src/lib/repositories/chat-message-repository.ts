@@ -179,6 +179,8 @@ export const chatMessageRepository = {
    * Update only the toolResults column for an existing message.
    * Used to back-fill client-side tool results that arrive in subsequent requests.
    * No-op when toolResults is empty — nothing to persist.
+   * Note: overwrites (not merges) the column — idempotent for the back-fill path
+   * because the same results are re-supplied on every subsequent request.
    */
   async updateMessageToolResults(
     messageId: string,
