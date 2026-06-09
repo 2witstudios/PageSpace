@@ -179,6 +179,8 @@ export const SPECIAL_HANDLED_TOOLS: Set<string> = new Set<string>([
   'ask_agent',
 ]);
 
+export const CLI_TOOL_NAMES = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep'] as const;
+
 export const toolRenderers: Record<string, ToolRenderer> = {
   // === DRIVE TOOLS ===
   list_drives: ({ parsedOutput }) => {

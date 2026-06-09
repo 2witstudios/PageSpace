@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { toolRenderers } from '../registry';
+import { toolRenderers, CLI_TOOL_NAMES } from '../registry';
 
-const CLI_TOOLS = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep'] as const;
+const CLI_TOOLS = CLI_TOOL_NAMES;
 
 const makeCtx = (
   toolName: string,
