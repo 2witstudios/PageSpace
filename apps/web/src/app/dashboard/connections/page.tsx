@@ -105,15 +105,12 @@ export default function ConnectionsPage() {
       const data = await response.json();
 
       if (!data.user) {
-        const errorMsg: string = data.error || '';
-        // Only surface the invite CTA for true "user not found" — not for
-        // self-search or existing PENDING/ACCEPTED/BLOCKED relationships,
-        // which also return user: null but with a specific reason.
-        if (errorMsg.toLowerCase().includes('no user found')) {
-          setInvitableEmail(trimmedEmail);
-        } else {
-          toast.error(errorMsg || 'No user found with this email address');
-        }
+        // The search endpoint now returns a single generic `{ user: null }` for
+        // every non-actionable case (no account, self-search, or an existing
+        // PENDING/ACCEPTED/BLOCKED relationship) so relationship state cannot be
+        // enumerated. Offer the invite path uniformly; /api/connections/invite
+        // enforces the real rules (dedupe, blocks, self) when a request is sent.
+        setInvitableEmail(trimmedEmail);
         return;
       }
 

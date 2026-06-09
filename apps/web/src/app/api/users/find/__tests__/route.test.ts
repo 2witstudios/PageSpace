@@ -30,6 +30,15 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: { API: { maxAttempts: 100, windowMs: 60000 } },
+}));
+
+vi.mock('@/lib/users/visibility', () => ({
+  callerCanViewUser: vi.fn(),
+}));
+
 const mockFindFirst = vi.fn();
 
 vi.mock('@pagespace/db/db', () => ({
@@ -52,6 +61,8 @@ import { GET } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { callerCanViewUser } from '@/lib/users/visibility';
 
 // ============================================================================
 // Test Helpers
@@ -81,6 +92,9 @@ describe('GET /api/users/find', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
+    // Default: caller already shares context with the matched user (visible).
+    vi.mocked(callerCanViewUser).mockResolvedValue(true);
     mockFindFirst.mockResolvedValue(null);
   });
 
@@ -139,9 +153,11 @@ describe('GET /api/users/find', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('User not found');
+      // No relationship check is needed when there is no candidate at all.
+      expect(callerCanViewUser).not.toHaveBeenCalled();
     });
 
-    it('should return user data when found', async () => {
+    it('should return user data when found AND caller already shares context', async () => {
       const userData = {
         id: 'user_456',
         name: 'Test User',
@@ -149,13 +165,72 @@ describe('GET /api/users/find', () => {
         image: 'https://example.com/avatar.png',
       };
       mockFindFirst.mockResolvedValue(userData);
+      vi.mocked(callerCanViewUser).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/users/find?email=test@example.com');
       const response = await GET(request);
       const body = await response.json();
 
+      expect(callerCanViewUser).toHaveBeenCalledWith(mockUserId, 'user_456');
       expect(response.status).toBe(200);
       expect(body).toEqual(userData);
+    });
+
+    it('should return a UNIFORM 404 when the account exists but the caller cannot see them (L1)', async () => {
+      // Indistinguishable from the "not found" case above — no existence leak,
+      // no name/avatar harvest.
+      mockFindFirst.mockResolvedValue({
+        id: 'stranger_1',
+        name: 'Stranger',
+        email: 'stranger@example.com',
+        image: 'https://example.com/s.png',
+      });
+      vi.mocked(callerCanViewUser).mockResolvedValue(false);
+
+      const request = new Request('https://example.com/api/users/find?email=stranger@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body).toEqual({ error: 'User not found' });
+      expect(body).not.toHaveProperty('name');
+      expect(body).not.toHaveProperty('image');
+    });
+
+    it('should always let a caller resolve their own account regardless of relationship', async () => {
+      const self = {
+        id: mockUserId,
+        name: 'Me',
+        email: 'me@example.com',
+        image: null,
+      };
+      mockFindFirst.mockResolvedValue(self);
+      vi.mocked(callerCanViewUser).mockResolvedValue(false);
+
+      const request = new Request('https://example.com/api/users/find?email=me@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual(self);
+    });
+  });
+
+  describe('rate limiting (L1)', () => {
+    it('should return 429 when the per-user rate limit is exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        retryAfter: 30,
+      });
+
+      const request = new Request('https://example.com/api/users/find?email=test@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('30');
+      expect(body.error).toBe('Too many requests');
+      expect(mockFindFirst).not.toHaveBeenCalled();
     });
   });
 

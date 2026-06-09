@@ -20,7 +20,9 @@ interface SelectedUser {
   userId: string;
   username?: string;
   displayName: string;
-  email: string;
+  // Optional: substring profile matches no longer carry an email (M3); invites
+  // use userId, so the email is display-only here.
+  email?: string;
   avatarUrl?: string;
 }
 

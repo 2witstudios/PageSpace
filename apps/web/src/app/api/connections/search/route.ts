@@ -7,6 +7,15 @@ import { connections } from '@pagespace/db/schema/social';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import {
+  checkDistributedRateLimit,
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security/distributed-rate-limit';
+import {
+  buildConnectionSearchResult,
+  type ConnectionStatus,
+  type ConnectionSearchProfile,
+} from '@/lib/users/enumeration-safe';
 
 // GET /api/connections/search - Search for users by email to connect with
 export async function GET(request: Request) {
@@ -14,6 +23,18 @@ export async function GET(request: Request) {
     const user = await verifyAuth(request);
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limit per caller — exact-email probe used to enumerate accounts (L2).
+    const rateLimit = await checkDistributedRateLimit(
+      `connections-search:${user.id}`,
+      DISTRIBUTED_RATE_LIMITS.API,
+    );
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: 'Too many requests' },
+        { status: 429, headers: { 'Retry-After': String(rateLimit.retryAfter ?? 60) } },
+      );
     }
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'connection_search', resourceId: 'self' });
@@ -32,13 +53,7 @@ export async function GET(request: Request) {
       .where(eq(users.id, user.id))
       .limit(1);
 
-    // Check if user is trying to search for themselves
-    if (email === currentUser?.email) {
-      return NextResponse.json({
-        user: null,
-        error: 'Cannot connect with yourself'
-      });
-    }
+    const isSelf = !!currentUser && email === currentUser.email;
 
     // Find user by exact email match
     const [targetUser] = await db
@@ -55,73 +70,46 @@ export async function GET(request: Request) {
       .where(eq(users.email, email))
       .limit(1);
 
-    if (!targetUser) {
-      return NextResponse.json({
-        user: null,
-        error: 'No user found with this email address'
-      });
-    }
+    let existingStatus: ConnectionStatus | null = null;
+    let target: ConnectionSearchProfile | null = null;
 
-    // Check if connection already exists - using basic select that always works
-    const existingConnections = await db
-      .select()  // Select ALL fields to avoid production issues
-      .from(connections)
-      .where(
-        or(
-          and(
-            eq(connections.user1Id, user.id),
-            eq(connections.user2Id, targetUser.id)
-          ),
-          and(
-            eq(connections.user1Id, targetUser.id),
-            eq(connections.user2Id, user.id)
-          )
-        )
-      )
-      .limit(1);
-
-    // Check if connection exists and handle different statuses
-    if (existingConnections.length > 0) {
-      const existingConnection = existingConnections[0];
-
-      // Defensive check to ensure status exists
-      if (!existingConnection || !existingConnection.status) {
-        loggers.api.error('Invalid connection data structure');
-        return NextResponse.json({
-          user: null,
-          error: 'Connection check failed'
-        });
-      }
-
-      if (existingConnection.status === 'ACCEPTED') {
-        return NextResponse.json({
-          user: null,
-          error: 'Already connected with this user'
-        });
-      } else if (existingConnection.status === 'PENDING') {
-        return NextResponse.json({
-          user: null,
-          error: 'Connection request already pending'
-        });
-      } else if (existingConnection.status === 'BLOCKED') {
-        return NextResponse.json({
-          user: null,
-          error: 'Cannot send connection request to this user'
-        });
-      }
-    }
-
-    // Return the user data for connection
-    return NextResponse.json({
-      user: {
+    if (targetUser) {
+      target = {
         id: targetUser.id,
         name: targetUser.name,
         email: targetUser.email,
         displayName: targetUser.displayName || targetUser.name,
         bio: targetUser.bio,
         avatarUrl: targetUser.avatarUrl,
-      }
-    });
+      };
+
+      // Check if a connection already exists - select ALL fields (status enum)
+      const existingConnections = await db
+        .select()
+        .from(connections)
+        .where(
+          or(
+            and(
+              eq(connections.user1Id, user.id),
+              eq(connections.user2Id, targetUser.id)
+            ),
+            and(
+              eq(connections.user1Id, targetUser.id),
+              eq(connections.user2Id, user.id)
+            )
+          )
+        )
+        .limit(1);
+
+      existingStatus = existingConnections[0]?.status ?? null;
+    }
+
+    // Collapse self-search / no-account / any existing-relationship state into a
+    // single generic `{ user: null }` so existence and relationship state are not
+    // distinguishable (L2). A profile is returned only when a request can be sent.
+    return NextResponse.json(
+      buildConnectionSearchResult({ isSelf, target, existingStatus }),
+    );
   } catch (error) {
     loggers.api.error('Error searching for user:', error as Error);
     return NextResponse.json(
