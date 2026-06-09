@@ -55,7 +55,7 @@ export function useDesktopExchangeHandler() {
     };
     const beginExchange = window.electron?.auth?.beginExchange;
     if (beginExchange) {
-      beginExchange().then(
+      void beginExchange().then(
         (state) => fire(state),
         () => fire(),
       );
