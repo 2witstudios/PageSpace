@@ -8,7 +8,11 @@
  * / `checkout.session.completed` funding was lost with no recovery path. A naive duplicate
  * check also acked redeliveries that raced an in-flight first attempt that later failed.
  *
- * Keeping the decision pure lets us exhaustively unit-test the four cases without a DB.
+ * A later failure mode (Codex P1): a worker that dies after claiming the id but before
+ * setting `processedAt` leaves an orphaned marker that would otherwise make every redelivery
+ * retry forever. A lease + atomic takeover (the `reclaim` outcome) handles that.
+ *
+ * Keeping the decision pure lets us exhaustively unit-test every outcome without a DB.
  */
 
 /** Postgres SQLSTATE for a unique-key violation — the EXPECTED duplicate signal. */
