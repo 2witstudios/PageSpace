@@ -73,6 +73,8 @@ export interface ThreadPanelProps {
   contextId: string;
   parentId: string;
   currentUserId: string | null;
+  /** Drive ID — required for channel threads to enable @mention autocomplete */
+  driveId?: string;
   /** Pre-rendered parent message header (page provides; preserves consistency with the main list) */
   parentSlot: ReactNode;
   /** Resolve a reply's author to a display name + avatar */
@@ -162,6 +164,7 @@ export function ThreadPanel({
   contextId,
   parentId,
   currentUserId,
+  driveId,
   parentSlot,
   resolveAuthor,
   replyCountHint,
@@ -877,6 +880,7 @@ export function ThreadPanel({
           source={source}
           contextId={contextId}
           parentId={parentId}
+          driveId={driveId}
           showAlsoSendToParent
           value={draft}
           onChange={setDraft}

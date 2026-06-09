@@ -601,6 +601,7 @@ function ChannelView({ page }: ChannelViewProps) {
       contextId={page.id}
       parentId={threadPanelParentId}
       currentUserId={user?.id ?? null}
+      driveId={page.driveId}
       parentSlot={renderParentSlot()}
       resolveAuthor={resolveThreadAuthor}
       replyCountHint={threadParent?.replyCount}
