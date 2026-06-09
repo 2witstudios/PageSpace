@@ -411,6 +411,66 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(db.delete).not.toHaveBeenCalled();
   });
 
+  it('REVOKES when the agent role has non-null driveWidePermissions (fail-closed)', async () => {
+    // driveWidePermissions spans the entire drive — we cannot verify it fits within
+    // any per-page cap, so we revoke unconditionally rather than risk widening access.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm8', agentPageId: 'a8', role: 'MEMBER', customRoleId: 'role_a' }]));
+    vi.mocked(fetchCustomRolePermissions)
+      .mockResolvedValueOnce({ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } })   // role_a (agent) — has driveWide
+      .mockResolvedValueOnce({ permissions: { pageX: { canView: true, canEdit: true, canShare: false } }, driveWidePermissions: null });   // role_b (cap)
+    stubUpdate([]);
+    const where = stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a8']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('REVOKES when the granter cap role has non-null driveWidePermissions (fail-closed)', async () => {
+    // The cap has a drive-wide span — the subset check cannot be done safely.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm9', agentPageId: 'a9', role: 'MEMBER', customRoleId: 'role_a' }]));
+    vi.mocked(fetchCustomRolePermissions)
+      .mockResolvedValueOnce({ permissions: { pageX: { canView: true, canEdit: false, canShare: false } }, driveWidePermissions: null })   // role_a (agent)
+      .mockResolvedValueOnce({ permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } });                 // role_b (cap) — has driveWide
+    stubUpdate([]);
+    const where = stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a9']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('REVOKES when both agent and cap roles have non-null driveWidePermissions (fail-closed)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))
+      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: 'role_b' }]))
+      .mockReturnValueOnce(stubJoinSelect([{ id: 'm10', agentPageId: 'a10', role: 'MEMBER', customRoleId: 'role_a' }]));
+    vi.mocked(fetchCustomRolePermissions)
+      .mockResolvedValueOnce({ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } })   // role_a — has driveWide
+      .mockResolvedValueOnce({ permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: true } });    // role_b — also has driveWide
+    stubUpdate([]);
+    const where = stubDelete();
+
+    const result = await recapAgentMembershipsGrantedBy(DRIVE, USER);
+
+    expect(result).toEqual(['a10']);
+    expect(db.delete).toHaveBeenCalledWith(driveAgentMembers);
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
   it('is a no-op when a downgraded granter granted no agents', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }]))             // drive lookup
