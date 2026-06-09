@@ -5,11 +5,11 @@ import { secureCompare } from '../secure-compare';
  * secureCompare is the pure timing-safe comparison primitive used to validate
  * shared secrets (SERVICE_API_SECRET, INTERNAL_API_SECRET, device tokens, ...).
  *
- * It hashes both inputs with SHA-256 and compares the digests with
- * crypto.timingSafeEqual, so the comparison time does not leak the length or
- * prefix structure of the secret. These tests pin the security-relevant
- * contract: equal -> true, anything else -> false, and non-string / empty
- * inputs never accidentally authenticate.
+ * It hashes both inputs with SHA3-256 (the repo convention for auth tokens, per
+ * token-utils.ts) and compares the digests, so the comparison time does not leak
+ * the length or prefix structure of the secret. These tests pin the
+ * security-relevant contract: equal -> true, anything else -> false, and
+ * non-string / empty inputs never accidentally authenticate.
  */
 describe('secureCompare', () => {
   it('returns true for identical strings', () => {
