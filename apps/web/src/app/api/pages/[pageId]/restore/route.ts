@@ -8,6 +8,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
+import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { canRestorePage } from './restore-authorization';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
@@ -90,7 +92,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   try {
-    // Check MCP token scope before page access
+    // Check MCP token scope before page access. Keeps scoped MCP tokens bounded
+    // to their drives (returns 403/404). Session auth and unscoped tokens pass.
     const scopeError = await checkMCPPageScope(auth, pageId);
     if (scopeError) return scopeError;
 
@@ -105,6 +108,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     if (!page || !page.isTrashed) {
       return NextResponse.json({ error: 'Page is not in trash' }, { status: 400 });
+    }
+
+    // Resource authorization (security finding H1): require the SAME delete/manage
+    // permission the sibling trash endpoint enforces. Without this, any
+    // authenticated caller could restore any trashed page in any drive (IDOR).
+    // The decision itself is the pure `canRestorePage`; this shell only resolves
+    // the facts it consumes.
+    const canDelete = await canUserDeletePage(auth.userId, pageId);
+    if (!canRestorePage({ canDelete, withinTokenScope: scopeError === null })) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     const actorInfo = await getActorInfo(auth.userId);
