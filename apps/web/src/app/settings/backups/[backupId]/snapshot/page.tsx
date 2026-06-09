@@ -8,7 +8,6 @@ import { ArrowLeft, File, FileCode, FileImage, FileSpreadsheet, FileText, Folder
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useDriveStore } from '@/hooks/useDrive';
 import type { SnapshotPageNode } from '@/services/api/snapshot-pages-service';
 import { formatSnapshotLabel, flattenTree, getNodeIcon } from './utils';
 
@@ -53,7 +52,6 @@ export default function SnapshotPage({
   params: Promise<{ backupId: string }>;
 }) {
   const router = useRouter();
-  const driveId = useDriveStore((s) => s.currentDriveId);
 
   const [resolvedBackupId, setResolvedBackupId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<(SnapshotPageNode & { depth: number }) | null>(null);
@@ -65,9 +63,7 @@ export default function SnapshotPage({
     params.then(({ backupId }) => setResolvedBackupId(backupId));
   }, [params]);
 
-  const swrKey = driveId && resolvedBackupId
-    ? `/api/drives/${driveId}/backups/${resolvedBackupId}/pages`
-    : null;
+  const swrKey = resolvedBackupId ? `/api/backups/${resolvedBackupId}/pages` : null;
 
   const { data, isLoading, error, mutate } = useSWR<PagesResponse>(swrKey, fetcher, {
     revalidateOnFocus: false,
@@ -76,12 +72,12 @@ export default function SnapshotPage({
   const handleRowClick = async (node: SnapshotPageNode & { depth: number }) => {
     setSelectedNode(node);
     if (contentMap.has(node.pageId)) return;
-    if (!driveId || !resolvedBackupId) return;
+    if (!resolvedBackupId) return;
 
     setLoadingPageIds(prev => new Set(prev).add(node.pageId));
     try {
       const r = await fetchWithAuth(
-        `/api/drives/${driveId}/backups/${resolvedBackupId}/pages?includeContent=true&pageId=${node.pageId}`,
+        `/api/backups/${resolvedBackupId}/pages?includeContent=true&pageId=${node.pageId}`,
       );
       if (!r.ok) return;
       const result = (await r.json()) as PagesResponse;
@@ -99,7 +95,7 @@ export default function SnapshotPage({
     }
   };
 
-  if (!driveId || isLoading || !resolvedBackupId) {
+  if (isLoading || !resolvedBackupId) {
     return (
       <div className="container max-w-4xl mx-auto py-10 px-10 flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

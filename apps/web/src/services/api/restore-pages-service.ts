@@ -2,6 +2,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { createPageVersion, computePageStateHash } from '@pagespace/lib/services/page-version-service';
+import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import type { RestoreDiff, BackupPageRow } from './restore-diff-service';
 
 export type PageRestoreOp =
@@ -71,6 +72,7 @@ export async function applyPageRestoreOps(
   userId: string,
   backupId: string,
   changeGroupId: string,
+  changeGroupType: ChangeGroupType,
   tx: DbLike,
 ): Promise<void> {
   // Pre-fetch all S3 content before entering DB writes so the transaction loop
@@ -158,6 +160,7 @@ export async function applyPageRestoreOps(
         pageRevision: 0,
         stateHash,
         changeGroupId,
+        changeGroupType,
         metadata: { backupId },
       },
       { tx: tx as never },
