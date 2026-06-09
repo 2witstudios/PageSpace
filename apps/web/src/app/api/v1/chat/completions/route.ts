@@ -17,7 +17,7 @@ import {
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
-import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
@@ -248,6 +248,49 @@ export async function POST(request: Request): Promise<Response> {
   if (isThreadMode && !clientManagesHistory) {
     const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
     inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
+  }
+
+  // Back-fill: when the client manages full history, persist tool results that arrived
+  // in role:tool messages (normalizeMessages collapsed them into assistant UIMessage parts).
+  // We cannot use msg.id — pagespace-cli sends OpenAI-format messages without id fields, so
+  // normalizeMessages assigns a random createId(). Instead we match DB assistant rows by
+  // tool_call_id, which is a stable key present in both the request body and the DB toolCalls.
+  if (clientManagesHistory && isThreadMode) {
+    const resultsByCallId = new Map<string, ReturnType<typeof extractToolResults>[number]>();
+    for (const msg of messages.slice(0, -1)) {
+      if (msg.role !== 'assistant') continue;
+      for (const result of extractToolResults(msg)) {
+        resultsByCallId.set(result.toolCallId, result);
+      }
+    }
+    if (resultsByCallId.size > 0) {
+      // Fire-and-forget — the response does not wait for back-fill to complete.
+      // Best-effort: a failure is logged but does not affect the streaming reply.
+      chatMessageRepository.getMessagesByConversationId(conversationId)
+        .then(dbRows => {
+          for (const row of dbRows) {
+            if (row.role !== 'assistant' || !row.isActive) continue;
+            const rawArr: unknown[] = Array.isArray(row.toolCalls)
+              ? row.toolCalls
+              : (() => {
+                  try { const p = JSON.parse(row.toolCalls as string); return Array.isArray(p) ? p : []; }
+                  catch { return []; }
+                })();
+            const matched = rawArr
+              .filter((tc): tc is Record<string, unknown> =>
+                typeof tc === 'object' && tc !== null &&
+                typeof (tc as Record<string, unknown>).toolCallId === 'string' &&
+                resultsByCallId.has((tc as Record<string, unknown>).toolCallId as string)
+              )
+              .map(tc => resultsByCallId.get(tc.toolCallId as string)!);
+            if (matched.length > 0) {
+              chatMessageRepository.updateMessageToolResults(row.id, conversationId, matched)
+                .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to back-fill tool results', err as Error));
+            }
+          }
+        })
+        .catch((err: unknown) => loggers.ai.error('OpenAI API: failed to load rows for tool-result back-fill', err as Error));
+    }
   }
 
   const userMessageId = userMessage.id;

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { toolRenderers, SPECIAL_HANDLED_TOOLS } from '../registry';
+import { toolRenderers, SPECIAL_HANDLED_TOOLS, CLI_TOOL_NAMES } from '../registry';
 
 /**
  * Coverage guard: every AI tool must have a rich renderer.
@@ -60,8 +60,11 @@ describe('tool renderer coverage', () => {
 
   it('does not register renderers for unknown tools', () => {
     // Guards against typos / stale entries drifting from the real tool set.
+    // CLI_TOOL_NAMES entries are intentional client-side renderers (pi / pagespace-cli)
+    // and are not in the PageSpace server tool set.
     const known = new Set(toolNames);
-    const orphanRegistry = Object.keys(toolRenderers).filter((name) => !known.has(name));
+    const cliToolSet = new Set<string>(CLI_TOOL_NAMES);
+    const orphanRegistry = Object.keys(toolRenderers).filter((name) => !known.has(name) && !cliToolSet.has(name));
     expect(orphanRegistry, `Registry entries for non-existent tools: ${orphanRegistry.join(', ')}`).toEqual([]);
   });
 });

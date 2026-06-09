@@ -90,6 +90,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
+  extractToolResults: vi.fn().mockReturnValue([]),
 }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {},
@@ -115,7 +116,11 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: { getMessagesForPage: vi.fn().mockResolvedValue([]) },
+  chatMessageRepository: {
+    getMessagesForPage: vi.fn().mockResolvedValue([]),
+    getMessagesByConversationId: vi.fn().mockResolvedValue([]),
+    updateMessageToolResults: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({

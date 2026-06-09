@@ -13,7 +13,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import {
   validateConversationAccess,
-  serializeMessageToOpenAI,
+  serializeMessageRowToMessages,
 } from '@/lib/ai/openai-api/v1-conversations';
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
@@ -51,7 +51,7 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     user_id: conversation!.userId,
     title: conversation!.title,
     drive_id: conversation!.contextId,
-    messages: messages.filter((m) => m.isActive).map(serializeMessageToOpenAI),
+    messages: messages.filter((m) => m.isActive).flatMap(serializeMessageRowToMessages),
   });
 }
 
