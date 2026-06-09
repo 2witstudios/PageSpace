@@ -3,6 +3,7 @@ import {
   classifyDedupeOutcome,
   isUniqueViolation,
   PG_UNIQUE_VIOLATION,
+  DEFAULT_LEASE_MS,
 } from '../dedupe';
 
 describe('classifyDedupeOutcome', () => {
@@ -27,6 +28,63 @@ describe('classifyDedupeOutcome', () => {
 
   it('retries a duplicate with no existing row info (undefined processedAt)', () => {
     expect(classifyDedupeOutcome({ inserted: false })).toBe('retry');
+  });
+
+  it('retries an unfinished marker still within its lease (live in-flight attempt)', () => {
+    const now = new Date('2026-06-09T00:05:00.000Z');
+    const claimedAt = new Date('2026-06-09T00:04:00.000Z'); // 1 min ago, < 10 min lease
+    expect(
+      classifyDedupeOutcome({
+        inserted: false,
+        existingProcessedAt: null,
+        existingClaimedAt: claimedAt,
+        now,
+      })
+    ).toBe('retry');
+  });
+
+  it('reclaims an unfinished marker older than the lease (abandoned by a dead worker)', () => {
+    const now = new Date('2026-06-09T00:30:00.000Z');
+    const claimedAt = new Date('2026-06-09T00:10:00.000Z'); // 20 min ago, >= 10 min lease
+    expect(
+      classifyDedupeOutcome({
+        inserted: false,
+        existingProcessedAt: null,
+        existingClaimedAt: claimedAt,
+        now,
+      })
+    ).toBe('reclaim');
+  });
+
+  it('reclaims exactly at the lease boundary (age === leaseMs)', () => {
+    const claimedAt = new Date('2026-06-09T00:00:00.000Z');
+    const now = new Date(claimedAt.getTime() + DEFAULT_LEASE_MS);
+    expect(
+      classifyDedupeOutcome({
+        inserted: false,
+        existingProcessedAt: null,
+        existingClaimedAt: claimedAt,
+        now,
+      })
+    ).toBe('reclaim');
+  });
+
+  it('respects a custom lease window', () => {
+    const claimedAt = new Date('2026-06-09T00:00:00.000Z');
+    const now = new Date(claimedAt.getTime() + 30_000); // 30s old
+    // Within a 60s lease → retry; past a 10s lease → reclaim.
+    expect(
+      classifyDedupeOutcome({ inserted: false, existingProcessedAt: null, existingClaimedAt: claimedAt, now, leaseMs: 60_000 })
+    ).toBe('retry');
+    expect(
+      classifyDedupeOutcome({ inserted: false, existingProcessedAt: null, existingClaimedAt: claimedAt, now, leaseMs: 10_000 })
+    ).toBe('reclaim');
+  });
+
+  it('falls back to retry when the lease cannot be assessed (missing claimedAt or now)', () => {
+    const t = new Date('2026-06-09T00:00:00.000Z');
+    expect(classifyDedupeOutcome({ inserted: false, existingProcessedAt: null, now: t })).toBe('retry');
+    expect(classifyDedupeOutcome({ inserted: false, existingProcessedAt: null, existingClaimedAt: t })).toBe('retry');
   });
 
   it('retries on an unknown DB error (never silently ack lost funding)', () => {

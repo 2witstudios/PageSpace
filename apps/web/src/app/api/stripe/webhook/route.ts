@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
@@ -9,7 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
-import { classifyDedupeOutcome, type DedupeOutcome } from './dedupe';
+import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
 
 export async function POST(request: NextRequest) {
   try {
@@ -44,7 +44,8 @@ export async function POST(request: NextRequest) {
     // distinguishes a TRUE duplicate (conflict → no row returned) from a transient DB fault
     // (throws) — so we never silently ack (200) an event we actually failed to record, which
     // would let Stripe drop the redelivery and permanently lose paid funding. The decision is
-    // a pure function (classifyDedupeOutcome) so all four cases are unit-tested without a DB.
+    // a pure function (classifyDedupeOutcome) so every outcome is unit-tested without a DB.
+    const now = new Date();
     let outcome: DedupeOutcome;
     try {
       const insertedRows = await db
@@ -54,21 +55,57 @@ export async function POST(request: NextRequest) {
         .returning({ id: stripeEvents.id });
 
       let existingProcessedAt: Date | null | undefined;
+      let existingClaimedAt: Date | null | undefined;
       if (insertedRows.length === 0) {
-        // Lost the race / redelivery: inspect the prior row to see whether it finished.
-        // processedAt is null until processing completes (see stripe_events schema).
+        // Lost the race / redelivery: inspect the prior row. processedAt is null until
+        // processing completes; createdAt is the lease anchor (when the id was claimed).
         const existing = await db
-          .select({ processedAt: stripeEvents.processedAt })
+          .select({
+            processedAt: stripeEvents.processedAt,
+            createdAt: stripeEvents.createdAt,
+          })
           .from(stripeEvents)
           .where(eq(stripeEvents.id, event.id))
           .limit(1);
         existingProcessedAt = existing[0]?.processedAt ?? null;
+        existingClaimedAt = existing[0]?.createdAt ?? null;
       }
 
       outcome = classifyDedupeOutcome({
         inserted: insertedRows.length > 0,
         existingProcessedAt,
+        existingClaimedAt,
+        now,
       });
+
+      if (outcome === 'reclaim') {
+        // Atomic takeover of an abandoned marker (worker died after claiming but before
+        // finishing). The WHERE guard — still unprocessed AND claimed before the lease
+        // cutoff — lets exactly one concurrent redelivery win; it re-leases the row
+        // (createdAt = now) and reprocesses. Losers match zero rows and fall back to retry.
+        // The `lte` cutoff mirrors classifyDedupeOutcome's `age >= leaseMs` boundary exactly.
+        const leaseCutoff = new Date(now.getTime() - DEFAULT_LEASE_MS);
+        const reclaimed = await db
+          .update(stripeEvents)
+          .set({ createdAt: now, error: null })
+          .where(
+            and(
+              eq(stripeEvents.id, event.id),
+              isNull(stripeEvents.processedAt),
+              lte(stripeEvents.createdAt, leaseCutoff)
+            )
+          )
+          .returning({ id: stripeEvents.id });
+        if (reclaimed.length > 0) {
+          loggers.api.warn('Reclaimed abandoned Stripe event marker; reprocessing', {
+            eventId: event.id,
+          });
+          outcome = 'process';
+        } else {
+          // Another delivery reclaimed it first, or it just finished — let Stripe redeliver.
+          outcome = 'retry';
+        }
+      }
     } catch (insertError) {
       // A genuine DB fault (pool timeout, connection drop) — never a duplicate, since
       // onConflictDoNothing absorbs the unique violation. Force Stripe to redeliver.

@@ -42,6 +42,7 @@ const mockInsertOnConflictDoNothing = vi.fn();
 const mockInsertReturning = vi.fn();
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
+const mockUpdateReturning = vi.fn();
 const mockDeleteWhere = vi.fn();
 
 vi.mock('@pagespace/db/db', () => {
@@ -90,6 +91,9 @@ vi.mock('@pagespace/db/db', () => {
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+  and: vi.fn((...conds: unknown[]) => ({ type: 'and', conds })),
+  isNull: vi.fn((field: unknown) => ({ field, type: 'isNull' })),
+  lte: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'lte' })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {},
@@ -273,8 +277,11 @@ describe('POST /api/stripe/webhook', () => {
     });
     // Default: the idempotency insert wins the race (fresh row) → event is processed.
     mockInsertReturning.mockResolvedValue([{ id: 'evt_test' }]);
-    mockUpdateWhere.mockResolvedValue(undefined);
+    // update().set().where() is awaited directly (completion/error marks) and also
+    // chains .returning() on the reclaim takeover path.
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockReturnValue({ returning: mockUpdateReturning });
+    mockUpdateReturning.mockResolvedValue([{ id: 'evt_test' }]);
     mockDeleteWhere.mockResolvedValue(undefined);
     mockApplyStripeFunding.mockResolvedValue(undefined);
   });
@@ -340,13 +347,14 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
     });
 
-    it('should return 500 (retry) for a duplicate whose prior attempt has NOT finished', async () => {
+    it('should return 500 (retry) for a duplicate whose prior attempt is still in flight (within lease)', async () => {
       const event = mockStripeEvent('invoice.paid', mockInvoice());
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
-      // Redelivery raced an in-flight first attempt: conflict, but processedAt is still null.
+      // Redelivery raced an in-flight first attempt: conflict, processedAt null, claimed
+      // just now (well within the lease) → genuinely in flight → retry, NOT a takeover.
       mockInsertReturning.mockResolvedValueOnce([]);
-      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null }]);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null, createdAt: new Date() }]);
 
       const request = new Request('https://example.com/api/stripe/webhook', {
         method: 'POST',
@@ -360,7 +368,59 @@ describe('POST /api/stripe/webhook', () => {
 
       // Must NOT ack — funding hasn't been applied yet. 500 forces Stripe to redeliver.
       expect(response.status).toBe(500);
-      // The funding handler must not run on a retry signal.
+      // The funding handler must not run on a retry signal, and we must not take over a live marker.
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockUpdateReturning).not.toHaveBeenCalled();
+    });
+
+    it('reclaims an abandoned marker (claim older than the lease) and reprocesses → 200', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      // Conflict, processedAt still null, but claimed 20 minutes ago (worker died mid-flight).
+      mockInsertReturning.mockResolvedValueOnce([]);
+      const staleClaim = new Date(Date.now() - 20 * 60 * 1000);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null, createdAt: staleClaim }]);
+      // Atomic takeover UPDATE wins (one row re-leased).
+      mockUpdateReturning.mockResolvedValueOnce([{ id: event.id }]);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // Takeover happened and the funding handler ran on reprocess.
+      expect(mockUpdateReturning).toHaveBeenCalled();
+      expect(mockApplyStripeFunding).toHaveBeenCalled();
+    });
+
+    it('returns 500 (retry) when the takeover loses the race to another delivery', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      mockInsertReturning.mockResolvedValueOnce([]);
+      const staleClaim = new Date(Date.now() - 20 * 60 * 1000);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: null, createdAt: staleClaim }]);
+      // Another concurrent delivery already re-leased the marker → our guarded UPDATE matches 0 rows.
+      mockUpdateReturning.mockResolvedValueOnce([]);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: {
+          'stripe-signature': 'valid_signature',
+        },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
       expect(mockApplyStripeFunding).not.toHaveBeenCalled();
     });
 

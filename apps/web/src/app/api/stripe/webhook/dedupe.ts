@@ -14,13 +14,25 @@
 /** Postgres SQLSTATE for a unique-key violation — the EXPECTED duplicate signal. */
 export const PG_UNIQUE_VIOLATION = '23505';
 
+/**
+ * How long an unfinished marker (processedAt still null) is presumed to be a live, in-flight
+ * attempt. A legitimate webhook completes in well under a second; past this window the worker
+ * almost certainly died mid-flight (crash, OOM, deploy) and left an orphaned marker. After the
+ * lease elapses a redelivery may atomically take the marker over and reprocess, so a single
+ * crash can never permanently block Stripe redeliveries (which is how funding would still be
+ * lost even with the transient-fault fix). Far below Stripe's hours-long redelivery horizon.
+ */
+export const DEFAULT_LEASE_MS = 10 * 60 * 1000; // 10 minutes
+
 export type DedupeOutcome =
   /** First time we've seen this event — run the handlers. */
   | 'process'
   /** A prior delivery already processed this event to completion — ack (200), don't reprocess. */
   | 'duplicate-ack'
-  /** Unknown DB error, or a prior attempt that hasn't finished — 500 so Stripe redelivers. */
-  | 'retry';
+  /** Unknown DB error, or a prior attempt still within its lease — 500 so Stripe redelivers. */
+  | 'retry'
+  /** An unfinished marker older than the lease — attempt an atomic takeover, then reprocess. */
+  | 'reclaim';
 
 export interface DedupeDecisionInput {
   /** True when our insert created a fresh row (won the idempotency race). */
@@ -28,9 +40,18 @@ export interface DedupeDecisionInput {
   /**
    * `processedAt` of the pre-existing row when our insert hit a duplicate key.
    * `null`/`undefined` ⇒ a prior attempt claimed the id but has not finished
-   * (still in flight, or failed mid-way).
+   * (still in flight, failed mid-way, or abandoned by a dead worker).
    */
   existingProcessedAt?: Date | null;
+  /**
+   * `createdAt` of the pre-existing row — the moment the in-flight attempt claimed the id.
+   * Used as the lease anchor to tell a live attempt from an abandoned one.
+   */
+  existingClaimedAt?: Date | null;
+  /** Reference time for the lease comparison (injectable for deterministic tests). */
+  now?: Date | null;
+  /** Lease window in ms; defaults to {@link DEFAULT_LEASE_MS}. */
+  leaseMs?: number;
   /**
    * An error thrown by the insert. With `onConflictDoNothing()` a duplicate key never
    * throws, so any error here is an unexpected DB fault. The unique-violation check is
@@ -52,14 +73,18 @@ export function isUniqueViolation(error: unknown): boolean {
 /**
  * Decide what the webhook should do after attempting the idempotency insert.
  *
- * - fresh insert            → `process`
- * - duplicate, finished     → `duplicate-ack`  (200)
- * - duplicate, unfinished   → `retry`          (500 — prior attempt in flight/failed)
- * - unexpected insert error → `retry`          (500 — never silently ack lost funding)
+ * - fresh insert                 → `process`        (run the handlers)
+ * - duplicate, finished          → `duplicate-ack`  (200 — already processed)
+ * - duplicate, unfinished, fresh → `retry`          (500 — prior attempt still in flight)
+ * - duplicate, unfinished, stale → `reclaim`        (lease elapsed → atomic takeover)
+ * - unexpected insert error      → `retry`          (500 — never silently ack lost funding)
  */
 export function classifyDedupeOutcome({
   inserted,
   existingProcessedAt,
+  existingClaimedAt,
+  now,
+  leaseMs = DEFAULT_LEASE_MS,
   error,
 }: DedupeDecisionInput): DedupeOutcome {
   // Any error that is NOT a duplicate-key conflict means we never established whether the
@@ -75,8 +100,20 @@ export function classifyDedupeOutcome({
   }
 
   // A duplicate (no row returned by onConflictDoNothing, or a surfaced 23505): a prior
-  // attempt already claimed this id. Ack only if that attempt actually finished
-  // (processedAt set); otherwise it is in flight or failed, so let Stripe redeliver
-  // rather than silently acknowledging unprocessed funding.
-  return existingProcessedAt != null ? 'duplicate-ack' : 'retry';
+  // attempt already claimed this id. Ack only if that attempt actually finished.
+  if (existingProcessedAt != null) {
+    return 'duplicate-ack';
+  }
+
+  // Unfinished marker. If its claim is older than the lease, the worker almost certainly
+  // died mid-flight — allow an atomic takeover so a single crash can't 500 every redelivery
+  // forever (which would still lose funding once Stripe exhausts its retries). Within the
+  // lease it is presumed genuinely in flight, so signal retry instead.
+  if (existingClaimedAt != null && now != null) {
+    const age = now.getTime() - existingClaimedAt.getTime();
+    if (age >= leaseMs) {
+      return 'reclaim';
+    }
+  }
+  return 'retry';
 }
