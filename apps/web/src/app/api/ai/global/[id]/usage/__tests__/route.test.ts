@@ -59,14 +59,16 @@ import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
 const mockUserId = 'user_123';
 const mockConversationId = 'conv_123';
 
-const mockWebAuth = (userId: string): SessionAuthResult => ({
+const mockWebAuth = (userId: string, role: 'user' | 'admin' = 'user'): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  role: 'user',
+  role,
   adminRoleVersion: 0,
 });
+
+const mockAdminAuth = (userId: string): SessionAuthResult => mockWebAuth(userId, 'admin');
 
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
@@ -213,7 +215,8 @@ describe('GET /api/ai/global/[id]/usage', () => {
   });
 
   describe('successful retrieval', () => {
-    it('should return usage statistics for conversation', async () => {
+    it('should return usage statistics including cost for admin', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAdminAuth(mockUserId));
       const usageLogs = [
         mockUsageLog({ inputTokens: 1000, outputTokens: 500 }),
         mockUsageLog({ inputTokens: 2000, outputTokens: 800 }),
@@ -229,13 +232,30 @@ describe('GET /api/ai/global/[id]/usage', () => {
 
       expect(response.status).toBe(200);
       expect(Array.isArray(body.logs)).toBe(true);
-      expect(body.summary).toEqual(mockUsageSummary());
       expect(body.summary.billing).toEqual({
         totalInputTokens: 3000,
         totalOutputTokens: 1300,
         totalTokens: 4300,
         totalCost: 0.03,
       });
+      // Admin sees real cost in logs
+      expect(body.logs[0].cost).toBe(0.015);
+    });
+
+    it('should strip cost from non-admin responses', async () => {
+      const usageLogs = [mockUsageLog({ cost: 0.015 })];
+      vi.mocked(globalConversationRepository.getUsageLogs).mockResolvedValue(usageLogs);
+      vi.mocked(mockedCalculateUsageSummary).mockReturnValue(mockUsageSummary());
+
+      const request = createRequest(mockConversationId);
+      const context = createContext(mockConversationId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.summary.billing.totalCost).toBe(0);
+      expect(body.logs[0].cost).toBeNull();
     });
 
     it('should call repository methods with correct arguments', async () => {

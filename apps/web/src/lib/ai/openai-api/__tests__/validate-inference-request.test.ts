@@ -289,6 +289,30 @@ describe('validateInferenceRequest', () => {
     });
   });
 
+  test('client_manages_history:true sets clientManagesHistory', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages, client_manages_history: true };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'client_manages_history:true in the body',
+      should: 'return clientManagesHistory:true',
+      actual: result.ok ? result.data.clientManagesHistory : undefined,
+      expected: true,
+    });
+  });
+
+  test('client_manages_history absent defaults to false', () => {
+    const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
+    const body = { model: 'ps-agent://page-123', messages };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'client_manages_history absent from the body',
+      should: 'return clientManagesHistory:false',
+      actual: result.ok ? result.data.clientManagesHistory : undefined,
+      expected: false,
+    });
+  });
+
   test('tool without description or parameters is accepted', () => {
     const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
     const body = { model: 'ps-agent://page-123', messages, tools: [{ type: 'function', function: { name: 'read_file' } }] };

@@ -99,14 +99,16 @@ import { GET } from '../../ai-usage/route';
 const mockUserId = 'user_123';
 const mockPageId = 'page_123';
 
-const mockWebAuth = (userId: string): SessionAuthResult => ({
+const mockWebAuth = (userId: string, role: 'user' | 'admin' = 'user'): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  role: 'user',
+  role,
   adminRoleVersion: 0,
 });
+
+const mockAdminAuth = (userId: string): SessionAuthResult => mockWebAuth(userId, 'admin');
 
 const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
@@ -251,7 +253,9 @@ describe('GET /api/pages/[pageId]/ai-usage', () => {
   });
 
   describe('usage statistics', () => {
-    it('returns logs and summary with aggregated billing metrics', async () => {
+    it('returns logs and summary with aggregated billing metrics for admin', async () => {
+      mockAuthenticateRequest.mockResolvedValue(mockAdminAuth(mockUserId));
+
       const response = await GET(createRequest(), mockParams);
       const body = await response.json();
 
@@ -261,6 +265,21 @@ describe('GET /api/pages/[pageId]/ai-usage', () => {
       expect(body.summary.billing.totalOutputTokens).toBe(900);
       expect(body.summary.billing.totalTokens).toBe(2700);
       expect(body.summary.billing.totalCost).toBe(0.075);
+      // Admin sees cost in logs
+      expect(body.logs[0].cost).toBe(0.045);
+    });
+
+    it('strips cost from non-admin responses', async () => {
+      const response = await GET(createRequest(), mockParams);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.logs).toHaveLength(2);
+      expect(body.summary.billing.totalInputTokens).toBe(1800);
+      expect(body.summary.billing.totalCost).toBe(0);
+      // Non-admin gets null cost in each log
+      expect(body.logs[0].cost).toBeNull();
+      expect(body.logs[1].cost).toBeNull();
     });
 
     it('returns most recent model and provider from first log', async () => {

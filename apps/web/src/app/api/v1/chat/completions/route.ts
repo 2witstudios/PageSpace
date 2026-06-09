@@ -123,6 +123,7 @@ export async function POST(request: Request): Promise<Response> {
     const conv = await conversationRepository.getConversation(incomingConversationId);
     if (clientManagesHistory) {
       if (conv) {
+        // Row exists — apply the same isActive + ownership checks as the normal path.
         if (!conv.isActive) {
           return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
         }
@@ -130,6 +131,8 @@ export async function POST(request: Request): Promise<Response> {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 });
         }
       } else {
+        // First use: create the row then re-read to verify ownership, guarding against
+        // the unlikely TOCTOU case where two requests race on the same new UUID.
         await conversationRepository.createConversation(incomingConversationId, authResult.userId, pageId);
         const owned = await conversationRepository.getConversation(incomingConversationId);
         if (!owned || owned.userId !== authResult.userId) {
