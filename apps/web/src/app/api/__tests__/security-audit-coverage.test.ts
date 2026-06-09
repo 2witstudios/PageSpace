@@ -104,6 +104,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['drives/[driveId]/backups/[backupId]/download', 'Read-only JSON download — no data written, covered by getDriveBackupDetail authz'],
   ['drives/[driveId]/backups/[backupId]/export', 'Read-only ZIP download — no data written, covered by streamBackupExport authz'],
   ['drives/[driveId]/backups/[backupId]/pages', 'Read-only snapshot page tree — no data written, covered by isDriveOwnerOrAdmin check'],
+  ['backups/[backupId]/pages', 'Read-only snapshot page tree (global route, settings context) — no data written, covered by isDriveOwnerOrAdmin check on backup.driveId'],
 
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR
