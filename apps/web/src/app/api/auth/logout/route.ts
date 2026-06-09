@@ -15,19 +15,11 @@ export async function POST(req: Request) {
   const cookieHeader = req.headers.get('cookie');
   const sessionToken = getSessionFromCookies(cookieHeader);
 
-  if (!sessionToken) {
-    // No session to logout from
-    const headers = new Headers();
-    appendClearCookies(headers);
-    return Response.json({ message: 'Logged out successfully' }, { status: 200, headers });
-  }
-
-  // Validate session to get user ID for logging
-  const sessionClaims = await sessionService.validateSession(sessionToken);
-  const userId = sessionClaims?.userId;
-
-  // The client may include device context so we can revoke the long-lived
-  // device token alongside the session (M9). Web logout sends no body.
+  // Parse device context up front. SECURITY (M9): we must be able to revoke a
+  // long-lived device token *by value* even when the session cookie is already
+  // missing or expired — that is exactly when the still-valid device token is
+  // the only credential left and must be invalidated. So this runs before any
+  // no-session short-circuit. Web logout may send no body.
   const body = await req.json().catch(() => ({}));
   const { deviceToken, deviceId, platform } = (body ?? {}) as {
     deviceToken?: unknown;
@@ -35,21 +27,30 @@ export async function POST(req: Request) {
     platform?: unknown;
   };
 
-  // Revoke the session
-  let revokeSucceeded = false;
-  try {
-    await sessionService.revokeSession(sessionToken, 'logout');
-    revokeSucceeded = true;
-    loggers.auth.debug('Session revoked on logout', { userId });
-  } catch (error) {
-    loggers.auth.error('Failed to revoke session on logout', {
-      error: error instanceof Error ? error.message : String(error),
-      userId,
-    });
+  // Validate + revoke the session when one is present.
+  let userId: string | undefined;
+  let sessionId: string | undefined;
+  let sessionRevokeSucceeded = false;
+  if (sessionToken) {
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    userId = sessionClaims?.userId;
+    sessionId = sessionClaims?.sessionId;
+    try {
+      await sessionService.revokeSession(sessionToken, 'logout');
+      sessionRevokeSucceeded = true;
+      loggers.auth.debug('Session revoked on logout', { userId });
+    } catch (error) {
+      loggers.auth.error('Failed to revoke session on logout', {
+        error: error instanceof Error ? error.message : String(error),
+        userId,
+      });
+    }
   }
 
   // SECURITY (M9): logout must also revoke the caller's 90-day device token,
   // otherwise device/refresh can silently re-mint sessions after "logout".
+  // By-value revocation needs no authenticated session; by-device requires the
+  // session-derived userId (so it only fires for the caller's own device).
   // A failure here must never break logout itself.
   const revocationPlan = planLogoutDeviceRevocation({
     deviceToken: typeof deviceToken === 'string' ? deviceToken : null,
@@ -89,12 +90,12 @@ export async function POST(req: Request) {
     }
   }
 
-  // Only emit audit/track events after a successful revoke
-  if (userId && revokeSucceeded) {
+  // Only emit session audit/track events after a successful session revoke
+  if (userId && sessionRevokeSucceeded) {
     auditRequest(req, {
       eventType: 'auth.logout',
       userId,
-      sessionId: sessionClaims?.sessionId ?? 'unknown',
+      sessionId: sessionId ?? 'unknown',
     });
     auditRequest(req, {
       eventType: 'auth.token.revoked',

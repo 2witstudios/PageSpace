@@ -362,6 +362,28 @@ describe('/api/auth/logout', () => {
       expect(appendClearCookies).toHaveBeenCalledTimes(1);
     });
 
+    it('revokes the device token by value even when the session cookie is missing/expired', async () => {
+      // SECURITY (M9): an expired session must not block revoking the still-valid
+      // long-lived device token — by-value revocation needs no active session.
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceToken: 'ps_dev_orphaned_token' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+      // Device token revoked by value despite no session…
+      expect(revokeDeviceTokenByValue).toHaveBeenCalledWith('ps_dev_orphaned_token', 'logout');
+      // …and no session revoke attempted (there was none).
+      expect(sessionService.revokeSession).not.toHaveBeenCalled();
+    });
+
     it('does not attempt device revocation when there is no valid session/user', async () => {
       vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
