@@ -34,6 +34,7 @@ vi.mock('@/services/api/restore-backup-service', () => ({
 }));
 vi.mock('@pagespace/lib/monitoring/change-group', () => ({
   createChangeGroupId: vi.fn().mockReturnValue('cg-1'),
+  inferChangeGroupType: vi.fn().mockReturnValue('user'),
 }));
 
 import { POST } from '../route';
