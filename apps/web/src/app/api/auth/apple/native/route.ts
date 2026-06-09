@@ -18,7 +18,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { resolveOAuthMatch } from '@pagespace/lib/auth/oauth-account-match';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 import {
   consumeAllInvitesForEmail,
@@ -113,11 +113,10 @@ export async function POST(req: Request) {
     // Resolve the account match through the shared, security-critical decision.
     // SECURITY (M5): match an EXISTING account by raw email only when Apple
     // asserts the email is verified; the subject id (appleId) may always match.
-    const subMatch = await authRepository.findUserByAppleId(appleId);
-    const emailMatch = await authRepository.findUserByEmail(email);
-    const matchDecision = resolveOAuthMatch({
-      providerSubMatch: !!subMatch,
-      emailMatch: !!emailMatch,
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'apple',
+      providerId: appleId,
+      email,
       emailVerified: emailVerified === true,
     });
 
@@ -140,12 +139,7 @@ export async function POST(req: Request) {
     }
 
     // Find or create user
-    let user =
-      matchDecision === 'use-sub'
-        ? subMatch
-        : matchDecision === 'use-email'
-          ? emailMatch
-          : null;
+    let user = matchedUser;
 
     let isNewUser = false;
     if (user) {
