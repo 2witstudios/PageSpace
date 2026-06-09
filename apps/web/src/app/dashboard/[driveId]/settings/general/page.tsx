@@ -21,6 +21,18 @@ interface DriveMember {
   profile?: { username?: string; avatar?: string | null };
 }
 
+interface MembersResponse {
+  members: DriveMember[];
+}
+
+interface AgentMembersResponse {
+  agentMembers: { id: string }[];
+}
+
+interface AppMembersResponse {
+  appMembers: { id: string }[];
+}
+
 const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
 
 export default function GeneralSettingsPage() {
@@ -45,15 +57,15 @@ export default function GeneralSettingsPage() {
     if (drive) setName(drive.name);
   }, [drive]);
 
-  const { data: members } = useSWR<DriveMember[]>(
+  const { data: membersData } = useSWR<MembersResponse>(
     drive ? `/api/drives/${driveId}/members` : null,
     fetcher
   );
-  const { data: agentMembers } = useSWR<{ id: string }[]>(
+  const { data: agentMembersData } = useSWR<AgentMembersResponse>(
     drive ? `/api/drives/${driveId}/agents/members` : null,
     fetcher
   );
-  const { data: appMembers } = useSWR<{ id: string }[]>(
+  const { data: appMembersData } = useSWR<AppMembersResponse>(
     drive ? `/api/drives/${driveId}/apps/members` : null,
     fetcher
   );
@@ -101,10 +113,10 @@ export default function GeneralSettingsPage() {
     );
   }
 
-  const humanCount = members?.length ?? 0;
-  const agentCount = agentMembers?.length ?? 0;
-  const appCount = appMembers?.length ?? 0;
-  const topAvatars = (members ?? []).slice(0, 5);
+  const humanCount = membersData?.members?.length ?? 0;
+  const agentCount = agentMembersData?.agentMembers?.length ?? 0;
+  const appCount = appMembersData?.appMembers?.length ?? 0;
+  const topAvatars = (membersData?.members ?? []).slice(0, 5);
 
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">

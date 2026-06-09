@@ -28,7 +28,7 @@ type SerializedBackup = {
   failedAt: string | null;
 };
 
-type BackupListResponse = { backups: SerializedBackup[]; total?: number };
+type BackupListResponse = { backups: SerializedBackup[] };
 
 type CreateBackupResult = {
   backupId: string;
@@ -62,6 +62,7 @@ export default function DriveBackupsPage() {
   const [accumulatedBackups, setAccumulatedBackups] = useState<SerializedBackup[]>([]);
   const [offset, setOffset] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
 
   useEffect(() => {
     fetchDrives();
@@ -83,6 +84,7 @@ export default function DriveBackupsPage() {
     if (data) {
       setAccumulatedBackups(data.backups);
       setOffset(data.backups.length);
+      setHasMore(data.backups.length === PAGE_SIZE);
     }
   }, [data]);
 
@@ -97,6 +99,7 @@ export default function DriveBackupsPage() {
       const result = (await r.json()) as BackupListResponse;
       setAccumulatedBackups((prev) => [...prev, ...result.backups]);
       setOffset((prev) => prev + result.backups.length);
+      setHasMore(result.backups.length === PAGE_SIZE);
     } catch {
       toast.error('Failed to load more backups');
     } finally {
@@ -153,9 +156,6 @@ export default function DriveBackupsPage() {
       </div>
     );
   }
-
-  const total = data?.total ?? accumulatedBackups.length;
-  const hasMore = accumulatedBackups.length < total;
 
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
@@ -265,10 +265,10 @@ export default function DriveBackupsPage() {
                     )}
                     {backup.status === 'ready' && (
                       <a
-                        href={`/settings/backups?driveId=${driveId}`}
+                        href="/settings/backups"
                         className="text-xs text-primary hover:underline"
                       >
-                        Restore…
+                        Restore from Settings
                       </a>
                     )}
                   </div>
@@ -281,10 +281,7 @@ export default function DriveBackupsPage() {
                 </div>
               ))}
               {hasMore && (
-                <div className="flex items-center justify-between pt-3">
-                  <span className="text-xs text-muted-foreground">
-                    Showing {accumulatedBackups.length} of {total}
-                  </span>
+                <div className="flex justify-end pt-3">
                   <Button
                     variant="ghost"
                     size="sm"
