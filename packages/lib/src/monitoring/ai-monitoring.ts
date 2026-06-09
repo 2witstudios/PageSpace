@@ -127,6 +127,9 @@ export const AI_PRICING = {
   'glm-5-turbo': { input: 1.20, output: 4.00 },
   'glm-4.7':     { input: 0.39, output: 1.90 },
   'glm-4.5-air': { input: 0.35, output: 1.55 },
+  // Legacy fallback: historical ai_usage rows recorded under 'glm-5' before the
+  // OpenRouter migration; must stay priced so old rows don't zero-cost.
+  'glm-5':       { input: 1.00, output: 3.20 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
   'z-ai/glm-5.1': { input: 0.98, output: 3.08 },
@@ -413,6 +416,7 @@ export const MODEL_CONTEXT_WINDOWS = {
   'glm-5-turbo': 202752,
   'glm-4.7':     200000,
   'glm-4.5-air': 128000,
+  'glm-5':       202752, // legacy fallback for historical billing rows
 
   // OpenRouter Models - Chinese/Asian
   'z-ai/glm-5.1': 202752,
