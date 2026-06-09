@@ -209,7 +209,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
   });
 
   describe('parallel db queries', () => {
-    it('calls db.select three times (isDriveOwnerOrAdmin + tier + schedule) via Promise.all', async () => {
+    it('fires isDriveOwnerOrAdmin + tier query + schedule query via Promise.all', async () => {
       await GET(req(), ctx(DRIVE_ID));
       // isDriveOwnerOrAdmin is mocked separately; db.select covers tier + schedule
       expect(db.select).toHaveBeenCalledTimes(2);
