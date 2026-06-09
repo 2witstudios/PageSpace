@@ -64,7 +64,7 @@ export function ConnectIntegrationDialog({
         providerId: provider.id,
         name: connectionName,
         returnUrl: scope === 'drive' && driveId
-          ? `/dashboard/${driveId}/settings`
+          ? `/dashboard/${driveId}/settings/integrations`
           : '/settings/integrations',
       };
 
