@@ -23,8 +23,15 @@ export const ALLOWED_MCP_COMMANDS: readonly string[] = [
   'uvx',
 ];
 
-/** Characters that would let a value break out into a shell. */
-const SHELL_METACHARACTERS = /[;&|`$(){}<>\n\r]/;
+/**
+ * Control characters never belong in an executable path. The server is spawned
+ * WITHOUT a shell (`spawn(command, args)` in mcp-manager), so ordinary shell
+ * metacharacters are passed literally and are not a shell-injection vector —
+ * and rejecting them would break legitimate paths like
+ * `C:\Program Files (x86)\nodejs\node.exe`. The basename allowlist below is the
+ * real control; this check only rejects control characters.
+ */
+const CONTROL_CHARACTERS = /[\u0000-\u001f]/;
 
 export interface McpServerConfigValidation {
   ok: boolean;
@@ -39,7 +46,7 @@ function commandBasename(command: string): string {
 
 /**
  * PURE. Validate a single MCP server config's launcher. Rejects empty/non-string
- * commands, shell metacharacters, and any command whose basename is not an
+ * commands, control characters, and any command whose basename is not an
  * allowed runtime. Args, when present, must be an array of strings.
  */
 export function validateMcpServerConfig(cfg: unknown): McpServerConfigValidation {
@@ -51,8 +58,8 @@ export function validateMcpServerConfig(cfg: unknown): McpServerConfigValidation
   if (typeof command !== 'string' || command.trim().length === 0) {
     return { ok: false, reason: 'Command is required' };
   }
-  if (SHELL_METACHARACTERS.test(command)) {
-    return { ok: false, reason: 'Command contains forbidden shell metacharacters' };
+  if (CONTROL_CHARACTERS.test(command)) {
+    return { ok: false, reason: 'Command contains forbidden control characters' };
   }
   if (!ALLOWED_MCP_COMMANDS.includes(commandBasename(command))) {
     return {

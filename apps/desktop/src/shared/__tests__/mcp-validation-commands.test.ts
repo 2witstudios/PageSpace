@@ -20,7 +20,13 @@ describe('validateMcpServerConfig (pure)', () => {
 
   it('accepts an absolute path whose basename is an allowed runtime', () => {
     expect(validateMcpServerConfig({ command: '/usr/local/bin/node', args: [] })).toEqual({ ok: true });
-    expect(validateMcpServerConfig({ command: 'C:\\\\Program Files\\\\nodejs\\\\node.exe', args: [] })).toEqual({ ok: true });
+    expect(validateMcpServerConfig({ command: 'C:\\Program Files\\nodejs\\node.exe', args: [] })).toEqual({ ok: true });
+  });
+
+  it('accepts a Windows path containing parentheses (Program Files (x86))', () => {
+    expect(
+      validateMcpServerConfig({ command: 'C:\\Program Files (x86)\\nodejs\\node.exe', args: [] }),
+    ).toEqual({ ok: true });
   });
 
   it('rejects shell interpreters', () => {
@@ -31,10 +37,18 @@ describe('validateMcpServerConfig (pure)', () => {
     }
   });
 
-  it('rejects commands containing shell metacharacters', () => {
+  it('rejects shell-injection-style commands via the basename allowlist', () => {
+    // No shell is used to spawn, so metacharacters are inert; the basename
+    // simply fails the allowlist (it is not exactly an allowed runtime).
     const result = validateMcpServerConfig({ command: 'node; rm -rf /', args: [] });
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/shell metacharacters/);
+    expect(result.reason).toMatch(/not an allowed MCP runtime/);
+  });
+
+  it('rejects commands containing control characters', () => {
+    const result = validateMcpServerConfig({ command: 'node\n', args: [] });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/control characters/);
   });
 
   it('rejects an empty or non-string command', () => {
