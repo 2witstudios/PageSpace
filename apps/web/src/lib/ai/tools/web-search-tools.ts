@@ -1,5 +1,4 @@
 import { promises as dnsPromises } from 'dns';
-import { Agent } from 'undici';
 import { tool } from 'ai';
 import { z } from 'zod';
 import TurndownService from 'turndown';
@@ -130,25 +129,23 @@ async function performWebSearch({
   }
 }
 
-interface ResolvedAddress {
-  address: string;
-  family: number;
-}
-
 /**
- * Resolves a hostname to all addresses and rejects if ANY is non-public
- * (DNS-rebinding mitigation). IP literals are already validated by
- * {@link isAllowedFetchTarget}, so they skip DNS. Returns the validated
- * addresses so the connection can be pinned to them.
- * Throws on block or DNS failure (fail-closed).
+ * Resolves a hostname and rejects if ANY resolved address is non-public
+ * (DNS-rebinding mitigation), re-running immediately before each connect.
+ * IP literals are already validated by {@link isAllowedFetchTarget}, so they
+ * skip DNS. Throws on block or DNS failure (fail-closed).
+ *
+ * Note: connection-level IP pinning is intentionally omitted — Node's global
+ * `fetch` exposes no per-request `lookup`/dispatcher hook that survives the
+ * Next.js webpack build (a bare `undici` import is not resolvable in this bundle),
+ * so a small validate→connect TOCTOU window remains. Per-hop re-resolution keeps
+ * it narrow and is the standard mitigation.
  */
-async function resolveValidatedAddresses(hostname: string): Promise<ResolvedAddress[]> {
+async function assertResolvesPublic(hostname: string): Promise<void> {
   const bare = hostname.replace(/^\[|\]$/g, '');
-  if (isIpLiteral(bare)) {
-    return [{ address: bare, family: bare.includes(':') ? 6 : 4 }];
-  }
+  if (isIpLiteral(bare)) return; // already validated as a public IP literal
 
-  let addresses: ResolvedAddress[];
+  let addresses: { address: string }[];
   try {
     addresses = await dnsPromises.lookup(hostname, { all: true });
   } catch {
@@ -158,95 +155,37 @@ async function resolveValidatedAddresses(hostname: string): Promise<ResolvedAddr
   for (const { address } of addresses) {
     if (!isPublicIp(address)) throw new Error(PRIVATE_HOST_MESSAGE);
   }
-  return addresses;
-}
-
-/**
- * Builds an undici dispatcher that pins outbound connections to the already
- * validated addresses, closing the TOCTOU window between DNS validation and
- * connect (a public hostname cannot re-resolve to a private IP at connect time).
- * The TLS servername stays the original hostname, preserving SNI/cert checks.
- * Returns undefined if a dispatcher cannot be constructed (revalidation still
- * applies on every hop).
- */
-function createPinnedDispatcher(addresses: ResolvedAddress[]): Agent | undefined {
-  if (!addresses.length) return undefined;
-  try {
-    return new Agent({
-      connect: {
-        lookup: (_hostname, options, callback) => {
-          if (options && options.all) {
-            callback(null, addresses.map((a) => ({ address: a.address, family: a.family })));
-          } else {
-            callback(null, addresses[0].address, addresses[0].family);
-          }
-        },
-      },
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-async function closeDispatcher(dispatcher: Agent | undefined): Promise<void> {
-  try {
-    await dispatcher?.close();
-  } catch {
-    /* best-effort cleanup */
-  }
-}
-
-type PinnedFetchInit = RequestInit & { dispatcher?: Agent };
-
-interface SafeFetchResult {
-  response: Response;
-  dispatcher: Agent | undefined;
 }
 
 /**
  * SSRF-safe fetch: follows redirects MANUALLY (redirect: 'manual'), revalidating
- * scheme + host and re-resolving + pinning DNS on EVERY hop. This closes the M2
- * bypass where an allowed initial URL 302s to cloud-metadata/internal hosts.
- * A single shared `signal` bounds total time across all hops (and the caller's
- * body read), so a redirect chain cannot extend the deadline. The caller owns
- * the returned dispatcher and must close it after reading the body.
+ * scheme + host and re-resolving DNS on EVERY hop. This closes the M2 bypass
+ * where an allowed initial URL 302s to cloud-metadata/internal hosts. A single
+ * shared `signal` bounds total time across all hops (and the caller's body read),
+ * so a redirect chain cannot extend the deadline.
  */
 async function ssrfSafeFetch(
   initialUrl: string,
   headers: Record<string, string>,
   signal: AbortSignal,
-): Promise<SafeFetchResult> {
+): Promise<Response> {
   let currentUrl = initialUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const decision = isAllowedFetchTarget(currentUrl);
     if (!decision.ok) throw new Error(decision.reason ?? PRIVATE_HOST_MESSAGE);
 
-    const addresses = await resolveValidatedAddresses(new URL(currentUrl).hostname);
-    const dispatcher = createPinnedDispatcher(addresses);
+    await assertResolvesPublic(new URL(currentUrl).hostname);
 
-    const init: PinnedFetchInit = { headers, redirect: 'manual', signal };
-    if (dispatcher) init.dispatcher = dispatcher;
-
-    let response: Response;
-    try {
-      response = await fetch(currentUrl, init);
-    } catch (err) {
-      // fetch rejected (timeout/TLS/connection reset): this hop's dispatcher is
-      // still local and would leak — the caller only owns the dispatcher we
-      // return on success. Close it here before propagating.
-      await closeDispatcher(dispatcher);
-      throw err;
-    }
+    const response = await fetch(currentUrl, { headers, redirect: 'manual', signal });
 
     if (!REDIRECT_STATUSES.has(response.status)) {
-      return { response, dispatcher };
+      return response;
     }
 
-    // Redirect: discard this hop's body + dispatcher, validate the next target.
+    // Redirect: discard this hop's body, then validate the next target.
     const location = response.headers.get('location');
     await response.body?.cancel().catch(() => { /* ignore */ });
-    await closeDispatcher(dispatcher);
 
     if (!location) throw new Error('Redirect response missing Location header');
     let next: URL;
@@ -378,16 +317,13 @@ Returns the page content converted to readable markdown.`,
         };
       }
 
-      let dispatcher: Agent | undefined;
       try {
         webSearchLogger.debug('Fetching URL', { userId: maskIdentifier(userId), url: redactUrl(url) });
 
-        // Follows redirects manually, revalidating + IP-pinning each hop (SSRF-safe).
+        // Follows redirects manually, revalidating scheme/host + re-resolving DNS each hop (SSRF-safe).
         // One shared deadline bounds the whole operation, including the body read below.
         const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-        const safe = await ssrfSafeFetch(url, { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' }, signal);
-        const response = safe.response;
-        dispatcher = safe.dispatcher;
+        const response = await ssrfSafeFetch(url, { 'User-Agent': 'Mozilla/5.0 (compatible; PageSpace/1.0)' }, signal);
 
         if (!response.ok) {
           throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
@@ -480,8 +416,6 @@ Returns the page content converted to readable markdown.`,
             'Try web_search to find an alternative source',
           ],
         };
-      } finally {
-        await closeDispatcher(dispatcher);
       }
     },
   }),
