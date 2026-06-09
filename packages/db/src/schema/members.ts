@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, boolean, pgEnum, index, unique, uniqueIndex, integer, jsonb } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { users, mcpTokens } from './auth';
 import { drives, pages } from './core';
 import { createId } from '@paralleldrive/cuid2';
@@ -18,6 +18,9 @@ export const driveRoles = pgTable('drive_roles', {
   permissions: jsonb('permissions').notNull().$type<
     Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>
   >(),
+  driveWidePermissions: jsonb('drive_wide_permissions')
+    .$type<{ canView: boolean; canEdit: boolean; canShare: boolean } | null>()
+    .default(sql`NULL`),
   position: integer('position').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

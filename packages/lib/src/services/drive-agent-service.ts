@@ -282,7 +282,10 @@ async function memberGrantWithinCap(
   // An unresolvable custom role resolves as plain MEMBER (drive-wide), which is
   // not a provable subset of a scoped cap ⇒ fail closed.
   if (!agentPerms || !capPerms) return false;
-  return customRoleSubset(agentPerms, capPerms);
+  // A role with driveWidePermissions spans all non-private pages — not expressible
+  // as a per-page matrix — so fail closed (same rationale as plain MEMBER above).
+  if (agentPerms.driveWidePermissions || capPerms.driveWidePermissions) return false;
+  return customRoleSubset(agentPerms.permissions, capPerms.permissions);
 }
 
 /**

@@ -1,6 +1,6 @@
 {
-  "id": "abd69052-9bd6-4086-9e55-d9d88d27c5be",
-  "prevId": "5eebc136-5433-4cee-9e55-ae647397ca98",
+  "id": "5a36574c-5ffb-4c1c-89e7-4a3f90bc19c8",
+  "prevId": "caca7000-1da2-4d06-b589-1a85e56db9c5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7687,6 +7687,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "drive_wide_permissions": {
+          "name": "drive_wide_permissions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "NULL"
+        },
         "position": {
           "name": "position",
           "type": "real",
@@ -7736,6 +7743,120 @@
         }
       },
       "uniqueConstraints": {}
+    },
+    "public.drive_backup_schedules": {
+      "name": "drive_backup_schedules",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "frequency": {
+          "name": "frequency",
+          "type": "drive_backup_schedule_frequency",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'daily'"
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'UTC'"
+        },
+        "nextRunAt": {
+          "name": "nextRunAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastRunAt": {
+          "name": "lastRunAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "drive_backup_schedules_enabled_next_run_idx": {
+          "name": "drive_backup_schedules_enabled_next_run_idx",
+          "columns": [
+            {
+              "expression": "enabled",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "nextRunAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "drive_backup_schedules_driveId_drives_id_fk": {
+          "name": "drive_backup_schedules_driveId_drives_id_fk",
+          "tableFrom": "drive_backup_schedules",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "drive_backup_schedules_driveId_unique": {
+          "name": "drive_backup_schedules_driveId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "driveId"
+          ]
+        }
+      }
     },
     "public.drive_backups": {
       "name": "drive_backups",
@@ -16310,6 +16431,15 @@
         "warn",
         "error",
         "fatal"
+      ]
+    },
+    "public.drive_backup_schedule_frequency": {
+      "name": "drive_backup_schedule_frequency",
+      "schema": "public",
+      "values": [
+        "daily",
+        "weekly",
+        "monthly"
       ]
     },
     "public.drive_backup_source": {

@@ -1,6 +1,6 @@
 {
-  "id": "abd69052-9bd6-4086-9e55-d9d88d27c5be",
-  "prevId": "5eebc136-5433-4cee-9e55-ae647397ca98",
+  "id": "caca7000-1da2-4d06-b589-1a85e56db9c5",
+  "prevId": "abd69052-9bd6-4086-9e55-d9d88d27c5be",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7686,6 +7686,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "drive_wide_permissions": {
+          "name": "drive_wide_permissions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "NULL"
         },
         "position": {
           "name": "position",

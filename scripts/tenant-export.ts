@@ -62,7 +62,7 @@ const DRIVE_COLUMNS = [
 
 const DRIVE_ROLE_COLUMNS = [
   'id', 'driveId', 'name', 'description', 'color', 'isDefault',
-  'permissions', 'position', 'createdAt', 'updatedAt',
+  'permissions', 'drive_wide_permissions', 'position', 'createdAt', 'updatedAt',
 ];
 
 const DRIVE_MEMBER_COLUMNS = [

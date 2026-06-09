@@ -9,6 +9,10 @@ import { db } from '@pagespace/db/db';
 import { eq, and, asc } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
+import type { PagePerm } from '../permissions/membership-queries';
+
+// Re-export canonical type so callers can import from one place
+export type { PagePerm };
 
 // ============================================================================
 // Types
@@ -22,6 +26,7 @@ export interface DriveRole {
   color: string | null;
   isDefault: boolean;
   permissions: RolePermissions;
+  driveWidePermissions: PagePerm | null;
   position: number;
   createdAt: Date;
   updatedAt: Date;
@@ -35,6 +40,7 @@ export interface CreateRoleInput {
   color?: string | null;
   isDefault?: boolean;
   permissions: RolePermissions;
+  driveWidePermissions?: PagePerm | null;
 }
 
 export interface UpdateRoleInput {
@@ -43,6 +49,7 @@ export interface UpdateRoleInput {
   color?: string | null;
   isDefault?: boolean;
   permissions?: RolePermissions;
+  driveWidePermissions?: PagePerm | null;
 }
 
 export interface DriveRoleAccessInfo {
@@ -171,6 +178,10 @@ export async function createDriveRole(
   driveId: string,
   input: CreateRoleInput
 ): Promise<DriveRole> {
+  if (!validateDriveWidePermissions(input.driveWidePermissions)) {
+    throw new Error('Invalid driveWidePermissions structure');
+  }
+
   // Get the highest position to add new role at the end
   const existingRoles = await db.query.driveRoles.findMany({
     where: eq(driveRoles.driveId, driveId),
@@ -195,6 +206,7 @@ export async function createDriveRole(
     color: input.color,
     isDefault: input.isDefault || false,
     permissions: input.permissions,
+    driveWidePermissions: input.driveWidePermissions ?? null,
     position: maxPosition,
     updatedAt: new Date(),
   }).returning();
@@ -210,6 +222,10 @@ export async function updateDriveRole(
   roleId: string,
   input: UpdateRoleInput
 ): Promise<{ role: DriveRole; wasDefault: boolean }> {
+  if (input.driveWidePermissions !== undefined && !validateDriveWidePermissions(input.driveWidePermissions)) {
+    throw new Error('Invalid driveWidePermissions structure');
+  }
+
   // Get existing role
   const existingRole = await db.query.driveRoles.findFirst({
     where: and(
@@ -236,6 +252,7 @@ export async function updateDriveRole(
       ...(input.color !== undefined && { color: input.color }),
       ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
       ...(input.permissions !== undefined && { permissions: input.permissions }),
+      ...(input.driveWidePermissions !== undefined && { driveWidePermissions: input.driveWidePermissions }),
       updatedAt: new Date(),
     })
     .where(and(
@@ -307,6 +324,21 @@ export async function reorderDriveRoles(
         ));
     }
   });
+}
+
+/**
+ * Validate driveWidePermissions structure (null = clear, object = set)
+ */
+export function validateDriveWidePermissions(perms: unknown): perms is PagePerm | null {
+  if (perms === null || perms === undefined) return true;
+  if (typeof perms !== 'object' || Array.isArray(perms)) return false;
+  const p = perms as Record<string, unknown>;
+  return (
+    typeof p.canView === 'boolean' &&
+    typeof p.canEdit === 'boolean' &&
+    typeof p.canShare === 'boolean' &&
+    Object.keys(p).every(k => ['canView', 'canEdit', 'canShare'].includes(k))
+  );
 }
 
 /**

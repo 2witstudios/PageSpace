@@ -353,6 +353,7 @@ export async function createDriveBackup(
           color: role.color,
           isDefault: role.isDefault,
           permissions: role.permissions,
+          driveWidePermissions: role.driveWidePermissions,
           position: role.position,
         }))
       );

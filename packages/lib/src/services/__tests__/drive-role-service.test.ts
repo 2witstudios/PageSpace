@@ -57,6 +57,7 @@ import {
   deleteDriveRole,
   reorderDriveRoles,
   validateRolePermissions,
+  validateDriveWidePermissions,
 } from '../drive-role-service';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -226,6 +227,23 @@ describe('drive-role-service', () => {
       const result = await createDriveRole('drive-1', { name: 'Default', isDefault: true, permissions: {} });
       expect(result.isDefault).toBe(true);
     });
+
+    it('should throw when driveWidePermissions is malformed', async () => {
+      await expect(
+        createDriveRole('drive-1', { name: 'X', permissions: {}, driveWidePermissions: { invalid: true } as never })
+      ).rejects.toThrow('Invalid driveWidePermissions structure');
+    });
+
+    it('should accept null driveWidePermissions', async () => {
+      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([]);
+      mockDb.insert.mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: 'r1', driveWidePermissions: null }]),
+        }),
+      });
+      const result = await createDriveRole('drive-1', { name: 'X', permissions: {}, driveWidePermissions: null });
+      expect(result.driveWidePermissions).toBeNull();
+    });
   });
 
   describe('updateDriveRole', () => {
@@ -268,6 +286,12 @@ describe('drive-role-service', () => {
 
       const result = await updateDriveRole('drive-1', 'r1', { isDefault: true });
       expect(result.role.isDefault).toBe(true);
+    });
+
+    it('should throw when driveWidePermissions is malformed', async () => {
+      await expect(
+        updateDriveRole('drive-1', 'r1', { driveWidePermissions: { bad: 'field' } as never })
+      ).rejects.toThrow('Invalid driveWidePermissions structure');
     });
   });
 
@@ -322,5 +346,20 @@ describe('drive-role-service', () => {
     it('should return true for valid permissions', () =>
       expect(validateRolePermissions({ p: { canView: true, canEdit: false, canShare: false } })).toBe(true));
     it('should return true for empty object', () => expect(validateRolePermissions({})).toBe(true));
+  });
+
+  describe('validateDriveWidePermissions', () => {
+    it('should return true for null', () => expect(validateDriveWidePermissions(null)).toBe(true));
+    it('should return true for undefined', () => expect(validateDriveWidePermissions(undefined)).toBe(true));
+    it('should return true for valid object', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false, canShare: false })).toBe(true));
+    it('should return false for array', () => expect(validateDriveWidePermissions([])).toBe(false));
+    it('should return false for string', () => expect(validateDriveWidePermissions('yes')).toBe(false));
+    it('should return false for missing key', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false })).toBe(false));
+    it('should return false for non-boolean value', () =>
+      expect(validateDriveWidePermissions({ canView: 1, canEdit: false, canShare: false })).toBe(false));
+    it('should return false for object with extra keys', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false, canShare: false, canDelete: true })).toBe(false));
   });
 });
