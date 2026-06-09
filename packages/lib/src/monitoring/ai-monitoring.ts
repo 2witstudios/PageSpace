@@ -122,19 +122,11 @@ export const AI_PRICING = {
   'mistralai/devstral-medium': { input: 0.40, output: 2.00 },
   'mistralai/devstral-small': { input: 0.10, output: 0.30 },
 
-  // Z.ai GLM direct (source: z.ai pricing; native model IDs used by GLM Coder Plan direct API)
-  'glm-5.1':       { input: 0.98, output: 3.08 },
-  'glm-5v-turbo':  { input: 1.20, output: 4.00 },
-  'glm-5-turbo':   { input: 1.20, output: 4.00 },
-  'glm-5':         { input: 0.80, output: 2.56 },
-  'glm-4.7':       { input: 0.39, output: 1.90 },
-  'glm-4.7-flash': { input: 0.06, output: 0.40 },
-  'glm-4.6v':      { input: 0.30, output: 0.90 },
-  'glm-4.6':       { input: 0.43, output: 1.74 },
-  'glm-4.5v':      { input: 0.48, output: 1.44 },
-  'glm-4.5':       { input: 0.48, output: 1.44 },
-  'glm-4.5-air':   { input: 0.35, output: 1.55 },
-  'glm-4-32b':     { input: 0.35, output: 1.55 },
+  // Z.ai GLM direct — GLM Coder Plan supported models only (source: z.ai/guides/overview/pricing)
+  'glm-5.1':     { input: 1.40, output: 4.40 },
+  'glm-5-turbo': { input: 1.20, output: 4.00 },
+  'glm-4.7':     { input: 0.39, output: 1.90 },
+  'glm-4.5-air': { input: 0.35, output: 1.55 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
   'z-ai/glm-5.1': { input: 0.98, output: 3.08 },
@@ -416,19 +408,11 @@ export const MODEL_CONTEXT_WINDOWS = {
   'mistralai/devstral-medium': 128000,
   'mistralai/devstral-small': 128000,
 
-  // Z.ai GLM direct (native model IDs)
-  'glm-5.1':       202752,
-  'glm-5v-turbo':  202752,
-  'glm-5-turbo':   202752,
-  'glm-5':         202752,
-  'glm-4.7':       200000,
-  'glm-4.7-flash': 202752,
-  'glm-4.6v':      131072,
-  'glm-4.6':       202752,
-  'glm-4.5v':      128000,
-  'glm-4.5':       128000,
-  'glm-4.5-air':   128000,
-  'glm-4-32b':     128000,
+  // Z.ai GLM direct — GLM Coder Plan supported models only
+  'glm-5.1':     202752,
+  'glm-5-turbo': 202752,
+  'glm-4.7':     200000,
+  'glm-4.5-air': 128000,
 
   // OpenRouter Models - Chinese/Asian
   'z-ai/glm-5.1': 202752,

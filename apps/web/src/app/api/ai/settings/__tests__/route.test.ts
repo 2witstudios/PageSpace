@@ -416,7 +416,7 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'glm',
-        model: 'glm-4.6',
+        model: 'glm-4.5-air',
       }));
       const body = await response.json();
 
@@ -432,13 +432,13 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'glm',
-        model: 'glm-4.6',
+        model: 'glm-4.5-air',
       }));
 
       expect(response.status).toBe(200);
       expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
         provider: 'glm',
-        model: 'glm-4.6',
+        model: 'glm-4.5-air',
       });
     });
   });
