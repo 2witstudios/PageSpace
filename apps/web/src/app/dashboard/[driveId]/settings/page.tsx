@@ -1,16 +1,18 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2 } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
-import { RolesManager } from '@/components/settings/RolesManager';
-import { DriveAISettings } from '@/components/settings/DriveAISettings';
-import { DriveDeleteSection } from '@/components/settings/DriveDeleteSection';
-import { DriveIntegrations } from '@/components/settings/DriveIntegrations';
-import { IntegrationAuditLog } from '@/components/settings/IntegrationAuditLog';
+import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
+
+interface SettingsSection {
+  title: string;
+  items: SettingsItem[];
+}
 
 export default function DriveSettingsPage() {
   const params = useParams();
@@ -24,17 +26,15 @@ export default function DriveSettingsPage() {
     fetchDrives();
   }, [fetchDrives]);
 
-  const drive = drives.find(d => d.id === driveId);
+  const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
 
   if (isLoading) {
     return (
-      <div className="h-full overflow-auto">
-        <div className="max-w-6xl mx-auto p-6">
-          <Skeleton className="h-8 w-48 mb-2" />
-          <Skeleton className="h-4 w-64 mb-6" />
-          <Skeleton className="h-96 w-full" />
-        </div>
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
+        <Skeleton className="h-8 w-48 mb-2" />
+        <Skeleton className="h-4 w-64 mb-8" />
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
@@ -66,39 +66,106 @@ export default function DriveSettingsPage() {
     );
   }
 
+  const settingsSections: SettingsSection[] = [
+    {
+      title: 'Drive',
+      items: [
+        {
+          title: 'General',
+          description: 'Drive name and member overview',
+          icon: Shield,
+          href: `/dashboard/${driveId}/settings/general`,
+          available: true,
+        },
+        {
+          title: 'Roles',
+          description: 'Custom roles and permissions',
+          icon: Users,
+          href: `/dashboard/${driveId}/settings/roles`,
+          available: true,
+        },
+        {
+          title: 'Context',
+          description: 'Workspace memory for AI',
+          icon: Brain,
+          href: `/dashboard/${driveId}/settings/context`,
+          available: true,
+        },
+      ],
+    },
+    {
+      title: 'Connections',
+      items: [
+        {
+          title: 'Integrations',
+          description: 'External services and API connections',
+          icon: Cable,
+          href: `/dashboard/${driveId}/settings/integrations`,
+          available: true,
+        },
+      ],
+    },
+    {
+      title: 'Data',
+      items: [
+        {
+          title: 'Backups',
+          description: 'Snapshots of pages, members, and roles',
+          icon: HardDrive,
+          href: `/dashboard/${driveId}/settings/backups`,
+          available: true,
+        },
+      ],
+    },
+    ...(drive.isOwned
+      ? [
+          {
+            title: 'Administration',
+            items: [
+              {
+                title: 'Danger Zone',
+                description: 'Delete or transfer this drive',
+                icon: Trash2,
+                href: `/dashboard/${driveId}/settings/danger`,
+                available: true,
+              },
+            ],
+          },
+        ]
+      : []),
+  ];
+
   return (
-    <div className="h-full overflow-auto">
-      <div className="max-w-6xl mx-auto p-6">
-        {/* Header */}
-        <div className="mb-6">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(`/dashboard/${driveId}/members`)}
-            className="mb-4"
-          >
-            <ChevronLeft className="w-4 h-4 mr-1" />
-            Back to Members
-          </Button>
+    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
+      <div className="mb-8">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(`/dashboard/${driveId}/members`)}
+          className="mb-4"
+        >
+          <ChevronLeft className="h-4 w-4 mr-1" />
+          Back to Members
+        </Button>
+        <h1 className="text-3xl font-bold mb-2">Drive Settings</h1>
+        <p className="text-muted-foreground">Configure settings for {drive.name}</p>
+      </div>
 
-          <h1 className="text-2xl font-bold">Drive Settings</h1>
-          <p className="text-muted-foreground mt-1">
-            Configure settings for {drive.name}
-          </p>
-        </div>
-
-        {/* Settings Cards */}
-        <div className="space-y-6">
-          <RolesManager driveId={driveId} />
-          <DriveAISettings driveId={driveId} />
-          <DriveIntegrations driveId={driveId} />
-          <IntegrationAuditLog driveId={driveId} />
-
-          {/* Danger Zone - Only show to owners */}
-          {drive.isOwned && (
-            <DriveDeleteSection driveId={driveId} driveName={drive.name} />
-          )}
-        </div>
+      <div className="space-y-8">
+        {settingsSections.map((section) => (
+          <div key={section.title}>
+            <h2 className="text-sm font-medium text-muted-foreground mb-2 px-1">
+              {section.title}
+            </h2>
+            <div className="rounded-lg border bg-card overflow-hidden">
+              {section.items.map((item, index) => (
+                <Link key={item.href} href={item.href}>
+                  <SettingsRow item={item} index={index} />
+                </Link>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
