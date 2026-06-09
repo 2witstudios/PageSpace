@@ -752,11 +752,6 @@
       "import": "./dist/auth/constants.js",
       "require": "./dist/auth/constants.js"
     },
-    "./auth/account-lockout": {
-      "types": "./dist/auth/account-lockout.d.ts",
-      "import": "./dist/auth/account-lockout.js",
-      "require": "./dist/auth/account-lockout.js"
-    },
     "./auth/csrf-utils": {
       "types": "./dist/auth/csrf-utils.d.ts",
       "import": "./dist/auth/csrf-utils.js",
@@ -1327,9 +1322,6 @@
       ],
       "auth/constants": [
         "./dist/auth/constants.d.ts"
-      ],
-      "auth/account-lockout": [
-        "./dist/auth/account-lockout.d.ts"
       ],
       "auth/csrf-utils": [
         "./dist/auth/csrf-utils.d.ts"
