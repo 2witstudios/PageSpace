@@ -180,3 +180,59 @@ export function filterToSubtree<T extends { id: string; parentId: string | null 
 
   return nodes.filter(n => descendantIds.has(n.id));
 }
+
+/**
+ * Filter a flat list of tree nodes down to those an actor may access.
+ *
+ * Security policy (ancestor-gated): a node is kept ONLY IF it is itself present
+ * in `accessiblePageIds` AND every one of its ancestors that is present in
+ * `nodes` is also accessible. Dropping an inaccessible node therefore also drops
+ * its now-orphaned descendant subtree, even when those descendants are
+ * individually in the accessible set.
+ *
+ * This deliberately avoids re-parenting an accessible descendant of an
+ * inaccessible node to a fabricated root: doing so would alter the true
+ * parent/child shape and could imply structure about (or the existence of) the
+ * inaccessible ancestor. The result is always a sub-forest of the input, so
+ * feeding it to `buildTree` reproduces the original shape minus the dropped
+ * branches.
+ *
+ * Boundary handling matches `buildTree`: a node whose `parentId` is null, or
+ * whose parent is absent from `nodes`, is treated as a root — only its own
+ * accessibility is required at that point. A `parentId` cycle (which has no real
+ * root) fails closed and drops the cycle's members.
+ */
+export function filterTreeNodesByAccess<T extends { id: string; parentId: string | null }>(
+  nodes: T[],
+  accessiblePageIds: ReadonlySet<string>
+): T[] {
+  const byId = new Map<string, T>();
+  for (const node of nodes) {
+    byId.set(node.id, node);
+  }
+
+  function isVisible(start: T): boolean {
+    const seen = new Set<string>();
+    let current: T | undefined = start;
+
+    while (current) {
+      // A parentId cycle never reaches a real root — fail closed.
+      if (seen.has(current.id)) return false;
+      seen.add(current.id);
+
+      if (!accessiblePageIds.has(current.id)) return false;
+
+      // Null parent => this node is a root: every node on the chain so far was
+      // accessible, so the node is visible.
+      if (current.parentId === null) return true;
+
+      // Parent absent from the list => root boundary (matches buildTree); the
+      // node is visible because all present ancestors checked were accessible.
+      current = byId.get(current.parentId);
+    }
+
+    return true;
+  }
+
+  return nodes.filter(isVisible);
+}
