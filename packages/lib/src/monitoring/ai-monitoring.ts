@@ -302,13 +302,6 @@ export const AI_PRICING = {
   'MiniMax-M2': { input: 0.30, output: 1.20 },
   'MiniMax-M2-Stable': { input: 0.30, output: 1.20 },
 
-  // Retired GLM model ids — legacy billing fallback only (no longer in the catalog;
-  // kept so historical ai_usage rows recorded under these bare ids still cost correctly).
-  'glm-5': { input: 1.00, output: 3.20 },
-  'glm-4.7': { input: 0.39, output: 1.90 },
-  'glm-4.6': { input: 0.39, output: 1.90 },
-  'glm-4.5-air': { input: 0.35, output: 1.55 },
-
   // MiniMax Direct Models (Native)
   'MiniMax-M2.5': { input: 0.30, output: 1.20 },
 
@@ -601,13 +594,6 @@ export const MODEL_CONTEXT_WINDOWS = {
   'MiniMax-M2.1': 128000,
   'MiniMax-M2': 128000,
   'MiniMax-M2-Stable': 128000,
-
-  // Retired GLM model ids — legacy fallback for historical rows (not in the catalog).
-  'glm-5': 200000,
-  'glm-4.7': 200000,
-  'glm-4.6': 200000,
-  'glm-4.5': 128000,
-  'glm-4.5-air': 128000,
 
   // Ollama (local) - context varies by model and configuration
   'llama3.2': 128000,
