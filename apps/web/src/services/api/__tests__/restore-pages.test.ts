@@ -134,6 +134,7 @@ describe('applyPageRestoreOps', () => {
   const userId = 'user_1';
   const backupId = 'backup_1';
   const changeGroupId = 'cg_1';
+  const changeGroupType = 'user' as const;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -164,7 +165,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [makeOp({ op: 'create', pageId: 'p1', contentRef: 'ref-1' })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     expect(readPageContent).toHaveBeenCalledWith('ref-1');
     expect(createPageVersion).toHaveBeenCalledWith(
@@ -177,7 +178,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [makeOp({ op: 'create', pageId: 'p2', contentRef: null })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     expect(readPageContent).not.toHaveBeenCalled();
     expect(createPageVersion).toHaveBeenCalledWith(
@@ -191,7 +192,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [makeOp({ op: 'overwrite', pageId: 'p3', contentRef: 'ref-3' })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     expect(tx.update).toHaveBeenCalled();
     const setArgs = tx.update.mock.results[0].value.set.mock.calls[0][0] as Record<string, unknown>;
@@ -207,7 +208,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [makeOp({ op: 'create', pageId: 'p1' })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     const insertArgs = tx.insert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
     expect(insertArgs).toHaveProperty('stateHash', 'hash-xyz');
@@ -219,7 +220,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [makeOp({ op: 'create', pageId: 'p1', contentRef: null, isTrashed: true, trashedAt })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     const insertArgs = tx.insert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
     expect(insertArgs.isTrashed).toBe(true);
@@ -230,7 +231,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [{ op: 'soft-delete' as const, pageId: 'p4' }];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     expect(tx.update).toHaveBeenCalled();
     expect(readPageContent).not.toHaveBeenCalled();
@@ -242,7 +243,7 @@ describe('applyPageRestoreOps', () => {
     const ops = [makeOp({ op: 'create', pageId: 'p5', contentRef: 'ref-5' })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, tx as never);
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
 
     expect(createPageVersion).toHaveBeenCalledWith(
       expect.objectContaining({ pageId: 'p5', content: '' }),
