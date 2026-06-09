@@ -210,6 +210,33 @@ export function filterAccessibleActivities<T extends { pageId: string | null }>(
 }
 
 /**
+ * Pure paging-termination decision for the access-filtered fetch loop.
+ *
+ * Because access filtering happens AFTER the DB applies its row cap, the tool
+ * over-fetches and pages the window until it has collected up to `limit`
+ * VISIBLE rows. Stop paging when any of these hold:
+ *  - we already have `limit` visible rows;
+ *  - we've scanned the ceiling that bounds DB work;
+ *  - the previous batch came back smaller than requested (window exhausted —
+ *    a partial or empty batch means there are no more rows to page).
+ *
+ * Pure: depends only on its numeric arguments.
+ */
+export function shouldContinuePaging(args: {
+  collected: number;
+  limit: number;
+  scanned: number;
+  maxScanned: number;
+  lastBatchSize: number;
+  batchSize: number;
+}): boolean {
+  if (args.collected >= args.limit) return false;
+  if (args.scanned >= args.maxScanned) return false;
+  if (args.lastBatchSize < args.batchSize) return false;
+  return true;
+}
+
+/**
  * Shell (impure): resolves the actor's set of viewable page IDs across the
  * pages referenced by `activities`, reusing the same per-page view check the
  * content-diff path already applies.
@@ -217,10 +244,14 @@ export function filterAccessibleActivities<T extends { pageId: string | null }>(
  * `getBatchPagePermissions` excludes trashed pages even for owners/admins, so
  * (as elsewhere in this file) we add an owner/admin override to keep their full
  * visibility into their own drives — including trash/delete activity.
+ *
+ * `adminDriveCache` memoizes the per-drive owner/admin check so paginated calls
+ * don't re-query the same drives on every batch.
  */
 async function buildAccessiblePageIdSet(
   userId: string,
   activities: { pageId: string | null; driveId: string | null }[],
+  adminDriveCache?: Map<string, boolean>,
 ): Promise<Set<string>> {
   const uniquePageIds = [
     ...new Set(activities.map((a) => a.pageId).filter((id): id is string => Boolean(id))),
@@ -249,7 +280,12 @@ async function buildAccessiblePageIdSet(
   ];
 
   for (const driveId of uniqueDriveIds) {
-    if (await isDriveOwnerOrAdmin(userId, driveId)) {
+    let isAdmin = adminDriveCache?.get(driveId);
+    if (isAdmin === undefined) {
+      isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
+      adminDriveCache?.set(driveId, isAdmin);
+    }
+    if (isAdmin) {
       for (const a of activities) {
         if (a.driveId === driveId && a.pageId) {
           accessible.add(a.pageId);
@@ -539,29 +575,66 @@ When summarizing multiple changes, group them thematically and describe the over
           );
         }
 
-        // Fetch activities
-        const activities = await db.query.activityLogs.findMany({
-          where: and(...conditions),
-          with: {
-            user: {
-              columns: { id: true, name: true, email: true },
+        // Fetch a batch of activity rows at a given offset. A composite
+        // (timestamp, id) ordering makes pagination deterministic across ties.
+        const fetchActivityBatch = (offset: number, take: number) =>
+          db.query.activityLogs.findMany({
+            where: and(...conditions),
+            with: {
+              user: {
+                columns: { id: true, name: true, email: true },
+              },
+              drive: {
+                columns: { id: true, name: true, slug: true, drivePrompt: true },
+              },
             },
-            drive: {
-              columns: { id: true, name: true, slug: true, drivePrompt: true },
-            },
-          },
-          orderBy: [desc(activityLogs.timestamp)],
-          limit,
-        });
+            orderBy: [desc(activityLogs.timestamp), desc(activityLogs.id)],
+            limit: take,
+            offset,
+          });
+        type ActivityRow = Awaited<ReturnType<typeof fetchActivityBatch>>[number];
 
         // Security (H2): the drive-level gate above is NOT page-level view
-        // access. Resolve the actor's accessible page set and drop rows for
-        // pages they cannot view BEFORE any title / delta / content diff is
-        // emitted. Everything downstream (actors, drive groups, content diffs,
-        // totals) is derived from this filtered list, so the filter is applied
-        // once here at the source.
-        const accessiblePageIds = await buildAccessiblePageIdSet(userId, activities);
-        const visibleActivities = filterAccessibleActivities(activities, accessiblePageIds);
+        // access. We must drop rows for pages the actor cannot view BEFORE any
+        // title / delta / content diff is emitted.
+        //
+        // The DB applies `limit` before that filter, so inaccessible private-
+        // page rows would otherwise consume the caller's result cap — a drive
+        // with many recent private changes could return an almost-empty feed
+        // even though older viewable activity exists in the window. So page
+        // through the window in batches, applying the access filter, until we
+        // have up to `limit` VISIBLE rows or run out of rows / hit a scan
+        // ceiling that bounds DB work.
+        const FETCH_BATCH = Math.min(200, Math.max(limit, limit * 4));
+        const MAX_SCANNED = 2000;
+        const adminDriveCache = new Map<string, boolean>();
+        const collected: ActivityRow[] = [];
+        let offset = 0;
+        let scanned = 0;
+        let lastBatchSize = FETCH_BATCH; // assume a full batch so the loop is entered
+
+        while (
+          shouldContinuePaging({
+            collected: collected.length,
+            limit,
+            scanned,
+            maxScanned: MAX_SCANNED,
+            lastBatchSize,
+            batchSize: FETCH_BATCH,
+          })
+        ) {
+          const batch = await fetchActivityBatch(offset, FETCH_BATCH);
+          lastBatchSize = batch.length;
+          if (batch.length === 0) break;
+          scanned += batch.length;
+          offset += batch.length;
+
+          const batchAccessible = await buildAccessiblePageIdSet(userId, batch, adminDriveCache);
+          collected.push(...filterAccessibleActivities(batch, batchAccessible));
+        }
+
+        // Honor the caller's requested cap on VISIBLE rows.
+        const visibleActivities = collected.slice(0, limit);
 
         // Build actor index for deduplication (saves tokens by not repeating actor info)
         // Store actor reference directly so count updates are shared

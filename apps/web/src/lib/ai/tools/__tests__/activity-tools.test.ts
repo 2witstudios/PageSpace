@@ -16,7 +16,7 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
     readPageContent: vi.fn(),
 }));
 
-import { activityTools, filterAccessibleActivities } from '../activity-tools';
+import { activityTools, filterAccessibleActivities, shouldContinuePaging } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -192,6 +192,53 @@ describe('activity-tools', () => {
 
     it('returns an empty array for empty input', () => {
       expect(filterAccessibleActivities([], new Set(['p1']))).toEqual([]);
+    });
+  });
+
+  // Access filtering runs AFTER the DB applies its row cap, so the tool
+  // over-fetches and pages the window until it has `limit` VISIBLE rows —
+  // otherwise inaccessible private-page rows would consume the caller's cap
+  // (PR review feedback). This predicate decides when to stop paging.
+  describe('shouldContinuePaging', () => {
+    const base = {
+      collected: 0,
+      limit: 50,
+      scanned: 0,
+      maxScanned: 2000,
+      lastBatchSize: 200,
+      batchSize: 200,
+    };
+
+    it('continues when below limit, under the scan ceiling, and the last batch was full', () => {
+      expect(shouldContinuePaging(base)).toBe(true);
+    });
+
+    it('stops once enough visible rows have been collected', () => {
+      expect(shouldContinuePaging({ ...base, collected: 50 })).toBe(false);
+      expect(shouldContinuePaging({ ...base, collected: 73 })).toBe(false);
+    });
+
+    it('stops when the scan ceiling is reached (bounds DB work)', () => {
+      expect(shouldContinuePaging({ ...base, scanned: 2000 })).toBe(false);
+      expect(shouldContinuePaging({ ...base, scanned: 2400 })).toBe(false);
+    });
+
+    it('stops when the previous batch was smaller than requested — window exhausted', () => {
+      expect(shouldContinuePaging({ ...base, lastBatchSize: 120 })).toBe(false);
+    });
+
+    it('stops when the previous batch was empty', () => {
+      expect(shouldContinuePaging({ ...base, lastBatchSize: 0 })).toBe(false);
+    });
+
+    it('continues when partially filled but the last batch was still full', () => {
+      expect(shouldContinuePaging({ ...base, collected: 30, scanned: 200 })).toBe(true);
+    });
+
+    it('the limit check takes priority even if a full batch was just fetched', () => {
+      expect(
+        shouldContinuePaging({ ...base, collected: 50, lastBatchSize: 200, batchSize: 200 })
+      ).toBe(false);
     });
   });
 });
