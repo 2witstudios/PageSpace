@@ -76,8 +76,12 @@ const authError = (): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
 });
 
+// Supports both .from().where() and .from().innerJoin().where()
 const selectChain = (rows: unknown[]) => ({
-  from: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
+  from: vi.fn(() => ({
+    where: vi.fn().mockResolvedValue(rows),
+    innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })),
+  })),
 });
 
 const insertChain = (row: unknown) => ({

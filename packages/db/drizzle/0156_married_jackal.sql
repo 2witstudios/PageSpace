@@ -40,4 +40,11 @@ DO $$ BEGIN
   );
 EXCEPTION
   WHEN duplicate_object THEN null;
+END $$;--> statement-breakpoint
+DO $$ BEGIN
+  ALTER TABLE "commands" ADD CONSTRAINT "commands_type_chk" CHECK (
+    "type" IN ('document', 'prompt_template', 'builtin')
+  );
+EXCEPTION
+  WHEN duplicate_object THEN null;
 END $$;

@@ -1444,6 +1444,9 @@
       ],
       "compliance/erasure/revoke-integration-tokens": [
         "./dist/compliance/erasure/revoke-integration-tokens.d.ts"
+      ],
+      "commands/command-core": [
+        "./dist/commands/command-core.d.ts"
       ]
     }
   },

@@ -68,6 +68,7 @@ const userCommand = (trigger: string, overrides: Record<string, unknown> = {}) =
   entryPageId: 'page_1',
   type: 'document',
   enabled: true,
+  entryPage: { driveId: 'some_drive', isTrashed: false },
   ...overrides,
 });
 
@@ -80,6 +81,7 @@ const driveCommand = (trigger: string, overrides: Record<string, unknown> = {}) 
   entryPageId: 'page_2',
   type: 'document',
   enabled: true,
+  entryPage: { driveId: 'drive_1', isTrashed: false },
   ...overrides,
 });
 
@@ -184,6 +186,39 @@ describe('GET /api/commands/suggest', () => {
       description: 'User command mine',
       scope: 'user',
     });
+  });
+
+  it('suppresses a drive command whose entry page has moved to another drive', async () => {
+    mockedDb.query.commands.findMany
+      .mockResolvedValueOnce([] as never) // personal
+      .mockResolvedValueOnce([
+        driveCommand('moved-away', { entryPage: { driveId: 'other_drive', isTrashed: false } }),
+        driveCommand('still-here'),
+      ] as never);
+
+    const response = await GET(suggestRequest({ driveId: 'drive_1' }));
+    const json = await response.json();
+    const triggers = json.suggestions.map((s: { trigger: string }) => s.trigger);
+    expect(triggers).not.toContain('moved-away');
+    expect(triggers).toContain('still-here');
+  });
+
+  it('suppresses commands whose entry page is trashed', async () => {
+    mockedDb.query.commands.findMany
+      .mockResolvedValueOnce([
+        userCommand('trashed-entry', { entryPage: { driveId: 'some_drive', isTrashed: true } }),
+        userCommand('live-entry'),
+      ] as never)
+      .mockResolvedValueOnce([
+        driveCommand('drive-trashed', { entryPage: { driveId: 'drive_1', isTrashed: true } }),
+      ] as never);
+
+    const response = await GET(suggestRequest({ driveId: 'drive_1' }));
+    const json = await response.json();
+    const triggers = json.suggestions.map((s: { trigger: string }) => s.trigger);
+    expect(triggers).not.toContain('trashed-entry');
+    expect(triggers).not.toContain('drive-trashed');
+    expect(triggers).toContain('live-entry');
   });
 
   it('returns 400 for an invalid driveId', async () => {

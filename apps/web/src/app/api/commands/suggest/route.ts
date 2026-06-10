@@ -69,32 +69,48 @@ export async function GET(request: Request) {
       type: 'builtin',
     }));
 
+    // Entry pages are loaded alongside each command so save-time invariants
+    // are re-checked at use: a trashed entry page suppresses the suggestion,
+    // and a drive command whose entry page has since moved to another drive
+    // (e.g. via bulk-move) is suppressed rather than offered while broken.
+    type EntryPageRef = { driveId: string; isTrashed: boolean };
+    const hasLiveEntryPage = <T extends { entryPage: EntryPageRef | null }>(
+      row: T
+    ): row is T & { entryPage: EntryPageRef } =>
+      row.entryPage !== null && !row.entryPage.isTrashed;
+
     const personalRows = await db.query.commands.findMany({
       where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
+      with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
     });
-    const userCommands: CommandSummary[] = personalRows.map((row) => ({
-      id: row.id,
-      trigger: row.trigger,
-      description: row.description,
-      scope: 'user',
-      type: row.type as CommandSummary['type'],
-      entryPageId: row.entryPageId,
-    }));
+    const userCommands: CommandSummary[] = personalRows
+      .filter(hasLiveEntryPage)
+      .map((row) => ({
+        id: row.id,
+        trigger: row.trigger,
+        description: row.description,
+        scope: 'user',
+        type: row.type as CommandSummary['type'],
+        entryPageId: row.entryPageId,
+      }));
 
     let driveCommands: CommandSummary[] = [];
     if (driveId) {
       const driveRows = await db.query.commands.findMany({
         where: and(eq(commands.driveId, driveId), eq(commands.enabled, true)),
+        with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
       });
-      driveCommands = driveRows.map((row) => ({
-        id: row.id,
-        trigger: row.trigger,
-        description: row.description,
-        scope: 'drive',
-        type: row.type as CommandSummary['type'],
-        entryPageId: row.entryPageId,
-        driveId: row.driveId ?? undefined,
-      }));
+      driveCommands = driveRows
+        .filter((row) => hasLiveEntryPage(row) && row.entryPage.driveId === driveId)
+        .map((row) => ({
+          id: row.id,
+          trigger: row.trigger,
+          description: row.description,
+          scope: 'drive',
+          type: row.type as CommandSummary['type'],
+          entryPageId: row.entryPageId,
+          driveId: row.driveId ?? undefined,
+        }));
     }
 
     const { winners } = resolveCommandPrecedence(builtins, userCommands, driveCommands);

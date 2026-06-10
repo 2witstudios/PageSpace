@@ -62,6 +62,10 @@ export const commands = pgTable(
       'commands_scope_chk',
       sql`(${table.userId} IS NOT NULL AND ${table.driveId} IS NULL) OR (${table.userId} IS NULL AND ${table.driveId} IS NOT NULL)`
     ),
+    typeAllowedValues: check(
+      'commands_type_chk',
+      sql`${table.type} IN ('document', 'prompt_template', 'builtin')`
+    ),
   })
 );
 

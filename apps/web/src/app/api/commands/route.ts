@@ -36,7 +36,14 @@ async function getMemberDriveIds(userId: string): Promise<string[]> {
   const memberships = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
-    .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)));
+    .innerJoin(drives, eq(driveMembers.driveId, drives.id))
+    .where(
+      and(
+        eq(driveMembers.userId, userId),
+        isNotNull(driveMembers.acceptedAt),
+        eq(drives.isTrashed, false)
+      )
+    );
   for (const membership of memberships) {
     driveIds.add(membership.driveId);
   }
