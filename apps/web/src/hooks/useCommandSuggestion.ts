@@ -129,6 +129,9 @@ export function useCommandSuggestion({
     setSelectedIndex(0);
     // Drop the fetched list: a later reopen must not expose this trigger's
     // items (even invisibly behind the loading row) to Enter/Tab selection.
+    // Bumping the request counter also invalidates any in-flight fetch so it
+    // can't repopulate the list after the picker closed.
+    fetchRequestRef.current++;
     setAllItems([]);
     setLoadFailed(false);
     if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
