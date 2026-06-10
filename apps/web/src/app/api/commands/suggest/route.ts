@@ -25,6 +25,8 @@ interface CommandSuggestion {
   description: string;
   scope: CommandScope;
   shadows?: CommandScope;
+  /** Set on a shadowed (losing) command: the scope of the command that wins. */
+  shadowedBy?: CommandScope;
 }
 
 // GET /api/commands/suggest?q=&driveId= - precedence-resolved merged command
@@ -113,7 +115,7 @@ export async function GET(request: Request) {
         }));
     }
 
-    const { winners } = resolveCommandPrecedence(builtins, userCommands, driveCommands);
+    const { winners, shadowed } = resolveCommandPrecedence(builtins, userCommands, driveCommands);
 
     // q matching happens in JS over the caller's own small command set, so user
     // input never reaches a SQL LIKE pattern
@@ -127,13 +129,33 @@ export async function GET(request: Request) {
       return a.trigger.localeCompare(b.trigger);
     });
 
-    const suggestions: CommandSuggestion[] = ranked.map((winner) => ({
-      id: winner.id,
-      trigger: winner.trigger,
-      description: winner.description,
-      scope: winner.scope,
-      ...(winner.shadows !== undefined ? { shadows: winner.shadows } : {}),
-    }));
+    // Shadowed (losing) commands are included so the picker can render them
+    // dimmed with a shadow indicator (UX spec §1.4/§1.6). `shadowedBy` carries
+    // the winning command's scope for the indicator tooltip.
+    const winnerScopeByTrigger = new Map(winners.map((w) => [w.trigger, w.scope]));
+    const shadowedFiltered = q
+      ? shadowed.filter((command) => command.trigger.includes(q))
+      : shadowed;
+    const shadowedRanked = [...shadowedFiltered].sort((a, b) =>
+      a.trigger.localeCompare(b.trigger)
+    );
+
+    const suggestions: CommandSuggestion[] = [
+      ...ranked.map((winner) => ({
+        id: winner.id,
+        trigger: winner.trigger,
+        description: winner.description,
+        scope: winner.scope,
+        ...(winner.shadows !== undefined ? { shadows: winner.shadows } : {}),
+      })),
+      ...shadowedRanked.map((command) => ({
+        id: command.id,
+        trigger: command.trigger,
+        description: command.description,
+        scope: command.scope,
+        shadowedBy: winnerScopeByTrigger.get(command.trigger) ?? ('builtin' as CommandScope),
+      })),
+    ];
 
     auditRequest(request, {
       eventType: 'data.read',

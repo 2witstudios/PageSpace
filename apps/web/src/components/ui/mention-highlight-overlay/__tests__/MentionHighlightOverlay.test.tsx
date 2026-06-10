@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
-import type { TrackedMention } from '@/hooks/useMentionTracker';
+import type { TrackedMention } from '@/lib/tokens/message-tokens';
 
 import { MentionHighlightOverlay } from '../MentionHighlightOverlay';
 
