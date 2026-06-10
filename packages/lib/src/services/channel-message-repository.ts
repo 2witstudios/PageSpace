@@ -16,6 +16,7 @@ import {
   channelMessageReactions,
   channelReadStatus,
   channelThreadFollowers,
+  type ChannelMessageAiMeta,
 } from '@pagespace/db/schema/chat';
 import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 
@@ -322,11 +323,7 @@ export interface InsertChannelThreadReplyInput {
   // instead of the user's display name. Auto-follow logic is unchanged: PR 3
   // upserts (parentAuthor, replier) regardless of aiMeta, and aiMeta only
   // affects how the reply itself is shown.
-  aiMeta?: {
-    senderType: 'global_assistant' | 'agent';
-    senderName: string;
-    agentPageId?: string;
-  } | null;
+  aiMeta?: ChannelMessageAiMeta | null;
 }
 
 export type InsertChannelThreadReplyResult =

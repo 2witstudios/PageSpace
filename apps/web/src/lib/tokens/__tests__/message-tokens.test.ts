@@ -129,6 +129,20 @@ describe('parseMessageTokens — command tokens', () => {
     expect(result.displayText).toBe('/foo bar');
     expect(result.tokens).toEqual([]);
   });
+
+  it('given a built-in command id containing a colon, should split id/type on the LAST colon', () => {
+    const result = parseMessageTokens('/[help](builtin:help:command) what can I do');
+    expect(result.displayText).toBe('/help what can I do');
+    expect(result.tokens).toEqual([
+      { start: 0, end: 5, label: 'help', id: 'builtin:help', type: 'command' },
+    ]);
+  });
+
+  it('round-trips a built-in command chip', () => {
+    const raw = '/[help](builtin:help:command) hi';
+    const { displayText, tokens } = parseMessageTokens(raw);
+    expect(serializeMessageTokens(displayText, tokens)).toBe(raw);
+  });
 });
 
 describe('serializeMessageTokens', () => {

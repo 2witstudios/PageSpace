@@ -11,6 +11,12 @@ import {
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
+import {
+  buildCommandPromptSection,
+  commandExecutionDataFromPlan,
+  type CommandExecutionData,
+} from '@/lib/ai/core/command-processor';
+import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 
@@ -215,6 +221,7 @@ async function postAgentThreadReply(input: {
   content: string;
   parentId: string;
   agent: MentionedAgent;
+  commandExecution?: CommandExecutionData;
 }): Promise<void> {
   const result = await channelMessageRepository.insertChannelThreadReply({
     parentId: input.parentId,
@@ -227,6 +234,7 @@ async function postAgentThreadReply(input: {
       senderType: 'agent',
       senderName: input.agent.title,
       agentPageId: input.agent.id,
+      ...(input.commandExecution && { commandExecution: input.commandExecution }),
     },
   });
 
@@ -369,6 +377,14 @@ export async function triggerMentionedAgentResponses(
     );
     const locationContext = buildLocationContext(params);
 
+    // Universal Commands (UX spec §6): a chip is inert in a plain channel
+    // message, but the command executes — with the SENDER's permissions —
+    // when this message triggers an agent response. Resolution degrades,
+    // never fails; a skipped command becomes a one-line notice.
+    const commandPlan = await planCommandExecution(params.content, params.userId);
+    const commandContext = buildCommandPromptSection(commandPlan);
+    const commandExecution = commandPlan ? commandExecutionDataFromPlan(commandPlan) : undefined;
+
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
@@ -383,6 +399,7 @@ export async function triggerMentionedAgentResponses(
               '',
               'Recent channel transcript (oldest to newest):',
               transcript,
+              ...(commandContext ? ['', commandContext] : []),
             ].join('\n'),
             conversationId: mentionConversationId,
           },
@@ -437,6 +454,7 @@ export async function triggerMentionedAgentResponses(
             content: replyContent,
             parentId: trimmedParent,
             agent,
+            commandExecution,
           });
         } else {
           await sendChannelExecute(
@@ -457,6 +475,7 @@ export async function triggerMentionedAgentResponses(
                   agentPageId: agent.id,
                   agentTitle: agent.title,
                 },
+                ...(commandExecution && { commandExecution }),
               } as ToolExecutionContext,
             }
           );

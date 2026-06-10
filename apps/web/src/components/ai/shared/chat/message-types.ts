@@ -76,9 +76,20 @@ export interface ProcessedToolPart {
 }
 
 /**
+ * Universal Commands execution feedback part (UX spec §7): streamed at
+ * response start and persisted with the message. `data` is validated by
+ * the indicator's view-model, not trusted here.
+ */
+export interface CommandExecutionPart {
+  type: 'data-command-execution';
+  id?: string;
+  data: unknown;
+}
+
+/**
  * Union type for processed message parts
  */
-export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart;
+export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | CommandExecutionPart;
 
 /**
  * Valid tool states for type checking
@@ -112,4 +123,11 @@ export function isFileGroupPart(part: GroupedPart): part is FileGroupPart {
  */
 export function isProcessedToolPart(part: GroupedPart): part is ProcessedToolPart {
   return part.type.startsWith('tool-');
+}
+
+/**
+ * Type guard for CommandExecutionPart
+ */
+export function isCommandExecutionPart(part: GroupedPart): part is CommandExecutionPart {
+  return part.type === 'data-command-execution';
 }

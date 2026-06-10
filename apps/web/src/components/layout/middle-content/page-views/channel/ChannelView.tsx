@@ -22,6 +22,8 @@ import { Lock, Check, X, MessageSquareText } from 'lucide-react';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
+import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
+import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -56,7 +58,15 @@ interface AiMeta {
   senderType: 'global_assistant' | 'agent';
   senderName: string;
   agentPageId?: string;
+  // Universal Commands execution feedback (UX spec §7) on agent replies
+  commandExecution?: {
+    label: string;
+    status: 'used' | 'skipped';
+    reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
+    entryPageTitle?: string;
+  };
 }
+
 
 // Extended message type with reactions and file attachment
 interface MessageWithReactions extends MessageWithUser {
@@ -573,9 +583,16 @@ function ChannelView({ page }: ChannelViewProps) {
               {new Date(m.createdAt).toLocaleTimeString()}
             </span>
           </div>
+          {m.aiMeta?.commandExecution && (
+            <CommandExecutionIndicator data={m.aiMeta.commandExecution} />
+          )}
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <RichText content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
+              <RichText
+                content={isAi ? m.content : addHardLineBreaks(m.content)}
+                isStreaming={false}
+                commandChipInert={isCommandInertForMessage(m.content, isAi)}
+              />
             </div>
           )}
           <MessageAttachment message={m} />
@@ -744,9 +761,16 @@ function ChannelView({ page }: ChannelViewProps) {
                                     {(m.quotedMessage || m.quotedMessageId) && (
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}
+                                    {m.aiMeta?.commandExecution && (
+                                      <CommandExecutionIndicator data={m.aiMeta.commandExecution} />
+                                    )}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        <RichText content={isAi ? m.content : addHardLineBreaks(m.content)} isStreaming={false} />
+                                        <RichText
+                                          content={isAi ? m.content : addHardLineBreaks(m.content)}
+                                          isStreaming={false}
+                                          commandChipInert={isCommandInertForMessage(m.content, isAi)}
+                                        />
                                       </div>
                                     )}
                                     {!isFirst && m.editedAt && (

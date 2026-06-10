@@ -4,6 +4,7 @@
  */
 
 import { ModelCapabilities } from './model-capabilities';
+import type { CommandExecutionData } from './command-processor';
 
 export interface ToolExecutionContext {
   userId: string;
@@ -52,4 +53,9 @@ export interface ToolExecutionContext {
     agentPageId?: string;   // For page agents: the AI_CHAT page ID
     agentTitle?: string;    // For page agents: the agent display name
   };
+
+  // Universal Commands execution feedback for the message this context posts
+  // (channel agent replies): carried into the reply's aiMeta so the channel
+  // renders the "Using /foo" / "Skipped /foo" indicator (UX spec §7).
+  commandExecution?: CommandExecutionData;
 }

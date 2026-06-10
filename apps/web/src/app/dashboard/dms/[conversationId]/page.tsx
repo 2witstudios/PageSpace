@@ -513,7 +513,8 @@ export default function InboxDMPage() {
           </div>
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
-              {<RichText content={addHardLineBreaks(m.content)} />}
+              {/* DMs have no AI participant, so command chips are always inert (UX spec §6). */}
+              {<RichText content={addHardLineBreaks(m.content)} commandChipInert />}
             </div>
           )}
           <MessageAttachment message={m} />
@@ -691,7 +692,8 @@ export default function InboxDMPage() {
                         )}
                         {message.content && (
                           <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                            {<RichText content={addHardLineBreaks(message.content)} />}
+                            {/* DMs have no AI participant, so command chips are always inert (UX spec §6). */}
+                            {<RichText content={addHardLineBreaks(message.content)} commandChipInert />}
                           </div>
                         )}
                         <MessageAttachment message={message} />

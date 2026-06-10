@@ -41,7 +41,10 @@ export function tokenDisplayText(label: string, type: TokenType): string {
 }
 
 // Same shape as the mention regex with the sigil generalized to [@/].
-const TOKEN_REGEX = /([@/])\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
+// The id/type split is on the LAST colon: token types never contain ':',
+// but built-in command ids do (e.g. `builtin:help`), so the id group must
+// admit colons for those chips to round-trip.
+const TOKEN_REGEX = /([@/])\[([^\]]+)\]\(([^()]+):([^():]+)\)/g;
 
 /**
  * Parse markdown-typed token format into display text and tracked positions.

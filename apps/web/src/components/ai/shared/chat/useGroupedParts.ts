@@ -49,6 +49,13 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
       if (part.type === 'text') {
         flushFileGroup();
         currentTextGroup.push(part as TextPart);
+      } else if (part.type === 'data-command-execution') {
+        // Universal Commands execution indicator (UX spec §7) — rendered
+        // standalone, above the content it precedes.
+        flushTextGroup();
+        flushFileGroup();
+        const dataPart = part as { type: 'data-command-execution'; id?: string; data?: unknown };
+        groups.push({ type: 'data-command-execution', id: dataPart.id, data: dataPart.data });
       } else if (part.type === 'file') {
         flushTextGroup();
         const filePart = part as FilePart & Record<string, unknown>;

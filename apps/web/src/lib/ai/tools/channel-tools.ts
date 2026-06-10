@@ -110,6 +110,11 @@ export const channelTools = {
               senderType: senderIdentity.senderType,
               senderName: senderIdentity.senderName,
               ...(senderIdentity.agentPageId && { agentPageId: senderIdentity.agentPageId }),
+              // Universal Commands (§7): execution feedback for the reply,
+              // threaded in by the agent-mention responder.
+              ...((context as ToolExecutionContext).commandExecution && {
+                commandExecution: (context as ToolExecutionContext).commandExecution,
+              }),
             },
           })
           .returning();
