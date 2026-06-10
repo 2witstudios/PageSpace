@@ -289,6 +289,8 @@ Same components everywhere; platform deltas only.
 
 Trigger rules are the Agent Skills name rules: 1–64 chars, lowercase alphanumeric + hyphens, no leading/trailing/consecutive hyphens. Description: required, 1–1,024 chars. All checks run inline on blur and on submit; E-codes block save, W-codes never do.
 
+The canonical enforcement lives in the shared validation lib `packages/lib/src/commands/command-core.ts` (`validateCommandTrigger`, `validateCommandDescription`, `RESERVED_TRIGGERS`, `resolveCommandPrecedence` — Phase 1). The UI must apply the same rules client-side using the copy below; the lib's own error strings are server/API-facing and are never shown verbatim in forms.
+
 | Code | Condition | Exact copy |
 |------|-----------|------------|
 | E1 | Trigger empty | `Trigger is required.` |
