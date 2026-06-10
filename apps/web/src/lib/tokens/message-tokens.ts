@@ -8,9 +8,9 @@ import type { MentionType } from '@/types/mentions';
  *   - commands:  `/[Label](commandId:command)`
  *
  * This module is the pure core behind `useMessageTokens` — parsing markdown to
- * display text, tracking token positions through edits (the mention tracker's
- * overlap-dissolve model), and serializing back. The mention-only behavior is
- * byte-for-byte identical to `useMentionTracker`'s pure functions.
+ * display text, tracking token positions through edits (the original mention
+ * tracker's overlap-dissolve model, which this superseded), and serializing
+ * back. Mention-only behavior is identical to the old tracker's.
  */
 
 export const COMMAND_TOKEN_TYPE = 'command' as const;
