@@ -152,14 +152,42 @@ describe('GET /api/commands/suggest', () => {
     expect(teamFaq.shadows).toBeUndefined();
   });
 
-  it('builtin shadows a user command with the same trigger', async () => {
+  it('builtin shadows a user command with the same trigger; the shadowed row is included with shadowedBy', async () => {
     mockedDb.query.commands.findMany.mockResolvedValueOnce([userCommand('help')] as never);
     const response = await GET(suggestRequest());
     const json = await response.json();
     const help = json.suggestions.filter((s: { trigger: string }) => s.trigger === 'help');
-    expect(help).toHaveLength(1);
+    // Winner first, shadowed (losing) command after — the picker renders the
+    // shadowed row dimmed with an indicator (UX spec §1.4/§1.6).
+    expect(help).toHaveLength(2);
     expect(help[0].scope).toBe('builtin');
     expect(help[0].shadows).toBe('user');
+    expect(help[0].shadowedBy).toBeUndefined();
+    expect(help[1]).toMatchObject({ id: 'user-help', scope: 'user', shadowedBy: 'builtin' });
+  });
+
+  it('includes a drive command shadowed by a personal command, marked shadowedBy user', async () => {
+    mockedDb.query.commands.findMany
+      .mockResolvedValueOnce([userCommand('deploy')] as never) // personal
+      .mockResolvedValueOnce([driveCommand('deploy')] as never); // drive
+
+    const response = await GET(suggestRequest({ driveId: 'drive_1' }));
+    const json = await response.json();
+    const deploy = json.suggestions.filter((s: { trigger: string }) => s.trigger === 'deploy');
+    expect(deploy).toHaveLength(2);
+    expect(deploy[0]).toMatchObject({ id: 'user-deploy', scope: 'user', shadows: 'drive' });
+    expect(deploy[1]).toMatchObject({ id: 'drive-deploy', scope: 'drive', shadowedBy: 'user' });
+  });
+
+  it('applies the q filter to shadowed rows as well', async () => {
+    mockedDb.query.commands.findMany
+      .mockResolvedValueOnce([userCommand('deploy'), userCommand('other')] as never)
+      .mockResolvedValueOnce([driveCommand('deploy')] as never);
+
+    const response = await GET(suggestRequest({ driveId: 'drive_1', q: 'dep' }));
+    const json = await response.json();
+    const triggers = json.suggestions.map((s: { trigger: string }) => s.trigger);
+    expect(triggers).toEqual(['deploy', 'deploy']);
   });
 
   it('filters by q with prefix matches ranked before substring matches', async () => {
