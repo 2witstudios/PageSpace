@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { and, eq, or, inArray, isNotNull } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -69,7 +70,60 @@ export async function GET(request: Request) {
 
     const sorted = [...visible].sort((a, b) => a.trigger.localeCompare(b.trigger));
 
-    return NextResponse.json({ commands: sorted.map(toCommandResponse) });
+    // Enrich for the settings lists: entry page title + availability, author name.
+    const pageIds = Array.from(new Set(sorted.map((command) => command.entryPageId)));
+    const entryPages = pageIds.length
+      ? await db.query.pages.findMany({
+          where: inArray(pages.id, pageIds),
+          columns: { id: true, title: true, driveId: true, isTrashed: true },
+        })
+      : [];
+    const pageById = new Map(entryPages.map((page) => [page.id, page]));
+
+    // A page in one of the caller's drives is always viewable; pages reached
+    // through page-level shares need the (rarer) per-page permission check.
+    const memberDriveIdSet = new Set(memberDriveIds);
+    const availabilityByPageId = new Map<string, boolean>();
+    for (const page of entryPages) {
+      if (page.isTrashed) {
+        availabilityByPageId.set(page.id, false);
+      } else if (memberDriveIdSet.has(page.driveId)) {
+        availabilityByPageId.set(page.id, true);
+      } else {
+        availabilityByPageId.set(page.id, await canUserViewPage(userId, page.id));
+      }
+    }
+
+    const authorIds = Array.from(
+      new Set(
+        sorted
+          .map((command) => command.createdById)
+          .filter((id): id is string => id !== null)
+      )
+    );
+    const authors = authorIds.length
+      ? await db.query.users.findMany({
+          where: inArray(users.id, authorIds),
+          columns: { id: true, name: true },
+        })
+      : [];
+    const authorNameById = new Map(authors.map((author) => [author.id, author.name]));
+
+    return NextResponse.json({
+      commands: sorted.map((command) => {
+        const page = pageById.get(command.entryPageId);
+        return {
+          ...toCommandResponse(command),
+          entryPageTitle: page?.title ?? null,
+          entryPageDriveId: page?.driveId ?? null,
+          entryPageAvailable: availabilityByPageId.get(command.entryPageId) ?? false,
+          authorName:
+            command.createdById !== null
+              ? authorNameById.get(command.createdById) ?? null
+              : null,
+        };
+      }),
+    });
   } catch (error) {
     loggers.api.error('[COMMANDS_GET]', error as Error);
     return NextResponse.json({ error: 'Failed to list commands' }, { status: 500 });
@@ -169,6 +223,7 @@ export async function POST(request: Request) {
         .values({
           userId: commandDriveId !== null ? null : userId,
           driveId: commandDriveId,
+          createdById: userId,
           trigger: trigger as string,
           description: description as string,
           entryPageId,

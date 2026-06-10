@@ -5,8 +5,10 @@ import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2 } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
+import { canSeeCommandSettings } from '@/lib/commands/command-gating';
 import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
 
 interface SettingsSection {
@@ -18,6 +20,7 @@ export default function DriveSettingsPage() {
   const params = useParams();
   const router = useRouter();
   const driveId = params.driveId as string;
+  const { user } = useAuth();
   const drives = useDriveStore((state) => state.drives);
   const isLoading = useDriveStore((state) => state.isLoading);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
@@ -91,6 +94,18 @@ export default function DriveSettingsPage() {
           href: `/dashboard/${driveId}/settings/context`,
           available: true,
         },
+        // Launch exposure gate (universal-commands spec §0): admin accounts only
+        ...(canSeeCommandSettings(user)
+          ? [
+              {
+                title: 'Commands',
+                description: 'Slash commands for everyone in this drive',
+                icon: SlashSquare,
+                href: `/dashboard/${driveId}/settings/commands`,
+                available: true,
+              },
+            ]
+          : []),
       ],
     },
     {

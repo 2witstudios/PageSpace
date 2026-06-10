@@ -30,6 +30,10 @@ export const commands = pgTable(
     userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
     driveId: text('drive_id').references(() => drives.id, { onDelete: 'cascade' }),
 
+    // Who registered the command (settings lists show "Added by {name}").
+    // Scope is carried by userId/driveId above; this is provenance only.
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+
     // The slash trigger (Agent Skills 'name' rules; validated in @pagespace/lib)
     trigger: text('trigger').notNull(),
 
