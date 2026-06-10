@@ -29,7 +29,8 @@ This spec describes the **perfected end state**. Implementation lands in phases;
 
 ### Exposure gating (launch)
 
-- **Given** a user whose `role !== 'admin'` (same check as `apps/web/src/app/settings/page.tsx` `isAdmin`), **should** see no command UI anywhere: no picker on `/`, no Commands settings pages, no Commands drive tab. `/` types as a literal character.
+- **Given** a user whose `role !== 'admin'` (same check as `apps/web/src/app/settings/page.tsx` `isAdmin`), **should** see no command *authoring or invoking* UI: no picker on `/`, no Commands settings pages, no Commands drive tab. `/` types as a literal character.
+- **Given** a non-admin viewing a message that contains a chip (which will occur whenever a gated-launch admin posts into a shared channel/DM), **should** see the chip rendered normally per §5 — never the raw `/[Label](commandId:command)` serialization. Gating hides authoring/invoking surfaces; it never degrades rendering of already-sent messages.
 - **Given** an admin user, **should** see the full feature.
 - **Given** the gate widens later, **should** require no UX change — gating is a visibility switch only.
 
@@ -51,8 +52,8 @@ Delta from mentions: `@` triggers anywhere after whitespace (`useSuggestion.ts` 
 - **Given** the user deletes back past the `/`, **should** close the picker (mirrors `useSuggestion.ts` close-when-no-trigger branch).
 - **Given** the user dismissed the picker with Escape and continues typing after the same `/`, **should NOT** reopen for that trigger position (mirrors `dismissedTriggerRef` in `useSuggestion.ts:100-103,222`); deleting the `/` and retyping it resets the dismissal.
 - **Given** an IME composition is in progress (`compositionstart` fired, `compositionend` not yet — the `isComposing` guard in `ChatTextarea.tsx:81,122`), **should NOT** open the picker until composition ends; if the committed composition result begins with `/` at position 0, **should** then evaluate trigger detection once.
-- **Given** a `/` typed mid-message then text before it deleted so the `/` is now at position 0, **should NOT** retroactively open the picker — detection runs only on input events at the trigger position, never on unrelated edits.
-- **Given** a paste that results in a message starting with `/` (e.g. pasting `/foo bar`), **should NOT** open the picker — paste is not a trigger keystroke. The text stays literal.
+- **Given** a `/` typed mid-message then text before it deleted so the `/` is now at position 0, **should NOT** retroactively open the picker — detection runs only on typing insertions at the trigger position (next criterion), never on unrelated edits.
+- **Given** a paste, drop, autofill, or any other non-typing insertion that results in a message starting with `/` (e.g. pasting `/foo bar`), **should NOT** open the picker; the text stays literal. Normatively: the picker opens only when a *typing insertion* — a keystroke or committed IME composition that inserts the `/` character, distinguishable via `InputEvent.inputType` (`insertText` / final `insertCompositionText`) — places `/` at the trigger position. Note the mirrored `useSuggestion.ts` detects triggers by value-diffing alone and cannot make this distinction; implementations must extend it (inspect the native `InputEvent`, or gate with a suppression flag in the spirit of its `suppressMentionDetection`).
 
 ### 1.2 Surfaces
 
@@ -61,13 +62,13 @@ Delta from mentions: `@` triggers anywhere after whitespace (`useSuggestion.ts` 
 
 ### 1.3 Open/close lifecycle
 
-Mirrors `MentionPickerPortal.tsx` exactly:
+Mirrors `MentionPickerPortal.tsx`, with the focus-model deltas noted here and in §1.4/§9:
 
 - **Given** the picker opens, **should** render in a `createPortal` to `document.body`, `position: fixed`, `zIndex: 50`, in a `bg-popover border border-border rounded-md shadow-md` container (`MentionPickerPortal.tsx:136-138`).
 - **Given** `popupPlacement='top'` (docked inputs — the default for chat/channel composers, see `ChannelInput.tsx:378`), **should** position above the input using the `bottom` strategy; **given** `popupPlacement='bottom'` (centered/empty-state inputs), below using `top` — both via `positioningService.calculateTextareaPosition` semantics.
 - **Given** the viewport edges, **should** clamp width to 256–320 px and left position to ≥8 px from either edge, and cap `maxHeight` to the space between the anchor and the viewport edge minus 8 px (`MentionPickerPortal.tsx:115-133`).
 - **Given** the picker is open, **should** close on: Escape (capture-phase document listener, `MentionPickerPortal.tsx:100-110`), click outside, selection, the trigger `/` being deleted, or the input unmounting.
-- **Given** the picker closes, **should** restore focus to the element focused before it opened (`returnFocusRef`, `MentionPickerPortal.tsx:41-48`).
+- **Given** the picker closes, **should** require no focus restoration on trigger-opened invocations — focus never left the textarea (§9). The portal's `returnFocusRef` dance (`MentionPickerPortal.tsx:41-48`) exists only because of its autofocused inner search input, which this picker omits; a button-opened popover variant, if any surface adds one, restores focus to its trigger button like the portal does.
 - **Given** the picker opens, **should** reset query to the text already typed after `/` (`initialQuery`), and reset selection index to 0 (`MentionPickerPortal.tsx:51-57`).
 
 ### 1.4 Filtering & list content
@@ -119,7 +120,7 @@ The chip reuses the mention chip machinery: tracked ranges via the pattern in `a
 ### 2.2 Appearance
 
 - **Given** a chip in the input, **should** render through the highlight overlay in the same visual language as mention chips: primary-tinted rounded token over the transparent textarea text, typography locked to the textarea (`CHAT_TYPOGRAPHY`, `ChatTextarea.tsx:20` — the overlay/textarea line-height sync constraint applies unchanged).
-- **Given** a chip and a mention coexist in one message (`/foo` then `@Alice` later), **should** both render via the same overlay pass; ranges never overlap because the chip is anchored at position 0 and mentions cannot precede it.
+- **Given** a chip and a mention coexist in one message — in either order, since mentions may be inserted into text typed before the chip (§2.3) — **should** both render via the same overlay pass; tracked ranges are disjoint by construction (the tracker only registers non-overlapping ranges and dissolves any range an edit overlaps, `useMentionTracker.ts`).
 
 ### 2.3 Editing & deletion
 
@@ -158,7 +159,7 @@ Opens as a dialog (or inline card on mobile) with fields:
 
 1. **Trigger** — text input, prefixed with a literal `/` adornment. Auto-lowercases as the user types; spaces are converted to hyphens on input.
 2. **Description** — textarea, helper text below: **"Describe what this command does *and when the AI should use it.* This is shown in the picker and given to the AI."** Live character counter `n / 1,024`.
-3. **Entry page** — page picker reusing the mention search machinery: the self-fetching `MentionPicker` (`MentionPicker.tsx:179-245`) with `allowedTypes={['page']}` and `crossDrive` enabled, in a popover (`MentionPickerPopover`, `MentionPicker.tsx:260-287`). Selected page renders as a chip with title + drive name and an × to clear.
+3. **Entry page** — page picker reusing the mention search machinery with `allowedTypes={['page']}`, in a popover (`MentionPickerPopover`, `MentionPicker.tsx:260-287`). The personal form needs a cross-drive search with **no** `driveId`; note that `MentionPicker`'s `driveId` prop is required and its fetch always embeds it (`MentionPicker.tsx:172,204`), while only `MentionPickerPortal`'s fetch supports the driveId-less cross-drive call (`MentionPickerPortal.tsx:63,69-72`) — the panel must be wired to that fetch path (a small extension, not plain reuse). Selected page renders as a chip with title + drive name and an × to clear.
 4. **Enabled** — switch, default on.
 
 - **Given** the form is opened for editing, **should** prefill all fields; changing the trigger is allowed and takes effect immediately on save (sent history is unaffected because chips store `commandId`).
@@ -171,7 +172,7 @@ Opens as a dialog (or inline card on mobile) with fields:
 All errors render inline beneath their field in destructive text. Exact copy in §10. Advisory warnings render in amber/warning style and **never block save**.
 
 - **Given** an entry page is selected, **should** immediately fetch its size and, if it exceeds ~5,000 tokens or 500 lines, show the advisory warning (§10, W1) under the field — non-blocking.
-- **Given** a trigger that collides with an existing enabled command, **should** show the relevant collision error (personal duplicate, built-in reserved) or — for drive-command collisions — the non-blocking shadow notice (§10, W2), since shadowing is legal.
+- **Given** a trigger that duplicates another command in the same scope — enabled **or** disabled; triggers are unique per scope, so toggling a command's enabled state can never create a collision — **should** show E6. **Given** it matches a built-in trigger, **should** show E7. **Given** it collides with a command in another scope (e.g. a personal trigger matching a drive command), **should** show the non-blocking shadow notice (§10, W2), since cross-scope shadowing is legal.
 
 ### 3.4 Delete
 
@@ -196,10 +197,10 @@ Delta from the drive settings hub, which hard-blocks non-managers (`canManage = 
 
 Identical to §3.1–3.4 with these deltas:
 
-- Scope copy says "drive": empty state subtext **"Drive commands are available to everyone in this drive."**; delete dialog body **"This removes the command for everyone in this drive. Pages are not deleted. Messages that already used this command keep their chip but show it as removed."**
-- The entry-page picker is scoped to the current drive (`MentionPicker` with `driveId`, `crossDrive=false`) — a drive command's entry page must live in that drive, so every member who can use the command can have its source attributed (access is still checked per user at execution, §5.3).
-- Duplicate check is against the drive's own commands (error E6); a collision with some member's personal command is invisible here (shadowing is per-user and surfaced in the picker, §1.6).
-- Each row also shows the author ("Added by {name}").
+- **Given** drive-scoped copy, **should** read: empty state subtext **"Drive commands are available to everyone in this drive."**; delete dialog body **"This removes the command for everyone in this drive. Pages are not deleted. Messages that already used this command keep their chip but show it as removed."**
+- **Given** the entry-page picker in the drive form, **should** be scoped to the current drive (`MentionPicker` with `driveId`, `crossDrive=false`) — a drive command's entry page must live in that drive. The sender's access to the entry page is still checked at execution time (§7.2), and a viewer's access governs chip navigation (§5.3).
+- **Given** the duplicate check, **should** run against the drive's own commands only (E6, enabled or disabled per §3.3); a collision with some member's personal command **should** surface nowhere in this form — shadowing is per-user and shown in the picker (§1.6).
+- **Given** a list row, **should** also show the author ("Added by {name}").
 
 ---
 
@@ -230,7 +231,8 @@ Sent-message rendering goes through `apps/web/src/components/messages/RichText.t
 
 - **Given** a channel/DM with no AI participant, when a message with a chip is sent, **should** deliver and render the chip for everyone (§5.1) with **no execution** — the chip is inert.
 - **Given** an inert chip, **should** add a tooltip suffix: **"No AI is in this conversation, so this command didn't run."**
-- **Given** an AI (agent/assistant) later responds in that conversation in a context that includes the message, execution semantics apply at that point — execution always happens at AI-response time, never at send time.
+- **Given** an AI (agent/assistant) later responds **to that chip-bearing message** (a direct reply/answer to it), the command **should** execute at that point — execution always happens at AI-response time, never at send time.
+- **Given** a chip-bearing message that is merely part of conversation history while the AI responds to a *different* message, its command **should NOT** inject — a command executes only for responses to its own message, at most once per response. Historical chips never re-inject ambiently.
 - **Given** an AI participant is present (agent in channel, assistant in AI chat), the command **should** execute when that AI responds to the message.
 
 ---
@@ -257,14 +259,14 @@ What the user sees when the AI responds with an injected command.
 
 Same components everywhere; platform deltas only.
 
-- **Given** a touch keyboard, typing `/` from the symbols layer at message start **should** open the picker identically — detection is input-event-based, not keydown-based, so layered/long-press keyboard input works.
-- **Given** IME/predictive composition on mobile, the composition guard of §1.1 applies (`isComposing || e.nativeEvent.isComposing`, `ChatTextarea.tsx:122`); the picker must not flicker open on intermediate composition states.
+- **Given** a touch keyboard, typing `/` from the symbols layer at message start **should** open the picker identically — detection keys off typing insertions in the `input`/`beforeinput` stream (§1.1), not raw keydown codes, so layered/long-press keyboard input works.
+- **Given** IME/predictive composition on mobile, the composition guard of §1.1 **should** apply (`isComposing || e.nativeEvent.isComposing`, `ChatTextarea.tsx:122`), and the picker **should NOT** flicker open on intermediate composition states.
 - **Given** the mobile keyboard is open, the picker's `maxHeight` math **should** use the visual viewport (`getViewportHeight()` / `window.visualViewport`, `MentionPickerPortal.tsx:115-116`) so the list sits fully between the input and the keyboard top — never under the keyboard. Keyboard open/height state comes from `useMobileKeyboard` (`apps/web/src/hooks/useMobileKeyboard.ts`) / the `--keyboard-height` CSS var.
 - **Given** a small viewport (<360 px wide), the picker width clamp (256–320 px, §1.3) **should** hold with the 8 px edge margins; rows stay single-line with truncation.
-- **Given** mobile, Enter inserts a newline rather than sending (`useEnterToSend`, `ChatTextarea.tsx:120`); with the picker open, tapping a row selects. Enter from an external keyboard on tablet behaves as desktop (§1.7).
-- **Given** touch, row hover-highlight (§1.7) doesn't exist; the first tap selects directly (no two-tap select).
-- **Given** Electron desktop, behavior is identical to web; no Electron-specific accelerators are registered for `/`.
-- **Given** mobile settings, the create/edit form of §3.2 renders as a full-height sheet instead of a centered dialog; field behavior is identical.
+- **Given** a mobile on-screen keyboard, Enter **should** insert a newline rather than send (`useEnterToSend`, `ChatTextarea.tsx:120`) — including while the picker is open; soft-keyboard Enter never selects a row, tapping is the selection mechanism. **Given** an external/hardware keyboard on tablet or desktop, Enter **should** behave per §1.7 (selects while the picker is open).
+- **Given** touch, **should** select a row directly on first tap — no hover state exists (§1.7's hover-highlight is pointer-only) and no two-tap select.
+- **Given** Electron desktop, behavior **should** be identical to web; no Electron-specific accelerators are registered for `/`.
+- **Given** mobile settings, the create/edit form of §3.2 **should** render as a full-height sheet instead of a centered dialog; field behavior is identical.
 
 ---
 
@@ -277,7 +279,7 @@ Same components everywhere; platform deltas only.
 - **Given** keyboard selection moves, **should** update `aria-activedescendant` on the textarea to the active option's id; options carry `aria-selected`.
 - **Given** results change, **should** announce via a polite live region: **"{n} commands available"** / **"No commands match"**.
 - **Given** an option, its accessible name **should** include trigger, scope, shadow state, and description (§1.5).
-- **Given** the picker closes for any reason, focus **should** end on the textarea with the caret where the user left it (§1.3 focus-restore).
+- **Given** the picker closes via Escape, selection, or deletion of the trigger, focus **should** remain in the textarea with the caret where the user left it (focus never moved — §1.3). **Given** the picker closes because the user clicked or tapped another focusable control, focus **should** follow that interaction — the picker never yanks focus back.
 - **Given** a chip in the transcript, **should** be focusable (`tabindex=0` when navigable) with the tooltip content available as its accessible description; inert/unavailable states (§5.2–5.3, §6) are part of the description.
 - **Given** the execution indicator (§7), **should** be a polite live-region announcement once per response: **"Using command /foo"** or the skip notice text.
 - **Given** settings forms, every validation error **should** be programmatically associated with its field via `aria-describedby` and announced on submit failure; the size advisory uses `role="status"`, errors use `role="alert"`.
@@ -309,6 +311,7 @@ The canonical enforcement lives in the shared validation lib `packages/lib/src/c
 - **Given** any E-code is active, the Save button **should** be disabled and the first errored field focused on attempted submit.
 - **Given** only W-codes are active, Save **should** be enabled; warnings persist visibly until the condition clears.
 - **Given** the user types uppercase or spaces in the trigger field, **should** normalize live (lowercase; space→hyphen) rather than erroring — E3 fires only for characters that can't be normalized (e.g. `!`, emoji).
+- **Given** W2 with collisions in multiple drives, **should** list the drive names comma-separated in the `{drive name}` slot (e.g. "in Marketing, Engineering"); the rest of the copy is unchanged.
 
 ---
 
