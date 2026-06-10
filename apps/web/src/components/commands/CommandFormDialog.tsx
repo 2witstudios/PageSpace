@@ -196,11 +196,18 @@ export function CommandFormDialog({
     values.enabled !== initial.enabled;
 
   const requestClose = (nextOpen: boolean) => {
-    if (!nextOpen && isDirty && !isSaving) {
+    if (nextOpen) {
+      onOpenChange(true);
+      return;
+    }
+    // Never close mid-save: a failed save must keep the form (and the user's
+    // input) on screen per spec §3.2.
+    if (isSaving) return;
+    if (isDirty) {
       setConfirmDiscard(true);
       return;
     }
-    onOpenChange(nextOpen);
+    onOpenChange(false);
   };
 
   const focusFirstError = () => {
