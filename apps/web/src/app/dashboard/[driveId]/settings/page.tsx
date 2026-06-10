@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
-import { canSeeCommandSettings } from '@/lib/commands/command-gating';
+import { canUseCommands } from '@/lib/commands/command-gating';
 import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
 
 interface SettingsSection {
@@ -36,7 +36,7 @@ export default function DriveSettingsPage() {
   // Listed outside the manager-only sections because the commands route is
   // readable by every drive member (read-only view, spec §4.1) — this row is
   // the navigation path to it for plain members.
-  const commandsItems: SettingsItem[] = canSeeCommandSettings(user)
+  const commandsItems: SettingsItem[] = canUseCommands(user)
     ? [
         {
           title: 'Commands',

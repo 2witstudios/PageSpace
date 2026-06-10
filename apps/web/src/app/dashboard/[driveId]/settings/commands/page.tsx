@@ -9,7 +9,7 @@ import { ChevronLeft, SlashSquare, Info } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
 import {
-  canSeeCommandSettings,
+  canUseCommands,
   canManageDriveCommands,
 } from '@/lib/commands/command-gating';
 import { DRIVE_READONLY_NOTICE } from '@/lib/commands/command-form-core';
@@ -30,7 +30,7 @@ export default function DriveCommandsSettingsPage() {
 
   // Launch exposure gate (spec §0): non-admin accounts see no commands UI
   useEffect(() => {
-    if (!authLoading && user && !canSeeCommandSettings(user)) {
+    if (!authLoading && user && !canUseCommands(user)) {
       router.push(`/dashboard/${driveId}`);
     }
   }, [authLoading, user, router, driveId]);
@@ -40,7 +40,7 @@ export default function DriveCommandsSettingsPage() {
   // No Access Denied screen here — plain members get the read-only view.
   const canManage = canManageDriveCommands(drive);
 
-  if (authLoading || isLoading || !user || !canSeeCommandSettings(user)) {
+  if (authLoading || isLoading || !user || !canUseCommands(user)) {
     return (
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
         <Skeleton className="h-8 w-48 mb-2" />

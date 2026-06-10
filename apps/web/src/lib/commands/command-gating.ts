@@ -1,26 +1,24 @@
 /**
- * Universal Commands — exposure-gating predicates (spec §0, §4.1).
+ * Exposure gating for Universal Commands (spec §0).
  *
- * At launch the whole feature is visible only to admin accounts (same check
- * the settings hub uses: `user.role === 'admin'`). Widening the gate later
- * means changing these predicates only.
+ * At launch the `/` trigger, picker, and all command authoring/invoking UI
+ * render only for admin accounts — the same `role === 'admin'` check the
+ * settings hub uses. For everyone else `/` types as a literal character.
+ * Widening the gate later is a change to this predicate only.
  */
-
-export interface GateUser {
-  role?: string | null;
-}
-
-export interface GateDrive {
-  isOwned?: boolean;
-  role?: string | null;
-}
-
-/** Launch gate: command settings surfaces are visible to admin accounts only. */
-export function canSeeCommandSettings(user: GateUser | null | undefined): boolean {
+export function canUseCommands(
+  user: { role?: string | null } | null | undefined
+): boolean {
   return user?.role === 'admin';
 }
 
-/** Drive authoring gate — same predicate as the drive settings hub. */
-export function canManageDriveCommands(drive: GateDrive | null | undefined): boolean {
+/**
+ * Drive authoring gate (spec §4.1) — same predicate as the drive settings
+ * hub. Distinct from the exposure gate above: this is about who may
+ * create/edit/delete a drive's commands, not who can see the feature.
+ */
+export function canManageDriveCommands(
+  drive: { isOwned?: boolean; role?: string | null } | null | undefined
+): boolean {
   return Boolean(drive && (drive.isOwned || drive.role === 'ADMIN'));
 }

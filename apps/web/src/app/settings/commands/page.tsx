@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
 import { Button } from '@/components/ui/button';
 import { Loader2, ArrowLeft, SlashSquare } from 'lucide-react';
-import { canSeeCommandSettings } from '@/lib/commands/command-gating';
+import { canUseCommands } from '@/lib/commands/command-gating';
 import { CommandsSettings } from '@/components/commands/CommandsSettings';
 
 export default function CommandsSettingsPage() {
@@ -23,13 +23,13 @@ export default function CommandsSettingsPage() {
     if (authLoading) return;
     if (!user) {
       router.push('/auth/signin');
-    } else if (!canSeeCommandSettings(user)) {
+    } else if (!canUseCommands(user)) {
       // Launch exposure gate (spec §0): non-admins see no command settings
       router.push('/settings');
     }
   }, [authLoading, user, router]);
 
-  if (authLoading || !user || !canSeeCommandSettings(user)) {
+  if (authLoading || !user || !canUseCommands(user)) {
     return (
       <div className="container max-w-4xl mx-auto py-10 px-10 flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

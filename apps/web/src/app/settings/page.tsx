@@ -8,7 +8,7 @@ import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
 import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
-import { canSeeCommandSettings } from "@/lib/commands/command-gating";
+import { canUseCommands } from "@/lib/commands/command-gating";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
@@ -91,7 +91,7 @@ export default function SettingsPage() {
           available: true,
         },
         // Launch exposure gate (universal-commands spec §0): admin accounts only
-        ...(canSeeCommandSettings(user)
+        ...(canUseCommands(user)
           ? [{
               title: "Commands",
               description: "Register pages as slash commands for AI",

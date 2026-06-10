@@ -1,19 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { canSeeCommandSettings, canManageDriveCommands } from '../command-gating';
+import { canUseCommands, canManageDriveCommands } from '../command-gating';
 
-describe('canSeeCommandSettings (launch exposure gate, spec §0)', () => {
-  it('is true only for admin accounts', () => {
-    expect(canSeeCommandSettings({ role: 'admin' })).toBe(true);
+describe('canUseCommands', () => {
+  it('given an admin user, should expose the command UI', () => {
+    expect(canUseCommands({ role: 'admin' })).toBe(true);
   });
 
-  it('is false for regular users', () => {
-    expect(canSeeCommandSettings({ role: 'user' })).toBe(false);
+  it('given a non-admin user, should hide the command UI (/ is plain text)', () => {
+    expect(canUseCommands({ role: 'user' })).toBe(false);
   });
 
-  it('is false for missing/unknown users', () => {
-    expect(canSeeCommandSettings(null)).toBe(false);
-    expect(canSeeCommandSettings(undefined)).toBe(false);
-    expect(canSeeCommandSettings({})).toBe(false);
+  it('given a user with no role, should hide the command UI', () => {
+    expect(canUseCommands({})).toBe(false);
+  });
+
+  it('given no user (logged out / loading), should hide the command UI', () => {
+    expect(canUseCommands(null)).toBe(false);
+    expect(canUseCommands(undefined)).toBe(false);
   });
 });
 
