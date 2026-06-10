@@ -225,14 +225,14 @@ describe('GET /api/commands', () => {
     });
   });
 
-  it('checks per-page permission for entry pages outside the member drives', async () => {
+  it('checks per-page permission for every entry page (membership does not imply access)', async () => {
     mockedDb.select.mockReset();
     mockedDb.select
-      .mockReturnValueOnce(selectChain([]) as never)
+      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
       .mockReturnValueOnce(selectChain([]) as never);
     mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
     mockedDb.query.pages.findMany.mockResolvedValue([
-      { id: 'page_1', title: 'Shared', driveId: 'foreign_drive', isTrashed: false },
+      { id: 'page_1', title: 'Secret Page', driveId: 'drive_member', isTrashed: false },
     ] as never);
     mockedCanView.mockResolvedValue(false);
 
@@ -240,6 +240,28 @@ describe('GET /api/commands', () => {
     const json = await response.json();
     expect(mockedCanView).toHaveBeenCalledWith(USER_ID, 'page_1');
     expect(json.commands[0].entryPageAvailable).toBe(false);
+  });
+
+  it('suppresses entry-page metadata the caller cannot view (no private-title leak)', async () => {
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      { ...storedCommand, userId: null, driveId: 'drive_member' },
+    ] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Private Roadmap', driveId: 'drive_member', isTrashed: false },
+    ] as never);
+    mockedCanView.mockResolvedValue(false);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: null,
+      entryPageDriveId: null,
+      entryPageAvailable: false,
+    });
   });
 });
 

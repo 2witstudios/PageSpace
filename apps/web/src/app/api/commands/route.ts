@@ -80,18 +80,14 @@ export async function GET(request: Request) {
       : [];
     const pageById = new Map(entryPages.map((page) => [page.id, page]));
 
-    // A page in one of the caller's drives is always viewable; pages reached
-    // through page-level shares need the (rarer) per-page permission check.
-    const memberDriveIdSet = new Set(memberDriveIds);
-    const availabilityByPageId = new Map<string, boolean>();
+    // Drive membership does NOT imply page access (private pages need explicit
+    // permission), so every entry page gets a real permission check. Pages the
+    // caller can't view have their metadata suppressed entirely — drive
+    // commands are listed to all members, and the title of a private entry
+    // page must not leak through this endpoint.
+    const viewableByPageId = new Map<string, boolean>();
     for (const page of entryPages) {
-      if (page.isTrashed) {
-        availabilityByPageId.set(page.id, false);
-      } else if (memberDriveIdSet.has(page.driveId)) {
-        availabilityByPageId.set(page.id, true);
-      } else {
-        availabilityByPageId.set(page.id, await canUserViewPage(userId, page.id));
-      }
+      viewableByPageId.set(page.id, await canUserViewPage(userId, page.id));
     }
 
     const authorIds = Array.from(
@@ -112,11 +108,12 @@ export async function GET(request: Request) {
     return NextResponse.json({
       commands: sorted.map((command) => {
         const page = pageById.get(command.entryPageId);
+        const viewable = viewableByPageId.get(command.entryPageId) ?? false;
         return {
           ...toCommandResponse(command),
-          entryPageTitle: page?.title ?? null,
-          entryPageDriveId: page?.driveId ?? null,
-          entryPageAvailable: availabilityByPageId.get(command.entryPageId) ?? false,
+          entryPageTitle: viewable && page ? page.title : null,
+          entryPageDriveId: viewable && page ? page.driveId : null,
+          entryPageAvailable: viewable && page !== undefined && !page.isTrashed,
           authorName:
             command.createdById !== null
               ? authorNameById.get(command.createdById) ?? null

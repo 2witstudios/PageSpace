@@ -32,6 +32,22 @@ export default function DriveSettingsPage() {
   const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
 
+  // Launch exposure gate (universal-commands spec §0): admin accounts only.
+  // Listed outside the manager-only sections because the commands route is
+  // readable by every drive member (read-only view, spec §4.1) — this row is
+  // the navigation path to it for plain members.
+  const commandsItems: SettingsItem[] = canSeeCommandSettings(user)
+    ? [
+        {
+          title: 'Commands',
+          description: 'Slash commands for everyone in this drive',
+          icon: SlashSquare,
+          href: `/dashboard/${driveId}/settings/commands`,
+          available: true,
+        },
+      ]
+    : [];
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
@@ -50,7 +66,7 @@ export default function DriveSettingsPage() {
     );
   }
 
-  if (!canManage) {
+  if (!canManage && commandsItems.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
@@ -69,86 +85,79 @@ export default function DriveSettingsPage() {
     );
   }
 
-  const settingsSections: SettingsSection[] = [
-    {
-      title: 'Drive',
-      items: [
+  // Plain members (with the commands gate) see only the member-accessible
+  // rows; everything else in drive settings stays owner/admin-only.
+  const settingsSections: SettingsSection[] = !canManage
+    ? [{ title: 'Drive', items: commandsItems }]
+    : [
         {
-          title: 'General',
-          description: 'Drive name and member overview',
-          icon: Shield,
-          href: `/dashboard/${driveId}/settings/general`,
-          available: true,
+          title: 'Drive',
+          items: [
+            {
+              title: 'General',
+              description: 'Drive name and member overview',
+              icon: Shield,
+              href: `/dashboard/${driveId}/settings/general`,
+              available: true,
+            },
+            {
+              title: 'Roles',
+              description: 'Custom roles and permissions',
+              icon: Users,
+              href: `/dashboard/${driveId}/settings/roles`,
+              available: true,
+            },
+            {
+              title: 'Context',
+              description: 'Workspace memory for AI',
+              icon: Brain,
+              href: `/dashboard/${driveId}/settings/context`,
+              available: true,
+            },
+            ...commandsItems,
+          ],
         },
         {
-          title: 'Roles',
-          description: 'Custom roles and permissions',
-          icon: Users,
-          href: `/dashboard/${driveId}/settings/roles`,
-          available: true,
+          title: 'Connections',
+          items: [
+            {
+              title: 'Integrations',
+              description: 'External services and API connections',
+              icon: Cable,
+              href: `/dashboard/${driveId}/settings/integrations`,
+              available: true,
+            },
+          ],
         },
         {
-          title: 'Context',
-          description: 'Workspace memory for AI',
-          icon: Brain,
-          href: `/dashboard/${driveId}/settings/context`,
-          available: true,
+          title: 'Data',
+          items: [
+            {
+              title: 'Backups',
+              description: 'Snapshots of pages, members, and roles',
+              icon: HardDrive,
+              href: `/dashboard/${driveId}/settings/backups`,
+              available: true,
+            },
+          ],
         },
-        // Launch exposure gate (universal-commands spec §0): admin accounts only
-        ...(canSeeCommandSettings(user)
+        ...(drive.isOwned
           ? [
               {
-                title: 'Commands',
-                description: 'Slash commands for everyone in this drive',
-                icon: SlashSquare,
-                href: `/dashboard/${driveId}/settings/commands`,
-                available: true,
+                title: 'Administration',
+                items: [
+                  {
+                    title: 'Danger Zone',
+                    description: 'Delete or transfer this drive',
+                    icon: Trash2,
+                    href: `/dashboard/${driveId}/settings/danger`,
+                    available: true,
+                  },
+                ],
               },
             ]
           : []),
-      ],
-    },
-    {
-      title: 'Connections',
-      items: [
-        {
-          title: 'Integrations',
-          description: 'External services and API connections',
-          icon: Cable,
-          href: `/dashboard/${driveId}/settings/integrations`,
-          available: true,
-        },
-      ],
-    },
-    {
-      title: 'Data',
-      items: [
-        {
-          title: 'Backups',
-          description: 'Snapshots of pages, members, and roles',
-          icon: HardDrive,
-          href: `/dashboard/${driveId}/settings/backups`,
-          available: true,
-        },
-      ],
-    },
-    ...(drive.isOwned
-      ? [
-          {
-            title: 'Administration',
-            items: [
-              {
-                title: 'Danger Zone',
-                description: 'Delete or transfer this drive',
-                icon: Trash2,
-                href: `/dashboard/${driveId}/settings/danger`,
-                available: true,
-              },
-            ],
-          },
-        ]
-      : []),
-  ];
+      ];
 
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
