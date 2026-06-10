@@ -46,10 +46,13 @@ export function findSlashTrigger(
 
   const query = textBeforeCursor.slice(triggerIndex + 1);
 
-  // Mirrors the mention "completed mention" patterns: a finished word plus
-  // whitespace, or an already-serialized token, means the `/` is no longer an
-  // active trigger.
-  if (/^[^\s[\]]+\s/.test(query)) return null;
+  // Trigger names cannot contain whitespace, so any whitespace in the query
+  // ends the trigger (a space "completes" it, mirroring the mention close
+  // pattern). This also guarantees the command picker is closed before a
+  // mid-query `@` (preceded by a space) can open the mention picker — the two
+  // pickers are never open at once.
+  if (/\s/.test(query)) return null;
+  // An already-serialized token after the `/` is not an active trigger.
   if (/^\[[^\]]+\]\([^)]+\)/.test(query)) return null;
 
   return { triggerIndex, query };
@@ -77,6 +80,28 @@ export function insertionCovers(
   return index >= start && index < newEnd;
 }
 
+/**
+ * Trigger memory the caller threads between evaluations:
+ * - `dismissedTriggerIndex`: the `/` the user dismissed via Escape — typing
+ *   after it never reopens the picker (spec §1.1's dismissal memory).
+ * - `typedTriggerIndex`: a `/` known to have arrived via a typing insertion —
+ *   typing after it MAY reopen the picker after a non-Escape close (click
+ *   outside), mirroring how the mention picker reopens on the next keystroke.
+ *   A pasted `/` never earns this, so paste stays literal forever.
+ *
+ * Both reset to -1 the moment the trigger disappears ("deleting the `/` and
+ * retyping it resets the dismissal").
+ */
+export interface SlashTriggerMemory {
+  dismissedTriggerIndex: number;
+  typedTriggerIndex: number;
+}
+
+export const INITIAL_SLASH_MEMORY: SlashTriggerMemory = {
+  dismissedTriggerIndex: -1,
+  typedTriggerIndex: -1,
+};
+
 export interface SlashEvaluationInput {
   prevValue: string;
   value: string;
@@ -88,21 +113,19 @@ export interface SlashEvaluationInput {
   hasCommandToken: boolean;
   tokenRanges?: readonly TokenRange[];
   isOpen: boolean;
-  /** Index of the `/` the user dismissed via Escape; -1 = none. */
-  dismissedTriggerIndex: number;
+  memory: SlashTriggerMemory;
 }
 
 export type SlashEvaluation =
-  | { action: 'open'; triggerIndex: number; query: string; dismissedTriggerIndex: number }
-  | { action: 'update'; triggerIndex: number; query: string; dismissedTriggerIndex: number }
-  | { action: 'close'; dismissedTriggerIndex: number }
-  | { action: 'none'; dismissedTriggerIndex: number };
+  | { action: 'open'; triggerIndex: number; query: string; memory: SlashTriggerMemory }
+  | { action: 'update'; triggerIndex: number; query: string; memory: SlashTriggerMemory }
+  | { action: 'close'; memory: SlashTriggerMemory }
+  | { action: 'none'; memory: SlashTriggerMemory };
 
 /**
  * Evaluate one input change against the slash-trigger rules.
- * The caller owns the state (isOpen, dismissedTriggerIndex) and applies the
- * returned action; `dismissedTriggerIndex` in the result is the new value to
- * store (it resets to -1 when the trigger disappears, mirroring mentions).
+ * The caller owns the state (isOpen, memory) and applies the returned action;
+ * `memory` in the result is the new value to store.
  */
 export function evaluateSlashTrigger(input: SlashEvaluationInput): SlashEvaluation {
   const {
@@ -114,36 +137,41 @@ export function evaluateSlashTrigger(input: SlashEvaluationInput): SlashEvaluati
     hasCommandToken,
     tokenRanges = [],
     isOpen,
-    dismissedTriggerIndex,
+    memory,
   } = input;
 
   if (hasCommandToken) {
-    return { action: isOpen ? 'close' : 'none', dismissedTriggerIndex };
+    return { action: isOpen ? 'close' : 'none', memory };
   }
 
   const hit = findSlashTrigger(value, cursorPos, tokenRanges);
 
   if (!hit) {
-    // Mirrors the mention close-when-no-trigger branch, which also resets
-    // the Escape-dismissal memory.
-    return { action: isOpen ? 'close' : 'none', dismissedTriggerIndex: -1 };
+    // Mirrors the mention close-when-no-trigger branch: the trigger is gone,
+    // so both memories reset.
+    return { action: isOpen ? 'close' : 'none', memory: INITIAL_SLASH_MEMORY };
   }
 
   if (isOpen) {
-    return { action: 'update', ...hit, dismissedTriggerIndex };
+    return { action: 'update', ...hit, memory };
   }
 
-  // Opening requires a typing insertion that placed the `/` itself.
-  if (isComposing) return { action: 'none', dismissedTriggerIndex };
-  if (!isTypingInsertion(inputType)) return { action: 'none', dismissedTriggerIndex };
-  if (!insertionCovers(prevValue, value, hit.triggerIndex)) {
-    return { action: 'none', dismissedTriggerIndex };
+  // Opening requires typing: either this insertion placed the `/` itself, or
+  // the user is typing after a `/` that previously arrived by typing (reopen
+  // after a click-outside close — the mention-mirror behavior).
+  const typing = !isComposing && isTypingInsertion(inputType);
+  const covers = typing && insertionCovers(prevValue, value, hit.triggerIndex);
+  const nextMemory = covers ? { ...memory, typedTriggerIndex: hit.triggerIndex } : memory;
+  const triggerWasTyped = covers || nextMemory.typedTriggerIndex === hit.triggerIndex;
+
+  if (!typing || !triggerWasTyped) {
+    return { action: 'none', memory: nextMemory };
   }
-  if (dismissedTriggerIndex === hit.triggerIndex) {
-    return { action: 'none', dismissedTriggerIndex };
+  if (nextMemory.dismissedTriggerIndex === hit.triggerIndex) {
+    return { action: 'none', memory: nextMemory };
   }
 
-  return { action: 'open', ...hit, dismissedTriggerIndex };
+  return { action: 'open', ...hit, memory: nextMemory };
 }
 
 export interface CommandInsertion {

@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useDebounce } from '@/hooks/useDebounce';
 import { positioningService, type Position } from '@/services/positioningService';
 import {
   evaluateSlashTrigger,
   findSlashTrigger,
   buildCommandInsertion,
-  type TokenRange,
+  INITIAL_SLASH_MEMORY,
 } from '@/lib/commands/slash-trigger';
 import {
   filterAndRankCommands,
@@ -16,6 +17,9 @@ import {
 } from '@/lib/commands/command-picker-core';
 import { resolvePickerKeyAction } from '@/lib/commands/picker-keyboard';
 import { COMMAND_TOKEN_TYPE, type TrackedToken } from '@/lib/tokens/message-tokens';
+import { createClientLogger } from '@/lib/logging/client-logger';
+
+const logger = createClientLogger({ namespace: 'commands', component: 'use-command-suggestion' });
 
 export interface UseCommandSuggestionProps {
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -23,10 +27,13 @@ export interface UseCommandSuggestionProps {
   enabled: boolean;
   driveId?: string;
   popupPlacement?: 'top' | 'bottom';
-  /** One command per message: a tracked command chip blocks the trigger. */
-  hasCommandToken: boolean;
-  /** All tracked token ranges (a `/` inside an existing chip is not a trigger). */
-  tokenRanges: readonly TokenRange[];
+  /**
+   * Reads the live tracked-token list. A getter (not a prop value) so trigger
+   * detection sees tokens the tracker updated synchronously earlier in the
+   * same input event — e.g. a select-all-and-type-`/` edit that dissolves a
+   * command chip and should immediately re-arm the trigger.
+   */
+  getTokens: () => readonly TrackedToken[];
   /** Whether Enter selects (hardware keyboard) or inserts a newline (mobile soft keyboard). */
   enterSelects: boolean;
   /** Propagates the new display text after chip insertion (tracker's handleDisplayTextChange). */
@@ -43,6 +50,8 @@ export interface UseCommandSuggestionResult {
   /** Total resolvable commands (distinguishes the two empty states, spec §1.4). */
   hasAnyCommands: boolean;
   loading: boolean;
+  /** True when the suggest fetch failed — the panel shows load-error copy. */
+  loadFailed: boolean;
   query: string;
   selectedIndex: number;
   /** Run trigger detection for an input event (call after the value propagates). */
@@ -51,7 +60,7 @@ export interface UseCommandSuggestionResult {
   handleKeyDown: (e: React.KeyboardEvent) => void;
   handleCompositionStart: () => void;
   handleCompositionEnd: () => void;
-  /** Sync after programmatic value changes (clear, draft restore). Never opens. */
+  /** Sync after programmatic value changes (clear, draft restore). Never opens; closes if open. */
   syncDisplayText: (value: string) => void;
   actions: {
     select: (item: CommandSuggestionItem) => void;
@@ -61,7 +70,9 @@ export interface UseCommandSuggestionResult {
   };
 }
 
-const FETCH_DEBOUNCE_MS = 200;
+// Filtering against the typed query is debounced 200ms, mirroring the mention
+// picker's fetch debounce (spec §1.4). The fetch itself fires immediately on
+// open — it happens once per trigger, so there is nothing to coalesce.
 const FILTER_DEBOUNCE_MS = 200;
 
 /**
@@ -81,8 +92,7 @@ export function useCommandSuggestion({
   enabled,
   driveId,
   popupPlacement = 'top',
-  hasCommandToken,
-  tokenRanges,
+  getTokens,
   enterSelects,
   onValueChange,
   onTokenInserted,
@@ -90,49 +100,60 @@ export function useCommandSuggestion({
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
   const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [allItems, setAllItems] = useState<CommandSuggestionItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  const debouncedQuery = useDebounce(query, FILTER_DEBOUNCE_MS);
+
+  // isOpen mirrored into a ref so the evaluate/handleInput callback chain
+  // stays identity-stable across open/close (it is recreated otherwise, which
+  // re-fires ChatTextarea's sync effect for nothing).
+  const isOpenRef = useRef(false);
   const prevValueRef = useRef('');
   const triggerIndexRef = useRef(-1);
-  const dismissedTriggerRef = useRef(-1);
+  const memoryRef = useRef(INITIAL_SLASH_MEMORY);
   const isComposingRef = useRef(false);
   const compositionStartValueRef = useRef('');
-  const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchRequestRef = useRef(0);
 
   const closeInternal = useCallback(() => {
+    isOpenRef.current = false;
     setIsOpen(false);
     setPosition(null);
     setQuery('');
-    setDebouncedQuery('');
     setSelectedIndex(0);
-    if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
-    if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
   }, []);
 
   const dismiss = useCallback(() => {
-    dismissedTriggerRef.current = triggerIndexRef.current;
+    memoryRef.current = {
+      ...memoryRef.current,
+      dismissedTriggerIndex: triggerIndexRef.current,
+    };
     closeInternal();
   }, [closeInternal]);
 
   const fetchCommands = useCallback(async () => {
     const requestId = ++fetchRequestRef.current;
     setLoading(true);
+    setLoadFailed(false);
     const url = driveId
       ? `/api/commands/suggest?driveId=${encodeURIComponent(driveId)}`
       : '/api/commands/suggest';
     try {
       const response = await fetchWithAuth(url);
+      if (!response.ok) throw new Error(`suggest fetch failed: ${response.status}`);
       const data: { suggestions?: CommandSuggestionItem[] } = await response.json();
       if (fetchRequestRef.current === requestId) {
         setAllItems(Array.isArray(data?.suggestions) ? data.suggestions : []);
       }
-    } catch {
-      if (fetchRequestRef.current === requestId) setAllItems([]);
+    } catch (error) {
+      logger.error('Failed to fetch command suggestions', { error, driveId });
+      if (fetchRequestRef.current === requestId) {
+        setAllItems([]);
+        setLoadFailed(true);
+      }
     } finally {
       if (fetchRequestRef.current === requestId) setLoading(false);
     }
@@ -151,36 +172,18 @@ export function useCommandSuggestion({
 
       triggerIndexRef.current = triggerIndex;
       setQuery(initialQuery);
-      setDebouncedQuery(initialQuery);
       setSelectedIndex(0);
       setPosition(newPosition);
+      isOpenRef.current = true;
       setIsOpen(true);
-      // Show the loading row immediately — the fetch is debounced, and an
-      // empty-state flash ("No commands yet…") before it lands would mislead.
-      setLoading(true);
-
-      // Fetch the full resolvable list, debounced like the mention portal;
-      // filtering against the typed query happens client-side (descriptions
-      // are matched too, which the server's trigger-only q cannot do).
-      if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
-      fetchDebounceRef.current = setTimeout(() => {
-        void fetchCommands();
-      }, FETCH_DEBOUNCE_MS);
+      void fetchCommands();
     },
     [inputRef, popupPlacement, fetchCommands]
   );
 
-  const updateQuery = useCallback((nextQuery: string) => {
-    setQuery(nextQuery);
-    if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
-    // 200ms filter debounce, mirroring MentionPickerPortal's fetch debounce.
-    filterDebounceRef.current = setTimeout(() => {
-      setDebouncedQuery(nextQuery);
-    }, FILTER_DEBOUNCE_MS);
-  }, []);
-
   const evaluate = useCallback(
     (prevValue: string, value: string, inputType: string | null) => {
+      const tokens = getTokens();
       const cursorPos = inputRef.current?.selectionStart ?? value.length;
       const result = evaluateSlashTrigger({
         prevValue,
@@ -188,13 +191,13 @@ export function useCommandSuggestion({
         cursorPos,
         inputType,
         isComposing: isComposingRef.current,
-        hasCommandToken,
-        tokenRanges,
-        isOpen,
-        dismissedTriggerIndex: dismissedTriggerRef.current,
+        hasCommandToken: tokens.some((t) => t.type === COMMAND_TOKEN_TYPE),
+        tokenRanges: tokens,
+        isOpen: isOpenRef.current,
+        memory: memoryRef.current,
       });
 
-      dismissedTriggerRef.current = result.dismissedTriggerIndex;
+      memoryRef.current = result.memory;
 
       switch (result.action) {
         case 'open':
@@ -202,7 +205,7 @@ export function useCommandSuggestion({
           break;
         case 'update':
           triggerIndexRef.current = result.triggerIndex;
-          updateQuery(result.query);
+          setQuery(result.query);
           break;
         case 'close':
           closeInternal();
@@ -211,7 +214,7 @@ export function useCommandSuggestion({
           break;
       }
     },
-    [inputRef, hasCommandToken, tokenRanges, isOpen, open, updateQuery, closeInternal]
+    [inputRef, getTokens, open, closeInternal]
   );
 
   const handleInput = useCallback(
@@ -247,14 +250,15 @@ export function useCommandSuggestion({
     (value: string) => {
       if (value === prevValueRef.current) return;
       prevValueRef.current = value;
-      // Programmatic changes (clear on send, draft restore, external pickers)
-      // never open the picker, but they can invalidate an open one.
-      if (isOpen) {
-        const cursorPos = inputRef.current?.selectionStart ?? value.length;
-        if (!findSlashTrigger(value, cursorPos, tokenRanges)) closeInternal();
-      }
+      // A programmatic replacement (clear on send, draft restore, toolbar
+      // insertion) severs any relationship to the previously typed trigger:
+      // reset the trigger memory so e.g. an Escape dismissal can't leak into
+      // the next message, and close the picker — its query, anchor, and items
+      // describe text the user is no longer typing.
+      memoryRef.current = INITIAL_SLASH_MEMORY;
+      if (isOpenRef.current) closeInternal();
     },
-    [isOpen, inputRef, tokenRanges, closeInternal]
+    [closeInternal]
   );
 
   const items = useMemo(
@@ -279,7 +283,7 @@ export function useCommandSuggestion({
       const cursorPos = element.selectionStart ?? value.length;
       let triggerIndex = triggerIndexRef.current;
       if (triggerIndex < 0 || value[triggerIndex] !== '/') {
-        const hit = findSlashTrigger(value, cursorPos, tokenRanges);
+        const hit = findSlashTrigger(value, cursorPos, getTokens());
         if (!hit) return;
         triggerIndex = hit.triggerIndex;
       }
@@ -301,7 +305,7 @@ export function useCommandSuggestion({
       element.focus();
       closeInternal();
     },
-    [inputRef, allItems, tokenRanges, onTokenInserted, onValueChange, closeInternal]
+    [inputRef, allItems, getTokens, onTokenInserted, onValueChange, closeInternal]
   );
 
   const handleKeyDown = useCallback(
@@ -346,20 +350,13 @@ export function useCommandSuggestion({
     [enabled, isOpen, popupPlacement, selectedIndex, items, enterSelects, select, dismiss]
   );
 
-  // Clear pending timers on unmount (the picker also closes with the input).
-  useEffect(() => {
-    return () => {
-      if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current);
-      if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
-    };
-  }, []);
-
   return {
     isOpen,
     position,
     items,
     hasAnyCommands: allItems.length > 0,
     loading,
+    loadFailed,
     query,
     selectedIndex,
     handleInput,

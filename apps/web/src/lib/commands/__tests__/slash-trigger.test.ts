@@ -5,6 +5,7 @@ import {
   insertionCovers,
   evaluateSlashTrigger,
   buildCommandInsertion,
+  INITIAL_SLASH_MEMORY,
   SlashEvaluationInput,
 } from '../slash-trigger';
 
@@ -17,7 +18,7 @@ const baseInput = (overrides: Partial<SlashEvaluationInput> = {}): SlashEvaluati
   hasCommandToken: false,
   tokenRanges: [],
   isOpen: false,
-  dismissedTriggerIndex: -1,
+  memory: INITIAL_SLASH_MEMORY,
   ...overrides,
 });
 
@@ -47,12 +48,19 @@ describe('findSlashTrigger', () => {
     expect(findSlashTrigger('/rel', 0)).toBeNull();
   });
 
-  it('given a completed word plus space after the / (mirrors mention close), should NOT find a trigger', () => {
+  it('given any whitespace in the query, should NOT find a trigger (trigger names cannot contain spaces; also prevents stacking with the @ mention picker)', () => {
     expect(findSlashTrigger('/foo bar', 8)).toBeNull();
+    expect(findSlashTrigger('/foo ', 5)).toBeNull();
+    expect(findSlashTrigger('/ @a', 4)).toBeNull();
+    expect(findSlashTrigger('/a\nb', 4)).toBeNull();
   });
 
   it('given the / sits inside a tracked token range, should NOT find a trigger', () => {
-    expect(findSlashTrigger('/foo rest', 9, [{ start: 0, end: 4 }])).toBeNull();
+    expect(findSlashTrigger('/foo-rest', 9, [{ start: 0, end: 4 }])).toBeNull();
+  });
+
+  it('given an already-serialized token after the /, should NOT find a trigger', () => {
+    expect(findSlashTrigger('/[foo](c1:command)', 18)).toBeNull();
   });
 
   it('given a value not starting with /, should NOT find a trigger', () => {
@@ -94,14 +102,14 @@ describe('insertionCovers', () => {
   });
 });
 
-describe('evaluateSlashTrigger', () => {
-  it('given an empty input and a typed /, should open with empty query', () => {
+describe('evaluateSlashTrigger — opening', () => {
+  it('given an empty input and a typed /, should open with empty query and remember the typed trigger', () => {
     const result = evaluateSlashTrigger(baseInput());
     expect(result).toEqual({
       action: 'open',
       triggerIndex: 0,
       query: '',
-      dismissedTriggerIndex: -1,
+      memory: { dismissedTriggerIndex: -1, typedTriggerIndex: 0 },
     });
   });
 
@@ -109,81 +117,13 @@ describe('evaluateSlashTrigger', () => {
     const result = evaluateSlashTrigger(
       baseInput({ prevValue: '  ', value: '  /', cursorPos: 3 })
     );
-    expect(result.action).toBe('open');
+    expect(result).toMatchObject({ action: 'open', triggerIndex: 2 });
   });
 
   it('given non-whitespace before the cursor slash, should not open', () => {
     const result = evaluateSlashTrigger(
       baseInput({ prevValue: 'hello ', value: 'hello /', cursorPos: 7 })
     );
-    expect(result.action).toBe('none');
-  });
-
-  it('given the message already contains a command chip, should never open', () => {
-    const result = evaluateSlashTrigger(
-      baseInput({ hasCommandToken: true })
-    );
-    expect(result.action).toBe('none');
-  });
-
-  it('given the message contains a command chip while open, should close', () => {
-    const result = evaluateSlashTrigger(
-      baseInput({ hasCommandToken: true, isOpen: true })
-    );
-    expect(result.action).toBe('close');
-  });
-
-  it('given the picker is open and the user keeps typing, should update the query', () => {
-    const result = evaluateSlashTrigger(
-      baseInput({ prevValue: '/re', value: '/rel', cursorPos: 4, isOpen: true })
-    );
-    expect(result).toMatchObject({ action: 'update', triggerIndex: 0, query: 'rel' });
-  });
-
-  it('given the user deletes back past the /, should close and reset dismissal', () => {
-    const result = evaluateSlashTrigger(
-      baseInput({
-        prevValue: '/',
-        value: '',
-        cursorPos: 0,
-        inputType: 'deleteContentBackward',
-        isOpen: true,
-        dismissedTriggerIndex: 0,
-      })
-    );
-    expect(result).toEqual({ action: 'close', dismissedTriggerIndex: -1 });
-  });
-
-  it('given a dismissed trigger position, should NOT reopen while typing after the same /', () => {
-    const result = evaluateSlashTrigger(
-      baseInput({ prevValue: '/r', value: '/re', cursorPos: 3, dismissedTriggerIndex: 0 })
-    );
-    expect(result.action).toBe('none');
-    expect(result.dismissedTriggerIndex).toBe(0);
-  });
-
-  it('given the / deleted and retyped, should reset dismissal and open again', () => {
-    // Step 1: deletion clears the trigger and resets dismissal
-    const afterDelete = evaluateSlashTrigger(
-      baseInput({
-        prevValue: '/re',
-        value: '',
-        cursorPos: 0,
-        inputType: 'deleteContentBackward',
-        dismissedTriggerIndex: 0,
-      })
-    );
-    expect(afterDelete.dismissedTriggerIndex).toBe(-1);
-
-    // Step 2: retyping the / opens
-    const afterRetype = evaluateSlashTrigger(
-      baseInput({ dismissedTriggerIndex: afterDelete.dismissedTriggerIndex })
-    );
-    expect(afterRetype.action).toBe('open');
-  });
-
-  it('given an IME composition in progress, should NOT open', () => {
-    const result = evaluateSlashTrigger(baseInput({ isComposing: true }));
     expect(result.action).toBe('none');
   });
 
@@ -199,6 +139,26 @@ describe('evaluateSlashTrigger', () => {
     expect(result).toMatchObject({ action: 'open', triggerIndex: 0, query: 'rel' });
   });
 
+  it('given an IME composition in progress, should NOT open', () => {
+    const result = evaluateSlashTrigger(baseInput({ isComposing: true }));
+    expect(result.action).toBe('none');
+  });
+
+  it('given a paste resulting in a leading /, should NOT open (text stays literal)', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({ prevValue: '', value: '/foo', cursorPos: 4, inputType: 'insertFromPaste' })
+    );
+    expect(result.action).toBe('none');
+    expect(result.memory.typedTriggerIndex).toBe(-1);
+  });
+
+  it('given typing after a pasted /foo, should still NOT open (the / never arrived by typing)', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({ prevValue: '/foo', value: '/foob', cursorPos: 5, inputType: 'insertText' })
+    );
+    expect(result.action).toBe('none');
+  });
+
   it('given a / typed mid-message then preceding text deleted, should NOT retroactively open', () => {
     const result = evaluateSlashTrigger(
       baseInput({
@@ -210,19 +170,112 @@ describe('evaluateSlashTrigger', () => {
     );
     expect(result.action).toBe('none');
   });
+});
 
-  it('given a paste resulting in a leading /, should NOT open (text stays literal)', () => {
+describe('evaluateSlashTrigger — reopen after non-Escape close (mirrors mention reopen)', () => {
+  // The picker closed via click-outside; the / at index 0 was originally typed.
+  const closedAfterTyping = { dismissedTriggerIndex: -1, typedTriggerIndex: 0 };
+
+  it('given continued typing after the same typed /, should reopen', () => {
     const result = evaluateSlashTrigger(
-      baseInput({ prevValue: '', value: '/foo', cursorPos: 4, inputType: 'insertFromPaste' })
+      baseInput({ prevValue: '/', value: '/d', cursorPos: 2, memory: closedAfterTyping })
+    );
+    expect(result).toMatchObject({ action: 'open', triggerIndex: 0, query: 'd' });
+  });
+
+  it('given a non-typing change after the close, should NOT reopen', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/',
+        value: '/d',
+        cursorPos: 2,
+        inputType: 'insertFromPaste',
+        memory: closedAfterTyping,
+      })
     );
     expect(result.action).toBe('none');
   });
+});
 
-  it('given a typed insertion that does not cover the slash, should NOT open (pasted /foo then typing)', () => {
+describe('evaluateSlashTrigger — dismissal memory (Escape)', () => {
+  const dismissedAt0 = { dismissedTriggerIndex: 0, typedTriggerIndex: 0 };
+
+  it('given a dismissed trigger position, should NOT reopen while typing after the same /', () => {
     const result = evaluateSlashTrigger(
-      baseInput({ prevValue: '/foo', value: '/foob', cursorPos: 5, inputType: 'insertText' })
+      baseInput({ prevValue: '/r', value: '/re', cursorPos: 3, memory: dismissedAt0 })
     );
     expect(result.action).toBe('none');
+    expect(result.memory.dismissedTriggerIndex).toBe(0);
+  });
+
+  it('given the / deleted and retyped, should reset all memory and open again', () => {
+    const afterDelete = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/re',
+        value: '',
+        cursorPos: 0,
+        inputType: 'deleteContentBackward',
+        memory: dismissedAt0,
+      })
+    );
+    expect(afterDelete.memory).toEqual(INITIAL_SLASH_MEMORY);
+
+    const afterRetype = evaluateSlashTrigger(baseInput({ memory: afterDelete.memory }));
+    expect(afterRetype.action).toBe('open');
+  });
+});
+
+describe('evaluateSlashTrigger — open-state updates and closing', () => {
+  it('given the picker is open and the user keeps typing, should update the query', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/re',
+        value: '/rel',
+        cursorPos: 4,
+        isOpen: true,
+        memory: { dismissedTriggerIndex: -1, typedTriggerIndex: 0 },
+      })
+    );
+    expect(result).toMatchObject({ action: 'update', triggerIndex: 0, query: 'rel' });
+  });
+
+  it('given the user deletes back past the /, should close and reset memory', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/',
+        value: '',
+        cursorPos: 0,
+        inputType: 'deleteContentBackward',
+        isOpen: true,
+        memory: { dismissedTriggerIndex: 0, typedTriggerIndex: 0 },
+      })
+    );
+    expect(result).toEqual({ action: 'close', memory: INITIAL_SLASH_MEMORY });
+  });
+
+  it('given a space typed while open (completed trigger word), should close', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/rel',
+        value: '/rel ',
+        cursorPos: 5,
+        isOpen: true,
+        memory: { dismissedTriggerIndex: -1, typedTriggerIndex: 0 },
+      })
+    );
+    expect(result.action).toBe('close');
+  });
+});
+
+describe('evaluateSlashTrigger — one command per message', () => {
+  it('given the message already contains a command chip, should never open', () => {
+    const result = evaluateSlashTrigger(baseInput({ hasCommandToken: true }));
+    expect(result.action).toBe('none');
+  });
+
+  it('given the message contains a command chip while open, should close', () => {
+    const result = evaluateSlashTrigger(baseInput({ hasCommandToken: true, isOpen: true }));
+    expect(result.action).toBe('close');
   });
 });
 

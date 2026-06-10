@@ -9,6 +9,7 @@ import {
   commandResultsAnnouncement,
   noMatchesCopy,
   NO_COMMANDS_EMPTY_STATE,
+  COMMANDS_LOAD_ERROR,
   CommandSuggestionItem,
 } from '../command-picker-core';
 
@@ -103,6 +104,13 @@ describe('copy helpers', () => {
     expect(shadowedTooltip(item({ trigger: 'foo', shadowedBy: 'builtin' }))).toBe(
       'Shadowed by the built-in command /foo. The built-in command runs instead.'
     );
+    expect(shadowedTooltip(item({ trigger: 'foo', shadowedBy: 'drive' }))).toBe(
+      'Shadowed by the drive command /foo. The drive command runs instead.'
+    );
+  });
+
+  it('exposes load-failure copy distinct from the empty states', () => {
+    expect(COMMANDS_LOAD_ERROR).toBe('Couldn’t load commands. Close and reopen to retry.');
   });
 
   it('includes trigger, scope, shadow state, and description in the accessible name', () => {

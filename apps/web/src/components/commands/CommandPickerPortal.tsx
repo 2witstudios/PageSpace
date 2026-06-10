@@ -11,41 +11,33 @@ export interface CommandPickerPortalProps
   position: Position | null;
   /** The message input the picker is anchored to (clicks there don't close it). */
   anchorRef?: React.RefObject<HTMLElement | null>;
-  /** Close without dismissal memory (click outside, selection elsewhere). */
+  /**
+   * Close without dismissal memory (click outside, selection elsewhere).
+   * Memoize with useCallback — it is an effect dependency here. Escape is NOT
+   * handled in the portal: focus always sits in the anchored textarea (spec
+   * §9), so the textarea's keydown grammar owns Escape dismissal. A document
+   * capture listener (the mention portal's approach, needed there because of
+   * its autofocused inner input) would shadow that path and swallow Escape
+   * from other surfaces.
+   */
   onClose: () => void;
-  /** Escape: close and remember this trigger position as dismissed (spec §1.1). */
-  onDismiss: () => void;
 }
 
 /**
  * Portal/positioning shell for the command picker — mirrors
- * `MentionPickerPortal`'s portal, clamps, and Escape handling (spec §1.3),
- * minus the autofocused inner search input: focus never leaves the textarea,
- * so there is no focus-restoration dance (spec §9). Adds close-on-click-outside.
+ * `MentionPickerPortal`'s portal and clamps (spec §1.3), minus the
+ * autofocused inner search input: focus never leaves the textarea, so there
+ * is no focus-restoration dance and no document-level Escape listener (spec
+ * §9). Adds close-on-click-outside.
  */
 export function CommandPickerPortal({
   isOpen,
   position,
   anchorRef,
   onClose,
-  onDismiss,
   ...panelProps
 }: CommandPickerPortalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-
-  // Close on Escape via document keydown (capture phase — the portal sits
-  // outside the component tree). Escape carries dismissal memory.
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onDismiss();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown, { capture: true });
-    return () => document.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [isOpen, onDismiss]);
 
   // Close on click/tap outside the picker (spec §1.3). Clicks inside the
   // anchored textarea only move the caret and keep the picker open; focus
@@ -77,7 +69,11 @@ export function CommandPickerPortal({
       ? `${viewportH - position.bottom - 8}px`
       : `${viewportH - (position.top ?? 0) - 8}px`;
 
-  const actualWidth = Math.min(Math.max(position.width ?? 256, 256), 320);
+  // Width clamps to 256–320px with 8px gutters (spec §1.3/§8); on viewports
+  // narrower than 272px the gutters win over the 256px floor so the picker
+  // never overflows horizontally.
+  const maxAllowedWidth = Math.min(320, viewportW - 16);
+  const actualWidth = Math.min(Math.max(position.width ?? 256, 256), maxAllowedWidth);
   const clampedLeft = Math.max(8, Math.min(position.left, viewportW - actualWidth - 8));
 
   const style: React.CSSProperties = {

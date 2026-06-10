@@ -117,6 +117,13 @@ describe('parseMessageTokens — command tokens', () => {
     expect(result.tokens).toEqual([]);
   });
 
+  it('given an @-sigil token whose type is command, should keep it as literal text (sigil and type must agree)', () => {
+    const raw = '@[foo](c1:command) hello';
+    const result = parseMessageTokens(raw);
+    expect(result.displayText).toBe(raw);
+    expect(result.tokens).toEqual([]);
+  });
+
   it('given a plain literal /foo text, should not produce a token', () => {
     const result = parseMessageTokens('/foo bar');
     expect(result.displayText).toBe('/foo bar');
@@ -161,6 +168,15 @@ describe('serializeMessageTokens', () => {
     const markdown = '/[foo](c1:command) hi @[Alice](u1:user) end';
     const { displayText, tokens } = parseMessageTokens(markdown);
     expect(serializeMessageTokens(displayText, tokens)).toBe(markdown);
+  });
+
+  it('stays stable across multiple round-trips', () => {
+    let markdown = 'Hey @[Alice](a:user), see @[Doc](d:page) and /[ship](c1:command)';
+    for (let i = 0; i < 3; i++) {
+      const { displayText, tokens } = parseMessageTokens(markdown);
+      markdown = serializeMessageTokens(displayText, tokens);
+    }
+    expect(markdown).toBe('Hey @[Alice](a:user), see @[Doc](d:page) and /[ship](c1:command)');
   });
 });
 

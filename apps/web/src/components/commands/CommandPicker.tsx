@@ -15,7 +15,7 @@ import {
   shadowedTooltip,
   commandOptionAccessibleName,
   noMatchesCopy,
-  NO_COMMANDS_EMPTY_STATE,
+  COMMANDS_LOAD_ERROR,
   COMMANDS_SETTINGS_ROUTE,
 } from '@/lib/commands/command-picker-core';
 import type { CommandScope } from '@pagespace/lib/commands/command-core';
@@ -32,6 +32,8 @@ const SCOPE_BADGE_CLASSES: Record<CommandScope, string> = {
 export interface CommandPickerPanelProps {
   items: CommandSuggestionItem[];
   loading: boolean;
+  /** True when the suggest fetch failed — shows load-error copy instead of an empty state. */
+  loadFailed: boolean;
   /** The text typed after `/` in the message input (there is no inner search field). */
   query: string;
   selectedIndex: number;
@@ -57,6 +59,7 @@ export interface CommandPickerPanelProps {
 export function CommandPickerPanel({
   items,
   loading,
+  loadFailed,
   query,
   selectedIndex,
   onSelect,
@@ -75,8 +78,12 @@ export function CommandPickerPanel({
             <span className="animate-spin inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
             Loading…
           </div>
+        ) : loadFailed ? (
+          <div className="p-3 text-sm text-muted-foreground">{COMMANDS_LOAD_ERROR}</div>
         ) : items.length === 0 ? (
           !hasAnyCommands ? (
+            // Exact copy: NO_COMMANDS_EMPTY_STATE (spec §1.4), with the
+            // settings path rendered as a navigating link.
             <div className="p-3 text-sm text-muted-foreground">
               No commands yet. Create one in{' '}
               <Link
@@ -87,7 +94,6 @@ export function CommandPickerPanel({
                 Settings → AI Settings → Commands
               </Link>
               .
-              <span className="sr-only">{NO_COMMANDS_EMPTY_STATE}</span>
             </div>
           ) : (
             <div className="p-3 text-sm text-muted-foreground">{noMatchesCopy(query)}</div>

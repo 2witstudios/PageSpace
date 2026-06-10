@@ -7,19 +7,27 @@ import {
   COMMAND_TOKEN_TYPE,
   type TrackedToken,
 } from '@/lib/tokens/message-tokens';
-import type { TrackedMention } from '@/hooks/useMentionTracker';
+
+// Stable identity for the no-token case — the common path for most messages.
+// Keeping the same array across keystrokes prevents dependency churn in the
+// suggestion hooks that receive the token list.
+const EMPTY_TOKENS: TrackedToken[] = [];
 
 export interface UseMessageTokensResult {
   /** Display text shown in the textarea (no IDs) */
   displayText: string;
   /** All tracked tokens (mentions + command chips) in the display text */
   tokens: TrackedToken[];
-  /** Mention-type tokens only, for mention-specific consumers (useSuggestion ranges) */
-  mentions: TrackedMention[];
   /** Whether any tokens exist (drives the transparent-text overlay mode) */
   hasTokens: boolean;
   /** One command per message: whether a command chip is currently tracked */
   hasCommandToken: boolean;
+  /**
+   * Stable getter for the live token list. Event handlers that run after the
+   * tracker has synchronously processed the same input event (e.g. slash
+   * trigger detection) read through this instead of render-captured props.
+   */
+  getTokens: () => readonly TrackedToken[];
   /** Handle textarea text changes — updates positions and reports markdown to parent */
   handleDisplayTextChange: (newDisplayText: string) => void;
   /** Register a newly inserted token (call before handleDisplayTextChange) */
@@ -27,7 +35,7 @@ export interface UseMessageTokensResult {
 }
 
 /**
- * Unified token tracker for chat inputs — the superset of `useMentionTracker`
+ * Unified token tracker for chat inputs — the superset of the mention tracker
  * that also tracks command chips (`/[Label](commandId:command)`) alongside
  * mentions (`@[Label](id:type)`). The mention behavior (parse, edit-region
  * position updates, overlap-dissolve, exact-text validation) is identical;
@@ -38,7 +46,7 @@ export function useMessageTokens(
   onMarkdownChange: (markdown: string) => void
 ): UseMessageTokensResult {
   const displayTextRef = useRef('');
-  const tokensRef = useRef<TrackedToken[]>([]);
+  const tokensRef = useRef<TrackedToken[]>(EMPTY_TOKENS);
   const lastReportedMarkdownRef = useRef('');
   const pendingTokensRef = useRef<TrackedToken[]>([]);
 
@@ -54,13 +62,15 @@ export function useMessageTokens(
 
     const parsed = parseMessageTokens(markdownValue);
     displayTextRef.current = parsed.displayText;
-    tokensRef.current = parsed.tokens;
-    return parsed;
+    tokensRef.current = parsed.tokens.length === 0 ? EMPTY_TOKENS : parsed.tokens;
+    return { displayText: parsed.displayText, tokens: tokensRef.current };
   }, [markdownValue]);
 
   const registerToken = useCallback((token: TrackedToken) => {
     pendingTokensRef.current.push(token);
   }, []);
+
+  const getTokens = useCallback((): readonly TrackedToken[] => tokensRef.current, []);
 
   const handleDisplayTextChange = useCallback(
     (newDisplayText: string) => {
@@ -74,14 +84,20 @@ export function useMessageTokens(
       );
 
       // Merge in pending tokens from suggestion selection
-      const allTokens = [...updatedTokens, ...pendingTokensRef.current];
+      const pending = pendingTokensRef.current;
       pendingTokensRef.current = [];
 
-      // Sort by position
-      allTokens.sort((a, b) => a.start - b.start);
-
-      // Validate token text still matches (safety check)
-      const validTokens = validTokensForText(allTokens, newDisplayText);
+      let validTokens: TrackedToken[];
+      if (updatedTokens.length === 0 && pending.length === 0) {
+        // Hot path: no tokens before or after — keep the stable empty array.
+        validTokens = EMPTY_TOKENS;
+      } else {
+        const allTokens = [...updatedTokens, ...pending];
+        allTokens.sort((a, b) => a.start - b.start);
+        // Validate token text still matches (safety check)
+        validTokens = validTokensForText(allTokens, newDisplayText);
+        if (validTokens.length === 0) validTokens = EMPTY_TOKENS;
+      }
 
       displayTextRef.current = newDisplayText;
       tokensRef.current = validTokens;
@@ -94,14 +110,6 @@ export function useMessageTokens(
     [onMarkdownChange]
   );
 
-  const mentions = useMemo(
-    () =>
-      tokens.filter(
-        (t): t is TrackedMention & TrackedToken => t.type !== COMMAND_TOKEN_TYPE
-      ),
-    [tokens]
-  );
-
   const hasCommandToken = useMemo(
     () => tokens.some((t) => t.type === COMMAND_TOKEN_TYPE),
     [tokens]
@@ -110,9 +118,9 @@ export function useMessageTokens(
   return {
     displayText,
     tokens,
-    mentions,
     hasTokens: tokens.length > 0,
     hasCommandToken,
+    getTokens,
     handleDisplayTextChange,
     registerToken,
   };

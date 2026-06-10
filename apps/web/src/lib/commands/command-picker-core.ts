@@ -67,56 +67,33 @@ export function resolveSelectionTarget(
   );
 }
 
+const SCOPE_BADGE: Record<CommandScope, string> = {
+  builtin: 'Built-in',
+  user: 'Personal',
+  drive: 'Drive',
+};
+
+/** One adjective per scope; every scope-worded copy string derives from it. */
+const SCOPE_ADJECTIVE: Record<CommandScope, string> = {
+  builtin: 'built-in',
+  user: 'personal',
+  drive: 'drive',
+};
+
 export function scopeBadgeLabel(scope: CommandScope): string {
-  switch (scope) {
-    case 'builtin':
-      return 'Built-in';
-    case 'user':
-      return 'Personal';
-    case 'drive':
-      return 'Drive';
-  }
+  return SCOPE_BADGE[scope];
 }
 
 export function scopeAnnouncement(scope: CommandScope): string {
-  switch (scope) {
-    case 'builtin':
-      return 'built-in command';
-    case 'user':
-      return 'personal command';
-    case 'drive':
-      return 'drive command';
-  }
-}
-
-/** Possessive phrase for the scope that wins a shadowing collision. */
-function shadowingScopePhrase(scope: CommandScope): string {
-  switch (scope) {
-    case 'builtin':
-      return 'the built-in command';
-    case 'user':
-      return 'your personal command';
-    case 'drive':
-      return 'the drive command';
-  }
-}
-
-/** Re-used inside the tooltip's second sentence ("The personal command runs instead."). */
-function shadowingScopeNoun(scope: CommandScope): string {
-  switch (scope) {
-    case 'builtin':
-      return 'built-in';
-    case 'user':
-      return 'personal';
-    case 'drive':
-      return 'drive';
-  }
+  return `${SCOPE_ADJECTIVE[scope]} command`;
 }
 
 /** Tooltip for a shadowed row (spec §1.6). */
 export function shadowedTooltip(item: CommandSuggestionItem): string {
   const winner = item.shadowedBy ?? 'builtin';
-  return `Shadowed by ${shadowingScopePhrase(winner)} /${item.trigger}. The ${shadowingScopeNoun(winner)} command runs instead.`;
+  const adjective = SCOPE_ADJECTIVE[winner];
+  const phrase = winner === 'user' ? `your ${adjective} command` : `the ${adjective} command`;
+  return `Shadowed by ${phrase} /${item.trigger}. The ${adjective} command runs instead.`;
 }
 
 /**
@@ -144,6 +121,13 @@ export function noMatchesCopy(query: string): string {
 /** Empty-state copy when the user has no commands at all (spec §1.4). */
 export const NO_COMMANDS_EMPTY_STATE =
   'No commands yet. Create one in Settings → AI Settings → Commands.';
+
+/**
+ * Shown when the suggest fetch fails. Built-ins guarantee a non-empty list,
+ * so an empty result is almost always a load failure — showing the
+ * "No commands yet" empty state there would mislead.
+ */
+export const COMMANDS_LOAD_ERROR = 'Couldn’t load commands. Close and reopen to retry.';
 
 /** Route the empty-state settings link navigates to. */
 export const COMMANDS_SETTINGS_ROUTE = '/settings/commands';

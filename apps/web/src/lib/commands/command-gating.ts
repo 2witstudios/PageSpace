@@ -11,3 +11,14 @@ export function canUseCommands(
 ): boolean {
   return user?.role === 'admin';
 }
+
+/**
+ * Drive authoring gate (spec §4.1) — same predicate as the drive settings
+ * hub. Distinct from the exposure gate above: this is about who may
+ * create/edit/delete a drive's commands, not who can see the feature.
+ */
+export function canManageDriveCommands(
+  drive: { isOwned?: boolean; role?: string | null } | null | undefined
+): boolean {
+  return Boolean(drive && (drive.isOwned || drive.role === 'ADMIN'));
+}

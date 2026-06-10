@@ -25,6 +25,11 @@ export interface TrackedToken {
   type: TokenType;
 }
 
+/** A tracked token that is a mention (the pre-command tracker's public shape). */
+export interface TrackedMention extends Omit<TrackedToken, 'type'> {
+  type: MentionType;
+}
+
 /** Sigil shown in the textarea before the label: '@' for mentions, '/' for commands. */
 export function tokenSigil(type: TokenType): '@' | '/' {
   return type === COMMAND_TOKEN_TYPE ? '/' : '@';
@@ -61,9 +66,12 @@ export function parseMessageTokens(markdown: string): {
   while ((match = TOKEN_REGEX.exec(markdown)) !== null) {
     const [fullMatch, sigil, label, id, type] = match;
 
+    // Sigil and type must agree: only `/...:command` is a command and only
+    // `@...:<mention type>` is a mention. A mismatched pair (e.g. literal
+    // text "@[x](y:command)") stays plain text — chipping it would flip its
+    // sigil on re-serialization.
     const isCommand = sigil === '/';
-    if (isCommand && type !== COMMAND_TOKEN_TYPE) {
-      // Not a command serialization — keep the whole match as literal text.
+    if (isCommand !== (type === COMMAND_TOKEN_TYPE)) {
       displayText += markdown.slice(lastIndex, match.index) + fullMatch;
       lastIndex = match.index + fullMatch.length;
       continue;
@@ -157,7 +165,9 @@ export function updateTokenPositions(
   oldText: string,
   newText: string
 ): TrackedToken[] {
-  if (tokens.length === 0) return [];
+  // Identity-stable for the hot no-token path (every keystroke in every chat
+  // input goes through here).
+  if (tokens.length === 0) return tokens;
 
   const { start, oldEnd, newEnd } = findEditRegion(oldText, newText);
   const delta = (newEnd - start) - (oldEnd - start);
