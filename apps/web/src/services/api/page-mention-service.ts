@@ -227,28 +227,36 @@ export async function syncMentions(
   const { pageIds: extractedPageIds, userIds: directUserIds, groupMentions } = extracted;
 
   // Expand group mentions (@everyone, @role) to individual user IDs. Role IDs
-  // also come from content, so expansion is fail-soft: on error the group
-  // mention is dropped and the save proceeds.
+  // also come from content, so expansion is fail-soft: on error the save
+  // proceeds, but user-mention sync is skipped for this save — substituting an
+  // empty recipient set would delete existing group-derived rows and a later
+  // successful save would recreate them and re-notify.
   let expandedUserIds: string[] = [];
+  let expansionFailed = false;
   if (groupMentions.length > 0 && options?.driveId) {
     try {
       expandedUserIds = await expandGroupMentions(groupMentions, options.driveId);
     } catch (error) {
-      loggers.api.error('Failed to expand group mentions; dropping group recipients:', error as Error);
+      loggers.api.error('Failed to expand group mentions; skipping user-mention sync for this save:', error as Error);
+      expansionFailed = true;
     }
   }
-
-  // Merge direct and group-expanded user IDs, preserving uniqueness
-  const allUserIdSet = new Set([...directUserIds, ...expandedUserIds]);
 
   // Validate every extracted ID against the database before any insert —
   // nonexistent targets (literal examples, deleted pages, stale users) are
   // dropped silently instead of violating an FK mid-transaction.
   const mentionedPageIds = await filterToExistingPageIds(extractedPageIds, tx);
-  const mentionedUserIds = await filterToExistingUserIds(Array.from(allUserIdSet), tx);
 
   // Sync page mentions
   await syncPageMentions(sourcePageId, mentionedPageIds, tx);
+
+  if (expansionFailed) {
+    return emptyResult;
+  }
+
+  // Merge direct and group-expanded user IDs, preserving uniqueness
+  const allUserIdSet = new Set([...directUserIds, ...expandedUserIds]);
+  const mentionedUserIds = await filterToExistingUserIds(Array.from(allUserIdSet), tx);
 
   // Sync user mentions and get newly created user IDs
   const newlyMentionedUserIds = await syncUserMentions(sourcePageId, mentionedUserIds, tx, options?.mentionedByUserId);

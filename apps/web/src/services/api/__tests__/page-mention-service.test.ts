@@ -272,6 +272,44 @@ describe('syncMentions — group mention expansion is fail-soft', () => {
     expect(userMentionInserts).toHaveLength(0);
   });
 
+  it('preserves existing user-mention rows when expansion fails instead of treating the empty set as authoritative', async () => {
+    // The doc still contains the group mention; a transient drive-member
+    // lookup failure must not delete the group-derived rows (which a later
+    // successful save would recreate and re-notify).
+    vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('drive query failed'));
+    const { tx, userMentionInserts, deletes } = makeTx({
+      existingUserIds: ['member-1', 'member-2'],
+      existingUserMentions: ['member-1', 'member-2'],
+    });
+
+    const result = await syncMentions(
+      'source-page',
+      'Hi @[everyone](everyone:everyone)',
+      tx as unknown as AnyTx,
+      { driveId: 'drive-1' }
+    );
+
+    expect(userMentionInserts).toHaveLength(0);
+    expect(deletes.filter(d => d.table === userMentions)).toHaveLength(0);
+    expect(result.newlyMentionedUserIds).toEqual([]);
+  });
+
+  it('still syncs page mentions when group expansion fails', async () => {
+    vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('drive query failed'));
+    const { tx, mentionInserts } = makeTx({ existingPageIds: ['page123'] });
+
+    await syncMentions(
+      'source-page',
+      '@[My Page](page123:page) cc @[everyone](everyone:everyone)',
+      tx as unknown as AnyTx,
+      { driveId: 'drive-1' }
+    );
+
+    expect(mentionInserts).toEqual([
+      { sourcePageId: 'source-page', targetPageId: 'page123' },
+    ]);
+  });
+
   it('still validates group-expanded user IDs before inserting', async () => {
     // Expansion returns one real and one stale user; only the real one is inserted.
     vi.mocked(getDriveMemberUserIdsByCustomRole).mockResolvedValueOnce(['real-user', 'stale-user']);
