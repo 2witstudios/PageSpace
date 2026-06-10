@@ -6,7 +6,8 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       commands: { findFirst: vi.fn(), findMany: vi.fn() },
-      pages: { findFirst: vi.fn() },
+      pages: { findFirst: vi.fn(), findMany: vi.fn() },
+      users: { findMany: vi.fn() },
     },
     select: vi.fn(),
     insert: vi.fn(),
@@ -28,6 +29,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', name: 'name' },
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -107,6 +111,7 @@ const storedCommand = {
   id: 'cmd_1',
   userId: USER_ID,
   driveId: null,
+  createdById: USER_ID,
   trigger: 'design-review',
   description: validBody.description,
   entryPageId: 'page_1',
@@ -127,6 +132,8 @@ beforeEach(() => {
   } as never);
   mockedDb.query.commands.findFirst.mockResolvedValue(undefined as never);
   mockedDb.query.commands.findMany.mockResolvedValue([] as never);
+  mockedDb.query.pages.findMany.mockResolvedValue([] as never);
+  mockedDb.query.users.findMany.mockResolvedValue([] as never);
   mockedCanView.mockResolvedValue(true);
   mockedIsOwnerOrAdmin.mockResolvedValue(true);
   mockedDb.insert.mockReturnValue(insertChain(storedCommand) as never);
@@ -158,6 +165,103 @@ describe('GET /api/commands', () => {
     expect(json.commands).toHaveLength(2);
     expect(json.commands[0].scope).toBe('user');
     expect(json.commands[1]).toMatchObject({ scope: 'drive', driveId: 'drive_member' });
+  });
+
+  it('enriches each command with entry page title, availability, and author name', async () => {
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      storedCommand,
+      {
+        ...storedCommand,
+        id: 'cmd_2',
+        userId: null,
+        driveId: 'drive_member',
+        createdById: 'user_2',
+        trigger: 'team-faq',
+        entryPageId: 'page_2',
+      },
+    ] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Design Review', driveId: 'drive_member', isTrashed: false },
+      { id: 'page_2', title: 'Team FAQ', driveId: 'drive_member', isTrashed: true },
+    ] as never);
+    mockedDb.query.users.findMany.mockResolvedValue([
+      { id: USER_ID, name: 'Me' },
+      { id: 'user_2', name: 'Alice' },
+    ] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: 'Design Review',
+      entryPageDriveId: 'drive_member',
+      entryPageAvailable: true,
+      authorName: 'Me',
+    });
+    // Trashed entry page → unavailable
+    expect(json.commands[1]).toMatchObject({
+      entryPageTitle: 'Team FAQ',
+      entryPageAvailable: false,
+      authorName: 'Alice',
+    });
+  });
+
+  it('marks the entry page unavailable when it no longer exists', async () => {
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: null,
+      entryPageAvailable: false,
+    });
+  });
+
+  it('checks per-page permission for every entry page (membership does not imply access)', async () => {
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Secret Page', driveId: 'drive_member', isTrashed: false },
+    ] as never);
+    mockedCanView.mockResolvedValue(false);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(mockedCanView).toHaveBeenCalledWith(USER_ID, 'page_1');
+    expect(json.commands[0].entryPageAvailable).toBe(false);
+  });
+
+  it('suppresses entry-page metadata the caller cannot view (no private-title leak)', async () => {
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([{ id: 'drive_member' }]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      { ...storedCommand, userId: null, driveId: 'drive_member' },
+    ] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Private Roadmap', driveId: 'drive_member', isTrashed: false },
+    ] as never);
+    mockedCanView.mockResolvedValue(false);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: null,
+      entryPageDriveId: null,
+      entryPageAvailable: false,
+    });
   });
 });
 
@@ -294,6 +398,15 @@ describe('POST /api/commands', () => {
     const json = await response.json();
     expect(json.command.scope).toBe('drive');
     expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, 'drive_1');
+  });
+
+  it('stamps createdById with the caller on create', async () => {
+    const chain = insertChain(storedCommand);
+    mockedDb.insert.mockReturnValue(chain as never);
+    await POST(postRequest(validBody));
+    expect(chain.values).toHaveBeenCalledWith(
+      expect.objectContaining({ createdById: USER_ID })
+    );
   });
 
   it('requires CSRF on writes', async () => {

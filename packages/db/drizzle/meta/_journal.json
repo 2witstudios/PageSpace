@@ -1100,6 +1100,13 @@
       "when": 1781057017324,
       "tag": "0156_married_jackal",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1781063805022,
+      "tag": "0157_quick_christian_walker",
+      "breakpoints": true
     }
   ]
 }
