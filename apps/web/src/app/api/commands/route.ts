@@ -85,10 +85,13 @@ export async function GET(request: Request) {
     // caller can't view have their metadata suppressed entirely — drive
     // commands are listed to all members, and the title of a private entry
     // page must not leak through this endpoint.
-    const viewableByPageId = new Map<string, boolean>();
-    for (const page of entryPages) {
-      viewableByPageId.set(page.id, await canUserViewPage(userId, page.id));
-    }
+    const viewableByPageId = new Map(
+      await Promise.all(
+        entryPages.map(
+          async (page) => [page.id, await canUserViewPage(userId, page.id)] as const
+        )
+      )
+    );
 
     const authorIds = Array.from(
       new Set(

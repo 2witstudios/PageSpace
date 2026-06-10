@@ -252,6 +252,13 @@ export function CommandFormDialog({
 
   const descriptionLength = values.description.length;
 
+  const triggerError = showError('trigger') ? errors.trigger : undefined;
+  const descriptionError = showError('description') ? errors.description : undefined;
+  const entryPageError = showError('entryPage') ? errors.entryPage : undefined;
+
+  const describedBy = (...ids: Array<string | false | undefined>) =>
+    ids.filter(Boolean).join(' ') || undefined;
+
   const form = (
     <form onSubmit={handleSubmit} className="space-y-5" noValidate>
       <div className="space-y-1.5">
@@ -270,8 +277,11 @@ export function CommandFormDialog({
             autoComplete="off"
             spellCheck={false}
             className="pl-6 font-mono"
-            aria-invalid={showError('trigger') && !!errors.trigger}
-            aria-describedby="command-trigger-error command-trigger-shadow"
+            aria-invalid={!!triggerError}
+            aria-describedby={describedBy(
+              !!triggerError && 'command-trigger-error',
+              !!shadowWarning && 'command-trigger-shadow'
+            )}
             onChange={(event) =>
               setValues((prev) => ({
                 ...prev,
@@ -281,9 +291,9 @@ export function CommandFormDialog({
             onBlur={() => setTouched((prev) => ({ ...prev, trigger: true }))}
           />
         </div>
-        {showError('trigger') && errors.trigger && (
+        {triggerError && (
           <p id="command-trigger-error" role="alert" className="text-sm text-destructive">
-            {errors.trigger.message}
+            {triggerError.message}
           </p>
         )}
         {shadowWarning && (
@@ -304,8 +314,11 @@ export function CommandFormDialog({
           ref={descriptionRef}
           value={values.description}
           className="min-h-[88px] resize-y"
-          aria-invalid={showError('description') && !!errors.description}
-          aria-describedby="command-description-help command-description-error"
+          aria-invalid={!!descriptionError}
+          aria-describedby={describedBy(
+            'command-description-help',
+            !!descriptionError && 'command-description-error'
+          )}
           onChange={(event) =>
             setValues((prev) => ({ ...prev, description: event.target.value }))
           }
@@ -321,9 +334,9 @@ export function CommandFormDialog({
             {COMMAND_DESCRIPTION_MAX_LENGTH.toLocaleString('en-US')}
           </span>
         </div>
-        {showError('description') && errors.description && (
+        {descriptionError && (
           <p id="command-description-error" role="alert" className="text-sm text-destructive">
-            {errors.description.message}
+            {descriptionError.message}
           </p>
         )}
       </div>
@@ -334,12 +347,15 @@ export function CommandFormDialog({
           driveId={scope === 'drive' ? driveId : undefined}
           value={values.entryPage}
           onChange={handleEntryPageChange}
-          invalid={showError('entryPage') && !!errors.entryPage}
-          describedBy="command-entry-page-error command-entry-page-size"
+          invalid={!!entryPageError}
+          describedBy={describedBy(
+            !!entryPageError && 'command-entry-page-error',
+            !!sizeWarning && 'command-entry-page-size'
+          )}
         />
-        {showError('entryPage') && errors.entryPage && (
+        {entryPageError && (
           <p id="command-entry-page-error" role="alert" className="text-sm text-destructive">
-            {errors.entryPage.message}
+            {entryPageError.message}
           </p>
         )}
         {sizeWarning && (
@@ -361,6 +377,11 @@ export function CommandFormDialog({
           onCheckedChange={(enabled) => setValues((prev) => ({ ...prev, enabled }))}
         />
       </div>
+
+      {/* The visible Save button lives in the dialog footer outside this form;
+          this guarantees Enter-to-submit (and the focus-first-error behavior)
+          regardless of browser implicit-submission rules. */}
+      <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
     </form>
   );
 
