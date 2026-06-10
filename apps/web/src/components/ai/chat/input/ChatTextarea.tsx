@@ -152,9 +152,11 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     }));
 
     // The command picker only intercepts Enter when it has a selectable item
-    // (spec §1.7); with zero items (loading or "No commands match") Enter
-    // falls through and sends the literal text, matching pre-command behavior.
-    const commandPickerBlocksEnter = command.isOpen && command.items.length > 0;
+    // (spec §1.7); with nothing selectable (loading or "No commands match")
+    // Enter falls through and sends the literal text, matching pre-command
+    // behavior.
+    const commandPickerBlocksEnter =
+      command.isOpen && !command.loading && command.items.length > 0;
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       // The command picker consumes navigation keys while open (spec §1.7)
@@ -305,6 +307,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
               hasAnyCommands={command.hasAnyCommands}
               onNavigateToSettings={command.actions.close}
               onClose={command.actions.close}
+              onDismiss={command.actions.dismiss}
             />
             {/* Polite live region announcing result counts (spec §9) */}
             <span role="status" aria-live="polite" className="sr-only">

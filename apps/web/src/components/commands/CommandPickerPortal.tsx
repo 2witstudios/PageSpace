@@ -13,31 +13,52 @@ export interface CommandPickerPortalProps
   anchorRef?: React.RefObject<HTMLElement | null>;
   /**
    * Close without dismissal memory (click outside, selection elsewhere).
-   * Memoize with useCallback — it is an effect dependency here. Escape is NOT
-   * handled in the portal: focus always sits in the anchored textarea (spec
-   * §9), so the textarea's keydown grammar owns Escape dismissal. A document
-   * capture listener (the mention portal's approach, needed there because of
-   * its autofocused inner input) would shadow that path and swallow Escape
-   * from other surfaces.
+   * Memoize with useCallback — it is an effect dependency here.
    */
   onClose: () => void;
+  /**
+   * Escape: close and remember this trigger position as dismissed (spec
+   * §1.1). The textarea's keyboard grammar is the primary Escape path; this
+   * portal-level capture listener (mirroring MentionPickerPortal, spec §1.3)
+   * is the backstop for states where the textarea lost focus while the
+   * picker is open (scrollbar drag, click on a non-row area of the panel).
+   * Both paths funnel into the same dismiss action, so double-firing is
+   * idempotent. Memoize with useCallback.
+   */
+  onDismiss: () => void;
 }
 
 /**
  * Portal/positioning shell for the command picker — mirrors
- * `MentionPickerPortal`'s portal and clamps (spec §1.3), minus the
- * autofocused inner search input: focus never leaves the textarea, so there
- * is no focus-restoration dance and no document-level Escape listener (spec
- * §9). Adds close-on-click-outside.
+ * `MentionPickerPortal`'s portal, clamps, and capture-phase Escape handling
+ * (spec §1.3), minus the autofocused inner search input: focus never leaves
+ * the textarea, so there is no focus-restoration dance (spec §9). Adds
+ * close-on-click-outside.
  */
 export function CommandPickerPortal({
   isOpen,
   position,
   anchorRef,
   onClose,
+  onDismiss,
   ...panelProps
 }: CommandPickerPortalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on Escape via document keydown (capture phase — works even when a
+  // panel interaction moved focus out of the textarea). Escape carries
+  // dismissal memory (spec §1.1).
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onDismiss();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => document.removeEventListener('keydown', handleKeyDown, { capture: true });
+  }, [isOpen, onDismiss]);
 
   // Close on click/tap outside the picker (spec §1.3). Clicks inside the
   // anchored textarea only move the caret and keep the picker open; focus

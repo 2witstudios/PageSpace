@@ -153,16 +153,31 @@ export function evaluateSlashTrigger(input: SlashEvaluationInput): SlashEvaluati
   }
 
   if (isOpen) {
-    return { action: 'update', ...hit, memory };
+    // While open the trigger is by definition the legitimate typed one; if
+    // its index shifted (e.g. leading whitespace edited), re-anchor the
+    // typed-trigger memory so a later close→reopen still works.
+    const nextMemory =
+      memory.typedTriggerIndex === hit.triggerIndex
+        ? memory
+        : { ...memory, typedTriggerIndex: hit.triggerIndex };
+    return { action: 'update', ...hit, memory: nextMemory };
   }
 
   // Opening requires typing: either this insertion placed the `/` itself, or
   // the user is typing after a `/` that previously arrived by typing (reopen
   // after a click-outside close — the mention-mirror behavior).
   const typing = !isComposing && isTypingInsertion(inputType);
-  const covers = typing && insertionCovers(prevValue, value, hit.triggerIndex);
-  const nextMemory = covers ? { ...memory, typedTriggerIndex: hit.triggerIndex } : memory;
-  const triggerWasTyped = covers || nextMemory.typedTriggerIndex === hit.triggerIndex;
+  const editCoversTrigger = insertionCovers(prevValue, value, hit.triggerIndex);
+
+  let nextMemory = memory;
+  if (editCoversTrigger) {
+    // The `/` at this index arrived in THIS edit: it is "typed" exactly when
+    // the edit was a typing insertion. A paste that lands a `/` where a typed
+    // one used to be must not inherit the typed status.
+    nextMemory = { ...memory, typedTriggerIndex: typing ? hit.triggerIndex : -1 };
+  }
+
+  const triggerWasTyped = nextMemory.typedTriggerIndex === hit.triggerIndex;
 
   if (!typing || !triggerWasTyped) {
     return { action: 'none', memory: nextMemory };

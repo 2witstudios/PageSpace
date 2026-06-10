@@ -195,6 +195,39 @@ describe('evaluateSlashTrigger — reopen after non-Escape close (mirrors mentio
     );
     expect(result.action).toBe('none');
   });
+
+  it('given a paste over a typed / that byte-preserves the slash, should keep the typed status (the edit diff shows the slash survived)', () => {
+    // '/' was typed (typedTriggerIndex=0), picker closed; user selects all and
+    // pastes '/deploy'. The edit diff shares the leading '/' so the typed
+    // slash survives byte-wise; typing afterwards reopens (mention-parity).
+    const afterPaste = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/',
+        value: '/deploy',
+        cursorPos: 7,
+        inputType: 'insertFromPaste',
+        memory: closedAfterTyping,
+      })
+    );
+    expect(afterPaste.action).toBe('none'); // the paste itself never opens
+    expect(afterPaste.memory.typedTriggerIndex).toBe(0);
+  });
+
+  it('given a non-typing edit whose region covers the slash itself, should forget the typed status', () => {
+    // ' /' typed at index 1 (typedTriggerIndex=1); an autofill/replacement
+    // rewrites from index 0 producing '/x' — the new slash arrived non-typed.
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: ' /',
+        value: '/x',
+        cursorPos: 2,
+        inputType: 'insertReplacementText',
+        memory: { dismissedTriggerIndex: -1, typedTriggerIndex: 1 },
+      })
+    );
+    expect(result.action).toBe('none');
+    expect(result.memory.typedTriggerIndex).toBe(-1);
+  });
 });
 
 describe('evaluateSlashTrigger — dismissal memory (Escape)', () => {
@@ -264,6 +297,22 @@ describe('evaluateSlashTrigger — open-state updates and closing', () => {
       })
     );
     expect(result.action).toBe('close');
+  });
+
+  it('given the trigger index shifts while open (leading whitespace deleted), should re-anchor the typed-trigger memory', () => {
+    // ' /re' (typed trigger at 1, open) → leading space deleted → '/re' at 0.
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: ' /re',
+        value: '/re',
+        cursorPos: 3,
+        inputType: 'deleteContentBackward',
+        isOpen: true,
+        memory: { dismissedTriggerIndex: -1, typedTriggerIndex: 1 },
+      })
+    );
+    expect(result).toMatchObject({ action: 'update', triggerIndex: 0 });
+    expect(result.memory.typedTriggerIndex).toBe(0);
   });
 });
 

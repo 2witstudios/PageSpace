@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useDebounce } from '@/hooks/useDebounce';
 import { positioningService, type Position } from '@/services/positioningService';
 import {
   evaluateSlashTrigger,
@@ -100,12 +99,14 @@ export function useCommandSuggestion({
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
   const [query, setQuery] = useState('');
+  // The query the list is actually filtered by. Seeded synchronously on open
+  // (so the picker never shows a stale list filtered by a previous trigger's
+  // query) and debounced 200ms while typing (spec §1.4).
+  const [filterQuery, setFilterQuery] = useState('');
   const [allItems, setAllItems] = useState<CommandSuggestionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
-
-  const debouncedQuery = useDebounce(query, FILTER_DEBOUNCE_MS);
 
   // isOpen mirrored into a ref so the evaluate/handleInput callback chain
   // stays identity-stable across open/close (it is recreated otherwise, which
@@ -117,13 +118,20 @@ export function useCommandSuggestion({
   const isComposingRef = useRef(false);
   const compositionStartValueRef = useRef('');
   const fetchRequestRef = useRef(0);
+  const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const closeInternal = useCallback(() => {
     isOpenRef.current = false;
     setIsOpen(false);
     setPosition(null);
     setQuery('');
+    setFilterQuery('');
     setSelectedIndex(0);
+    // Drop the fetched list: a later reopen must not expose this trigger's
+    // items (even invisibly behind the loading row) to Enter/Tab selection.
+    setAllItems([]);
+    setLoadFailed(false);
+    if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
   }, []);
 
   const dismiss = useCallback(() => {
@@ -172,6 +180,7 @@ export function useCommandSuggestion({
 
       triggerIndexRef.current = triggerIndex;
       setQuery(initialQuery);
+      setFilterQuery(initialQuery);
       setSelectedIndex(0);
       setPosition(newPosition);
       isOpenRef.current = true;
@@ -180,6 +189,14 @@ export function useCommandSuggestion({
     },
     [inputRef, popupPlacement, fetchCommands]
   );
+
+  const updateQuery = useCallback((nextQuery: string) => {
+    setQuery(nextQuery);
+    if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
+    filterDebounceRef.current = setTimeout(() => {
+      setFilterQuery(nextQuery);
+    }, FILTER_DEBOUNCE_MS);
+  }, []);
 
   const evaluate = useCallback(
     (prevValue: string, value: string, inputType: string | null) => {
@@ -205,7 +222,7 @@ export function useCommandSuggestion({
           break;
         case 'update':
           triggerIndexRef.current = result.triggerIndex;
-          setQuery(result.query);
+          updateQuery(result.query);
           break;
         case 'close':
           closeInternal();
@@ -262,8 +279,8 @@ export function useCommandSuggestion({
   );
 
   const items = useMemo(
-    () => filterAndRankCommands(allItems, debouncedQuery),
-    [allItems, debouncedQuery]
+    () => filterAndRankCommands(allItems, filterQuery),
+    [allItems, filterQuery]
   );
 
   // Keep the highlighted row valid as the filtered list changes.
@@ -317,7 +334,9 @@ export function useCommandSuggestion({
         {
           placement: popupPlacement,
           selectedIndex,
-          itemCount: items.length,
+          // While loading the panel hides the list behind the spinner row, so
+          // nothing is selectable — Enter falls through to send.
+          itemCount: loading ? 0 : items.length,
           enterSelects,
         },
         { shiftKey: e.shiftKey }
@@ -347,8 +366,15 @@ export function useCommandSuggestion({
           break;
       }
     },
-    [enabled, isOpen, popupPlacement, selectedIndex, items, enterSelects, select, dismiss]
+    [enabled, isOpen, popupPlacement, selectedIndex, items, loading, enterSelects, select, dismiss]
   );
+
+  // Clear the pending filter timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
+    };
+  }, []);
 
   return {
     isOpen,
