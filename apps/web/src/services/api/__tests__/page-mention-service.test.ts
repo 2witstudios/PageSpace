@@ -294,6 +294,28 @@ describe('syncMentions — group mention expansion is fail-soft', () => {
     expect(result.newlyMentionedUserIds).toEqual([]);
   });
 
+  it('defers direct user mentions too when expansion fails — never syncs a partial recipient set', async () => {
+    // Direct and group-derived rows are indistinguishable in userMentions, so
+    // syncing only the direct set would delete the group-derived rows. The
+    // whole user-mention sync waits for the next successful save instead.
+    vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('drive query failed'));
+    const { tx, userMentionInserts, deletes } = makeTx({
+      existingUserIds: ['user42', 'member-1'],
+      existingUserMentions: ['member-1'],
+    });
+
+    const result = await syncMentions(
+      'source-page',
+      'Hey @[Alice](user42:user) and @[everyone](everyone:everyone)',
+      tx as unknown as AnyTx,
+      { driveId: 'drive-1', mentionedByUserId: 'author-1' }
+    );
+
+    expect(userMentionInserts).toHaveLength(0);
+    expect(deletes.filter(d => d.table === userMentions)).toHaveLength(0);
+    expect(result.newlyMentionedUserIds).toEqual([]);
+  });
+
   it('still syncs page mentions when group expansion fails', async () => {
     vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('drive query failed'));
     const { tx, mentionInserts } = makeTx({ existingPageIds: ['page123'] });
