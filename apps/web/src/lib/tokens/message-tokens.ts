@@ -41,10 +41,19 @@ export function tokenDisplayText(label: string, type: TokenType): string {
 }
 
 // Same shape as the mention regex with the sigil generalized to [@/].
-// The id/type split is on the LAST colon: token types never contain ':',
-// but built-in command ids do (e.g. `builtin:help`), so the id group must
-// admit colons for those chips to round-trip.
-const TOKEN_REGEX = /([@/])\[([^\]]+)\]\(([^()]+):([^():]+)\)/g;
+// The paren body is matched as ONE bounded character class and split on its
+// LAST colon in code (token types never contain ':', but built-in command
+// ids do, e.g. `builtin:help`) — a single class keeps the regex linear; an
+// ambiguous `id:type` group pair would backtrack polynomially on hostile
+// input (CodeQL js/polynomial-redos).
+const TOKEN_REGEX = /([@/])\[([^\]]{1,500})\]\(([^()]{1,300})\)/g;
+
+/** Split a token's paren body on its last colon into id/type, or null. */
+function splitTokenBody(body: string): { id: string; type: string } | null {
+  const sep = body.lastIndexOf(':');
+  if (sep < 1 || sep === body.length - 1) return null;
+  return { id: body.slice(0, sep), type: body.slice(sep + 1) };
+}
 
 /**
  * Parse markdown-typed token format into display text and tracked positions.
@@ -67,18 +76,20 @@ export function parseMessageTokens(markdown: string): {
   let match: RegExpExecArray | null;
 
   while ((match = TOKEN_REGEX.exec(markdown)) !== null) {
-    const [fullMatch, sigil, label, id, type] = match;
+    const [fullMatch, sigil, label, body] = match;
+    const parsed = splitTokenBody(body);
 
     // Sigil and type must agree: only `/...:command` is a command and only
     // `@...:<mention type>` is a mention. A mismatched pair (e.g. literal
     // text "@[x](y:command)") stays plain text — chipping it would flip its
-    // sigil on re-serialization.
+    // sigil on re-serialization. A body with no id:type split is plain text.
     const isCommand = sigil === '/';
-    if (isCommand !== (type === COMMAND_TOKEN_TYPE)) {
+    if (!parsed || isCommand !== (parsed.type === COMMAND_TOKEN_TYPE)) {
       displayText += markdown.slice(lastIndex, match.index) + fullMatch;
       lastIndex = match.index + fullMatch.length;
       continue;
     }
+    const { id, type } = parsed;
 
     displayText += markdown.slice(lastIndex, match.index);
 

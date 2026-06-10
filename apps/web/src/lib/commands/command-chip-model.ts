@@ -107,8 +107,10 @@ export function buildCommandChipViewModel(
  * Whether a channel/DM message's command chip ran nothing (UX spec §6).
  * Agents respond only to @-mentions, so a chip-bearing message that pings
  * no page (agent) is inert; AI-authored messages never execute chips.
+ * Page ids never contain ':', so excluding it from the id class keeps the
+ * pattern unambiguous (linear — no polynomial backtracking).
  */
-const PAGE_MENTION_PATTERN = /@\[[^\]]+\]\([^()]+:page\)/;
+const PAGE_MENTION_PATTERN = /@\[[^\]]{1,500}\]\([^():]{1,200}:page\)/;
 export function isCommandInertForMessage(content: string, isAiMessage: boolean): boolean {
   return !isAiMessage && !PAGE_MENTION_PATTERN.test(content);
 }
@@ -122,9 +124,20 @@ export function isCommandInertForMessage(content: string, isAiMessage: boolean):
  * chip (§2.3: only picker selection creates one).
  */
 export function preprocessCommandTokens(content: string): string {
-  // Non-global regex: .replace converts only the first match.
+  // The paren body is matched as one bounded class and split on its last
+  // colon in code (mirrors message-tokens): an `id:command` group pair
+  // would backtrack polynomially on hostile input. The scan is global but
+  // only the first command-typed token converts — slash-sigil tokens with
+  // other types pass through untouched.
+  let converted = false;
   return content.replace(
-    /\/\[([^\]]+)\]\(([^()]+):command\)/,
-    (_match, label: string, id: string) => `[command:${label}](/command/${id})`
+    /\/\[([^\]]{1,500})\]\(([^()]{1,300})\)/g,
+    (match, label: string, body: string) => {
+      if (converted) return match;
+      const sep = body.lastIndexOf(':');
+      if (sep < 1 || body.slice(sep + 1) !== 'command') return match;
+      converted = true;
+      return `[command:${label}](/command/${body.slice(0, sep)})`;
+    }
   );
 }
