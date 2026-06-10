@@ -18,6 +18,17 @@ import {
   parseMessageTokens,
   COMMAND_TOKEN_TYPE,
 } from '@/lib/tokens/message-tokens';
+import { COMMAND_TRIGGER_PATTERN } from '@pagespace/lib/commands/command-core';
+
+/**
+ * A token label is echoed into the system prompt only when it looks like a
+ * real trigger. The token grammar admits almost arbitrary text (including
+ * newlines), and a skipped command's label is client-controlled — echoing
+ * it verbatim would promote message text into the system role.
+ */
+function safeCommandLabel(label: string): string | null {
+  return COMMAND_TRIGGER_PATTERN.test(label) ? label : null;
+}
 
 export interface ParsedCommandToken {
   commandId: string;
@@ -148,7 +159,9 @@ export function buildCommandSystemPrompt(injection: CommandInjection): string {
 export function buildCommandPromptSection(plan: CommandExecutionPlan | null): string {
   if (!plan) return '';
   if (plan.kind === 'skip') {
-    return `\nNote: the user invoked the /${plan.label} command, but it was skipped because ${COMMAND_SKIP_REASON_TEXT[plan.reason]}. Respond to the message text normally.\n`;
+    const safe = safeCommandLabel(plan.label);
+    const name = safe ? `the /${safe} command` : 'a slash command';
+    return `\nNote: the user invoked ${name}, but it was skipped because ${COMMAND_SKIP_REASON_TEXT[plan.reason]}. Respond to the message text normally.\n`;
   }
   return buildCommandSystemPrompt(plan.injection);
 }

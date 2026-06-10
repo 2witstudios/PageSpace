@@ -109,6 +109,13 @@ export function buildCommandChipViewModel(
  * no page (agent) is inert; AI-authored messages never execute chips.
  * Page ids never contain ':', so excluding it from the id class keeps the
  * pattern unambiguous (linear — no polynomial backtracking).
+ *
+ * Deliberately one-sided: a page mention that turns out not to be an
+ * eligible agent means the suffix is *omitted* on a message that in fact
+ * ran nothing. The viewer can't resolve agent eligibility, and the inverse
+ * error — showing "this command didn't run" beside an agent reply whose §7
+ * pill says it did — would be an outright falsehood, so the heuristic errs
+ * toward omission.
  */
 const PAGE_MENTION_PATTERN = /@\[[^\]]{1,500}\]\([^():]{1,200}:page\)/;
 export function isCommandInertForMessage(content: string, isAiMessage: boolean): boolean {

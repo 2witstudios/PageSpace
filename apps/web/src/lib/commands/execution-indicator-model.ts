@@ -39,16 +39,20 @@ export function buildExecutionIndicatorViewModel(
 ): ExecutionIndicatorViewModel | null {
   if (!isCommandExecutionData(data)) return null;
 
+  // Skip labels originate from client-controlled tokens (the grammar admits
+  // newlines and near-arbitrary text) — clamp to a single trigger-sized line.
+  const label = data.label.split('\n')[0].slice(0, 64);
+
   if (data.status === 'skipped') {
     const reason: CommandSkipReason = data.reason ?? 'not_found';
     return {
-      text: `Skipped /${data.label} — ${COMMAND_SKIP_REASON_TEXT[reason]}`,
+      text: `Skipped /${label} — ${COMMAND_SKIP_REASON_TEXT[reason]}`,
       skipped: true,
     };
   }
 
   return {
-    text: `Using /${data.label}`,
+    text: `Using /${label}`,
     skipped: false,
     ...(data.entryPageTitle
       ? { tooltip: `The page “${data.entryPageTitle}” was added to the AI's context for this response.` }
