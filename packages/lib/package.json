@@ -17,6 +17,11 @@
       "import": "./dist/client-safe.js",
       "default": "./dist/client-safe.js"
     },
+    "./commands/command-core": {
+      "types": "./dist/commands/command-core.d.ts",
+      "import": "./dist/commands/command-core.js",
+      "require": "./dist/commands/command-core.js"
+    },
     "./ai/global-channel-id": {
       "types": "./dist/ai/global-channel-id.d.ts",
       "import": "./dist/ai/global-channel-id.js",

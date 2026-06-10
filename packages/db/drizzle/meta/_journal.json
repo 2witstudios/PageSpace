@@ -1093,6 +1093,13 @@
       "when": 1781038710626,
       "tag": "0155_special_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1781057017324,
+      "tag": "0156_married_jackal",
+      "breakpoints": true
     }
   ]
 }
