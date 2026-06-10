@@ -1,7 +1,8 @@
 import * as cheerio from 'cheerio';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
-import { mentions, userMentions } from '@pagespace/db/schema/core';
+import { mentions, userMentions, pages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   getDriveRecipientUserIds,
@@ -26,6 +27,18 @@ interface MentionIds {
 
 const STANDARD_ROLES = new Set(['OWNER', 'ADMIN', 'MEMBER']);
 
+/**
+ * Remove <pre> and <code> regions so documentation that shows literal mention
+ * syntax (e.g. a doc explaining `@[Label](id:type)`) is never parsed as a real
+ * mention. Without this, the placeholder "id" reaches the mentions insert and
+ * fails the FK, aborting the caller's whole save transaction.
+ */
+function stripCodeRegions(content: string): string {
+  return content
+    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre\s*>/gi, ' ')
+    .replace(/<code\b[^>]*>[\s\S]*?<\/code\s*>/gi, ' ');
+}
+
 function findMentionNodes(content: unknown): MentionIds {
   const pageIds: string[] = [];
   const userIds: string[] = [];
@@ -43,6 +56,8 @@ function findMentionNodes(content: unknown): MentionIds {
   if (shouldParseHtml) {
     try {
       const $ = cheerio.load(contentStr);
+      // Code regions hold literal examples, not real mentions.
+      $('pre, code').remove();
       $('a[data-page-id]').each((_, element) => {
         const pageId = $(element).attr('data-page-id');
         if (pageId) pageIds.push(pageId);
@@ -82,9 +97,10 @@ function findMentionNodes(content: unknown): MentionIds {
 
   if (!shouldParseHtml || parseFailed) {
     // Parse markdown-style mentions: @[Label](id:type)
+    const searchable = stripCodeRegions(contentStr);
     const regex = /@\[([^\]]{1,500})\]\(([^:)]{1,200}):?([^)]{0,200})\)/g;
     let match;
-    while ((match = regex.exec(contentStr)) !== null) {
+    while ((match = regex.exec(searchable)) !== null) {
       const id = match[2];
       const type = match[3] || 'page';
       if (type === 'user') {
@@ -152,26 +168,95 @@ export interface SyncMentionsResult {
   mentionedByUserId?: string;
 }
 
+/**
+ * Filter extracted page IDs down to pages that actually exist. Mention IDs
+ * come from user-authored content (and can be literal format examples like
+ * `@[Label](id:type)`), so an unvalidated insert can violate the
+ * mentions_targetPageId FK and abort the caller's save transaction.
+ * Nonexistent IDs are dropped silently — a bad mention must never fail a save.
+ */
+async function filterToExistingPageIds(
+  pageIds: string[],
+  tx: TransactionType | DatabaseType
+): Promise<string[]> {
+  if (pageIds.length === 0) return [];
+  const rows = await tx
+    .select({ id: pages.id })
+    .from(pages)
+    .where(inArray(pages.id, pageIds));
+  const existing = new Set(rows.map(r => r.id));
+  return pageIds.filter(id => existing.has(id));
+}
+
+/** Same FK hazard as page IDs: userMentions.targetUserId references users.id. */
+async function filterToExistingUserIds(
+  userIds: string[],
+  tx: TransactionType | DatabaseType
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  const rows = await tx
+    .select({ id: users.id })
+    .from(users)
+    .where(inArray(users.id, userIds));
+  const existing = new Set(rows.map(r => r.id));
+  return userIds.filter(id => existing.has(id));
+}
+
 export async function syncMentions(
   sourcePageId: string,
   content: unknown,
   tx: TransactionType | DatabaseType,
   options?: SyncMentionsOptions
 ): Promise<SyncMentionsResult> {
-  const { pageIds: mentionedPageIds, userIds: directUserIds, groupMentions } = findMentionNodes(content);
+  const emptyResult: SyncMentionsResult = {
+    newlyMentionedUserIds: [],
+    sourcePageId,
+    mentionedByUserId: options?.mentionedByUserId,
+  };
 
-  // Expand group mentions (@everyone, @role) to individual user IDs
+  // Mention sync runs inside the caller's save transaction, so a throw here on
+  // bad content poisons the whole save. Content parsing failures skip the sync
+  // (existing mention rows are left untouched) rather than failing the save.
+  let extracted: MentionIds;
+  try {
+    extracted = findMentionNodes(content);
+  } catch (error) {
+    loggers.api.error('Failed to parse content for mentions; skipping mention sync:', error as Error);
+    return emptyResult;
+  }
+  const { pageIds: extractedPageIds, userIds: directUserIds, groupMentions } = extracted;
+
+  // Expand group mentions (@everyone, @role) to individual user IDs. Role IDs
+  // also come from content, so expansion is fail-soft: on error the save
+  // proceeds, but user-mention sync is skipped for this save — substituting an
+  // empty recipient set would delete existing group-derived rows and a later
+  // successful save would recreate them and re-notify.
   let expandedUserIds: string[] = [];
+  let expansionFailed = false;
   if (groupMentions.length > 0 && options?.driveId) {
-    expandedUserIds = await expandGroupMentions(groupMentions, options.driveId);
+    try {
+      expandedUserIds = await expandGroupMentions(groupMentions, options.driveId);
+    } catch (error) {
+      loggers.api.error('Failed to expand group mentions; skipping user-mention sync for this save:', error as Error);
+      expansionFailed = true;
+    }
+  }
+
+  // Validate every extracted ID against the database before any insert —
+  // nonexistent targets (literal examples, deleted pages, stale users) are
+  // dropped silently instead of violating an FK mid-transaction.
+  const mentionedPageIds = await filterToExistingPageIds(extractedPageIds, tx);
+
+  // Sync page mentions
+  await syncPageMentions(sourcePageId, mentionedPageIds, tx);
+
+  if (expansionFailed) {
+    return emptyResult;
   }
 
   // Merge direct and group-expanded user IDs, preserving uniqueness
   const allUserIdSet = new Set([...directUserIds, ...expandedUserIds]);
-  const mentionedUserIds = Array.from(allUserIdSet);
-
-  // Sync page mentions
-  await syncPageMentions(sourcePageId, mentionedPageIds, tx);
+  const mentionedUserIds = await filterToExistingUserIds(Array.from(allUserIdSet), tx);
 
   // Sync user mentions and get newly created user IDs
   const newlyMentionedUserIds = await syncUserMentions(sourcePageId, mentionedUserIds, tx, options?.mentionedByUserId);
