@@ -202,6 +202,10 @@
     "./transactions/auth-transactions": {
       "types": "./dist/transactions/auth-transactions.d.ts",
       "default": "./dist/transactions/auth-transactions.js"
+    },
+    "./schema/commands": {
+      "types": "./dist/schema/commands.d.ts",
+      "default": "./dist/schema/commands.js"
     }
   },
   "scripts": {

@@ -43,6 +43,7 @@ export * from './schema/drafts';
 export * from './schema/sandbox-sessions';
 export * from './schema/published-pages';
 export * from './schema/credits';
+export * from './schema/commands';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -89,6 +90,7 @@ import * as drafts from './schema/drafts';
 import * as sandboxSessions from './schema/sandbox-sessions';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
+import * as commands from './schema/commands';
 
 export const schema = {
   ...auth,
@@ -136,4 +138,5 @@ export const schema = {
   ...sandboxSessions,
   ...publishedPages,
   ...credits,
+  ...commands,
 };
