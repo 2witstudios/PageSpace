@@ -80,7 +80,7 @@ Mirrors `MentionPickerPortal.tsx` exactly:
 - **Given** a row, **should** render (left → right, mirroring `MentionPicker.tsx:113-160` row anatomy): `/trigger` in `text-sm font-medium`, the scope badge, the shadow indicator when applicable, and the description in `text-xs text-muted-foreground truncate`. Single-line rows, same `px-3 py-2` density.
 - **Given** a row's description is truncated, **should** show the full description in a tooltip on hover/focus (delay per the app's standard `Tooltip`).
 
-Delta from mentions: **no tabs**. The mention picker's All/People/Pages/Groups tabs (`MentionPicker.tsx:90-102`) do not apply; commands are one category. The search input at the top is retained with placeholder **"Search commands…"**.
+Deltas from mentions: **no tabs**, and **no inner search input on trigger-opened invocations**. The mention picker's All/People/Pages/Groups tabs (`MentionPicker.tsx:90-102`) do not apply; commands are one category. Unlike `MentionPickerPortal`'s autofocused search `Input`, the `/`-triggered picker has no search field of its own — the query is the text typed after `/` in the message input, and focus stays there (§9). A search input with placeholder **"Search commands…"** (mirroring `MentionPickerPanel`'s input) appears only in button-opened popover variants of the panel, if any surface adds one; none is required at launch.
 
 ### 1.5 Scope badges
 
@@ -129,12 +129,12 @@ Mirrors the mention tracker's overlap-removal model (`useMentionTracker.ts` `upd
 - **Given** a dissolved chip's text is manually re-typed to `/trigger`, **should NOT** silently re-chip — only picker selection creates a chip. Plain `/foo` text sends as literal text with no injection.
 - **Given** text typed before the chip (making the chip no longer at message start), **should** keep the chip valid for send — chip validity is set at insertion; position-0 is a *picker-opening* rule, not a send-time rule. (Rationale: matching Slack, users may prepend a salutation after picking; the command still applies to the whole message.)
 - **Given** the input is cleared (send or `clear()`), **should** drop all tracked ranges.
-- **Given** a sent message is later edited (message edit flows), the chip **should** be preserved as an immutable token: the editor re-parses `/[Label](commandId:command)` into a chip, edits around it behave as above, and deleting it removes the command from the message. Re-editing **does not** re-execute the command (§4.4).
+- **Given** a sent message is later edited (message edit flows), the chip **should** be preserved as an immutable token: the editor re-parses `/[Label](commandId:command)` into a chip, edits around it behave as above, and deleting it removes the command from the message. Re-editing **does not** re-execute the command — execution only ever happens when an AI responds (§6), never as a side effect of editing history.
 
 ### 2.4 Send
 
 - **Given** a message containing a chip is sent to an AI surface, **should** send the serialized form; the server resolves `commandId`, injects the entry page (SKILL.md) into context, and lists the entry page's direct children as on-demand resources.
-- **Given** the chip's command was deleted or disabled between insertion and send, **should** send normally and degrade per §5.3/§4.3 — the input does not block send.
+- **Given** the chip's command was deleted or disabled between insertion and send, **should** send normally and degrade gracefully — rendering per §5.2, execution skip per §7.2. The input does not block send.
 
 ---
 
