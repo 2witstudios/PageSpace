@@ -155,6 +155,9 @@ export function useCommandSuggestion({
       setSelectedIndex(0);
       setPosition(newPosition);
       setIsOpen(true);
+      // Show the loading row immediately — the fetch is debounced, and an
+      // empty-state flash ("No commands yet…") before it lands would mislead.
+      setLoading(true);
 
       // Fetch the full resolvable list, debounced like the mention portal;
       // filtering against the typed query happens client-side (descriptions
