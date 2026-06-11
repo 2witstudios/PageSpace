@@ -492,7 +492,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => router.push('/settings/usage')}
+                    onClick={() => router.push('/settings/plan')}
                     className="w-full border-primary/30 text-primary hover:bg-primary/10 dark:border-primary/30 dark:text-primary dark:hover:bg-primary/20"
                   >
                     View Upgrade Options

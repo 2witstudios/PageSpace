@@ -28,7 +28,7 @@ export function createSubscriptionRequiredResponse(): NextResponse {
     {
       error: 'Subscription required',
       message: 'This model is available on paid plans. Upgrade to access the full model catalog.',
-      upgradeUrl: '/settings/usage',
+      upgradeUrl: '/settings/plan',
     },
     { status: 403 }
   );

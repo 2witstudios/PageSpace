@@ -63,7 +63,7 @@ export async function POST(request: Request) {
           {
             error: 'Pro plan required',
             message: 'Voice mode requires a Pro or above subscription.',
-            upgradeUrl: '/settings/usage',
+            upgradeUrl: '/settings/plan',
           },
           { status: 403 }
         );
