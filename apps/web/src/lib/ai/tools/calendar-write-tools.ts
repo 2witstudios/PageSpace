@@ -933,6 +933,7 @@ export const calendarWriteTools = {
 
       // Apply defaults
       const isOptional = isOptionalInput ?? false;
+      const context = ctx as ToolExecutionContext | undefined;
 
       try {
         // Verify event exists
@@ -945,6 +946,14 @@ export const calendarWriteTools = {
             success: false,
             error: 'Event not found.',
           };
+        }
+
+        // MCP scope ceiling: write operations are gated on the home drive
+        if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+          return { success: false, error: 'Event is outside the scope of your access token.' };
+        }
+        if (context && !event.driveId && isMcpScoped(context)) {
+          return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
         }
 
         // Only creator can add attendees
@@ -1183,6 +1192,20 @@ export const calendarWriteTools = {
       if (!userId) throw new Error('Authentication required');
 
       const context = ctx as ToolExecutionContext | undefined;
+
+      // Load event for scope ceiling on the home drive
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+        columns: { id: true, driveId: true },
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+
+      if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+      if (context && !event.driveId && isMcpScoped(context)) {
+        return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
+      }
       if (context && await driveDeniedByAppToken(context, driveId, 'edit')) {
         return { success: false, error: 'Target drive is outside the scope of your access token.' };
       }
@@ -1221,6 +1244,22 @@ export const calendarWriteTools = {
     execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
       const userId = (ctx as ToolExecutionContext)?.userId;
       if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+
+      // Load event for scope ceiling on the home drive
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+        columns: { id: true, driveId: true },
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+
+      if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+      if (context && !event.driveId && isMcpScoped(context)) {
+        return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
+      }
 
       const result = await unshareEventFromDrive({ actingUserId: userId, eventId, driveId });
       if (!result.ok) {

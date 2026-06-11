@@ -4,9 +4,9 @@ import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
+import { getAllMemberUserIdsForEvent, isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -58,10 +58,16 @@ export async function GET(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: allow access if token covers any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     const isCreator = event.createdById === userId;
@@ -93,10 +99,9 @@ export async function GET(
         }
       }
     }
-    // DRIVE events: creator, attendees, or drive members can access
+    // DRIVE events: creator, attendees, or any-drive members can access
     else if (event.visibility === 'DRIVE') {
       if (!isCreator) {
-        // Check if user is an attendee first (fast path)
         const isAttendee = await db.query.eventAttendees.findFirst({
           where: and(
             eq(eventAttendees.eventId, eventId),
@@ -105,18 +110,10 @@ export async function GET(
         });
 
         if (!isAttendee) {
-          // Must be a drive member
-          if (!event.driveId) {
+          const isMember = await isUserMemberOfAnyEventDrive(userId, event);
+          if (!isMember) {
             return NextResponse.json(
-              { error: 'Access denied - invalid event configuration' },
-              { status: 403 }
-            );
-          }
-
-          const isDriveMember = await isPrincipalDriveMember(auth, event.driveId);
-          if (!isDriveMember) {
-            return NextResponse.json(
-              { error: 'Access denied - you do not have access to this drive' },
+              { error: 'Access denied - you do not have access to this event' },
               { status: 403 }
             );
           }
@@ -178,10 +175,16 @@ export async function POST(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: write operations require access to any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     // Only creator can add attendees
@@ -317,10 +320,16 @@ export async function PATCH(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: allow RSVP if token covers any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     // Verify user is an attendee
@@ -422,10 +431,16 @@ export async function DELETE(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: allow removal if token covers any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     // Check permissions
