@@ -45,6 +45,7 @@ import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { post, put, fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import { PageShareLinkSection } from './PageShareLinkSection';
+import { PageLinkSection } from './PageLinkSection';
 import type { DriveRole } from '@pagespace/lib/services/drive-role-service';
 import type { RoleGrant } from '@/services/api';
 
@@ -281,31 +282,16 @@ export function ShareDialog({
 
   const ungrantedRoles = driveRoles.filter(r => !grantedRoles.some(g => g.roleId === r.id));
 
-  // Show disabled button when no share permission and not controlled (used as trigger)
-  if (!canShare && !isControlled) {
-    return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size={isMobile ? "icon" : "sm"} disabled className="opacity-50 cursor-not-allowed">
-              <Lock className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
-              {!isMobile && "Share"}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>{getPermissionErrorMessage('share')}</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
-
+  // Users without share permission can still open the dialog to copy the
+  // page link/ID — the dialog body locks out the sharing controls.
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       {!isControlled && (
         <DialogTrigger asChild>
           <Button variant="ghost" size={isMobile ? "icon" : "sm"}>
-            <Share2 className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+            {canShare
+              ? <Share2 className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+              : <Lock className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />}
             {!isMobile && "Share"}
           </Button>
         </DialogTrigger>
@@ -317,6 +303,9 @@ export function ShareDialog({
             Manage who has access to this page.
           </DialogDescription>
         </DialogHeader>
+        <div className="mt-2">
+          <PageLinkSection pageId={page.id} driveId={driveId} />
+        </div>
         {!canShare ? (
           <Alert className="mt-4">
             <Lock className="h-4 w-4" />
