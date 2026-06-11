@@ -11,7 +11,7 @@ import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isScopedMCPAuth } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -398,8 +398,9 @@ export async function GET(request: Request) {
     // 3. Events where user is an attendee
     const conditions = [];
 
-    // Personal events
-    if (params.includePersonal) {
+    // Personal events. A drive-scoped key has no identity power over the
+    // owner's PERSONAL (drive-less) events — it belongs to a workspace.
+    if (params.includePersonal && !isScopedMCPAuth(auth)) {
       conditions.push(
         and(
           isNull(calendarEvents.driveId),
@@ -471,10 +472,18 @@ export async function GET(request: Request) {
       orderBy: [asc(calendarEvents.startAt)],
     });
 
+    // Scoped keys: the creator/attendee branches above are identity-derived and
+    // can surface events outside the key's drive universe (or personal ones).
+    // Cap the result at the principal's drives — mirrors the calendar tools.
+    const principalDriveIdSet = new Set(driveIds);
+    const visibleEvents = isScopedMCPAuth(auth)
+      ? events.filter((e) => e.driveId !== null && principalDriveIdSet.has(e.driveId))
+      : events;
+
     // Annotate events with agent trigger presence
-    const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
+    const triggeredIds = await getTriggeredEventIds(visibleEvents.map(e => e.id));
     const annotatedEvents = expandRecurringEvents(
-      events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
+      visibleEvents.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
       params.startDate,
       params.endDate,
     );
