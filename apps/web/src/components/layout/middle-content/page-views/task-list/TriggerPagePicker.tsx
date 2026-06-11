@@ -96,20 +96,12 @@ export function TriggerPagePicker(props: Props) {
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounce(query, 200);
 
-  // Same pause-while-editing contract as PageLabel — see comment there for rationale.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
-  const searchLoadedRef = useRef(false);
-
   const searchKey = open && driveId
     ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${driveId}&types=page`
     : null;
   const { data: results = [], isLoading } = useSWR(searchKey, searchFetcher, {
     revalidateOnFocus: false,
     keepPreviousData: true,
-    isPaused: () => searchLoadedRef.current && isAnyActive,
-    onSuccess: () => {
-      searchLoadedRef.current = true;
-    },
   });
   const searching = isLoading || query !== debouncedQuery;
 
@@ -183,7 +175,7 @@ export function TriggerPagePicker(props: Props) {
               value={query}
               onValueChange={setQuery}
             />
-            <CommandList>
+            <CommandList onWheel={(e) => e.stopPropagation()}>
               <CommandEmpty>
                 {searching ? 'Searching…' : 'No pages found.'}
               </CommandEmpty>
