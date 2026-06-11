@@ -5,7 +5,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalViewDrive, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -77,9 +77,10 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
     return true;
   }
 
-  // Check drive membership for drive events with DRIVE visibility
+  // Check drive-level view for drive events with DRIVE visibility — a scoped
+  // token's role caps this (custom role needs a drive-wide view grant).
   if (event.driveId && event.visibility === 'DRIVE') {
-    return isPrincipalDriveMember(auth, event.driveId);
+    return canPrincipalViewDrive(auth, event.driveId);
   }
 
   return false;

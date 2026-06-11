@@ -33,6 +33,7 @@ import {
 import {
   getAppAccessLevel,
   getAppDriveMembership,
+  getAppDriveAccessLevel,
   getAppAccessiblePagesInDrive,
   hasAppDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
@@ -111,6 +112,36 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
 }
 
 /**
+ * Drive-level VIEW for resources with no per-page granularity (calendar events,
+ * member listings). Scoped tokens use their role's drive-level access — a plain
+ * MEMBER keeps view, a custom role needs a drive-wide view grant. Users keep
+ * the membership rule. Routes whose responses are already filtered per page
+ * (tasks, search, tree) should keep isPrincipalDriveMember + per-page filters
+ * instead, so per-page custom-role grants still work.
+ */
+export async function canPrincipalViewDrive(auth: AuthResult, driveId: string): Promise<boolean> {
+  if (isScopedMCPAuth(auth)) {
+    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    return level?.canView ?? false;
+  }
+  return isUserDriveMember(auth.userId, driveId);
+}
+
+/**
+ * Drive-level EDIT (creating drive-scoped resources such as calendar events).
+ * Scoped tokens need their role's drive-level canEdit — MEMBER (view-only) and
+ * custom roles without a drive-wide edit grant are denied. Users keep the
+ * existing membership rule (any accepted member may create).
+ */
+export async function canPrincipalEditDrive(auth: AuthResult, driveId: string): Promise<boolean> {
+  if (isScopedMCPAuth(auth)) {
+    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    return level?.canEdit ?? false;
+  }
+  return isUserDriveMember(auth.userId, driveId);
+}
+
+/**
  * The principal's drive universe: a scoped token's mcp_token_drives memberships
  * (NOT intersected with the owning user's drives), otherwise the user's drives.
  */
@@ -119,6 +150,24 @@ export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> 
     return auth.allowedDriveIds;
   }
   return getDriveIdsForUser(auth.userId);
+}
+
+/**
+ * Like getPrincipalDriveIds, but for aggregate reads with no per-item page
+ * filtering: drops drives where a scoped token's role grants no drive-level
+ * view (custom role without a drive-wide view grant).
+ */
+export async function getPrincipalViewableDriveIds(auth: AuthResult): Promise<string[]> {
+  if (!isScopedMCPAuth(auth)) {
+    return getDriveIdsForUser(auth.userId);
+  }
+  const results = await Promise.all(
+    auth.allowedDriveIds.map(async (driveId) => {
+      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      return level?.canView ? driveId : null;
+    }),
+  );
+  return results.filter((id): id is string => id !== null);
 }
 
 export async function getPrincipalAccessiblePagesInDrive(

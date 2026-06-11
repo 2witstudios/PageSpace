@@ -16,6 +16,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppAccessLevel: vi.fn(),
   getAppDriveMembership: vi.fn(),
+  getAppDriveAccessLevel: vi.fn(),
   getAppAccessiblePagesInDrive: vi.fn(),
   hasAppDriveMembership: vi.fn(),
 }));
@@ -23,6 +24,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 import {
   isScopedMCPAuth,
   getPrincipalAccessLevel,
+  canPrincipalViewDrive,
+  canPrincipalEditDrive,
+  getPrincipalViewableDriveIds,
   canPrincipalViewPage,
   canPrincipalEditPage,
   canPrincipalDeletePage,
@@ -51,6 +55,7 @@ import {
 import {
   getAppAccessLevel,
   getAppDriveMembership,
+  getAppDriveAccessLevel,
   getAppAccessiblePagesInDrive,
   hasAppDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
@@ -184,6 +189,50 @@ describe('dispatch matrix — drive-level checks', () => {
     vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([]);
     await getPrincipalAccessiblePagesInDrive(sessionAuth, DRIVE_ID);
     expect(getUserAccessiblePagesInDriveWithDetails).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+  });
+});
+
+describe('drive-level view/edit dispatch', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('canPrincipalViewDrive: scoped token keyed to its drive-level role, not membership', async () => {
+    vi.mocked(getAppDriveAccessLevel).mockResolvedValue({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    expect(await canPrincipalViewDrive(scopedMcpAuth, DRIVE_ID)).toBe(false);
+    expect(getAppDriveAccessLevel).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
+
+    vi.mocked(getAppDriveAccessLevel).mockResolvedValue(VIEW_ONLY);
+    expect(await canPrincipalViewDrive(scopedMcpAuth, DRIVE_ID)).toBe(true);
+  });
+
+  it('canPrincipalViewDrive: session falls through to membership', async () => {
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    expect(await canPrincipalViewDrive(sessionAuth, DRIVE_ID)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+  });
+
+  it('canPrincipalEditDrive: scoped MEMBER token (view-only) denied; user member allowed', async () => {
+    vi.mocked(getAppDriveAccessLevel).mockResolvedValue(VIEW_ONLY);
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    expect(await canPrincipalEditDrive(scopedMcpAuth, DRIVE_ID)).toBe(false);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
+
+    expect(await canPrincipalEditDrive(unscopedMcpAuth, DRIVE_ID)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+  });
+
+  it('getPrincipalViewableDriveIds: drops drives where the token role grants no view', async () => {
+    const auth = { ...scopedMcpAuth, allowedDriveIds: ['drive_view', 'drive_noview'] } as typeof scopedMcpAuth;
+    vi.mocked(getAppDriveAccessLevel).mockImplementation(async (_t, driveId) =>
+      driveId === 'drive_view' ? VIEW_ONLY : { canView: false, canEdit: false, canShare: false, canDelete: false });
+
+    expect(await getPrincipalViewableDriveIds(auth)).toEqual(['drive_view']);
+    expect(getDriveIdsForUser).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalViewableDriveIds: session → user drives', async () => {
+    vi.mocked(getDriveIdsForUser).mockResolvedValue(['a', 'b']);
+    expect(await getPrincipalViewableDriveIds(sessionAuth)).toEqual(['a', 'b']);
   });
 });
 

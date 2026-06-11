@@ -469,7 +469,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
         } as never;
       });
 
-      vi.mocked(canPrincipalViewPage).mockImplementation(async (_userId: string, pageId: string) => {
+      vi.mocked(canPrincipalViewPage).mockImplementation(async (_auth, pageId: string) => {
         return pageId === 'agent-visible';
       });
 
