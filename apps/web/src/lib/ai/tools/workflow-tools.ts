@@ -33,7 +33,7 @@ export const workflowTools = {
   create_workflow: tool({
     description: `Create a standalone recurring workflow that runs an AI agent on a cron schedule.
 
-Use this for scheduled, repeating agent work that isn't tied to a task due date or a calendar event — e.g. "every weekday at 9am, summarize new activity". For one-off or entity-bound scheduling, attach an agentTrigger to a task (update_task) or calendar event (create_calendar_event) instead.
+Use this for scheduled, repeating agent work that isn't tied to a task due date or a calendar event — e.g. "every weekday at 9am, summarize new activity". For one-off or event-bound scheduling use set_calendar_trigger. For task-bound scheduling (fire at due date or on completion) use set_task_trigger.
 
 The cron expression must not fire more often than every 5 minutes (the polling cadence). Times are interpreted in the workflow timezone.`,
     inputSchema: z.object({
