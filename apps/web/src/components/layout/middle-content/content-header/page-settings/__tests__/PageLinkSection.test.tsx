@@ -108,4 +108,29 @@ describe('PageLinkSection', () => {
       });
     });
   });
+
+  it('given navigator.clipboard is undefined (non-secure origin), shows an error toast instead of throwing', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    });
+    render(<PageLinkSection pageId="page_abc" driveId="drive_xyz" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy page ID' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'navigator.clipboard is undefined',
+        should: 'show an error toast and not throw an unhandled rejection',
+        actual: vi.mocked(toast.error).mock.calls.length > 0,
+        expected: true,
+      });
+      assert({
+        given: 'navigator.clipboard is undefined',
+        should: 'not show a success toast',
+        actual: vi.mocked(toast.success).mock.calls.length,
+        expected: 0,
+      });
+    });
+  });
 });

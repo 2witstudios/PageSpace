@@ -11,9 +11,12 @@ interface PageLinkSectionProps {
 }
 
 async function copyToClipboard(text: string, label: string) {
-  const copied = await navigator.clipboard.writeText(text).then(() => true).catch(() => false);
-  if (copied) toast.success(`${label} copied to clipboard`);
-  else toast.error(`Could not copy ${label.toLowerCase()} to clipboard`);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success(`${label} copied to clipboard`);
+  } catch {
+    toast.error(`Could not copy ${label.toLowerCase()} to clipboard`);
+  }
 }
 
 export function PageLinkSection({ pageId, driveId }: PageLinkSectionProps) {
