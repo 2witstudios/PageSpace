@@ -14,7 +14,8 @@ import {
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../core/types';
@@ -253,11 +254,12 @@ export const calendarWriteTools = {
             };
           }
 
-          // For drive events, verify all proposed attendees are drive members
+          // For drive events, verify all proposed attendees are drive members.
+          // New events have no shared drives yet; getDriveRecipientUserIds suffices.
           if (driveId) {
-            const driveMemberIds = await getDriveMemberUserIds(driveId);
-            const driveMemberSet = new Set(driveMemberIds);
-            const nonMembers = otherAttendees.filter((id) => !driveMemberSet.has(id));
+            const memberIds = await getDriveRecipientUserIds(driveId);
+            const memberSet = new Set(memberIds);
+            const nonMembers = otherAttendees.filter((id) => !memberSet.has(id));
 
             if (nonMembers.length > 0) {
               return {
@@ -954,11 +956,11 @@ export const calendarWriteTools = {
         // Deduplicate userIds
         const uniqueUserIds = [...new Set(userIds)];
 
-        // For drive events, verify all proposed attendees are drive members
+        // For drive events, verify all proposed attendees are members of the
+        // home drive OR any drive the event is shared with.
         if (event.driveId) {
-          const driveMemberIds = await getDriveMemberUserIds(event.driveId);
-          const driveMemberSet = new Set(driveMemberIds);
-          const nonMembers = uniqueUserIds.filter((id) => !driveMemberSet.has(id));
+          const memberIds = await getAllMemberUserIdsForEvent(eventId, event.driveId);
+          const nonMembers = uniqueUserIds.filter((id) => !memberIds.has(id));
 
           if (nonMembers.length > 0) {
             return {

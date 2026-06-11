@@ -49,6 +49,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getDriveIdsForUser: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {
@@ -70,11 +74,13 @@ vi.mock('@/lib/logging/mask', () => ({
 import { calendarReadTools } from '../calendar-read-tools';
 import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { isUserMemberOfAnyEventDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockGetDriveIdsForUser = vi.mocked(getDriveIdsForUser);
+const mockIsUserMemberOfAnyEventDrive = vi.mocked(isUserMemberOfAnyEventDrive);
 
 const createMockEvent = (overrides = {}) => ({
   id: 'event-1',
@@ -569,7 +575,7 @@ describe('calendar-read-tools', () => {
       });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
       mockDb.query.eventAttendees.findFirst = vi.fn().mockResolvedValue(null);
-      mockIsUserDriveMember.mockResolvedValue(true);
+      mockIsUserMemberOfAnyEventDrive.mockResolvedValue(true);
       const input = { eventId: 'event-1' };
 
       const result = await calendarReadTools.get_calendar_event.execute!(

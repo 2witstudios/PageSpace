@@ -74,6 +74,11 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn().mockResolvedValue(false),
+  getAllDriveIdsForEvent: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {

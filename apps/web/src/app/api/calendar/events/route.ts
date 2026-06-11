@@ -2,14 +2,15 @@ import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gte, lte, inArray, isNull, isNotNull, asc } from '@pagespace/db/operators'
-import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { calendarEvents, eventAttendees, calendarEventDrives } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { desc } from '@pagespace/db/operators';
 import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -303,7 +304,20 @@ export async function GET(request: Request) {
         );
       }
 
+      // Fetch events shared into this drive via the junction table
+      const sharedRows = await db
+        .select({ eventId: calendarEventDrives.eventId })
+        .from(calendarEventDrives)
+        .where(eq(calendarEventDrives.driveId, params.driveId));
+      const sharedEventIds = sharedRows.map(r => r.eventId);
+
+      // Drive-or-shared condition (reused for both attendee and event queries)
+      const driveOrSharedCondition = sharedEventIds.length > 0
+        ? or(eq(calendarEvents.driveId, params.driveId), inArray(calendarEvents.id, sharedEventIds))
+        : eq(calendarEvents.driveId, params.driveId);
+
       // Get event IDs where user is an attendee (for ATTENDEES_ONLY events)
+      // Covers both home-drive events and shared events.
       const attendeeEventsInDrive = await db
         .select({ eventId: eventAttendees.eventId })
         .from(eventAttendees)
@@ -311,18 +325,18 @@ export async function GET(request: Request) {
         .where(
           and(
             eq(eventAttendees.userId, userId),
-            eq(calendarEvents.driveId, params.driveId)
+            driveOrSharedCondition,
           )
         );
       const attendeeEventIdsInDrive = attendeeEventsInDrive.map(e => e.eventId);
 
       // Fetch drive events within date range, respecting visibility:
-      // - DRIVE: visible to all drive members
+      // - DRIVE: visible to all drive members (including shared drives)
       // - ATTENDEES_ONLY: only visible to creator or attendees
       // - PRIVATE: only visible to creator
       const events = await db.query.calendarEvents.findMany({
         where: and(
-          eq(calendarEvents.driveId, params.driveId),
+          driveOrSharedCondition,
           eq(calendarEvents.isTrashed, false),
           // Include recurring events that started before the window (they may
           // have occurrences inside it); non-recurring must overlap normally.
@@ -409,7 +423,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // Drive events
+    // Drive events (home drive ownership or shared via junction table)
     if (driveIds.length > 0) {
       conditions.push(
         and(
@@ -417,6 +431,21 @@ export async function GET(request: Request) {
           eq(calendarEvents.visibility, 'DRIVE')
         )
       );
+
+      // Events shared into any of the user's drives via junction table
+      const sharedIntoUserDrives = await db
+        .select({ eventId: calendarEventDrives.eventId })
+        .from(calendarEventDrives)
+        .where(inArray(calendarEventDrives.driveId, driveIds));
+      const sharedIntoUserEventIds = [...new Set(sharedIntoUserDrives.map(r => r.eventId))];
+      if (sharedIntoUserEventIds.length > 0) {
+        conditions.push(
+          and(
+            inArray(calendarEvents.id, sharedIntoUserEventIds),
+            eq(calendarEvents.visibility, 'DRIVE'),
+          )
+        );
+      }
     }
 
     // Get event IDs where user is an attendee
@@ -592,11 +621,14 @@ export async function POST(request: Request) {
         );
       }
 
-      // For drive events, verify all proposed attendees are drive members
+      // For drive events, verify all proposed attendees are drive members.
+      // Uses getDriveRecipientUserIds (includes drive owner) since the event
+      // has no junction rows yet — getAllMemberUserIdsForEvent would add no
+      // shared-drive members for a brand-new event.
       if (data.driveId) {
-        const driveMemberIds = await getDriveMemberUserIds(data.driveId);
-        const driveMemberSet = new Set(driveMemberIds);
-        const nonMembers = otherAttendees.filter(id => !driveMemberSet.has(id));
+        const memberIds = await getDriveRecipientUserIds(data.driveId);
+        const memberSet = new Set(memberIds);
+        const nonMembers = otherAttendees.filter(id => !memberSet.has(id));
 
         if (nonMembers.length > 0) {
           return NextResponse.json(

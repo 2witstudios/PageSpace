@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
@@ -216,11 +216,11 @@ export async function POST(
     // Deduplicate userIds to prevent unique constraint errors
     const userIds = [...new Set(rawUserIds)];
 
-    // For drive events, verify all proposed attendees are drive members
+    // For drive events, verify all proposed attendees are members of the
+    // home drive OR any drive the event is shared with.
     if (event.driveId) {
-      const driveMemberIds = await getDriveMemberUserIds(event.driveId);
-      const driveMemberSet = new Set(driveMemberIds);
-      const nonMembers = userIds.filter(id => !driveMemberSet.has(id));
+      const memberIds = await getAllMemberUserIdsForEvent(eventId, event.driveId);
+      const nonMembers = userIds.filter(id => !memberIds.has(id));
 
       if (nonMembers.length > 0) {
         return NextResponse.json(
