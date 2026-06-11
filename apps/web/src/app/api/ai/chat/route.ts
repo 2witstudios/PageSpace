@@ -39,6 +39,13 @@ import { buildProviderAvailabilityMap } from '@/lib/ai/core/ai-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, saveMessageToDatabase, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import {
+  buildCommandPromptSection,
+  commandExecutionDataFromPlan,
+  COMMAND_EXECUTION_PART_TYPE,
+  type CommandExecutionPlan,
+} from '@/lib/ai/core/command-processor';
+import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
@@ -336,6 +343,11 @@ export async function POST(request: Request) {
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
+    // Universal Commands: resolved execution plan for the leading command
+    // token, if the user message carries one. Resolution degrades, never
+    // fails — a missing/forbidden command leaves the request untouched.
+    let commandPlan: CommandExecutionPlan | null = null;
+    let commandSystemPrompt = '';
 
     // Load the user up front: the prepaid credit gate must run BEFORE we persist
     // the user's message OR create the conversation row. Otherwise an out-of-credits
@@ -403,7 +415,19 @@ export async function POST(request: Request) {
             pageIds: mentionedPageIds
           });
         }
-        
+
+        // Resolve the message's slash command (if any) with the SENDER's
+        // permissions. The token stays in the saved content — transcripts
+        // render it as a chip; only the system prompt gains the injection.
+        commandPlan = await planCommandExecution(messageContent, userId!);
+        if (commandPlan) {
+          commandSystemPrompt = buildCommandPromptSection(commandPlan);
+          loggers.ai.info('AI Chat API: Command resolution', {
+            kind: commandPlan.kind,
+            ...(commandPlan.kind === 'skip' ? { reason: commandPlan.reason } : {}),
+          });
+        }
+
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
         await saveMessageToDatabase({
@@ -901,6 +925,17 @@ export async function POST(request: Request) {
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
+          // Execution feedback (UX spec §7): announce the command indicator
+          // ("Using /foo" / "Skipped /foo — reason") as the first part of the
+          // assistant message. Persisted with the message via onFinish so
+          // transcripts keep showing that a command informed the answer.
+          if (commandPlan) {
+            writer.write({
+              type: COMMAND_EXECUTION_PART_TYPE,
+              id: `${serverAssistantMessageId}-command`,
+              data: commandExecutionDataFromPlan(commandPlan),
+            });
+          }
           // Resolve once outside the per-attempt factory (the factory is synchronous).
           // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the
@@ -920,7 +955,7 @@ export async function POST(request: Request) {
             logger: loggers.ai,
             buildStreamText: (messages) => streamText({
               model,
-              system: systemPrompt + mentionSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+              system: systemPrompt + mentionSystemPrompt + commandSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
               messages,
               tools: filteredTools,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],

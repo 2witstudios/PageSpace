@@ -28,6 +28,8 @@ import { Bell, BellOff, Check, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
+import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
+import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
@@ -48,6 +50,13 @@ export type ThreadSource = 'channel' | 'dm';
  * message formats. `authorId` is `userId` for channel replies and `senderId`
  * for DM replies; the resolver maps it back to a display name + avatar.
  */
+interface ThreadCommandExecution {
+  label: string;
+  status: 'used' | 'skipped';
+  reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
+  entryPageTitle?: string;
+}
+
 export interface ThreadReply {
   id: string;
   content: string;
@@ -60,6 +69,8 @@ export interface ThreadReply {
   file?: FileRelation | null;
   reactions?: Reaction[];
   aiSenderName?: string | null;
+  /** Universal Commands execution feedback on agent replies (UX spec §7). */
+  commandExecution?: ThreadCommandExecution | null;
   parentId?: string | null;
 }
 
@@ -110,7 +121,7 @@ interface RawReply {
   // channel shape
   userId?: string | null;
   user?: { id: string; name: string | null; image: string | null } | null;
-  aiMeta?: { senderName: string } | null;
+  aiMeta?: { senderName: string; commandExecution?: ThreadCommandExecution } | null;
   // dm shape
   senderId?: string | null;
   sender?: { id: string; name: string | null; image: string | null } | null;
@@ -156,6 +167,7 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   file: raw.file ?? null,
   reactions: raw.reactions ?? [],
   aiSenderName: raw.aiMeta?.senderName ?? null,
+  commandExecution: raw.aiMeta?.commandExecution ?? null,
   parentId: raw.parentId ?? null,
 });
 
@@ -813,9 +825,16 @@ export function ThreadPanel({
                     </div>
                   ) : (
                     <>
+                      {reply.commandExecution && (
+                        <CommandExecutionIndicator data={reply.commandExecution} />
+                      )}
                       {reply.content && (
                         <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
-                          <RichText content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)} isStreaming={false} />
+                          <RichText
+                            content={reply.aiSenderName ? reply.content : addHardLineBreaks(reply.content)}
+                            isStreaming={false}
+                            commandChipInert={isCommandInertForMessage(reply.content, !!reply.aiSenderName)}
+                          />
                         </div>
                       )}
                       {(reply.fileId || reply.attachmentMeta) && (
