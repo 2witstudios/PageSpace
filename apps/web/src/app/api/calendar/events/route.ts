@@ -10,7 +10,6 @@ import { desc } from '@pagespace/db/operators';
 import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
