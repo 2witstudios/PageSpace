@@ -8,7 +8,7 @@ import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../core/types';
-import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope } from './actor-permissions';
+import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 
 /**
@@ -20,8 +20,13 @@ async function canAccessEvent(
   context?: ToolExecutionContext
 ): Promise<boolean> {
   // A scoped MCP token may never reach a drive-tied event outside its scope,
-  // even one it created (no-op for unscoped callers / personal events).
+  // even one it created (no-op for unscoped callers).
   if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'view')) {
+    return false;
+  }
+  // A drive-scoped token has no identity power over the owner's PERSONAL
+  // (drive-less) events — it belongs to a workspace, not to all of you.
+  if (context && !event.driveId && isMcpScoped(context)) {
     return false;
   }
 

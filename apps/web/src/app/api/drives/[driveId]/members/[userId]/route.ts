@@ -28,6 +28,8 @@ import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespa
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
+import { mcpTokenDrives } from '@pagespace/db/schema/members'
+import { mcpTokens } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 
@@ -329,6 +331,19 @@ export async function DELETE(
       // drive. Their access was capped at this user's, so it must not outlive
       // their membership. (Home-drive memberships are preserved.)
       revokedAgentIds = await revokeAgentMembershipsGrantedBy(tx, driveId, targetUserId);
+
+      // Cascade: the removed user's API keys lose this drive too. Inherited
+      // rows would deny automatically (dangling-inherit), but explicit-role
+      // rows would otherwise retain stale authority — delete both. Keys owned
+      // by OTHER users (admin-added foreign apps) are untouched.
+      await tx.delete(mcpTokenDrives)
+        .where(and(
+          eq(mcpTokenDrives.driveId, driveId),
+          inArray(
+            mcpTokenDrives.tokenId,
+            tx.select({ id: mcpTokens.id }).from(mcpTokens).where(eq(mcpTokens.userId, targetUserId)),
+          ),
+        ));
     });
 
     trackDriveOperation(currentUserId, 'remove_member', driveId, {

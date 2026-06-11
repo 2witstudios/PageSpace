@@ -18,7 +18,7 @@ import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-serv
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../core/types';
-import { driveDeniedByAppToken } from './actor-permissions';
+import { driveDeniedByAppToken, isMcpScoped } from './actor-permissions';
 import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
@@ -475,6 +475,11 @@ export const calendarWriteTools = {
         if (event.driveId && await driveDeniedByAppToken(ctx as ToolExecutionContext, event.driveId, 'edit')) {
           return { success: false, error: 'This token does not have access to this event’s drive.' };
         }
+        // A drive-scoped token has no identity power over the owner's PERSONAL
+        // (drive-less) events — it belongs to a workspace, not to all of you.
+        if (!event.driveId && isMcpScoped(ctx as ToolExecutionContext)) {
+          return { success: false, error: 'This token is scoped to drives and cannot modify personal events.' };
+        }
 
         // Check edit permission
         const editCheck = await canEditEvent(userId, event);
@@ -700,6 +705,11 @@ export const calendarWriteTools = {
         // even for events it created in another drive (no-op for unscoped callers).
         if (event.driveId && await driveDeniedByAppToken(ctx as ToolExecutionContext, event.driveId, 'edit')) {
           return { success: false, error: 'This token does not have access to this event’s drive.' };
+        }
+        // A drive-scoped token has no identity power over the owner's PERSONAL
+        // (drive-less) events — it belongs to a workspace, not to all of you.
+        if (!event.driveId && isMcpScoped(ctx as ToolExecutionContext)) {
+          return { success: false, error: 'This token is scoped to drives and cannot modify personal events.' };
         }
 
         // Check edit permission

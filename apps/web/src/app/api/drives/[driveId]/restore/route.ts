@@ -27,23 +27,30 @@ export async function POST(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    // A scoped MCP token is its own drive member: it must hold OWNER/ADMIN
-    // itself; sessions and unscoped tokens require drive ownership as before.
+    // Restoring a drive is owner-only for users. An inherited key uses its
+    // owner's identity (same rule); an explicit-role key needs the OWNER role —
+    // ADMIN is not enough, mirroring the user-side ownership requirement.
+    let scopedExplicitRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null | undefined;
+    if (isScopedMCPAuth(auth)) {
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (!membership) {
+        return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      }
+      scopedExplicitRole = membership.role;
+      if (scopedExplicitRole !== null && scopedExplicitRole !== 'OWNER') {
+        return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      }
+    }
+
+    const requireUserOwnership = !isScopedMCPAuth(auth) || scopedExplicitRole === null;
     const drive = await db.query.drives.findFirst({
-      where: isScopedMCPAuth(auth)
-        ? eq(drives.id, driveId)
-        : and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),
+      where: requireUserOwnership
+        ? and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId))
+        : eq(drives.id, driveId),
     });
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
-    }
-
-    if (isScopedMCPAuth(auth)) {
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
-      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
-        return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
-      }
     }
 
     if (!drive.isTrashed) {

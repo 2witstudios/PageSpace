@@ -2,120 +2,230 @@ import { db } from '@pagespace/db/db';
 import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { mcpTokenDrives } from '@pagespace/db/schema/members';
-import { resolveRolePermissions } from './resolve-role-permissions';
-import { fetchDriveIdForPage, fetchCustomRolePermissions, resolveCustomRolePermissions } from './membership-queries';
+import { mcpTokens } from '@pagespace/db/schema/auth';
+import {
+  getUserAccessLevel,
+  isUserDriveMember,
+  getUserAccessiblePagesInDriveWithDetails,
+} from './permissions';
+import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
 
-async function fetchAppMembership(tokenId: string, driveId: string) {
+/**
+ * App-member permission resolution for MCP tokens.
+ *
+ * Model: a key is the user it belongs to, narrowed by scope, optionally
+ * weakened by an explicit role.
+ *  - role === NULL  → INHERIT: the token resolves with its OWNER's access in
+ *    that drive (a scoped key "is me, only here").
+ *  - explicit role  → means EXACTLY what the same role means for a human
+ *    drive member (parity oracle: getUserAccessLevel) — channels editable by
+ *    members, drive-root creation for members, admin sees private pages, etc.
+ */
+
+export type AppMemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
+interface AppMembershipContext {
+  role: AppMemberRole | null;
+  customRoleId: string | null;
+  ownerUserId: string;
+}
+
+async function fetchAppMembershipContext(
+  tokenId: string,
+  driveId: string,
+): Promise<AppMembershipContext | null> {
   const rows = await db
-    .select()
+    .select({
+      role: mcpTokenDrives.role,
+      customRoleId: mcpTokenDrives.customRoleId,
+      ownerUserId: mcpTokens.userId,
+    })
     .from(mcpTokenDrives)
+    .innerJoin(mcpTokens, eq(mcpTokenDrives.tokenId, mcpTokens.id))
     .where(and(eq(mcpTokenDrives.tokenId, tokenId), eq(mcpTokenDrives.driveId, driveId)))
     .limit(1);
   return rows[0] ?? null;
+}
+
+interface PageTarget {
+  driveId: string;
+  isPrivate: boolean;
+  pageType: string | null;
+  /** No page row matched — the id is treated as a drive id (drive-as-root-node). */
+  isDriveRoot: boolean;
+}
+
+async function fetchPageTarget(targetPageId: string): Promise<PageTarget> {
+  const rows = await db
+    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate, type: pages.type })
+    .from(pages)
+    .where(eq(pages.id, targetPageId))
+    .limit(1);
+  if (rows.length === 0) {
+    return { driveId: targetPageId, isPrivate: false, pageType: null, isDriveRoot: true };
+  }
+  return {
+    driveId: rows[0].driveId,
+    isPrivate: rows[0].isPrivate ?? false,
+    pageType: rows[0].type,
+    isDriveRoot: false,
+  };
+}
+
+/**
+ * Pure parity resolver for EXPLICIT roles. Mirrors getUserAccessLevel
+ * (permissions.ts:92-280) cell for cell:
+ *  - drive-root target: ANY membership → view+edit (members may create root
+ *    pages); share/delete only for ADMIN/OWNER; customRoleId is not consulted
+ *    at the drive root, same as the user branch.
+ *  - ADMIN/OWNER → full access, including private pages.
+ *  - custom role: per-page grant wins; driveWidePermissions fallback (never on
+ *    private pages); no grant at all → all-false; canDelete always false.
+ *  - plain MEMBER: private → null; otherwise view-only EXCEPT channels, which
+ *    grant canEdit so members can post ("Discord/Slack semantics").
+ */
+export function resolveExplicitAppRoleAccess(input: {
+  role: AppMemberRole;
+  customRole: { permissions: CustomRolePerms; driveWidePermissions: PagePerm | null } | null;
+  /** True when the custom role id was set but did not resolve to a role in this drive. */
+  customRoleUnresolved: boolean;
+  targetPageId: string;
+  pageType: string | null;
+  isPrivate: boolean;
+  isDriveRoot: boolean;
+}): PermissionLevel | null {
+  const { role, customRole, customRoleUnresolved, targetPageId, pageType, isPrivate, isDriveRoot } = input;
+  const isAdminLike = role === 'ADMIN' || role === 'OWNER';
+
+  if (isDriveRoot) {
+    return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+  }
+
+  if (isAdminLike) {
+    return { canView: true, canEdit: true, canShare: true, canDelete: true };
+  }
+
+  if (customRole) {
+    const resolved = resolveCustomRolePermissions(customRole, targetPageId);
+    if (resolved !== null) {
+      // driveWidePermissions fallback must not grant access to private pages
+      if (isPrivate && customRole.permissions[targetPageId] === undefined) return null;
+      return resolved.canView ? { ...resolved, canDelete: false } : null;
+    }
+    // No per-page or drive-wide grant — custom roles limit access to explicitly listed pages
+    return { canView: false, canEdit: false, canShare: false, canDelete: false };
+  }
+  if (customRoleUnresolved) {
+    // Custom role id set but not resolvable in this drive ⇒ no access.
+    return { canView: false, canEdit: false, canShare: false, canDelete: false };
+  }
+
+  // Plain MEMBER: mirrors the user member rule — no private pages, view-only,
+  // channels editable so members can post.
+  if (isPrivate) return null;
+  return { canView: true, canEdit: pageType === 'CHANNEL', canShare: false, canDelete: false };
 }
 
 export async function getAppAccessLevel(
   tokenId: string,
   targetPageId: string,
 ): Promise<PermissionLevel | null> {
-  const { driveId, isPrivate } = await fetchDriveIdForPage(targetPageId);
-  const membership = await fetchAppMembership(tokenId, driveId);
+  const target = await fetchPageTarget(targetPageId);
+  const membership = await fetchAppMembershipContext(tokenId, target.driveId);
   if (!membership) return null;
 
-  const role = membership.customRoleId
-    ? await fetchCustomRolePermissions(membership.customRoleId, driveId)
+  // Inherit: the token acts as its owner in this drive.
+  if (membership.role === null) {
+    return getUserAccessLevel(membership.ownerUserId, targetPageId);
+  }
+
+  const customRole = membership.customRoleId
+    ? await fetchCustomRolePermissions(membership.customRoleId, target.driveId)
     : null;
 
-  // Mirror user-side membership semantics: a plain MEMBER (no resolvable custom
-  // role) sees only non-private pages, so a token never out-reads the member who
-  // granted it. ADMIN/OWNER and explicit custom-role grants keep the same parity
-  // they already have with the user-side paths.
-  if (!role && membership.role !== 'ADMIN' && membership.role !== 'OWNER' && isPrivate) {
-    return null;
-  }
-
-  if (role && membership.role !== 'ADMIN' && membership.role !== 'OWNER') {
-    const resolved = resolveCustomRolePermissions(role, targetPageId);
-    if (resolved !== null) {
-      // driveWidePermissions fallback must not grant access to private pages
-      if (isPrivate && role.permissions[targetPageId] === undefined) return null;
-      return resolved.canView ? { ...resolved, canDelete: false } : null;
-    }
-    // No per-page or drive-wide grant — custom roles limit access to explicitly listed pages
-    return { canView: false, canEdit: false, canShare: false, canDelete: false };
-  }
-
-  return resolveRolePermissions(membership.role, role?.permissions ?? null, targetPageId);
+  return resolveExplicitAppRoleAccess({
+    role: membership.role,
+    customRole,
+    customRoleUnresolved: !!membership.customRoleId && !customRole,
+    targetPageId,
+    pageType: target.pageType,
+    isPrivate: target.isPrivate,
+    isDriveRoot: target.isDriveRoot,
+  });
 }
 
+/**
+ * Whether the token has usable access to the drive. An inherit row counts only
+ * while its OWNER still has drive access — a dangling inherit row (owner
+ * removed/demoted out of the drive) grants nothing.
+ */
 export async function hasAppDriveMembership(tokenId: string, driveId: string): Promise<boolean> {
-  const row = await db
-    .select({ id: mcpTokenDrives.id })
-    .from(mcpTokenDrives)
-    .where(and(eq(mcpTokenDrives.tokenId, tokenId), eq(mcpTokenDrives.driveId, driveId)))
-    .limit(1);
-  return row.length > 0;
+  const membership = await fetchAppMembershipContext(tokenId, driveId);
+  if (!membership) return false;
+  if (membership.role === null) {
+    return isUserDriveMember(membership.ownerUserId, driveId);
+  }
+  return true;
 }
 
 export interface AppDriveMembership {
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /** NULL = inherit the owner's access. */
+  role: AppMemberRole | null;
   customRoleId: string | null;
+  ownerUserId: string;
 }
 
 export async function getAppDriveMembership(
   tokenId: string,
   driveId: string,
 ): Promise<AppDriveMembership | null> {
-  const membership = await fetchAppMembership(tokenId, driveId);
+  const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return null;
-  return { role: membership.role, customRoleId: membership.customRoleId ?? null };
+  return {
+    role: membership.role,
+    customRoleId: membership.customRoleId ?? null,
+    ownerUserId: membership.ownerUserId,
+  };
 }
 
 /**
- * Drive-level permission for a token, used where there is no specific target
- * page (drive listing, drive-root creation gates). OWNER/ADMIN → full access;
- * plain MEMBER → view-only; custom role → its driveWidePermissions (never
- * canDelete), or no access at all when the role grants nothing drive-wide.
+ * Drive-level access. Inherit → the owner's drive-root access (user rule);
+ * explicit → user drive-root parity: any membership gets view+edit, ADMIN/
+ * OWNER add share+delete.
  */
 export async function getAppDriveAccessLevel(
   tokenId: string,
   driveId: string,
 ): Promise<PermissionLevel | null> {
-  const membership = await fetchAppMembership(tokenId, driveId);
+  const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return null;
 
-  if (membership.role === 'ADMIN' || membership.role === 'OWNER') {
-    return { canView: true, canEdit: true, canShare: true, canDelete: true };
+  if (membership.role === null) {
+    return getUserAccessLevel(membership.ownerUserId, driveId);
   }
 
-  if (membership.customRoleId) {
-    const role = await fetchCustomRolePermissions(membership.customRoleId, driveId);
-    if (role) {
-      const driveWide = role.driveWidePermissions;
-      if (!driveWide) {
-        return { canView: false, canEdit: false, canShare: false, canDelete: false };
-      }
-      return { ...driveWide, canDelete: false };
-    }
-    // Custom role with no resolvable permissions ⇒ no access.
-    return { canView: false, canEdit: false, canShare: false, canDelete: false };
-  }
-
-  return { canView: true, canEdit: false, canShare: false, canDelete: false };
+  const isAdminLike = membership.role === 'ADMIN' || membership.role === 'OWNER';
+  return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
 }
 
 /**
  * All pages in a drive visible to the token, with the token's own permissions.
- * Mirrors getAgentAccessiblePagesInDrive — the token is its own drive member,
- * independent of the owning user's access.
+ * Inherit → exactly the owner's accessible set. Explicit roles mirror the
+ * corresponding user role (plain MEMBER additionally gets canEdit on channels,
+ * matching getAppAccessLevel — the user-side LISTING function lacks that
+ * exception, but access-level semantics are what gate actions).
  */
 export async function getAppAccessiblePagesInDrive(
   tokenId: string,
   driveId: string,
 ): Promise<PageWithPermissions[]> {
-  const membership = await fetchAppMembership(tokenId, driveId);
+  const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return [];
+
+  if (membership.role === null) {
+    return getUserAccessiblePagesInDriveWithDetails(membership.ownerUserId, driveId);
+  }
 
   const { role, customRoleId } = membership;
 
@@ -216,9 +326,8 @@ export async function getAppAccessiblePagesInDrive(
     return [];
   }
 
-  // Plain MEMBER (no custom role): view-only over the drive's non-private pages —
-  // the same set a plain MEMBER *user* sees, consistent with getAppAccessLevel
-  // denying a plain member access to private pages.
+  // Plain MEMBER: the drive's non-private pages, view-only except channels
+  // (canEdit so members can post — parity with getAppAccessLevel).
   const memberPages = await db
     .select({
       id: pages.id,
@@ -233,6 +342,6 @@ export async function getAppAccessiblePagesInDrive(
 
   return memberPages.map((p) => ({
     ...p,
-    permissions: resolveRolePermissions('MEMBER', null, p.id),
+    permissions: { canView: true, canEdit: p.type === 'CHANNEL', canShare: false, canDelete: false },
   }));
 }

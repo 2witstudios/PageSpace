@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMCPDriveScope, canPrincipalViewPage, canPrincipalViewDrive } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMCPDriveScope, canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth';
 import { getActivityById, previewRollback } from '@/services/api';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -71,7 +71,7 @@ export async function GET(
       );
     }
   } else if (activity.driveId) {
-    const isMember = await canPrincipalViewDrive(auth, activity.driveId);
+    const isMember = await isPrincipalDriveMember(auth, activity.driveId);
     if (!isMember) {
       return NextResponse.json(
         { error: 'Unauthorized - you do not have access to this drive' },

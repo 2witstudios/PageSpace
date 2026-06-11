@@ -49,6 +49,13 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
   isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  // Session auth falls through to user-level authority; derive it from the
+  // test's getDriveAccess fixture so existing fixtures keep driving 403/200.
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { getDriveAccess } = await import('@pagespace/lib/services/drive-service');
+    const access = await getDriveAccess(driveId, auth.userId);
+    return Boolean(access && (access.isOwner || access.isAdmin));
+  }),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({

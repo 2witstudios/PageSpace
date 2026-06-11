@@ -592,10 +592,7 @@ export {
   isPrincipalDriveMember,
   getPrincipalDriveAccess,
   isPrincipalDriveOwnerOrAdmin,
-  canPrincipalViewDrive,
-  canPrincipalEditDrive,
   getPrincipalDriveIds,
-  getPrincipalViewableDriveIds,
   getPrincipalAccessiblePagesInDrive,
   getPrincipalBatchPagePermissions,
 } from './principal-permissions';

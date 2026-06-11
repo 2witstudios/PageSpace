@@ -24,10 +24,17 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserEditPage(auth.userId, pageId);
   }),
+}));
+
+// Mock app-permissions (boundary): drive-scope role lookup for scoped MCP tokens
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
 }));
 
 // Mock permissions (boundary)
@@ -106,6 +113,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
@@ -304,6 +312,63 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toContain('Only drive owners');
+    });
+
+    // Scoped MCP token at root level: an explicit role means the key acts as
+    // exactly that role (user parity) — only OWNER may create at drive root.
+    it('should return 403 when scoped token with explicit ADMIN role creates at root level', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: mockUserId,
+        tokenType: 'mcp',
+        tokenId: 'token_123',
+        allowedDriveIds: [mockDriveId],
+      } as unknown as SessionAuthResult);
+      vi.mocked(getAppDriveMembership).mockResolvedValue({
+        role: 'ADMIN',
+        customRoleId: null,
+        ownerUserId: mockUserId,
+      });
+
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Only drive owners');
+      expect(getAppDriveMembership).toHaveBeenCalledWith('token_123', mockDriveId);
+    });
+
+    // role === null means INHERIT: the key acts as its owner, so root creation
+    // falls through to the drive.ownerId === userId check and succeeds.
+    it('should allow scoped token with inherited (null) role to create at root when owner owns the drive', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: mockUserId,
+        tokenType: 'mcp',
+        tokenId: 'token_123',
+        allowedDriveIds: [mockDriveId],
+      } as unknown as SessionAuthResult);
+      vi.mocked(getAppDriveMembership).mockResolvedValue({
+        role: null,
+        customRoleId: null,
+        ownerUserId: mockUserId,
+      });
+
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
     });
 
     it('should return 403 when user lacks edit permission for parent folder', async () => {

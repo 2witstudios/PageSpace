@@ -50,10 +50,13 @@ export async function GET(req: Request) {
       drives = await Promise.all(
         rows.map(async (drive) => {
           const membership = await getAppDriveMembership(auth.tokenId, drive.id);
+          // Inherit rows present the owner's own relationship to the drive.
+          const role = membership?.role
+            ?? (drive.ownerId === userId ? ('OWNER' as const) : ('MEMBER' as const));
           return {
             ...drive,
-            isOwned: false,
-            role: membership?.role ?? ('MEMBER' as const),
+            isOwned: membership?.role === null && drive.ownerId === userId,
+            role,
             lastAccessedAt: null,
           };
         })

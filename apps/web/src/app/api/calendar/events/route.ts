@@ -11,7 +11,7 @@ import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, canPrincipalViewDrive, canPrincipalEditDrive, getPrincipalViewableDriveIds, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -294,7 +294,7 @@ export async function GET(request: Request) {
       const scopeError = checkMCPDriveScope(auth, params.driveId);
       if (scopeError) return scopeError;
 
-      const canView = await canPrincipalViewDrive(auth, params.driveId);
+      const canView = await isPrincipalDriveMember(auth, params.driveId);
       if (!canView) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
@@ -387,10 +387,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ events: annotatedEvents, workflowEvents });
     }
 
-    // User context: aggregate events from all sources. Calendar events have no
-    // per-event page filter, so a scoped token's drive list is capped at its
-    // role's drive-level VIEW (custom role without drive-wide view sees nothing).
-    const driveIds = await getPrincipalViewableDriveIds(auth);
+    // User context: aggregate events from all sources. User parity: any drive
+    // member sees DRIVE-visible events, so the principal's membership universe
+    // is the gate (inherit rows require the owner to still be a member).
+    const driveIds = await getPrincipalDriveIds(auth);
 
     // Build conditions for user's visible events:
     // 1. Personal events (driveId is null, created by user)
@@ -534,10 +534,10 @@ export async function POST(request: Request) {
 
     // Validate drive access if driveId is provided
     if (data.driveId) {
-      // Creating a drive event is a WRITE: a scoped token needs its role's
-      // drive-level edit (MEMBER tokens are view-only); users keep the
-      // any-accepted-member rule.
-      const canAccess = await canPrincipalEditDrive(auth, data.driveId);
+      // User parity: any accepted member may create drive events; the principal
+      // membership check applies the same rule to keys (explicit MEMBER roles
+      // included — a member user could do this, so a member key can too).
+      const canAccess = await isPrincipalDriveMember(auth, data.driveId);
       if (!canAccess) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },

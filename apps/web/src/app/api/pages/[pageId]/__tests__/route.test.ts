@@ -246,7 +246,12 @@ describe('GET /api/pages/[pageId]', () => {
     it('passes correct parameters to service', async () => {
       await GET(createRequest(), { params: mockParams });
 
-      expect(pageService.getPage).toHaveBeenCalledWith(mockPageId, mockUserId);
+      expect(pageService.getPage).toHaveBeenCalledWith(
+        mockPageId,
+        mockUserId,
+        // Principal-aware view authorization is injected by the route
+        expect.objectContaining({ authorizeView: expect.any(Function) })
+      );
     });
 
     it('logs read audit event on successful page retrieval', async () => {
@@ -771,7 +776,7 @@ describe('DELETE /api/pages/[pageId]', () => {
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
         mockUserId,
-        { trashChildren: true }
+        expect.objectContaining({ trashChildren: true, authorizeDelete: expect.any(Function) })
       );
     });
 
@@ -781,7 +786,7 @@ describe('DELETE /api/pages/[pageId]', () => {
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
         mockUserId,
-        { trashChildren: true }
+        expect.objectContaining({ trashChildren: true, authorizeDelete: expect.any(Function) })
       );
     });
 
@@ -791,7 +796,7 @@ describe('DELETE /api/pages/[pageId]', () => {
       expect(pageService.trashPage).toHaveBeenCalledWith(
         mockPageId,
         mockUserId,
-        { trashChildren: false }
+        expect.objectContaining({ trashChildren: false, authorizeDelete: expect.any(Function) })
       );
     });
   });

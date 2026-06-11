@@ -13,7 +13,7 @@ export interface AppMember {
   id: string;
   tokenId: string;
   name: string | null;
-  role: string;
+  role: string | null;
   createdAt: Date | string;
   customRole: { id: string; name: string; color: string | null } | null;
 }
@@ -34,6 +34,13 @@ interface AppMemberRowProps {
 }
 
 function getRoleBadge(app: AppMember) {
+  if (app.role === null) {
+    return (
+      <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Inherits owner
+      </Badge>
+    );
+  }
   if (app.role === 'ADMIN') {
     return (
       <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
@@ -56,6 +63,7 @@ function getRoleBadge(app: AppMember) {
 }
 
 function currentSelectValue(app: AppMember): string {
+  if (app.role === null) return 'INHERIT';
   if (app.role === 'ADMIN') return 'ADMIN';
   if (app.customRole) return app.customRole.id;
   return 'MEMBER';
@@ -77,8 +85,10 @@ export function AppMemberRow({
   const handleRoleSelect = async (value: string) => {
     setSaving(true);
     try {
-      const body: { role: 'MEMBER' | 'ADMIN'; customRoleId: string | null } =
-        value === 'ADMIN'
+      const body: { role: 'MEMBER' | 'ADMIN' | null; customRoleId: string | null } =
+        value === 'INHERIT'
+          ? { role: null, customRoleId: null }
+          : value === 'ADMIN'
           ? { role: 'ADMIN', customRoleId: null }
           : value === 'MEMBER'
           ? { role: 'MEMBER', customRoleId: null }
@@ -86,7 +96,7 @@ export function AppMemberRow({
 
       await patch(`/api/drives/${driveId}/apps/${app.tokenId}`, body);
 
-      const customRole = value !== 'ADMIN' && value !== 'MEMBER'
+      const customRole = value !== 'INHERIT' && value !== 'ADMIN' && value !== 'MEMBER'
         ? (driveRoles.find((r) => r.id === value) ?? null)
         : null;
 
@@ -137,6 +147,7 @@ export function AppMemberRow({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="INHERIT">Inherits owner</SelectItem>
               <SelectItem value="ADMIN">Admin</SelectItem>
               <SelectItem value="MEMBER">Member</SelectItem>
               {driveRoles.length > 0 && (

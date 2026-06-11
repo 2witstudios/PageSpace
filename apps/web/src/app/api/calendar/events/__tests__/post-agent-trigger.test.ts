@@ -91,15 +91,11 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: vi.fn(() => null),
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
-  canPrincipalViewDrive: vi.fn(async (auth: { userId: string }, driveId: string) => {
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
     return isUserDriveMember(auth.userId, driveId);
   }),
-  canPrincipalEditDrive: vi.fn(async (auth: { userId: string }, driveId: string) => {
-    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
-    return isUserDriveMember(auth.userId, driveId);
-  }),
-  getPrincipalViewableDriveIds: vi.fn(async (auth: { userId: string }) => {
+  getPrincipalDriveIds: vi.fn(async (auth: { userId: string }) => {
     const { getDriveIdsForUser } = await import('@pagespace/lib/permissions/permissions');
     return getDriveIdsForUser(auth.userId);
   }),

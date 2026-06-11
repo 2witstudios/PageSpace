@@ -4,7 +4,10 @@ vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate', isTrashed: 'isTrashed' },
+  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate', isTrashed: 'isTrashed', type: 'type' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: { id: 'id', userId: 'userId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   mcpTokenDrives: {
@@ -25,6 +28,12 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ and: args })),
   inArray: vi.fn((_a: unknown, _b: unknown) => 'inArray'),
 }));
+// User-side oracle, mocked: inherit MUST delegate to these with the OWNER's id.
+vi.mock('../permissions', () => ({
+  getUserAccessLevel: vi.fn(),
+  isUserDriveMember: vi.fn(),
+  getUserAccessiblePagesInDriveWithDetails: vi.fn(),
+}));
 
 import {
   getAppAccessLevel,
@@ -32,15 +41,27 @@ import {
   getAppDriveMembership,
   getAppDriveAccessLevel,
   getAppAccessiblePagesInDrive,
+  resolveExplicitAppRoleAccess,
 } from '../app-permissions';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
+import {
+  getUserAccessLevel,
+  isUserDriveMember,
+  getUserAccessiblePagesInDriveWithDetails,
+} from '../permissions';
 
 const TOKEN_ID = 'mcp_aaaaaaaaaaaaaaaaaaaaaa';
+const OWNER_ID = 'user_oooooooooooooooooooo';
 const PAGE_ID = 'page_bbbbbbbbbbbbbbbbbbbbbbb';
 const DRIVE_ID = 'drive_cccccccccccccccccccccc';
 const CUSTOM_ROLE_ID = 'role_dddddddddddddddddddddd';
 
+const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
+const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
+const NONE = { canView: false, canEdit: false, canShare: false, canDelete: false };
+
+// select().from().where().limit() → rows  (page target, custom role)
 function stubSelect(rows: unknown[]) {
   return {
     from: vi.fn().mockReturnValue({
@@ -51,107 +72,20 @@ function stubSelect(rows: unknown[]) {
   } as unknown as ReturnType<typeof db.select>;
 }
 
-describe('getAppAccessLevel — page targets', () => {
-  beforeEach(() => vi.clearAllMocks());
+// select().from().innerJoin().where().limit() → rows  (membership + owner join)
+function stubSelectJoin(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      innerJoin: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue(rows),
+        }),
+      }),
+    }),
+  } as unknown as ReturnType<typeof db.select>;
+}
 
-  it('returns null when token has no membership in the drive', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
-      .mockReturnValueOnce(stubSelect([]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
-  });
-
-  it('returns full access for ADMIN role', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
-      canView: true, canEdit: true, canShare: true, canDelete: true,
-    });
-  });
-
-  it('returns read-only for MEMBER with no custom role', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
-      canView: true, canEdit: false, canShare: false, canDelete: false,
-    });
-  });
-
-  it('returns custom role permissions for MEMBER with custom role', async () => {
-    const perms = { [PAGE_ID]: { canView: true, canEdit: true, canShare: false } };
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
-      canView: true, canEdit: true, canShare: false, canDelete: false,
-    });
-  });
-
-  it('denies MCP token with driveWidePermissions:{canView:true} and no per-page entry access to a PRIVATE page', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
-  });
-
-  it('grants MCP token with driveWidePermissions AND explicit per-page entry access to a PRIVATE page', async () => {
-    const perms = { [PAGE_ID]: { canView: true, canEdit: false, canShare: false } };
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
-      canView: true, canEdit: false, canShare: false, canDelete: false,
-    });
-  });
-});
-
-describe('getAppAccessLevel — drive-as-root-node', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('returns null when token has no membership (drive target)', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([]))
-      .mockReturnValueOnce(stubSelect([]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, DRIVE_ID)).toBeNull();
-  });
-
-  it('returns full access for ADMIN role on drive target', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([]))
-      .mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
-      canView: true, canEdit: true, canShare: true, canDelete: true,
-    });
-  });
-
-  it('returns all-false when custom role has no entry for the drive', async () => {
-    const perms = { 'page_other': { canView: true, canEdit: true, canShare: false } };
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
-
-    expect(await getAppAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
-      canView: false, canEdit: false, canShare: false, canDelete: false,
-    });
-  });
-});
-
-// Stub for queries that resolve directly from .where() (no .limit()), e.g. the
-// page-enumeration queries in getAppAccessiblePagesInDrive.
+// select().from().where() → rows  (page enumeration)
 function stubSelectList(rows: unknown[]) {
   return {
     from: vi.fn().mockReturnValue({
@@ -160,50 +94,205 @@ function stubSelectList(rows: unknown[]) {
   } as unknown as ReturnType<typeof db.select>;
 }
 
-describe('getAppAccessLevel — private pages', () => {
+const membershipRow = (role: 'OWNER' | 'ADMIN' | 'MEMBER' | null, customRoleId: string | null = null) =>
+  ({ role, customRoleId, ownerUserId: OWNER_ID });
+
+// ---------------------------------------------------------------------------
+// Pure parity resolver — table-driven, ZERO mocks. The oracle is
+// getUserAccessLevel's member semantics (permissions.ts:92-280).
+// ---------------------------------------------------------------------------
+
+describe('resolveExplicitAppRoleAccess (pure user-parity table)', () => {
+  const base = {
+    customRole: null,
+    customRoleUnresolved: false,
+    targetPageId: PAGE_ID,
+    isDriveRoot: false,
+  };
+
+  it.each([
+    // [description, input, expected]
+    ['MEMBER on non-private DOCUMENT → view-only', { role: 'MEMBER', pageType: 'DOCUMENT', isPrivate: false }, VIEW_ONLY],
+    ['MEMBER on non-private CHANNEL → canEdit (Discord/Slack member posting)', { role: 'MEMBER', pageType: 'CHANNEL', isPrivate: false }, { ...VIEW_ONLY, canEdit: true }],
+    ['MEMBER on private page → null (no access)', { role: 'MEMBER', pageType: 'DOCUMENT', isPrivate: true }, null],
+    ['ADMIN on private page → full (admins see private, same as user admins)', { role: 'ADMIN', pageType: 'DOCUMENT', isPrivate: true }, FULL],
+    ['OWNER on CHANNEL → full', { role: 'OWNER', pageType: 'CHANNEL', isPrivate: false }, FULL],
+  ] as const)('%s', (_desc, input, expected) => {
+    expect(resolveExplicitAppRoleAccess({ ...base, ...input })).toEqual(expected);
+  });
+
+  it.each([
+    ['MEMBER at drive root → view+edit (members may create root pages)', 'MEMBER', { canView: true, canEdit: true, canShare: false, canDelete: false }],
+    ['ADMIN at drive root → full', 'ADMIN', FULL],
+  ] as const)('%s', (_desc, role, expected) => {
+    expect(
+      resolveExplicitAppRoleAccess({ ...base, role, pageType: null, isPrivate: false, isDriveRoot: true }),
+    ).toEqual(expected);
+  });
+
+  it('custom role per-page grant wins; canDelete forced false', () => {
+    expect(
+      resolveExplicitAppRoleAccess({
+        ...base,
+        role: 'MEMBER',
+        customRole: { permissions: { [PAGE_ID]: { canView: true, canEdit: true, canShare: false } }, driveWidePermissions: null },
+        pageType: 'DOCUMENT',
+        isPrivate: false,
+      }),
+    ).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('custom role driveWide fallback never grants PRIVATE pages', () => {
+    expect(
+      resolveExplicitAppRoleAccess({
+        ...base,
+        role: 'MEMBER',
+        customRole: { permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } },
+        pageType: 'DOCUMENT',
+        isPrivate: true,
+      }),
+    ).toBeNull();
+  });
+
+  it('custom role with no grant for the page → all-false (explicit-list semantics)', () => {
+    expect(
+      resolveExplicitAppRoleAccess({
+        ...base,
+        role: 'MEMBER',
+        customRole: { permissions: { other: { canView: true, canEdit: false, canShare: false } }, driveWidePermissions: null },
+        pageType: 'DOCUMENT',
+        isPrivate: false,
+      }),
+    ).toEqual(NONE);
+  });
+
+  it('custom role id set but unresolvable → all-false', () => {
+    expect(
+      resolveExplicitAppRoleAccess({
+        ...base,
+        role: 'MEMBER',
+        customRoleUnresolved: true,
+        pageType: 'DOCUMENT',
+        isPrivate: false,
+      }),
+    ).toEqual(NONE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAppAccessLevel — dispatch: inherit → owner's access; explicit → resolver
+// ---------------------------------------------------------------------------
+
+describe('getAppAccessLevel', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('denies a plain MEMBER token access to a private page (mirrors plain-member user/agent)', async () => {
+  it('returns null when token has no membership in the drive', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]));
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]))
+      .mockReturnValueOnce(stubSelectJoin([]));
+
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('INHERIT (role null) → delegates to the OWNER\'s user access for the page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual(FULL);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, PAGE_ID);
+  });
+
+  it('explicit MEMBER on a CHANNEL → canEdit true (parity, end to end)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+
+    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({ ...VIEW_ONLY, canEdit: true });
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('explicit MEMBER on a private page → null', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true, type: 'DOCUMENT' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toBeNull();
   });
 
-  it('still grants an ADMIN token access to a private page', async () => {
+  it('drive-as-root target (no page row): explicit MEMBER may create (view+edit)', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]));
+      .mockReturnValueOnce(stubSelect([]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
 
-    expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
-      canView: true, canEdit: true, canShare: true, canDelete: true,
+    expect(await getAppAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
+      canView: true, canEdit: true, canShare: false, canDelete: false,
     });
   });
 
-  it('honours an explicit custom-role grant on a private page', async () => {
-    const perms = { [PAGE_ID]: { canView: true, canEdit: false, canShare: false } };
+  it('explicit custom role resolves through fetchCustomRolePermissions', async () => {
+    const perms = { [PAGE_ID]: { canView: true, canEdit: true, canShare: false } };
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER', CUSTOM_ROLE_ID)]))
       .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
 
     expect(await getAppAccessLevel(TOKEN_ID, PAGE_ID)).toEqual({
-      canView: true, canEdit: false, canShare: false, canDelete: false,
+      canView: true, canEdit: true, canShare: false, canDelete: false,
     });
   });
 });
 
+// ---------------------------------------------------------------------------
+// hasAppDriveMembership — dangling-inherit denial (Story 5)
+// ---------------------------------------------------------------------------
+
+describe('hasAppDriveMembership', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('false when no row', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([]));
+    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
+  });
+
+  it('explicit role row → true regardless of owner membership', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
+    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(true);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
+  });
+
+  it('inherit row counts ONLY while the owner still has drive access', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+  });
+
+  it('DANGLING inherit row (owner removed) → false', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAppDriveMembership / getAppDriveAccessLevel
+// ---------------------------------------------------------------------------
+
 describe('getAppDriveMembership', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns role and customRoleId when membership exists', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]));
-    expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toEqual({ role: 'ADMIN', customRoleId: null });
+  it('returns nullable role + ownerUserId', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
+    expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toEqual({
+      role: null, customRoleId: null, ownerUserId: OWNER_ID,
+    });
   });
 
   it('returns null when no membership row', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([]));
     expect(await getAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBeNull();
   });
 });
@@ -211,98 +300,87 @@ describe('getAppDriveMembership', () => {
 describe('getAppDriveAccessLevel', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns null when token has no membership', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
+  it('null when token has no membership', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([]));
     expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toBeNull();
   });
 
-  it('returns full access for OWNER/ADMIN roles', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ role: 'OWNER', customRoleId: null }]));
-    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
-      canView: true, canEdit: true, canShare: true, canDelete: true,
-    });
+  it('INHERIT → owner\'s drive-root access via getUserAccessLevel', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual(FULL);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
   });
 
-  it('returns view-only for plain MEMBER', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]));
-    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
-      canView: true, canEdit: false, canShare: false, canDelete: false,
-    });
-  });
-
-  it('returns driveWidePermissions (canDelete forced false) for a custom role', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } }]));
-
+  it('explicit MEMBER → view+edit (user drive-root parity: members create root pages/events)', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]));
     expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
       canView: true, canEdit: true, canShare: false, canDelete: false,
     });
   });
 
-  it('returns all-false for a custom role with no driveWidePermissions', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([{ permissions: { [PAGE_ID]: { canView: true, canEdit: true, canShare: false } }, driveWidePermissions: null }]));
-
-    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
-      canView: false, canEdit: false, canShare: false, canDelete: false,
-    });
-  });
-
-  it('returns all-false for a custom role that does not resolve', async () => {
-    vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
-      .mockReturnValueOnce(stubSelect([]));
-
-    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual({
-      canView: false, canEdit: false, canShare: false, canDelete: false,
-    });
+  it('explicit ADMIN → full', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]));
+    expect(await getAppDriveAccessLevel(TOKEN_ID, DRIVE_ID)).toEqual(FULL);
   });
 });
+
+// ---------------------------------------------------------------------------
+// getAppAccessiblePagesInDrive
+// ---------------------------------------------------------------------------
 
 describe('getAppAccessiblePagesInDrive', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns [] when the token has no membership', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([]));
     expect(await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID)).toEqual([]);
   });
 
-  it('grants a plain MEMBER view-only access to non-private pages only', async () => {
+  it('INHERIT → exactly the owner\'s accessible set', async () => {
+    const ownerSet = [
+      { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: FULL },
+    ];
+    vi.mocked(db.select).mockReturnValueOnce(stubSelectJoin([membershipRow(null)]));
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue(ownerSet);
+
+    expect(await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID)).toBe(ownerSet);
+    expect(getUserAccessiblePagesInDriveWithDetails).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+  });
+
+  it('explicit plain MEMBER: non-private pages, channels editable', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER')]))
       .mockReturnValueOnce(stubSelectList([
-        { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
-        { id: 'p2', title: 'B', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+        { id: 'doc', title: 'Doc', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+        { id: 'chan', title: 'General', type: 'CHANNEL', parentId: null, position: 1, isTrashed: false },
       ]));
 
     const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
-    expect(result).toHaveLength(2);
-    expect(result.every((p) => p.permissions.canView)).toBe(true);
-    expect(result.every((p) => !p.permissions.canEdit)).toBe(true);
+    expect(result.find((p) => p.id === 'doc')?.permissions).toEqual(VIEW_ONLY);
+    expect(result.find((p) => p.id === 'chan')?.permissions).toEqual({ ...VIEW_ONLY, canEdit: true });
     expect(eq).toHaveBeenCalledWith('isPrivate', false);
   });
 
-  it('grants an ADMIN full access to every page', async () => {
+  it('explicit ADMIN: every page, full access', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ role: 'ADMIN', customRoleId: null }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('ADMIN')]))
       .mockReturnValueOnce(stubSelectList([
         { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
       ]));
 
     const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
     expect(result).toHaveLength(1);
-    expect(result[0].permissions).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+    expect(result[0].permissions).toEqual(FULL);
   });
 
-  it('custom role with no drive-wide view returns only explicitly granted pages', async () => {
+  it('explicit custom role without drive-wide view → only granted pages', async () => {
     const perms = {
       p1: { canView: true, canEdit: true, canShare: false },
       p2: { canView: false, canEdit: false, canShare: false },
     };
     vi.mocked(db.select)
-      .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelectJoin([membershipRow('MEMBER', CUSTOM_ROLE_ID)]))
       .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]))
       .mockReturnValueOnce(stubSelectList([
         { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
@@ -310,21 +388,6 @@ describe('getAppAccessiblePagesInDrive', () => {
 
     const result = await getAppAccessiblePagesInDrive(TOKEN_ID, DRIVE_ID);
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe('p1');
     expect(result[0].permissions).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
-  });
-});
-
-describe('hasAppDriveMembership', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('returns true when membership row exists', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: 'member-1' }]));
-    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(true);
-  });
-
-  it('returns false when no membership row', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
-    expect(await hasAppDriveMembership(TOKEN_ID, DRIVE_ID)).toBe(false);
   });
 });

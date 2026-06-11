@@ -60,8 +60,12 @@ export async function POST(request: Request) {
     // Check the principal has edit access to target drive. A scoped MCP token
     // is its own drive member — use the TOKEN's role, not its owning user's.
     let canEditDrive: boolean;
-    if (isScopedMCPAuth(auth)) {
-      const tokenMembership = await getAppDriveMembership(auth.tokenId, targetDriveId);
+    const tokenMembership = isScopedMCPAuth(auth)
+      ? await getAppDriveMembership(auth.tokenId, targetDriveId)
+      : null;
+    if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
+      // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
+      // through to the owner's own authority below.
       canEditDrive = tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
     } else {
       const isOwner = targetDrive.ownerId === userId;

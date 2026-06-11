@@ -5,7 +5,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalViewDrive, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -61,6 +61,12 @@ const updateEventSchema = z.object({
 async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
   const userId = auth.userId;
 
+  // A drive-scoped token acts as an app member of its drives only: it gets no
+  // identity power over the owner's PERSONAL (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) {
+    return false;
+  }
+
   // Creator always has access (identity check)
   if (event.createdById === userId) {
     return true;
@@ -77,10 +83,10 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
     return true;
   }
 
-  // Check drive-level view for drive events with DRIVE visibility — a scoped
-  // token's role caps this (custom role needs a drive-wide view grant).
+  // Check drive membership for drive events with DRIVE visibility (user
+  // parity: any member sees DRIVE-visible events).
   if (event.driveId && event.visibility === 'DRIVE') {
-    return canPrincipalViewDrive(auth, event.driveId);
+    return isPrincipalDriveMember(auth, event.driveId);
   }
 
   return false;
@@ -90,6 +96,8 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
  * Check if the principal can edit an event (only creator or drive admin)
  */
 async function canEditEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
+  // Scoped tokens have no identity power over personal (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) return false;
   if (event.createdById === auth.userId) return true;
   if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;

@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveById, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
@@ -53,6 +53,11 @@ export async function GET(
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
       const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (membership?.role === null) {
+        // Inherit: the key is its owner — present the owner's own relationship.
+        const inherited = await getDriveWithAccess(driveId, userId);
+        if (inherited) return NextResponse.json(inherited);
+      }
       return NextResponse.json({
         ...drive,
         isOwned: false,
@@ -110,23 +115,13 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization. A scoped MCP token must hold OWNER/ADMIN itself.
-    if (isScopedMCPAuth(auth)) {
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
-      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
-        return NextResponse.json(
-          { error: 'Only drive owners and admins can update drive settings' },
-          { status: 403 }
-        );
-      }
-    } else {
-      const access = await getDriveAccess(driveId, userId);
-      if (!access.isOwner && !access.isAdmin) {
-        return NextResponse.json(
-          { error: 'Only drive owners and admins can update drive settings' },
-          { status: 403 }
-        );
-      }
+    // Check authorization: owner/admin authority. Scoped tokens with an
+    // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can update drive settings' },
+        { status: 403 }
+      );
     }
 
     // Update the drive
@@ -226,23 +221,13 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization. A scoped MCP token must hold OWNER/ADMIN itself.
-    if (isScopedMCPAuth(auth)) {
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
-      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
-        return NextResponse.json(
-          { error: 'Only drive owners and admins can delete drives' },
-          { status: 403 }
-        );
-      }
-    } else {
-      const access = await getDriveAccess(driveId, userId);
-      if (!access.isOwner && !access.isAdmin) {
-        return NextResponse.json(
-          { error: 'Only drive owners and admins can delete drives' },
-          { status: 403 }
-        );
-      }
+    // Check authorization: owner/admin authority. Scoped tokens with an
+    // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      return NextResponse.json(
+        { error: 'Only drive owners and admins can delete drives' },
+        { status: 403 }
+      );
     }
 
     // Get recipients BEFORE trashing (ensures we have valid member list)

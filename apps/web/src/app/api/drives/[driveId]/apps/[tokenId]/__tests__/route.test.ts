@@ -38,10 +38,20 @@ vi.mock('@pagespace/db/schema/members', () => ({
     driveId: 'col_dr_driveId',
   },
 }));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: {
+    id: 'col_mt_id',
+    userId: 'col_mt_userId',
+  },
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  isUserDriveMember: vi.fn().mockResolvedValue(true),
+}));
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 
 const MOCK_USER_ID = 'user_abc';
@@ -72,12 +82,30 @@ const createRequest = (method: string, body?: unknown) =>
     body: body ? JSON.stringify(body) : undefined,
   });
 
+// The existing-row lookup now JOINs mcpTokens (select().from().innerJoin().where().limit())
+// to surface the token's ownerUserId; plain selects still go from().where().limit().
 function setupSelectChain(rows: unknown[]) {
   const mockLimit = vi.fn().mockResolvedValue(rows);
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-  const mockFrom = vi.fn(() => ({ where: mockWhere }));
+  const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
+  const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
   vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
-  return { mockFrom, mockWhere, mockLimit };
+  return { mockFrom, mockInnerJoin, mockWhere, mockLimit };
+}
+
+// Per-call select chain: first call is the joined existing-row lookup, later
+// calls (e.g. driveRoles validation) get `laterRows`.
+function setupSequencedSelect(firstRows: unknown[], laterRows: unknown[] = []) {
+  let selectCallCount = 0;
+  vi.mocked(db.select).mockImplementation(() => {
+    selectCallCount++;
+    const rows = selectCallCount === 1 ? firstRows : laterRows;
+    const mockLimit = vi.fn().mockResolvedValue(rows);
+    const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+    const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
+    const mockFrom = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
+    return { from: mockFrom } as never;
+  });
 }
 
 function setupUpdateChain(updated: unknown) {
@@ -154,29 +182,14 @@ describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
   });
 
   it('returns 404 when customRoleId does not belong to drive', async () => {
-    let selectCallCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      selectCallCount++;
-      const mockLimit = vi.fn().mockResolvedValue(selectCallCount === 1 ? [{ id: 'mtd-1' }] : []);
-      const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      return { from: mockFrom } as never;
-    });
+    setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'owner-1' }], []);
 
     const res = await PATCH(createRequest('PATCH', { customRoleId: 'role-other-drive' }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
     expect(res.status).toBe(404);
   });
 
   it('updates role successfully', async () => {
-    let selectCallCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      selectCallCount++;
-      const rows = selectCallCount === 1 ? [{ id: 'mtd-1' }] : [];
-      const mockLimit = vi.fn().mockResolvedValue(rows);
-      const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      return { from: mockFrom } as never;
-    });
+    setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'owner-1' }], []);
     setupUpdateChain({ id: 'mtd-1', tokenId: MOCK_TOKEN_ID, role: 'ADMIN' });
 
     const res = await PATCH(createRequest('PATCH', { role: 'ADMIN' }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
@@ -184,6 +197,32 @@ describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
+  });
+
+  it('clears role to inherit (null) when the token owner is a drive member', async () => {
+    setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'owner-1' }], []);
+    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    const { mockSet } = setupUpdateChain({ id: 'mtd-1', tokenId: MOCK_TOKEN_ID, role: null });
+
+    const res = await PATCH(createRequest('PATCH', { role: null }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(isUserDriveMember).toHaveBeenCalledWith('owner-1', MOCK_DRIVE_ID);
+    expect(mockSet).toHaveBeenCalledWith({ role: null });
+  });
+
+  it('returns 400 when clearing to inherit but the token owner is not a drive member', async () => {
+    setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'foreign-owner' }], []);
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+
+    const res = await PATCH(createRequest('PATCH', { role: null }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain('inherit');
+    expect(db.update).not.toHaveBeenCalled();
   });
 
   it('returns 500 on unexpected error', async () => {

@@ -273,6 +273,9 @@ export interface UpdatePageOptions {
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
   skipPermissionCheck?: boolean;
+  /** Edit-authorization predicate; defaults to the user-level check. Routes
+   * serving scoped MCP tokens inject canPrincipalEditPage. */
+  authorizeEdit?: (pageId: string) => Promise<boolean>;
 }
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -361,9 +364,15 @@ export const pageService = {
   /**
    * Get page with children and messages
    */
-  async getPage(pageId: string, userId: string): Promise<GetPageResult> {
-    // Check authorization
-    const canView = await canUserViewPage(userId, pageId);
+  async getPage(
+    pageId: string,
+    userId: string,
+    options?: { authorizeView?: (pageId: string) => Promise<boolean> },
+  ): Promise<GetPageResult> {
+    // Check authorization — routes serving scoped MCP tokens inject
+    // canPrincipalViewPage so the token's own role decides (see CreatePageOptions.authorizeEdit).
+    const authorizeView = options?.authorizeView ?? ((id: string) => canUserViewPage(userId, id));
+    const canView = await authorizeView(pageId);
     if (!canView) {
       return { success: false, error: 'You do not have permission to view this page', status: 403 };
     }
@@ -413,7 +422,8 @@ export const pageService = {
   ): Promise<UpdatePageResult> {
     // Check authorization (can be skipped by callers that have already verified a sufficient permission)
     if (!options?.skipPermissionCheck) {
-      const canEdit = await canUserEditPage(userId, pageId);
+      const authorizeEdit = options?.authorizeEdit ?? ((id: string) => canUserEditPage(userId, id));
+      const canEdit = await authorizeEdit(pageId);
       if (!canEdit) {
         return { success: false, error: 'You need edit permission to modify this page', status: 403 };
       }
@@ -517,9 +527,14 @@ export const pageService = {
   /**
    * Trash a page (soft delete)
    */
-  async trashPage(pageId: string, userId: string, options: { trashChildren: boolean; metadata?: Record<string, unknown> }): Promise<TrashPageResult> {
-    // Check authorization
-    const canDelete = await canUserDeletePage(userId, pageId);
+  async trashPage(
+    pageId: string,
+    userId: string,
+    options: { trashChildren: boolean; metadata?: Record<string, unknown>; authorizeDelete?: (pageId: string) => Promise<boolean> },
+  ): Promise<TrashPageResult> {
+    // Check authorization — injectable for scoped MCP tokens (canPrincipalDeletePage).
+    const authorizeDelete = options.authorizeDelete ?? ((id: string) => canUserDeletePage(userId, id));
+    const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
     }

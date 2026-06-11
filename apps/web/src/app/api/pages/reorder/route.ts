@@ -3,8 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, isScopedMCPAuth } from '@/lib/auth';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -43,8 +42,7 @@ export async function PATCH(request: Request) {
       if (!page) {
         return NextResponse.json({ error: 'Page not found.' }, { status: 404 });
       }
-      const membership = await getAppDriveMembership(auth.tokenId, page.driveId);
-      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+      if (!(await isPrincipalDriveOwnerOrAdmin(auth, page.driveId))) {
         return NextResponse.json(
           { error: 'Only drive owners and admins can reorder pages.' },
           { status: 403 }

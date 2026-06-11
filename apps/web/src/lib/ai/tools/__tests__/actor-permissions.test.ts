@@ -185,8 +185,9 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     mcpTokenId: 'token-1',
   } as ToolExecutionContext;
 
-  it('canActorEditPage: MEMBER token (view-only) is denied even when the agent ACL allows edit', async () => {
+  it('canActorEditPage: explicit MEMBER token (view-only page) is denied even when the agent ACL allows edit', async () => {
     mockDbWhere.mockResolvedValue([{ driveId: 'drive-A' }]);
+    mockGetAppDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' });
     mockGetAppAccessLevel.mockResolvedValue(VIEW_ONLY);
     mockGetAgentAccessLevel.mockResolvedValue(FULL);
 
@@ -196,8 +197,19 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
-  it('canActorEditPage: ADMIN token falls through to the agent ACL (deny-only, never grants)', async () => {
+  it('canActorEditPage: INHERITED token (role null) applies no ceiling — agent ACL decides', async () => {
     mockDbWhere.mockResolvedValue([{ driveId: 'drive-A' }]);
+    mockGetAppDriveMembership.mockResolvedValue({ role: null, customRoleId: null, ownerUserId: 'user-1' });
+    mockGetAgentAccessLevel.mockResolvedValue(FULL);
+
+    expect(await canActorEditPage(tokenAgentCtx, 'page-x')).toBe(true);
+    // No ceiling lookup for inherited rows.
+    expect(mockGetAppAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage: explicit ADMIN token falls through to the agent ACL (deny-only, never grants)', async () => {
+    mockDbWhere.mockResolvedValue([{ driveId: 'drive-A' }]);
+    mockGetAppDriveMembership.mockResolvedValue({ role: 'ADMIN', customRoleId: null, ownerUserId: 'user-1' });
     mockGetAppAccessLevel.mockResolvedValue(FULL);
     mockGetAgentAccessLevel.mockResolvedValue({ ...FULL, canEdit: false });
 
@@ -206,8 +218,9 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'page-x');
   });
 
-  it('canActorViewPage: token outside its membership (null app access) is denied', async () => {
+  it('canActorViewPage: explicit-role token outside its page access (null level) is denied', async () => {
     mockDbWhere.mockResolvedValue([{ driveId: 'drive-A' }]);
+    mockGetAppDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' });
     mockGetAppAccessLevel.mockResolvedValue(null);
 
     expect(await canActorViewPage(tokenUserCtx, 'page-x')).toBe(false);
@@ -241,7 +254,8 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     expect(await canActorManageDrive(tokenUserCtx, 'drive-A')).toBe(true);
   });
 
-  it('getActorAccessiblePagesInDrive: intersects actor pages with the token set, AND-ing flags', async () => {
+  it('getActorAccessiblePagesInDrive: explicit role intersects actor pages with the token set, AND-ing flags', async () => {
+    mockGetAppDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' });
     const { getUserAccessiblePagesInDriveWithDetails } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([
       { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: { ...FULL } },
@@ -258,26 +272,33 @@ describe('app-member RBAC ceiling (mcpTokenId set)', () => {
     expect(result[0].permissions).toEqual(VIEW_ONLY);
   });
 
-  it('driveDeniedByAppToken: role-aware drive gate (view/edit/manage)', async () => {
-    mockGetAppDriveAccessLevel.mockResolvedValue(VIEW_ONLY);
+  it('driveDeniedByAppToken: role-aware drive gate (view/edit/manage, inherit no-op)', async () => {
+    mockGetAppDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' });
+    // User drive-root parity: explicit MEMBER may view AND edit (create events/root pages)…
+    mockGetAppDriveAccessLevel.mockResolvedValue({ ...VIEW_ONLY, canEdit: true });
     expect(await driveDeniedByAppToken(tokenUserCtx, 'drive-A', 'view')).toBe(false);
-    expect(await driveDeniedByAppToken(tokenUserCtx, 'drive-A', 'edit')).toBe(true);
-
-    mockGetAppDriveMembership.mockResolvedValue({ role: 'MEMBER', customRoleId: null });
+    expect(await driveDeniedByAppToken(tokenUserCtx, 'drive-A', 'edit')).toBe(false);
+    // …but not manage.
     expect(await driveDeniedByAppToken(tokenUserCtx, 'drive-A', 'manage')).toBe(true);
+
+    // Inherited membership: no ceiling at any level.
+    mockGetAppDriveMembership.mockResolvedValue({ role: null, customRoleId: null, ownerUserId: 'user-1' });
+    expect(await driveDeniedByAppToken(tokenUserCtx, 'drive-A', 'manage')).toBe(false);
 
     // Out-of-scope drive denied before any role lookup.
     expect(await driveDeniedByAppToken(tokenUserCtx, 'drive-B', 'view')).toBe(true);
   });
 
-  it('filterDriveIdsByAppTokenScope: drops drives the token role cannot view', async () => {
+  it('filterDriveIdsByAppTokenScope: drops drives where the token has no usable membership', async () => {
     const ctx = {
       userId: 'user-1',
       mcpAllowedDriveIds: ['drive-A', 'drive-B'],
       mcpTokenId: 'token-1',
     } as ToolExecutionContext;
-    mockGetAppDriveAccessLevel.mockImplementation(async (_t: string, driveId: string) =>
-      driveId === 'drive-A' ? VIEW_ONLY : { canView: false, canEdit: false, canShare: false, canDelete: false });
+    // drive-A: explicit membership (kept); drive-B: dangling row (dropped).
+    mockGetAppDriveMembership.mockImplementation(async (_t: string, driveId: string) =>
+      driveId === 'drive-A' ? { role: 'MEMBER', customRoleId: null, ownerUserId: 'user-1' } : null);
+    mockGetAppDriveAccessLevel.mockResolvedValue({ ...VIEW_ONLY, canEdit: true });
 
     expect(await filterDriveIdsByAppTokenScope(ctx, ['drive-A', 'drive-B', 'drive-C'])).toEqual(['drive-A']);
   });

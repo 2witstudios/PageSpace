@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service'
-import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
+import { hasAppDriveMembership, getAppDriveMembership, getAppAccessiblePagesInDrive } from '@pagespace/lib/permissions/app-permissions';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
@@ -50,8 +50,9 @@ export async function GET(
     // the TOKEN's membership, not the owning user's.
     let drive: { id: string; slug: string | null; name: string } | null;
     if (isScopedMCPAuth(auth)) {
-      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
-      if (!level?.canView) {
+      // Membership gate only — results below are filtered per page by the
+      // TOKEN's own access, so per-page custom-role grants still work.
+      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
         return NextResponse.json(
           { error: "You don't have access to this drive" },
           { status: 403 }
@@ -83,6 +84,21 @@ export async function GET(
     }
 
     // Perform regex search
+    // Explicit-role tokens: filter results by the TOKEN's accessible page set.
+    // Inherited keys (role null) act as their owner, so the service's default
+    // user filter is already correct for them.
+    let tokenViewablePageIds: Set<string> | null = null;
+    if (isScopedMCPAuth(auth)) {
+      const explicitMembership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (explicitMembership && explicitMembership.role !== null) {
+        tokenViewablePageIds = new Set(
+          (await getAppAccessiblePagesInDrive(auth.tokenId, driveId))
+            .filter((p) => p.permissions.canView)
+            .map((p) => p.id),
+        );
+      }
+    }
+
     const searchResults = await regexSearchPages(
       driveId,
       userId,
@@ -91,6 +107,9 @@ export async function GET(
       {
         searchIn,
         maxResults,
+        authorizeView: tokenViewablePageIds
+          ? async (pageId: string) => tokenViewablePageIds.has(pageId)
+          : undefined,
       }
     );
 

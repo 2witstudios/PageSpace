@@ -9,7 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
-import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
+import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -54,8 +54,9 @@ export async function POST(request: Request) {
     // the TOKEN's membership, not the owning user's.
     const isOwner = drive.ownerId === userId;
     if (isScopedMCPAuth(auth)) {
-      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
-      if (!level?.canView) {
+      // Membership gate only — the tree below is filtered to the TOKEN's
+      // per-page view set, so per-page custom-role grants still work.
+      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
     } else {

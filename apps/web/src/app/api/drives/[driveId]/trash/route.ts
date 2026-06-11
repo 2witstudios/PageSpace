@@ -6,8 +6,7 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -40,11 +39,10 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    // Only owners and admins can view trash. A scoped MCP token is its own
-    // drive member — it must hold OWNER/ADMIN itself.
+    // Only owners and admins can view trash. Scoped tokens with an explicit
+    // role need OWNER/ADMIN; inherited keys use the owner's own authority.
     if (isScopedMCPAuth(auth)) {
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
-      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+      if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
         return NextResponse.json(
           { error: 'Only drive owners and admins can view trash' },
           { status: 403 },

@@ -5,7 +5,7 @@ import { eq, and, desc, gte, lt, inArray } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, canPrincipalViewDrive, isScopedMCPAuth, getPrincipalViewableDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { format } from 'date-fns';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -84,7 +84,7 @@ export async function GET(request: Request) {
           const scopeError = checkMCPDriveScope(auth, params.driveId);
           if (scopeError) return scopeError;
 
-          const canViewDrive = await canPrincipalViewDrive(auth, params.driveId);
+          const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
           if (!canViewDrive) {
             return NextResponse.json(
               { error: 'Unauthorized - you do not have access to this drive' },
@@ -93,15 +93,10 @@ export async function GET(request: Request) {
           }
           userConditions.push(eq(activityLogs.driveId, params.driveId));
         } else {
-          // Cap a scoped token at the drives its role can VIEW (not bare scope) —
-          // activity feeds have no per-item page filter.
-          if (isScopedMCPAuth(auth)) {
-            const viewableDriveIds = await getPrincipalViewableDriveIds(auth);
-            userConditions.push(
-              viewableDriveIds.length > 0
-                ? inArray(activityLogs.driveId, viewableDriveIds)
-                : eq(activityLogs.id, '__never_match__'),
-            );
+          // Filter by MCP token scope when no driveId provided
+          const allowedDriveIds = getAllowedDriveIds(auth);
+          if (allowedDriveIds.length > 0) {
+            userConditions.push(inArray(activityLogs.driveId, allowedDriveIds));
           }
         }
 
@@ -120,7 +115,7 @@ export async function GET(request: Request) {
         const scopeError = checkMCPDriveScope(auth, params.driveId);
         if (scopeError) return scopeError;
 
-        const canViewDrive = await canPrincipalViewDrive(auth, params.driveId);
+        const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
           return NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
