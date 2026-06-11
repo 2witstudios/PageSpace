@@ -17,9 +17,13 @@ export function useDashboardContext() {
   const params = useParams();
   const pathname = usePathname();
 
+  // Normalize pathname to strip any trailing slash for consistent matching
+  const normalizedPath = pathname?.replace(/\/$/, '') || '';
+
+  // params.driveId distinguishes /dashboard/[driveId] from static routes like /dashboard/calendar
   const isDashboardContext =
-    pathname === '/dashboard' ||
-    (!params.pageId && /^\/dashboard\/[^/]+$/.test(pathname || ''));
+    normalizedPath === '/dashboard' ||
+    (!!params.driveId && !params.pageId && /^\/dashboard\/[^/]+$/.test(normalizedPath));
 
   return { isDashboardContext };
 }
