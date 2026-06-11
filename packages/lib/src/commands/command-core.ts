@@ -30,19 +30,77 @@ export interface CommandSummary {
   shadows?: CommandScope;
 }
 
+/**
+ * Data injected into a built-in's dynamic prompt section. The resolver layer
+ * loads it (DB queries, permission checks) and hands it to the pure builder —
+ * the registry itself never performs I/O.
+ */
+export interface BuiltinPromptContext {
+  /**
+   * The sender's precedence-resolved command list for the current context:
+   * built-ins + personal commands + (when there is a drive context the
+   * sender is a member of) that drive's commands.
+   */
+  availableCommands: readonly CommandSummary[];
+}
+
 export interface BuiltinCommandDefinition {
   trigger: string;
   description: string;
+  /**
+   * Optional dynamic prompt section: a pure function of injected data (data
+   * in, string out). When present, the resolver loads a BuiltinPromptContext
+   * and injects this builder's output instead of the bare description; when
+   * loading fails it degrades to the static description.
+   */
+  buildPromptSection?: (context: BuiltinPromptContext) => string;
+}
+
+/** User-facing scope names ('user' is presented as 'personal'). */
+const SCOPE_LABELS: Record<CommandScope, string> = {
+  builtin: 'built-in',
+  user: 'personal',
+  drive: 'drive',
+};
+
+/**
+ * The /help dynamic section: the sender's actual command list plus a short
+ * explanation of the command mechanics, so the AI can answer "what commands
+ * do I have here?" with real data instead of guessing.
+ */
+export function buildHelpPromptSection(context: BuiltinPromptContext): string {
+  const lines: string[] = [
+    'The user asked for help with slash commands. Commands work like this: the user picks a command from the picker that opens when they type "/" in the message box, which inserts a command chip at the start of the message. When the message is sent, the command\'s entry page (its instructions) is injected into the assistant\'s context, and the entry page\'s direct child pages become resources the assistant reads on demand with the read_page tool. Built-in commands have no entry page; their description is the instruction. Personal commands are visible only to their owner, drive commands are shared with every member of the drive, and when triggers collide the precedence is built-in over personal over drive.',
+    '',
+  ];
+
+  if (context.availableCommands.length === 0) {
+    lines.push('No commands are available in this context.');
+  } else {
+    lines.push('These are the commands actually available to the user here:', '');
+    for (const command of context.availableCommands) {
+      lines.push(`- /${command.trigger} (${SCOPE_LABELS[command.scope]}) — ${command.description}`);
+    }
+  }
+
+  lines.push(
+    '',
+    'Answer the user\'s question using this list — present the available commands with what each does, and briefly explain how to invoke one. Do not invent commands that are not listed.'
+  );
+
+  return lines.join('\n');
 }
 
 /**
- * Built-in command registry. Phase 1 only reserves the triggers; execution of
- * built-ins arrives in a later phase.
+ * Built-in command registry. Built-ins with a `buildPromptSection` get a
+ * dynamic section injected at execution (phase 5); the rest inject their
+ * static description.
  */
 export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
   {
     trigger: 'help',
     description: 'List the commands available here and explain how to use them.',
+    buildPromptSection: buildHelpPromptSection,
   },
 ];
 

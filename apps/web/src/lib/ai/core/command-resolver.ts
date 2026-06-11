@@ -21,8 +21,9 @@ import { and, asc, eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { commands } from '@pagespace/db/schema/commands';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { BUILTIN_COMMANDS } from '@pagespace/lib/commands/command-core';
+import { BUILTIN_COMMANDS, type BuiltinCommandDefinition } from '@pagespace/lib/commands/command-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { loadAvailableCommands } from '@/lib/commands/available-commands';
 import {
   findActiveCommandToken,
   type CommandExecutionPlan,
@@ -38,19 +39,29 @@ const BUILTIN_ID_PREFIX = 'builtin:';
 const MAX_MANIFEST_CHILDREN = 100;
 
 /**
+ * Where the message is being sent from, as far as commands care: the drive
+ * the chat surface lives in. The global assistant has no drive — built-ins
+ * then resolve against personal commands + built-ins only.
+ */
+export interface CommandResolutionContext {
+  driveId?: string | null;
+}
+
+/**
  * Resolve the message's command token (if any) into an execution plan.
  * Returns null when the message carries no command, and also on unexpected
  * resolution errors — the chat request must proceed regardless.
  */
 export async function planCommandExecution(
   content: string,
-  senderId: string
+  senderId: string,
+  context: CommandResolutionContext = {}
 ): Promise<CommandExecutionPlan | null> {
   const token = findActiveCommandToken(content);
   if (!token) return null;
 
   try {
-    return await resolveToken(token, senderId);
+    return await resolveToken(token, senderId, context);
   } catch (error) {
     loggers.ai.error('Command resolution failed; proceeding without injection', error as Error, {
       commandId: token.commandId,
@@ -68,10 +79,11 @@ function skip(
 
 async function resolveToken(
   token: ParsedCommandToken,
-  senderId: string
+  senderId: string,
+  context: CommandResolutionContext
 ): Promise<CommandExecutionPlan> {
   if (token.commandId.startsWith(BUILTIN_ID_PREFIX)) {
-    return resolveBuiltin(token);
+    return resolveBuiltin(token, senderId, context);
   }
 
   // Shape-validate the hostile id before any DB operation.
@@ -144,14 +156,22 @@ async function resolveToken(
 }
 
 /**
- * Built-ins have no entry page yet (the registry only carries trigger +
- * description) — inject the description as the instruction, which is the
- * Agent Skills metadata level of the standard.
+ * Built-ins have no entry page — their instruction is the description, plus
+ * an optional dynamic section the registry declares as a pure function of
+ * injected data. The data loading happens HERE (registry stays pure): for
+ * /help that is the sender's precedence-resolved command list. A loading
+ * failure degrades to the static description, never the request.
  */
-function resolveBuiltin(token: ParsedCommandToken): CommandExecutionPlan {
+async function resolveBuiltin(
+  token: ParsedCommandToken,
+  senderId: string,
+  context: CommandResolutionContext
+): Promise<CommandExecutionPlan> {
   const trigger = token.commandId.slice(BUILTIN_ID_PREFIX.length);
   const builtin = BUILTIN_COMMANDS.find((command) => command.trigger === trigger);
   if (!builtin) return skip(token, 'not_found');
+
+  const dynamicContent = await loadBuiltinDynamicSection(builtin, senderId, context);
 
   return {
     kind: 'inject',
@@ -163,8 +183,42 @@ function resolveBuiltin(token: ParsedCommandToken): CommandExecutionPlan {
       description: builtin.description,
       entryPage: null,
       children: [],
+      ...(dynamicContent !== undefined ? { dynamicContent } : {}),
     },
   };
+}
+
+/**
+ * Load the injected data for a built-in's dynamic prompt section and run the
+ * pure builder over it. The context drive only counts when the sender is a
+ * member (loadAvailableCommands requires membership-verified drive ids);
+ * otherwise — and for the drive-less global assistant — the list is personal
+ * commands + built-ins. Returns undefined (static-description fallback) on
+ * any failure.
+ */
+async function loadBuiltinDynamicSection(
+  builtin: BuiltinCommandDefinition,
+  senderId: string,
+  context: CommandResolutionContext
+): Promise<string | undefined> {
+  if (!builtin.buildPromptSection) return undefined;
+
+  try {
+    const requestedDriveId = context.driveId ?? null;
+    const driveId =
+      requestedDriveId && (await isUserDriveMember(senderId, requestedDriveId))
+        ? requestedDriveId
+        : null;
+    const { winners } = await loadAvailableCommands(senderId, driveId);
+    return builtin.buildPromptSection({ availableCommands: winners });
+  } catch (error) {
+    loggers.ai.error(
+      'Built-in dynamic section failed; degrading to static description',
+      error as Error,
+      { trigger: builtin.trigger }
+    );
+    return undefined;
+  }
 }
 
 /** Direct, non-trashed children of the entry page the sender can view. */

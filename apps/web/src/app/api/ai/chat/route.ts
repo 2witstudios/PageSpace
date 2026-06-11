@@ -419,7 +419,9 @@ export async function POST(request: Request) {
         // Resolve the message's slash command (if any) with the SENDER's
         // permissions. The token stays in the saved content — transcripts
         // render it as a chip; only the system prompt gains the injection.
-        commandPlan = await planCommandExecution(messageContent, userId!);
+        commandPlan = await planCommandExecution(messageContent, userId!, {
+          driveId: page.driveId,
+        });
         if (commandPlan) {
           commandSystemPrompt = buildCommandPromptSection(commandPlan);
           loggers.ai.info('AI Chat API: Command resolution', {

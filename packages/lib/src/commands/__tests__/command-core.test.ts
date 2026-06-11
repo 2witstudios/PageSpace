@@ -4,6 +4,7 @@ import {
   validateCommandDescription,
   isReservedTrigger,
   resolveCommandPrecedence,
+  buildHelpPromptSection,
   RESERVED_TRIGGERS,
   BUILTIN_COMMANDS,
   COMMAND_TRIGGER_MAX_LENGTH,
@@ -197,5 +198,47 @@ describe('resolveCommandPrecedence', () => {
 
   it('handles empty inputs', () => {
     expect(resolveCommandPrecedence([], [], [])).toEqual({ winners: [], shadowed: [] });
+  });
+});
+
+describe('buildHelpPromptSection', () => {
+  const context = {
+    availableCommands: [
+      builtinCmd('help'),
+      userCmd('release-checklist', { description: 'Run the release checklist.' }),
+      driveCmd('standup', { description: 'Prepare standup notes.' }),
+    ],
+  };
+
+  it('lists every available command with trigger, description, and scope', () => {
+    const section = buildHelpPromptSection(context);
+    expect(section).toContain('/help');
+    expect(section).toContain('/release-checklist');
+    expect(section).toContain('Run the release checklist.');
+    expect(section).toContain('/standup');
+    expect(section).toContain('Prepare standup notes.');
+    // Scope is surfaced per command in user-facing terms
+    expect(section).toContain('built-in');
+    expect(section).toContain('personal');
+    expect(section).toContain('drive');
+  });
+
+  it('explains how commands work: chip at message start, entry page injection, read_page children', () => {
+    const section = buildHelpPromptSection(context);
+    expect(section.toLowerCase()).toContain('chip');
+    expect(section).toContain('entry page');
+    expect(section).toContain('read_page');
+  });
+
+  it('handles an empty command list without throwing', () => {
+    const section = buildHelpPromptSection({ availableCommands: [] });
+    expect(typeof section).toBe('string');
+    expect(section.length).toBeGreaterThan(0);
+  });
+
+  it('is wired into the /help registry entry as its dynamic prompt section', () => {
+    const help = BUILTIN_COMMANDS.find((command) => command.trigger === 'help');
+    expect(typeof help?.buildPromptSection).toBe('function');
+    expect(help?.buildPromptSection).toBe(buildHelpPromptSection);
   });
 });

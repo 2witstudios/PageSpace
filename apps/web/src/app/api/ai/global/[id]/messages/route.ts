@@ -383,7 +383,9 @@ export async function POST(
         // Resolve the message's slash command (if any) with the SENDER's
         // permissions. The token stays in the saved content; only the
         // system prompt gains the injection.
-        commandPlan = await planCommandExecution(messageContent, userId);
+        // The global assistant has no drive context — built-ins resolve
+        // against personal commands + built-ins only.
+        commandPlan = await planCommandExecution(messageContent, userId, { driveId: null });
         if (commandPlan) {
           commandSystemPrompt = buildCommandPromptSection(commandPlan);
           loggers.api.info('Global Assistant Chat API: Command resolution', {
