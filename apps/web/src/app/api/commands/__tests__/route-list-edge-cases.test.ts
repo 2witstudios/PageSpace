@@ -6,8 +6,7 @@
  * 500), and inaccessible page metadata must be suppressed, not leaked.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth';
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -80,10 +79,6 @@ const webAuth = (): SessionAuthResult => ({
   sessionId: 'sess_1',
   role: 'user',
   adminRoleVersion: 0,
-});
-
-const authError = (): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
 });
 
 const selectChain = (rows: unknown[]) => ({
