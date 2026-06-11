@@ -53,8 +53,9 @@ composer" with real context. Build nothing in QuickCreatePalette now.
 (trigger + description — the Agent Skills "metadata level"), so agents can suggest
 commands unprompted ("you have /standup for exactly this")?
 
-**Cost.** With `loadAvailableCommands`, the list is one or two indexed DB queries per
-message — tolerable, but currently paid only when a command actually runs. The token
+**Cost.** With `loadAvailableCommands`, the list is two or three DB round-trips per
+message (personal + drive command queries in parallel, plus one batched entry-page
+permission check) — tolerable, but currently paid only when a command actually runs. The token
 cost is the real line item: a trigger (≤64 chars) plus a useful description (~100–200
 chars of the allowed 1,024) is roughly 40–60 tokens per command. A user with 5 personal
 + 10 drive commands adds ~600–900 tokens to **every** request — chat, agent mentions,

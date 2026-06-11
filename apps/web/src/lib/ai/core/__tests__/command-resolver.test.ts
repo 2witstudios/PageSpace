@@ -22,6 +22,7 @@ vi.mock('@pagespace/db/schema/commands', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   isUserDriveMember: vi.fn(),
+  getBatchPagePermissions: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -30,7 +31,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import {
+  canUserViewPage,
+  getBatchPagePermissions,
+  isUserDriveMember,
+} from '@pagespace/lib/permissions/permissions';
 import { planCommandExecution } from '../command-resolver';
 
 const mockCommandsFindFirst = db.query.commands.findFirst as unknown as Mock;
@@ -38,6 +43,7 @@ const mockCommandsFindMany = db.query.commands.findMany as unknown as Mock;
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
+const mockBatchPermissions = vi.mocked(getBatchPagePermissions);
 
 const SENDER = 'usr9zmbrgj3atz4a98xxat96';
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';
@@ -74,6 +80,15 @@ beforeEach(() => {
   mockCommandsFindMany.mockResolvedValue([]);
   mockCanUserViewPage.mockResolvedValue(true);
   mockIsUserDriveMember.mockResolvedValue(true);
+  mockBatchPermissions.mockImplementation(
+    async (_userId, pageIds) =>
+      new Map(
+        pageIds.map((id) => [
+          id,
+          { canView: true, canEdit: false, canShare: false, canDelete: false },
+        ])
+      )
+  );
 });
 
 describe('planCommandExecution', () => {

@@ -15,15 +15,27 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import {
   BUILTIN_COMMANDS,
+  builtinCommandId,
   resolveCommandPrecedence,
+  type CommandScope,
   type CommandSummary,
   type ResolvedCommands,
 } from '@pagespace/lib/commands/command-core';
 
 type EntryPageRef = { driveId: string; isTrashed: boolean };
+
+interface CommandRowShape {
+  id: string;
+  trigger: string;
+  description: string;
+  entryPageId: string;
+  type: string;
+  driveId: string | null;
+  entryPage: EntryPageRef | null;
+}
 
 // Entry pages are loaded alongside each command so save-time invariants are
 // re-checked at use: a trashed entry page suppresses the command, and a drive
@@ -33,20 +45,15 @@ const hasLiveEntryPage = <T extends { entryPage: EntryPageRef | null }>(
   row: T
 ): row is T & { entryPage: EntryPageRef } => row.entryPage !== null && !row.entryPage.isTrashed;
 
-// Execution re-checks entry-page access with canUserViewPage (command
-// resolution skips with no_access otherwise), so the offered list must apply
-// the same predicate — a command the user can't actually run (private entry
-// page, custom-role denial, revoked cross-drive ref) is not "available".
-async function filterByEntryPageAccess<T extends { entryPageId: string }>(
-  rows: T[],
-  userId: string
-): Promise<T[]> {
-  if (rows.length === 0) return rows;
-  const checks = await Promise.all(
-    rows.map(async (row) => ({ row, canView: await canUserViewPage(userId, row.entryPageId) }))
-  );
-  return checks.filter((entry) => entry.canView).map((entry) => entry.row);
-}
+const toSummary = (row: CommandRowShape, scope: CommandScope): CommandSummary => ({
+  id: row.id,
+  trigger: row.trigger,
+  description: row.description,
+  scope,
+  type: row.type as CommandSummary['type'],
+  entryPageId: row.entryPageId,
+  driveId: row.driveId ?? undefined,
+});
 
 /**
  * Load and precedence-resolve every command available to `userId`:
@@ -61,7 +68,7 @@ export async function loadAvailableCommands(
   driveId: string | null
 ): Promise<ResolvedCommands> {
   const builtins: CommandSummary[] = BUILTIN_COMMANDS.map((builtin) => ({
-    id: `builtin:${builtin.trigger}`,
+    id: builtinCommandId(builtin.trigger),
     trigger: builtin.trigger,
     description: builtin.description,
     scope: 'builtin',
@@ -70,46 +77,40 @@ export async function loadAvailableCommands(
 
   // The personal and drive lookups are independent — run them concurrently
   // (this is the suggest picker's per-keystroke path).
-  const [userCommands, driveCommands] = await Promise.all([
-    loadPersonalCommands(userId),
-    driveId ? loadDriveCommands(userId, driveId) : Promise.resolve([]),
+  const entryPageColumns = { columns: { driveId: true, isTrashed: true } } as const;
+  const [personalRows, driveRows] = await Promise.all([
+    db.query.commands.findMany({
+      where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
+      with: { entryPage: entryPageColumns },
+    }),
+    driveId
+      ? db.query.commands.findMany({
+          where: and(eq(commands.driveId, driveId), eq(commands.enabled, true)),
+          with: { entryPage: entryPageColumns },
+        })
+      : [],
   ]);
 
-  return resolveCommandPrecedence(builtins, userCommands, driveCommands);
-}
-
-async function loadPersonalCommands(userId: string): Promise<CommandSummary[]> {
-  const rows = await db.query.commands.findMany({
-    where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
-    with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
-  });
-  const liveRows = await filterByEntryPageAccess(rows.filter(hasLiveEntryPage), userId);
-  return liveRows.map((row) => ({
-    id: row.id,
-    trigger: row.trigger,
-    description: row.description,
-    scope: 'user',
-    type: row.type as CommandSummary['type'],
-    entryPageId: row.entryPageId,
-  }));
-}
-
-async function loadDriveCommands(userId: string, driveId: string): Promise<CommandSummary[]> {
-  const rows = await db.query.commands.findMany({
-    where: and(eq(commands.driveId, driveId), eq(commands.enabled, true)),
-    with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
-  });
-  const liveRows = await filterByEntryPageAccess(
-    rows.filter((row) => hasLiveEntryPage(row) && row.entryPage.driveId === driveId),
-    userId
+  const livePersonal = personalRows.filter(hasLiveEntryPage);
+  const liveDrive = driveRows.filter(
+    (row) => hasLiveEntryPage(row) && row.entryPage.driveId === driveId
   );
-  return liveRows.map((row) => ({
-    id: row.id,
-    trigger: row.trigger,
-    description: row.description,
-    scope: 'drive',
-    type: row.type as CommandSummary['type'],
-    entryPageId: row.entryPageId,
-    driveId: row.driveId ?? undefined,
-  }));
+
+  // Execution re-checks entry-page access with canUserViewPage (command
+  // resolution skips with no_access otherwise), so the offered list must
+  // apply the same predicate — a command the user can't actually run
+  // (private entry page, custom-role denial, revoked cross-drive ref) is not
+  // "available". One batched permission query covers both scopes; this keeps
+  // the per-keystroke suggest path at a single permission round-trip.
+  const entryPageIds = [...new Set([...livePersonal, ...liveDrive].map((row) => row.entryPageId))];
+  const access =
+    entryPageIds.length > 0 ? await getBatchPagePermissions(userId, entryPageIds) : null;
+  const canViewEntryPage = (row: { entryPageId: string }): boolean =>
+    access?.get(row.entryPageId)?.canView === true;
+
+  return resolveCommandPrecedence(
+    builtins,
+    livePersonal.filter(canViewEntryPage).map((row) => toSummary(row, 'user')),
+    liveDrive.filter(canViewEntryPage).map((row) => toSummary(row, 'drive'))
+  );
 }

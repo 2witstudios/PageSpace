@@ -27,7 +27,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
-  canUserViewPage: vi.fn(),
+  getBatchPagePermissions: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -38,13 +38,13 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../suggest/route';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { getBatchPagePermissions, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
 const mockedIsMember = vi.mocked(isUserDriveMember);
-const mockedCanViewPage = vi.mocked(canUserViewPage);
+const mockedBatchPermissions = vi.mocked(getBatchPagePermissions);
 
 const USER_ID = 'user_1';
 
@@ -99,7 +99,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedAuth.mockResolvedValue(webAuth());
   mockedIsMember.mockResolvedValue(true);
-  mockedCanViewPage.mockResolvedValue(true);
+  mockedBatchPermissions.mockImplementation(
+    async (_userId, pageIds) =>
+      new Map(
+        pageIds.map((id) => [
+          id,
+          { canView: true, canEdit: false, canShare: false, canDelete: false },
+        ])
+      )
+  );
   mockedDb.query.commands.findMany.mockResolvedValue([] as never);
 });
 
@@ -123,6 +131,33 @@ describe('GET /api/commands/suggest', () => {
     mockedIsMember.mockResolvedValue(false);
     const response = await GET(suggestRequest({ driveId: 'drive_1' }));
     expect(response.status).toBe(403);
+  });
+
+  it('omits commands whose entry page the caller cannot view (execution-time predicate)', async () => {
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      userCommand('mine', { entryPageId: 'page_ok' }),
+      userCommand('blocked', { entryPageId: 'page_denied' }),
+    ] as never);
+    mockedBatchPermissions.mockImplementation(
+      async (_userId, pageIds) =>
+        new Map(
+          pageIds.map((id) => [
+            id,
+            { canView: id !== 'page_denied', canEdit: false, canShare: false, canDelete: false },
+          ])
+        )
+    );
+
+    const response = await GET(suggestRequest());
+    const json = await response.json();
+    expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual([
+      'help',
+      'mine',
+    ]);
+    expect(mockedBatchPermissions).toHaveBeenCalledWith(USER_ID, [
+      'page_ok',
+      'page_denied',
+    ]);
   });
 
   it('does not query drive commands when no driveId is given', async () => {

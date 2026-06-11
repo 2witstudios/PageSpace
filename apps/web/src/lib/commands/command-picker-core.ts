@@ -1,4 +1,7 @@
-import type { CommandScope } from '@pagespace/lib/commands/command-core';
+import {
+  COMMAND_SCOPE_ADJECTIVES,
+  type CommandScope,
+} from '@pagespace/lib/commands/command-core';
 
 /**
  * Pure presentation/filtering logic for the command picker (spec §1.4–§1.6, §9).
@@ -73,12 +76,12 @@ const SCOPE_BADGE: Record<CommandScope, string> = {
   drive: 'Drive',
 };
 
-/** One adjective per scope; every scope-worded copy string derives from it. */
-const SCOPE_ADJECTIVE: Record<CommandScope, string> = {
-  builtin: 'built-in',
-  user: 'personal',
-  drive: 'drive',
-};
+/**
+ * One adjective per scope; every scope-worded copy string derives from it.
+ * Shared with /help's command list (command-core) so the picker and the AI
+ * use the same scope words.
+ */
+const SCOPE_ADJECTIVE = COMMAND_SCOPE_ADJECTIVES;
 
 export function scopeBadgeLabel(scope: CommandScope): string {
   return SCOPE_BADGE[scope];

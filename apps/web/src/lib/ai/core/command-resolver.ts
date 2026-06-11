@@ -21,7 +21,11 @@ import { and, asc, eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { commands } from '@pagespace/db/schema/commands';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { BUILTIN_COMMANDS, type BuiltinCommandDefinition } from '@pagespace/lib/commands/command-core';
+import {
+  BUILTIN_COMMANDS,
+  BUILTIN_ID_PREFIX,
+  type BuiltinCommandDefinition,
+} from '@pagespace/lib/commands/command-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
 import {
@@ -34,7 +38,6 @@ import { serializePageContentForAI, isTextSerializablePageType } from './page-se
 
 /** DB command ids are cuid2-style lowercase alphanumerics. */
 const COMMAND_ID_PATTERN = /^[a-z0-9]{10,40}$/;
-const BUILTIN_ID_PREFIX = 'builtin:';
 /** Manifest cap — a pathological child count must not balloon the prompt. */
 const MAX_MANIFEST_CHILDREN = 100;
 
@@ -183,7 +186,7 @@ async function resolveBuiltin(
       description: builtin.description,
       entryPage: null,
       children: [],
-      ...(dynamicContent !== undefined ? { dynamicContent } : {}),
+      dynamicContent,
     },
   };
 }

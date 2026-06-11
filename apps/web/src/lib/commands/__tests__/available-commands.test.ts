@@ -15,15 +15,28 @@ vi.mock('@pagespace/db/schema/commands', () => ({
   commands: { id: 'id', userId: 'userId', driveId: 'driveId', enabled: 'enabled' },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  canUserViewPage: vi.fn(),
+  getBatchPagePermissions: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { loadAvailableCommands } from '../available-commands';
 
 const mockFindMany = db.query.commands.findMany as unknown as Mock;
-const mockCanUserViewPage = vi.mocked(canUserViewPage);
+const mockBatchPermissions = vi.mocked(getBatchPagePermissions);
+
+const allowAll = (pageIds: string[]) =>
+  new Map(
+    pageIds.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }])
+  );
+
+const denyMatching = (pageIds: string[], denyPattern: string) =>
+  new Map(
+    pageIds.map((id) => [
+      id,
+      { canView: !id.includes(denyPattern), canEdit: false, canShare: false, canDelete: false },
+    ])
+  );
 
 const USER_ID = 'usr9zmbrgj3atz4a98xxat96';
 const DRIVE_ID = 'drv9zmbrgj3atz4a98xxat96';
@@ -57,7 +70,7 @@ const driveRow = (trigger: string, overrides: Record<string, unknown> = {}) => (
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindMany.mockResolvedValue([]);
-  mockCanUserViewPage.mockResolvedValue(true);
+  mockBatchPermissions.mockImplementation(async (_userId, pageIds) => allowAll(pageIds));
 });
 
 describe('loadAvailableCommands', () => {
@@ -126,21 +139,25 @@ describe('loadAvailableCommands', () => {
     mockFindMany
       .mockResolvedValueOnce([personalRow('visible'), personalRow('hidden')])
       .mockResolvedValueOnce([driveRow('drive-visible'), driveRow('drive-hidden')]);
-    mockCanUserViewPage.mockImplementation(
-      async (_userId: string, pageId: string) => !pageId.includes('hidden')
+    mockBatchPermissions.mockImplementation(async (_userId, pageIds) =>
+      denyMatching(pageIds, 'hidden')
     );
 
     const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
 
     expect(winners.map((w) => w.trigger).sort()).toEqual(['drive-visible', 'help', 'visible']);
-    // The check runs with the requesting user's identity
-    expect(mockCanUserViewPage).toHaveBeenCalledWith(USER_ID, 'page-hidden');
+    // ONE batched check with the requesting user's identity covers both scopes
+    expect(mockBatchPermissions).toHaveBeenCalledTimes(1);
+    expect(mockBatchPermissions).toHaveBeenCalledWith(
+      USER_ID,
+      expect.arrayContaining(['page-visible', 'page-hidden', 'page-drive-visible', 'page-drive-hidden'])
+    );
   });
 
-  it('does not run entry-page access checks for built-ins (they have no entry page)', async () => {
+  it('skips the permission query entirely when only built-ins are available', async () => {
     const { winners } = await loadAvailableCommands(USER_ID, null);
     expect(winners.map((w) => w.trigger)).toEqual(['help']);
-    expect(mockCanUserViewPage).not.toHaveBeenCalled();
+    expect(mockBatchPermissions).not.toHaveBeenCalled();
   });
 
   it('resolves trigger collisions with builtin > user > drive precedence', async () => {
