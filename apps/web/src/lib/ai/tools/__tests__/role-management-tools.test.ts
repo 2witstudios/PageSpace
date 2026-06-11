@@ -55,6 +55,9 @@ import {
   deleteDriveRole,
 } from '@pagespace/lib/services/drive-role-service';
 import { driveDeniedByAppToken } from '../actor-permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { broadcastDriveEvent } from '@/lib/websocket';
 import { db } from '@pagespace/db/db';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -253,6 +256,34 @@ describe('role-management-tools', () => {
 
       expect(result.success).toBe(true);
       expect(result.role.driveWidePermissions).toEqual(dwp);
+    });
+
+    it('still succeeds and logs activity when the broadcast fails after the role is created', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockCreateRole.mockResolvedValueOnce(makeRole({ id: 'r11', name: 'Survivors' }));
+      vi.mocked(getDriveRecipientUserIds).mockRejectedValueOnce(new Error('socket down'));
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Survivors' },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(vi.mocked(logDriveActivity)).toHaveBeenCalled();
+    });
+
+    it('still succeeds when broadcastDriveEvent itself rejects', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockCreateRole.mockResolvedValueOnce(makeRole({ id: 'r12', name: 'Resilient' }));
+      vi.mocked(broadcastDriveEvent).mockRejectedValueOnce(new Error('emit failed'));
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Resilient' },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(vi.mocked(logDriveActivity)).toHaveBeenCalled();
     });
 
     it('defaults driveWidePermissions to null when omitted', async () => {

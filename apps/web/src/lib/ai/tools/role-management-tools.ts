@@ -65,8 +65,14 @@ async function logAndBroadcastRoleChange(
   action: 'create' | 'update' | 'delete',
   roleName: string
 ): Promise<void> {
-  const recipientUserIds = await getDriveRecipientUserIds(driveId);
-  await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+  // Broadcast is best-effort: the mutation has already committed, so a socket
+  // failure must not surface as a tool error (mirrors the role API routes).
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+  } catch (broadcastError) {
+    console.error('Failed to broadcast role change event for drive', driveId, broadcastError);
+  }
   logDriveActivity(context.userId, action, { id: driveId, name: `${driveName} — role "${roleName}"` },
     await getAiContextWithActor(context));
 }
@@ -160,14 +166,14 @@ export const roleManagementTools = {
   }),
 
   create_drive_role: tool({
-    description: 'Create a new custom role in a drive. Optionally set drive-wide permissions (canView/canEdit/canShare applying to all pages including future ones). Requires drive admin or owner.',
+    description: 'Create a new custom role in a drive. Optionally set drive-wide permissions (canView/canEdit/canShare applying to all non-private pages, including future ones; private pages always need per-page grants). Requires drive admin or owner.',
     inputSchema: z.object({
       driveId: driveIdSchema.describe('The ID of the drive to create the role in'),
       name: z.string().min(1).describe('Role name, unique within the drive'),
       description: z.string().optional().describe('What this role is for'),
       color: z.string().optional().describe('Display color (hex)'),
       driveWidePermissions: driveWidePermissionsSchema.nullable().optional()
-        .describe('Permissions applying to ALL pages in the drive, including future ones. Omit or null for per-page-only.'),
+        .describe('Permissions applying to all non-private pages in the drive, including future ones. Private pages always require per-page grants (set_role_page_permissions). Omit or null for per-page-only.'),
     }),
     execute: async ({ driveId, name, description, color, driveWidePermissions }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -334,13 +340,13 @@ export const roleManagementTools = {
   }),
 
   set_role_drive_wide_permissions: tool({
-    description: 'Set a role\'s drive-wide permissions (view/edit/share applying to ALL pages in the drive, including future ones). Per-page permissions still override. Requires drive admin or owner.',
+    description: 'Set a role\'s drive-wide permissions (view/edit/share applying to all non-private pages in the drive, including future ones). Private pages are excluded — they always require per-page grants via set_role_page_permissions. Per-page permissions still override. Requires drive admin or owner.',
     inputSchema: z.object({
       driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
       roleId: z.string().describe('The ID of the role to modify'),
-      canView: z.boolean().describe('Whether the role can view all pages'),
-      canEdit: z.boolean().describe('Whether the role can edit all pages'),
-      canShare: z.boolean().describe('Whether the role can share all pages'),
+      canView: z.boolean().describe('Whether the role can view all non-private pages'),
+      canEdit: z.boolean().describe('Whether the role can edit all non-private pages'),
+      canShare: z.boolean().describe('Whether the role can share all non-private pages'),
     }),
     execute: async ({ driveId, roleId, canView, canEdit, canShare }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -360,7 +366,11 @@ export const roleManagementTools = {
           success: true,
           summary: `Set ${role.name}'s drive-wide permissions: view=${canView}, edit=${canEdit}, share=${canShare}`,
           stats: { driveName: gate.access.drive.name },
-          nextSteps: ['Use get_drive_role to verify', 'Per-page grants override drive-wide settings'],
+          nextSteps: [
+            'Use get_drive_role to verify',
+            'Per-page grants override drive-wide settings',
+            'Private pages are not covered — use set_role_page_permissions for those',
+          ],
         };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : 'Failed to set drive-wide permissions' };
