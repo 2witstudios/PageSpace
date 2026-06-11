@@ -22,7 +22,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  getAllowedDriveIds: vi.fn().mockReturnValue([]),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
+  getPrincipalViewableDriveIds: vi.fn().mockResolvedValue([]),
+  canPrincipalViewDrive: vi.fn().mockResolvedValue(true),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/db/db', () => ({

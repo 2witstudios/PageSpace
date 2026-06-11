@@ -6,7 +6,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isPrincipalDriveMember } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalViewDrive, isScopedMCPAuth, getPrincipalViewableDriveIds } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -59,10 +59,15 @@ export async function GET(request: Request) {
           eq(activityLogs.isArchived, false)
         ];
 
-        // Filter by MCP token scope when no driveId provided
-        const allowedDriveIds = getAllowedDriveIds(auth);
-        if (allowedDriveIds.length > 0) {
-          userConditions.push(inArray(activityLogs.driveId, allowedDriveIds));
+        // Cap a scoped token at the drives its role can VIEW (not bare scope) —
+        // activity feeds have no per-item page filter.
+        if (isScopedMCPAuth(auth)) {
+          const viewableDriveIds = await getPrincipalViewableDriveIds(auth);
+          userConditions.push(
+            viewableDriveIds.length > 0
+              ? inArray(activityLogs.driveId, viewableDriveIds)
+              : eq(activityLogs.id, '__never_match__'),
+          );
         }
 
         whereCondition = and(...userConditions);
@@ -82,7 +87,7 @@ export async function GET(request: Request) {
         if (scopeError) return scopeError;
 
         // Verify principal can view drive
-        const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
+        const canViewDrive = await canPrincipalViewDrive(auth, params.driveId);
         if (!canViewDrive) {
           return NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
