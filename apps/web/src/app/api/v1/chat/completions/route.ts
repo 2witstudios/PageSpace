@@ -400,6 +400,13 @@ export async function POST(request: Request): Promise<Response> {
           content: text ?? '',
           toolCalls: extracted.toolCalls.length > 0 ? extracted.toolCalls : undefined,
           toolResults: extracted.toolResults.length > 0 ? extracted.toolResults : undefined,
+          ...(page?.driveId && {
+            mentionNotify: {
+              driveId: page.driveId,
+              triggeredByUserId: authResult.userId,
+              mentionerName: page.title ?? undefined,
+            },
+          }),
         }).catch((err: unknown) => {
           loggers.ai.error('OpenAI API: failed to save assistant message', err as Error);
         });

@@ -1096,6 +1096,13 @@ export async function POST(request: Request) {
                 toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
                 toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
                 uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
+                ...(page?.driveId && userId && {
+                  mentionNotify: {
+                    driveId: page.driveId,
+                    triggeredByUserId: userId,
+                    mentionerName: page.title ?? undefined,
+                  },
+                }),
               });
 
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
