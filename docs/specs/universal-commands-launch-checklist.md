@@ -9,8 +9,9 @@ gate-widening because the repo's only user-facing changelog surface (the
 marketing blog, `apps/marketing/src/app/blog/[slug]/data.ts`) is
 publish-time-only — entries go live the moment they land in `data.ts`.
 
-Phase 0–4 are merged to master. Phase 5 (built-in commands beyond `/help`,
-branch `pu/cmd-builtins`) runs in parallel; see "Merge sequencing" at the end.
+Phase 0–5 are merged to master (Phase 5, #1606, landed real `/help`
+execution and the shared `loadAvailableCommands` loader). See "Merge
+sequencing" at the end for the remaining follow-ups.
 
 ---
 
@@ -342,19 +343,15 @@ Settings → AI Settings → Commands.
 
 ## 4. Merge sequencing & known follow-ups
 
-- **Phase 5 overlap (`pu/cmd-builtins`):** that branch owns
-  `packages/lib/src/commands/`,
-  `apps/web/src/lib/ai/core/command-resolver.ts` /
-  `apps/web/src/lib/ai/core/command-processor.ts`, and the suggest route.
-  Phase 6 (this branch) adds
-  **new test files only** against those modules — no source edits — so the
-  merge is conflict-free in either order. If Phase 5 changes resolver
-  behavior (e.g. built-ins gain entry pages), the new edge-case tests pin
-  the degradation contract and will fail loudly if it regresses; that is by
-  design, not a conflict.
-- **Built-ins at flip time:** only `/help` is registered
-  (`packages/lib/src/commands/command-core.ts:42-47`). Decide whether
-  Phase 5's expanded registry is a launch blocker (exit criterion 7).
+- **Phase 5 (#1606) is merged** and this branch is rebased on it: `/help`
+  now executes for real (`buildHelpPromptSection` renders the sender's
+  precedence-resolved command list), and `planCommandExecution` takes an
+  optional `{driveId}` context. The Phase 6 edge-case tests pass unchanged
+  against the merged behavior — the degradation contract held.
+- **Built-ins at flip time:** `/help` is the only registered built-in
+  (`packages/lib/src/commands/command-core.ts`); the remaining Phase 5
+  scope (`.skill` import/export) is deferred and is not a flip blocker
+  (exit criterion 7).
 - **Gate is not a security boundary** (§2.1) — if product wants creation
   *blocked* (not just hidden) for non-admins during dogfooding, that's a
   server-side check in `POST /api/commands` and a deliberate spec §0
