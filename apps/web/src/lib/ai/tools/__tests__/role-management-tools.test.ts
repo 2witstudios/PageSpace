@@ -55,6 +55,7 @@ import {
   deleteDriveRole,
 } from '@pagespace/lib/services/drive-role-service';
 import { driveDeniedByAppToken } from '../actor-permissions';
+import { db } from '@pagespace/db/db';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockCheckAccess = vi.mocked(checkDriveAccessForRoles);
@@ -64,6 +65,7 @@ const mockCreateRole = vi.mocked(createDriveRole);
 const mockUpdateRole = vi.mocked(updateDriveRole);
 const mockDeleteRole = vi.mocked(deleteDriveRole);
 const mockDenied = vi.mocked(driveDeniedByAppToken);
+const mockFindPage = vi.mocked(db.query.pages.findFirst);
 
 const makeContext = (userId?: string) => ({
   toolCallId: '1',
@@ -343,6 +345,162 @@ describe('role-management-tools', () => {
 
       const result = await roleManagementTools.delete_drive_role.execute!(
         { driveId: 'drive1', roleId: 'role1' },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('set_role_page_permissions', () => {
+    const input = { driveId: 'drive1', roleId: 'role1', pageId: 'page1', canView: true, canEdit: true, canShare: false };
+
+    it('rejects a plain member', async () => {
+      mockCheckAccess.mockResolvedValueOnce(memberAccess);
+
+      const result = await roleManagementTools.set_role_page_permissions.execute!(
+        input,
+        makeContext('user1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(false);
+    });
+
+    it('merges the page grant into role.permissions for an admin', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(
+        makeRole({ permissions: { existing: { canView: true, canEdit: false, canShare: false } } })
+      );
+      mockFindPage.mockResolvedValueOnce({ id: 'page1', driveId: 'drive1' } as never);
+      mockUpdateRole.mockImplementationOnce(async (_d, _r, patch) => ({
+        role: makeRole({ permissions: patch.permissions }),
+        wasDefault: false,
+      }));
+
+      const result = await roleManagementTools.set_role_page_permissions.execute!(
+        input,
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateRole).toHaveBeenCalledWith('drive1', 'role1', {
+        permissions: {
+          existing: { canView: true, canEdit: false, canShare: false },
+          page1: { canView: true, canEdit: true, canShare: false },
+        },
+      });
+    });
+
+    it('returns error when pageId is not in this drive', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(makeRole());
+      mockFindPage.mockResolvedValueOnce(undefined as never);
+
+      const result = await roleManagementTools.set_role_page_permissions.execute!(
+        input,
+        makeContext('admin1')
+      ) as { success: boolean; error: string };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+
+    it('returns error when roleId is not in this drive', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(null);
+
+      const result = await roleManagementTools.set_role_page_permissions.execute!(
+        input,
+        makeContext('admin1')
+      ) as { success: boolean; error: string };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('set_role_drive_wide_permissions', () => {
+    it('rejects a plain member', async () => {
+      mockCheckAccess.mockResolvedValueOnce(memberAccess);
+
+      const result = await roleManagementTools.set_role_drive_wide_permissions.execute!(
+        { driveId: 'drive1', roleId: 'role1', canView: true, canEdit: false, canShare: false },
+        makeContext('user1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(false);
+    });
+
+    it('sets driveWidePermissions for an admin', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockUpdateRole.mockResolvedValueOnce({
+        role: makeRole({ driveWidePermissions: { canView: true, canEdit: false, canShare: false } }),
+        wasDefault: false,
+      });
+
+      const result = await roleManagementTools.set_role_drive_wide_permissions.execute!(
+        { driveId: 'drive1', roleId: 'role1', canView: true, canEdit: false, canShare: false },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateRole).toHaveBeenCalledWith('drive1', 'role1', {
+        driveWidePermissions: { canView: true, canEdit: false, canShare: false },
+      });
+    });
+
+    it('accepts an all-false grant (clears effective drive-wide access)', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockUpdateRole.mockResolvedValueOnce({
+        role: makeRole({ driveWidePermissions: { canView: false, canEdit: false, canShare: false } }),
+        wasDefault: false,
+      });
+
+      const result = await roleManagementTools.set_role_drive_wide_permissions.execute!(
+        { driveId: 'drive1', roleId: 'role1', canView: false, canEdit: false, canShare: false },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateRole).toHaveBeenCalledWith('drive1', 'role1', {
+        driveWidePermissions: { canView: false, canEdit: false, canShare: false },
+      });
+    });
+  });
+
+  describe('remove_role_page_permissions', () => {
+    it('removes an existing page grant for an admin', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(
+        makeRole({
+          permissions: {
+            page1: { canView: true, canEdit: true, canShare: false },
+            page2: { canView: true, canEdit: false, canShare: false },
+          },
+        })
+      );
+      mockUpdateRole.mockImplementationOnce(async (_d, _r, patch) => ({
+        role: makeRole({ permissions: patch.permissions }),
+        wasDefault: false,
+      }));
+
+      const result = await roleManagementTools.remove_role_page_permissions.execute!(
+        { driveId: 'drive1', roleId: 'role1', pageId: 'page1' },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockUpdateRole).toHaveBeenCalledWith('drive1', 'role1', {
+        permissions: { page2: { canView: true, canEdit: false, canShare: false } },
+      });
+    });
+
+    it('is idempotent when the pageId has no grant on the role', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(makeRole({ permissions: {} }));
+
+      const result = await roleManagementTools.remove_role_page_permissions.execute!(
+        { driveId: 'drive1', roleId: 'role1', pageId: 'ghost' },
         makeContext('admin1')
       ) as { success: boolean };
 
