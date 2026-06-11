@@ -19,6 +19,32 @@ async function copyToClipboard(text: string, label: string) {
   }
 }
 
+function CopyableRow({ label, value, ariaLabel }: { label: string; value: string; ariaLabel: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-8 shrink-0 text-xs text-muted-foreground">{label}</span>
+      <input
+        type="text"
+        readOnly
+        value={value}
+        aria-label={ariaLabel}
+        className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
+        onClick={(e) => (e.target as HTMLInputElement).select()}
+      />
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 shrink-0"
+        onClick={() => copyToClipboard(value, label)}
+        disabled={!value}
+        aria-label={`Copy ${ariaLabel}`}
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 export function PageLinkSection({ pageId, driveId }: PageLinkSectionProps) {
   // window is read in an effect so the dialog renders identically on server and client
   const [origin, setOrigin] = useState('');
@@ -30,47 +56,8 @@ export function PageLinkSection({ pageId, driveId }: PageLinkSectionProps) {
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="w-8 shrink-0 text-xs text-muted-foreground">Link</span>
-        <input
-          type="text"
-          readOnly
-          value={pageUrl}
-          aria-label="Page link"
-          className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
-          onClick={(e) => (e.target as HTMLInputElement).select()}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 shrink-0"
-          onClick={() => copyToClipboard(pageUrl, 'Page link')}
-          disabled={!pageUrl}
-          aria-label="Copy page link"
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="w-8 shrink-0 text-xs text-muted-foreground">ID</span>
-        <input
-          type="text"
-          readOnly
-          value={pageId}
-          aria-label="Page ID"
-          className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
-          onClick={(e) => (e.target as HTMLInputElement).select()}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 shrink-0"
-          onClick={() => copyToClipboard(pageId, 'Page ID')}
-          aria-label="Copy page ID"
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+      <CopyableRow label="Link" value={pageUrl} ariaLabel="Page link" />
+      <CopyableRow label="ID" value={pageId} ariaLabel="Page ID" />
       <p className="text-xs text-muted-foreground">
         The link opens this page for people who already have access.
       </p>

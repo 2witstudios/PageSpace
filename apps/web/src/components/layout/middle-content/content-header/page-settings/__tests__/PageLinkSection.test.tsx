@@ -60,7 +60,7 @@ describe('PageLinkSection', () => {
     render(<PageLinkSection pageId="page_abc" driveId="drive_xyz" />);
 
     await waitFor(() => screen.getByLabelText('Page link'));
-    fireEvent.click(screen.getByRole('button', { name: 'Copy page link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Page link' }));
 
     await waitFor(() => {
       assert({
@@ -81,7 +81,7 @@ describe('PageLinkSection', () => {
   it('given a click on the copy-ID button, writes the page ID to the clipboard', async () => {
     render(<PageLinkSection pageId="page_abc" driveId="drive_xyz" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy page ID' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Page ID' }));
 
     await waitFor(() => {
       assert({
@@ -97,7 +97,7 @@ describe('PageLinkSection', () => {
     writeText.mockRejectedValueOnce(new Error('denied'));
     render(<PageLinkSection pageId="page_abc" driveId="drive_xyz" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy page ID' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Page ID' }));
 
     await waitFor(() => {
       assert({
@@ -116,7 +116,7 @@ describe('PageLinkSection', () => {
     });
     render(<PageLinkSection pageId="page_abc" driveId="drive_xyz" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy page ID' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Page ID' }));
 
     await waitFor(() => {
       assert({

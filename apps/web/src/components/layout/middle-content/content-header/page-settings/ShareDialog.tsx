@@ -281,6 +281,7 @@ export function ShareDialog({
   };
 
   const ungrantedRoles = driveRoles.filter(r => !grantedRoles.some(g => g.roleId === r.id));
+  const triggerIconCn = isMobile ? "h-4 w-4" : "mr-2 h-4 w-4";
 
   // Users without share permission can still open the dialog to copy the
   // page link/ID — the dialog body locks out the sharing controls.
@@ -290,8 +291,8 @@ export function ShareDialog({
         <DialogTrigger asChild>
           <Button variant="ghost" size={isMobile ? "icon" : "sm"}>
             {canShare
-              ? <Share2 className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
-              : <Lock className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />}
+              ? <Share2 className={triggerIconCn} />
+              : <Lock className={triggerIconCn} />}
             {!isMobile && "Share"}
           </Button>
         </DialogTrigger>
