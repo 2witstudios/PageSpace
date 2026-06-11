@@ -54,7 +54,17 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
+  isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => undefined),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(auth.userId, pageId);
+  }),
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(auth.userId, pageId);
+  }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

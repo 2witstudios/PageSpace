@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
-import { getAppAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
@@ -11,7 +9,7 @@ import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
+import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
@@ -131,11 +129,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Scoped tokens use their own drive membership role; unscoped tokens fall back to user permissions.
-    // Unscoped tokens have no mcp_token_drives row, so getAppAccessLevel would return null.
-    const isScoped = isMCPAuthResult(auth) && auth.allowedDriveIds.length > 0;
-    const accessLevel = isScoped
-      ? await getAppAccessLevel(auth.tokenId, pageId)
-      : await getUserAccessLevel(userId, pageId);
+    const accessLevel = await getPrincipalAccessLevel(auth, pageId);
     if (!accessLevel || !accessLevel.canView) {
       loggers.api.warn('MCP document access denied - no view permission', {
         userId,

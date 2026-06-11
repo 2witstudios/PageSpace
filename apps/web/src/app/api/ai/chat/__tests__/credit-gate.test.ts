@@ -13,7 +13,17 @@ import type { SessionAuthResult } from '@/lib/auth';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
+  isMCPAuthResult: vi.fn((r: any) => r?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => undefined),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(auth.userId, pageId);
+  }),
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(auth.userId, pageId);
+  }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

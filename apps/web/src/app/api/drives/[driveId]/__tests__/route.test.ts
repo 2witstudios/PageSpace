@@ -48,6 +48,12 @@ vi.mock('@/lib/auth', () => ({
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
+  getAppDriveAccessLevel: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({

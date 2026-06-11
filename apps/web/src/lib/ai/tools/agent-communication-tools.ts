@@ -5,7 +5,7 @@ import { generateText, convertToModelMessages, UIMessage } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByMcpScope } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
@@ -255,7 +255,7 @@ export const agentCommunicationTools = {
 
         // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
         const allowedIds = new Set(
-          filterDriveIdsByMcpScope(executionContext, allUserDrives.map((d) => d.id)),
+          await filterDriveIdsByAppTokenScope(executionContext, allUserDrives.map((d) => d.id)),
         );
         const userDrives = allUserDrives.filter((d) => allowedIds.has(d.id));
 

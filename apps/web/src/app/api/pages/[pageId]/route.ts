@@ -4,10 +4,9 @@ import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserF
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
-import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -79,7 +78,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     // Apply it through the service with skipPermissionCheck so users with canShare but not
     // canEdit (e.g. page creator) can still toggle privacy.
     if (isPrivateUpdate !== undefined) {
-      const canShare = await canUserSharePage(userId, pageId);
+      const canShare = await canPrincipalSharePage(auth, pageId);
       if (!canShare) {
         return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
       }

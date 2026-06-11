@@ -6,12 +6,14 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/agents
 // ============================================================================
 
-vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserDriveAccess: vi.fn(),
-    canUserViewPage: vi.fn(),
-}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+    checkDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+    addAgentToDrive: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -58,13 +60,14 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+  getPrincipalDriveAccess: vi.fn(),
+  canPrincipalViewPage: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 
 // ============================================================================
 // Test Helpers
@@ -138,7 +141,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
 
   describe('authorization', () => {
     it('should return 403 when user has no drive access', async () => {
-      vi.mocked(getUserDriveAccess).mockResolvedValue(false);
+      vi.mocked(getPrincipalDriveAccess).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -151,7 +154,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
 
   describe('drive lookup', () => {
     it('should return 404 when drive not found', async () => {
-      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getPrincipalDriveAccess).mockResolvedValue(true);
 
       // First call: drive query returns empty, second call: agents query
       const mockOrderBy = vi.fn();
@@ -173,7 +176,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
 
   describe('response contract', () => {
     beforeEach(() => {
-      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getPrincipalDriveAccess).mockResolvedValue(true);
     });
 
     it('should return agents list with correct fields', async () => {
@@ -215,7 +218,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
         } as never;
       });
 
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -273,7 +276,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents?includeSystemPrompt=true');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -311,7 +314,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -350,7 +353,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -386,7 +389,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents?includeTools=false');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -423,7 +426,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -466,7 +469,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
         } as never;
       });
 
-      vi.mocked(canUserViewPage).mockImplementation(async (_userId: string, pageId: string) => {
+      vi.mocked(canPrincipalViewPage).mockImplementation(async (_userId: string, pageId: string) => {
         return pageId === 'agent-visible';
       });
 
@@ -508,7 +511,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -588,7 +591,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
           })),
         } as never;
       });
-      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -641,7 +644,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(MOCK_USER_ID));
       vi.mocked(isAuthError).mockReturnValue(false);
       vi.mocked(checkMCPDriveScope).mockReturnValue(null);
-      vi.mocked(getUserDriveAccess).mockRejectedValueOnce(error);
+      vi.mocked(getPrincipalDriveAccess).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -657,7 +660,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
     });
 
     it('should handle non-Error thrown values', async () => {
-      vi.mocked(getUserDriveAccess).mockRejectedValueOnce('string error');
+      vi.mocked(getPrincipalDriveAccess).mockRejectedValueOnce('string error');
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

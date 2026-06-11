@@ -7,8 +7,8 @@ import { db } from '@pagespace/db/db'
 import { and, eq, inArray, desc, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { createId } from '@paralleldrive/cuid2';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
@@ -58,22 +58,29 @@ export async function POST(request: Request) {
       return targetScopeError;
     }
 
-    // Check user has edit access to target drive
-    const isOwner = targetDrive.ownerId === userId;
-    let canEditDrive = isOwner;
+    // Check the principal has edit access to target drive. A scoped MCP token
+    // is its own drive member — use the TOKEN's role, not its owning user's.
+    let canEditDrive: boolean;
+    if (isScopedMCPAuth(auth)) {
+      const tokenMembership = await getAppDriveMembership(auth.tokenId, targetDriveId);
+      canEditDrive = tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
+    } else {
+      const isOwner = targetDrive.ownerId === userId;
+      canEditDrive = isOwner;
 
-    if (!isOwner) {
-      // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
-      // would otherwise pass the role check and be allowed to write into a
-      // drive they have not accepted into. Closes Review C2.
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, targetDriveId),
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        ),
-      });
-      canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
+      if (!isOwner) {
+        // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
+        // would otherwise pass the role check and be allowed to write into a
+        // drive they have not accepted into. Closes Review C2.
+        const membership = await db.query.driveMembers.findFirst({
+          where: and(
+            eq(driveMembers.driveId, targetDriveId),
+            eq(driveMembers.userId, userId),
+            isNotNull(driveMembers.acceptedAt)
+          ),
+        });
+        canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
+      }
     }
 
     if (!canEditDrive) {
@@ -122,7 +129,7 @@ export async function POST(request: Request) {
 
     // Verify view permissions for all pages
     for (const page of sourcePages) {
-      const canView = await canUserViewPage(userId, page.id);
+      const canView = await canPrincipalViewPage(auth, page.id);
       if (!canView) {
         return NextResponse.json(
           { error: `You do not have permission to copy page: ${page.title}` },

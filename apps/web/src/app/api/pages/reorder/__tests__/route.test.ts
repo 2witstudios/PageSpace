@@ -27,6 +27,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  isScopedMCPAuth: () => false,
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({

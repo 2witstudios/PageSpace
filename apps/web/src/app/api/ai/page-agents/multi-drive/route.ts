@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -57,7 +56,7 @@ export async function GET(request: Request) {
     // Filter drives by access
     const accessibleDrives = [];
     for (const drive of allDrives) {
-      const hasAccess = await getUserDriveAccess(userId, drive.id);
+      const hasAccess = await getPrincipalDriveAccess(auth, drive.id);
       if (hasAccess) {
         accessibleDrives.push(drive);
       }
@@ -107,7 +106,7 @@ export async function GET(request: Request) {
       // Filter by view permissions and build agent info
       const accessibleAgentsInDrive: AgentSummary[] = [];
       for (const agent of driveAgents) {
-        const canView = await canUserViewPage(userId, agent.id);
+        const canView = await canPrincipalViewPage(auth, agent.id);
         if (canView) {
           // Build agent info object
           const agentInfo: AgentSummary = {

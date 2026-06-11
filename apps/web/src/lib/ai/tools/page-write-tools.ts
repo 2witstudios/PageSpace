@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage, canActorDeletePage, driveOutsideMcpScope } from './actor-permissions';
+import { canActorEditPage, canActorDeletePage, driveDeniedByAppToken } from './actor-permissions';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -832,7 +832,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      if (driveOutsideMcpScope(context as ToolExecutionContext, id)) {
+      if (await driveDeniedByAppToken(context as ToolExecutionContext, id, 'manage')) {
         throw new Error('This token does not have access to this drive');
       }
 
@@ -919,7 +919,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      if (driveOutsideMcpScope(context as ToolExecutionContext, id)) {
+      if (await driveDeniedByAppToken(context as ToolExecutionContext, id, 'manage')) {
         throw new Error('This token does not have access to this drive');
       }
 

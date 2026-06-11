@@ -5,7 +5,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
@@ -39,6 +40,27 @@ export async function GET(
     if (scopeError) return scopeError;
 
     const userId = auth.userId;
+
+    // A scoped MCP token is its own drive member — gate on and report the
+    // TOKEN's membership, not the owning user's.
+    if (isScopedMCPAuth(auth)) {
+      const drive = await getDriveById(driveId);
+      if (!drive) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      }
+      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      if (!level?.canView) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      return NextResponse.json({
+        ...drive,
+        isOwned: false,
+        isMember: true,
+        role: membership?.role ?? 'MEMBER',
+        lastAccessedAt: null,
+      });
+    }
 
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
@@ -88,13 +110,23 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const access = await getDriveAccess(driveId, userId);
-    if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json(
-        { error: 'Only drive owners and admins can update drive settings' },
-        { status: 403 }
-      );
+    // Check authorization. A scoped MCP token must hold OWNER/ADMIN itself.
+    if (isScopedMCPAuth(auth)) {
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can update drive settings' },
+          { status: 403 }
+        );
+      }
+    } else {
+      const access = await getDriveAccess(driveId, userId);
+      if (!access.isOwner && !access.isAdmin) {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can update drive settings' },
+          { status: 403 }
+        );
+      }
     }
 
     // Update the drive
@@ -194,13 +226,23 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const access = await getDriveAccess(driveId, userId);
-    if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json(
-        { error: 'Only drive owners and admins can delete drives' },
-        { status: 403 }
-      );
+    // Check authorization. A scoped MCP token must hold OWNER/ADMIN itself.
+    if (isScopedMCPAuth(auth)) {
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can delete drives' },
+          { status: 403 }
+        );
+      }
+    } else {
+      const access = await getDriveAccess(driveId, userId);
+      if (!access.isOwner && !access.isAdmin) {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can delete drives' },
+          { status: 403 }
+        );
+      }
     }
 
     // Get recipients BEFORE trashing (ensures we have valid member list)

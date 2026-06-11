@@ -11,8 +11,7 @@ import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -295,7 +294,7 @@ export async function GET(request: Request) {
       const scopeError = checkMCPDriveScope(auth, params.driveId);
       if (scopeError) return scopeError;
 
-      const canView = await isUserDriveMember(userId, params.driveId);
+      const canView = await isPrincipalDriveMember(auth, params.driveId);
       if (!canView) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
@@ -388,10 +387,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ events: annotatedEvents, workflowEvents });
     }
 
-    // User context: aggregate events from all sources
-    const allDriveIds = await getDriveIdsForUser(userId);
-    // Filter drives by MCP token scope
-    const driveIds = filterDrivesByMCPScope(auth, allDriveIds);
+    // User context: aggregate events from all sources (already scoped for MCP tokens)
+    const driveIds = await getPrincipalDriveIds(auth);
 
     // Build conditions for user's visible events:
     // 1. Personal events (driveId is null, created by user)
@@ -535,7 +532,7 @@ export async function POST(request: Request) {
 
     // Validate drive access if driveId is provided
     if (data.driveId) {
-      const canAccess = await isUserDriveMember(userId, data.driveId);
+      const canAccess = await isPrincipalDriveMember(auth, data.driveId);
       if (!canAccess) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
@@ -572,7 +569,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: message }, { status: 400 });
       }
 
-      const canViewAgent = await canUserViewPage(userId, agentPageId);
+      const canViewAgent = await canPrincipalViewPage(auth, agentPageId);
       if (!canViewAgent) {
         return NextResponse.json(
           { error: 'Agent not found in this drive' },

@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { normalizeSubdomain, validatePublishSubdomain } from '@pagespace/lib/validators/subdomain';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { db } from '@pagespace/db/db';
@@ -36,9 +35,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
-  const userId = auth.userId;
-
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You do not have permission to view this page' }, { status: 403 });
   }
@@ -105,7 +102,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   const userId = auth.userId;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You do not have permission to publish this page' }, { status: 403 });
   }
@@ -277,7 +274,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
   const userId = auth.userId;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You do not have permission to unpublish this page' }, { status: 403 });
   }

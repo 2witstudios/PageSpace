@@ -97,6 +97,16 @@ vi.mock('../../../../../../lib/auth', () => ({
     return typeof result === 'object' && result !== null && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null), // Default: MCP scope check passes
+  // Principal dispatch: session auth falls through to the user-level checks,
+  // so delegate to the mocked permissions fns to keep call-arg assertions.
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(auth.userId, driveId);
+  }),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(auth.userId, driveId);
+  }),
 }));
 
 vi.mock('../../../../../../lib/websocket/calendar-events', () => ({

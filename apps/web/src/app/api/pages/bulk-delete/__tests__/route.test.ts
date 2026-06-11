@@ -22,6 +22,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result !== null && typeof result === 'object' && 'error' in (result as Record<string, unknown>)),
   getAllowedDriveIds: vi.fn(() => []),
   isMCPAuthResult: vi.fn(() => false),
+  canPrincipalDeletePage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserDeletePage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserDeletePage(auth.userId, pageId);
+  }),
 }));
 
 vi.mock('@/lib/websocket', () => ({

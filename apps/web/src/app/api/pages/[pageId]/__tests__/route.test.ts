@@ -29,6 +29,7 @@ vi.mock('@/lib/auth', () => ({
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  canPrincipalSharePage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -115,9 +116,8 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
-import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
@@ -328,7 +328,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));
-    vi.mocked(canUserSharePage).mockResolvedValue(true);
+    vi.mocked(canPrincipalSharePage).mockResolvedValue(true);
     // @ts-expect-error - partial mock: page is not private by default
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ isPrivate: false });
     // @ts-expect-error - partial mock
@@ -649,7 +649,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('returns 403 when user lacks share permission to change privacy', async () => {
-      vi.mocked(canUserSharePage).mockResolvedValue(false);
+      vi.mocked(canPrincipalSharePage).mockResolvedValue(false);
 
       const response = await PATCH(createRequest({ isPrivate: true }), { params: mockParams });
       const body = await response.json();

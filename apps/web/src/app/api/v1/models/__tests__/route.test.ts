@@ -7,6 +7,10 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   getAllowedDriveIds: vi.fn().mockReturnValue([]),
+  getPrincipalBatchPagePermissions: vi.fn(async (auth: { userId: string }, pageIds: string[]) => {
+    const { getBatchPagePermissions } = await import('@pagespace/lib/permissions/permissions');
+    return getBatchPagePermissions(auth.userId, pageIds);
+  }),
 }));
 
 vi.mock('@pagespace/db/db', () => ({

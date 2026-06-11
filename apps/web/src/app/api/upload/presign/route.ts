@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import {
   validateContentHash,
   validateFileSize,
@@ -47,12 +48,21 @@ export async function POST(request: Request) {
   const scopeError = checkMCPCreateScope(auth, driveId);
   if (scopeError) return scopeError;
 
-  const drivePerms = await getUserDrivePermissions(userId, driveId);
-  if (!drivePerms) {
-    return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-  }
-  if (!drivePerms.canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+  // A scoped MCP token is its own drive member — uploads require the TOKEN's
+  // role to grant edit, not the owning user's.
+  if (isScopedMCPAuth(auth)) {
+    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    if (!level?.canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+    }
+  } else {
+    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    if (!drivePerms) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+    if (!drivePerms.canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+    }
   }
 
   const hashResult = validateContentHash(contentHash);

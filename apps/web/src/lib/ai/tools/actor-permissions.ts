@@ -12,6 +12,12 @@ import {
   getAgentAccessiblePagesInDrive,
   hasAgentDriveMembership,
 } from '@pagespace/lib/permissions/agent-permissions';
+import {
+  getAppAccessLevel,
+  getAppDriveMembership,
+  getAppDriveAccessLevel,
+  getAppAccessiblePagesInDrive,
+} from '@pagespace/lib/permissions/app-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -36,6 +42,35 @@ export function isMcpScoped(context: ToolExecutionContext): boolean {
 
 function hasMcpScope(context: ToolExecutionContext): boolean {
   return isMcpScoped(context);
+}
+
+/**
+ * Whether the app-member RBAC ceiling applies: a drive-scoped MCP token whose
+ * own membership role (mcp_token_drives) caps every tool action. Older callers
+ * that set only mcpAllowedDriveIds (no token id) keep the scope-only behavior.
+ */
+function hasAppTokenCeiling(context: ToolExecutionContext): boolean {
+  return !!context.mcpTokenId && isMcpScoped(context);
+}
+
+/**
+ * Deny-only page-level cap from the token's own drive-membership role. Returns
+ * true when the ceiling applies and the token's role does NOT grant the needed
+ * permission. Never grants anything the actor's own ACL would deny.
+ */
+async function pageDeniedByAppToken(
+  context: ToolExecutionContext,
+  pageId: string,
+  need: 'view' | 'edit' | 'delete',
+): Promise<boolean> {
+  if (!hasAppTokenCeiling(context)) return false;
+  const level = await getAppAccessLevel(context.mcpTokenId!, pageId);
+  if (!level) return true;
+  switch (need) {
+    case 'view': return !level.canView;
+    case 'edit': return !level.canEdit;
+    case 'delete': return !level.canDelete;
+  }
 }
 
 /**
@@ -89,6 +124,7 @@ export async function canActorEditPage(
   pageId: string,
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (await pageDeniedByAppToken(context, pageId, 'edit')) return false;
   const agentPageId = getAgentPageId(context);
   if (agentPageId) {
     const perms = await getAgentAccessLevel(agentPageId, pageId);
@@ -102,6 +138,7 @@ export async function canActorDeletePage(
   pageId: string,
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (await pageDeniedByAppToken(context, pageId, 'delete')) return false;
   const agentPageId = getAgentPageId(context);
   if (agentPageId) {
     const perms = await getAgentAccessLevel(agentPageId, pageId);
@@ -115,6 +152,7 @@ export async function canActorViewPage(
   pageId: string,
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (await pageDeniedByAppToken(context, pageId, 'view')) return false;
   const agentPageId = getAgentPageId(context);
   if (agentPageId) {
     const perms = await getAgentAccessLevel(agentPageId, pageId);
@@ -129,6 +167,7 @@ export async function canActorAccessDrive(
   driveId: string,
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
+  if (await driveDeniedByAppToken(context, driveId, 'view')) return false;
   const agentPageId = getAgentPageId(context);
   if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
   return getUserDriveAccess(context.userId, driveId);
@@ -150,6 +189,7 @@ export async function canActorManageDrive(
   driveId: string,
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
+  if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
   const agentPageId = getAgentPageId(context);
   if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
   const access = await checkDriveAccess(driveId, context.userId);
@@ -162,8 +202,69 @@ export async function getActorAccessiblePagesInDrive(
 ): Promise<PageWithPermissions[]> {
   if (driveOutsideMcpScope(context, driveId)) return [];
   const agentPageId = getAgentPageId(context);
-  if (agentPageId) {
-    return getAgentAccessiblePagesInDrive(agentPageId, driveId);
+  const actorPages = agentPageId
+    ? await getAgentAccessiblePagesInDrive(agentPageId, driveId)
+    : await getUserAccessiblePagesInDriveWithDetails(context.userId, driveId);
+  if (!hasAppTokenCeiling(context)) return actorPages;
+
+  // App-member ceiling: intersect with the token's own accessible set, AND-ing
+  // each permission flag so the token never exceeds its membership role.
+  const tokenPages = new Map(
+    (await getAppAccessiblePagesInDrive(context.mcpTokenId!, driveId)).map((p) => [p.id, p.permissions]),
+  );
+  return actorPages
+    .filter((p) => tokenPages.get(p.id)?.canView)
+    .map((p) => {
+      const cap = tokenPages.get(p.id)!;
+      return {
+        ...p,
+        permissions: {
+          canView: p.permissions.canView && cap.canView,
+          canEdit: p.permissions.canEdit && cap.canEdit,
+          canShare: p.permissions.canShare && cap.canShare,
+          canDelete: p.permissions.canDelete && cap.canDelete,
+        },
+      };
+    });
+}
+
+/**
+ * Drive-level app-member ceiling for tools that authorize via primitives other
+ * than the canActor* chokepoint (activity, calendar, member listing). Combines
+ * the sync drive-scope check with the token's own membership role: deny-only
+ * and a no-op for sessions, unscoped tokens, and contexts without a token id.
+ */
+export async function driveDeniedByAppToken(
+  context: ToolExecutionContext,
+  driveId: string,
+  need: 'view' | 'edit' | 'manage' = 'view',
+): Promise<boolean> {
+  if (driveOutsideMcpScope(context, driveId)) return true;
+  if (!hasAppTokenCeiling(context)) return false;
+  if (need === 'manage') {
+    const membership = await getAppDriveMembership(context.mcpTokenId!, driveId);
+    return membership?.role !== 'OWNER' && membership?.role !== 'ADMIN';
   }
-  return getUserAccessiblePagesInDriveWithDetails(context.userId, driveId);
+  const level = await getAppDriveAccessLevel(context.mcpTokenId!, driveId);
+  if (!level) return true;
+  return need === 'edit' ? !level.canEdit : !level.canView;
+}
+
+/**
+ * Role-aware variant of filterDriveIdsByMcpScope: drops drives outside the
+ * token scope AND drives where the token's own role grants no view access.
+ */
+export async function filterDriveIdsByAppTokenScope(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  const scoped = filterDriveIdsByMcpScope(context, driveIds);
+  if (!hasAppTokenCeiling(context)) return scoped;
+  const results = await Promise.all(
+    scoped.map(async (driveId) => {
+      const level = await getAppDriveAccessLevel(context.mcpTokenId!, driveId);
+      return level?.canView ? driveId : null;
+    }),
+  );
+  return results.filter((id): id is string => id !== null);
 }

@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMCPDriveScope, canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth';
 import { getActivityById, previewRollback } from '@/services/api';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -64,7 +63,7 @@ export async function GET(
 
   // Authorization check: User must have access to the associated resource
   if (activity.pageId) {
-    const canView = await canUserViewPage(userId, activity.pageId);
+    const canView = await canPrincipalViewPage(auth, activity.pageId);
     if (!canView) {
       return NextResponse.json(
         { error: 'Unauthorized - you do not have access to this page' },
@@ -72,7 +71,7 @@ export async function GET(
       );
     }
   } else if (activity.driveId) {
-    const isMember = await isUserDriveMember(userId, activity.driveId);
+    const isMember = await isPrincipalDriveMember(auth, activity.driveId);
     if (!isMember) {
       return NextResponse.json(
         { error: 'Unauthorized - you do not have access to this drive' },

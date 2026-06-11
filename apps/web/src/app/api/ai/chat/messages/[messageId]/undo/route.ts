@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, type AuthResult } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -46,7 +45,7 @@ async function checkUndoPermissions(
       return scopeError;
     }
 
-    const canEdit = await canUserEditPage(userId, preview.pageId);
+    const canEdit = await canPrincipalEditPage(auth, preview.pageId);
     if (!canEdit) {
       loggers.api.warn(`Undo ${operationType} permission denied`, {
         userId: maskIdentifier(userId),

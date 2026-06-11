@@ -3,7 +3,11 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { pageReorderService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -27,6 +31,26 @@ export async function PATCH(request: Request) {
     // Check MCP token scope before page access
     const scopeError = await checkMCPPageScope(auth, pageId);
     if (scopeError) return scopeError;
+
+    // A scoped MCP token is its own drive member: it must hold OWNER/ADMIN on the
+    // page's drive itself (mirrors the owner/admin rule pageReorderService enforces
+    // for users), so a MEMBER-role token cannot reorder via its owner's powers.
+    if (isScopedMCPAuth(auth)) {
+      const page = await db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { driveId: true },
+      });
+      if (!page) {
+        return NextResponse.json({ error: 'Page not found.' }, { status: 404 });
+      }
+      const membership = await getAppDriveMembership(auth.tokenId, page.driveId);
+      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can reorder pages.' },
+          { status: 403 }
+        );
+      }
+    }
 
     // Validate parent change to prevent circular references
     const validation = await pageReorderService.validateMove(pageId, newParentId);

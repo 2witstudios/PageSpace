@@ -246,6 +246,13 @@ export interface CreatePageParams {
 export interface CreatePageOptions {
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
+  /**
+   * Edit-authorization predicate for the create target (the parent page id, or
+   * the drive id for root pages). Defaults to the user-level check; routes
+   * serving scoped MCP tokens inject canPrincipalEditPage so the token's own
+   * drive-membership role decides instead of the owning user's.
+   */
+  authorizeEdit?: (targetId: string) => Promise<boolean>;
 }
 
 /**
@@ -614,6 +621,7 @@ export const pageService = {
 
     // Check authorization — nested pages require edit permission on the parent;
     // root-level pages treat the drive as the root parent and require canEdit on the drive.
+    const authorizeEdit = options?.authorizeEdit ?? ((targetId: string) => canUserEditPage(userId, targetId));
     if (params.parentId) {
       const parentPage = await db.query.pages.findFirst({
         where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
@@ -622,12 +630,12 @@ export const pageService = {
       if (!parentPage) {
         return { success: false, error: 'Parent page not found in this drive', status: 400 };
       }
-      const canEdit = await canUserEditPage(userId, params.parentId);
+      const canEdit = await authorizeEdit(params.parentId);
       if (!canEdit) {
         return { success: false, error: 'Insufficient permissions to create pages in this folder', status: 403 };
       }
     } else {
-      const canEdit = await canUserEditPage(userId, params.driveId);
+      const canEdit = await authorizeEdit(params.driveId);
       if (!canEdit) {
         return { success: false, error: 'Insufficient permissions to create pages in this drive', status: 403 };
       }

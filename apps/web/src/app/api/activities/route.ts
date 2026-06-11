@@ -5,8 +5,7 @@ import { eq, and, desc, count, gte, lt, inArray } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -93,7 +92,7 @@ export async function GET(request: Request) {
           const scopeError = checkMCPDriveScope(auth, params.driveId);
           if (scopeError) return scopeError;
 
-          const canViewDrive = await isUserDriveMember(userId, params.driveId);
+          const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
           if (!canViewDrive) {
             return NextResponse.json(
               { error: 'Unauthorized - you do not have access to this drive' },
@@ -126,8 +125,8 @@ export async function GET(request: Request) {
         const scopeError = checkMCPDriveScope(auth, params.driveId);
         if (scopeError) return scopeError;
 
-        // Verify user can view drive
-        const canViewDrive = await isUserDriveMember(userId, params.driveId);
+        // Verify principal can view drive
+        const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
           return NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
@@ -155,8 +154,8 @@ export async function GET(request: Request) {
         const scopeError = await checkMCPPageScope(auth, params.pageId);
         if (scopeError) return scopeError;
 
-        // Verify user can view page
-        const canViewPage = await canUserViewPage(userId, params.pageId);
+        // Verify principal can view page
+        const canViewPage = await canPrincipalViewPage(auth, params.pageId);
         if (!canViewPage) {
           return NextResponse.json(
             { error: 'Unauthorized - you do not have access to this page' },

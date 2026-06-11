@@ -6,7 +6,8 @@ import { driveMembers } from '@pagespace/db/schema/members';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -39,31 +40,42 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    // Check if user is owner
-    const isOwner = drive.ownerId === auth.userId;
+    // Only owners and admins can view trash. A scoped MCP token is its own
+    // drive member — it must hold OWNER/ADMIN itself.
+    if (isScopedMCPAuth(auth)) {
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can view trash' },
+          { status: 403 },
+        );
+      }
+    } else {
+      // Check if user is owner
+      const isOwner = drive.ownerId === auth.userId;
 
-    // Check if user is admin
-    let isAdmin = false;
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, auth.userId),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        ))
-        .limit(1);
+      // Check if user is admin
+      let isAdmin = false;
+      if (!isOwner) {
+        const adminMembership = await db.select()
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, driveId),
+            eq(driveMembers.userId, auth.userId),
+            eq(driveMembers.role, 'ADMIN'),
+            isNotNull(driveMembers.acceptedAt)
+          ))
+          .limit(1);
 
-      isAdmin = adminMembership.length > 0;
-    }
+        isAdmin = adminMembership.length > 0;
+      }
 
-    // Only owners and admins can view trash
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json(
-        { error: 'Only drive owners and admins can view trash' },
-        { status: 403 },
-      );
+      if (!isOwner && !isAdmin) {
+        return NextResponse.json(
+          { error: 'Only drive owners and admins can view trash' },
+          { status: 403 },
+        );
+      }
     }
 
     const trashedPages = await db.query.pages.findMany({

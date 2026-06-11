@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, sql } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -91,7 +90,7 @@ export async function GET(
     }
 
     // Check permissions
-    const canView = await canUserViewPage(auth.userId, agentId);
+    const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'no_view_permission', agentId, method: 'GET' }, riskScore: 0.5 });
       return NextResponse.json(

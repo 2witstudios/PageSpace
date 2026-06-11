@@ -6,7 +6,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -26,12 +27,23 @@ export async function POST(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
+    // A scoped MCP token is its own drive member: it must hold OWNER/ADMIN
+    // itself; sessions and unscoped tokens require drive ownership as before.
     const drive = await db.query.drives.findFirst({
-      where: and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),
+      where: isScopedMCPAuth(auth)
+        ? eq(drives.id, driveId)
+        : and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),
     });
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+    }
+
+    if (isScopedMCPAuth(auth)) {
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (membership?.role !== 'OWNER' && membership?.role !== 'ADMIN') {
+        return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      }
     }
 
     if (!drive.isTrashed) {

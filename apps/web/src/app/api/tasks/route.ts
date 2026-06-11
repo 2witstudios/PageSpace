@@ -7,8 +7,15 @@ import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/ta
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  checkMCPDriveScope,
+  isScopedMCPAuth,
+  isPrincipalDriveMember,
+  getPrincipalDriveIds,
+  getPrincipalBatchPagePermissions,
+} from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -102,8 +109,8 @@ export async function GET(request: Request) {
         );
       }
 
-      // Verify user can view drive
-      const canViewDrive = await isUserDriveMember(userId, params.driveId);
+      // Verify the principal (user, or the token itself when drive-scoped) can view the drive
+      const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
       if (!canViewDrive) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
@@ -116,9 +123,8 @@ export async function GET(request: Request) {
 
       driveIds = [params.driveId];
     } else {
-      // User context: get all accessible drive IDs
-      driveIds = await getDriveIdsForUser(userId);
-      driveIds = filterDrivesByMCPScope(auth, driveIds);
+      // User context: the principal's drive universe (a scoped token's own memberships)
+      driveIds = await getPrincipalDriveIds(auth);
 
       // Optional drive filter for user context
       if (params.driveId) {
@@ -147,7 +153,7 @@ export async function GET(request: Request) {
     }
 
     // First, get all task list pages in the accessible drives
-    const taskListPages = await db.query.pages.findMany({
+    let taskListPages = await db.query.pages.findMany({
       where: and(
         eq(pages.type, 'TASK_LIST'),
         eq(pages.isTrashed, false),
@@ -155,6 +161,13 @@ export async function GET(request: Request) {
       ),
       columns: { id: true, driveId: true, title: true },
     });
+
+    // Scoped tokens see only the task lists their own role grants view on —
+    // custom roles can restrict visibility per page, not just per drive.
+    if (isScopedMCPAuth(auth)) {
+      const pagePerms = await getPrincipalBatchPagePermissions(auth, taskListPages.map(p => p.id));
+      taskListPages = taskListPages.filter(p => pagePerms.get(p.id)?.canView);
+    }
 
     if (taskListPages.length === 0) {
       return NextResponse.json({

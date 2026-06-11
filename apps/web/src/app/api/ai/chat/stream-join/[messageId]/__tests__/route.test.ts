@@ -63,8 +63,17 @@ const mockAuthFailure = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-const makeRequest = (signal?: AbortSignal) =>
-  new Request(`http://test.local/api/ai/chat/stream-join/${mockMessageId}`, { signal });
+const makeRequest = (signal?: AbortSignal) => {
+  // Avoid passing `signal` through RequestInit: the test runtime's Request
+  // (undici realm) rejects AbortSignal instances created from the global
+  // AbortController. The route only reads `request.signal`, so attach it
+  // directly instead.
+  const request = new Request(`http://test.local/api/ai/chat/stream-join/${mockMessageId}`);
+  if (signal) {
+    Object.defineProperty(request, 'signal', { value: signal });
+  }
+  return request;
+};
 
 const makeContext = (messageId: string) => ({
   params: Promise.resolve({ messageId }),

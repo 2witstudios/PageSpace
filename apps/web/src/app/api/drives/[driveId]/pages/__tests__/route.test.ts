@@ -100,6 +100,8 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  getPrincipalAccessiblePagesInDrive: vi.fn(),
 }));
 
 // ---------- imports (after mocks) ----------

@@ -7,7 +7,7 @@ import { pagePermissions, driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -117,37 +117,52 @@ export async function GET(
 
     let pageResults;
 
-    // Check if user is owner
-    const isOwner = drive.ownerId === userId;
-
-    // Check if user is admin
-    let isAdmin = false;
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, drive.id),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    // If user owns the drive or is an admin, fetch all pages
-    if (isOwner || isAdmin) {
-      pageResults = await db.query.pages.findMany({
+    if (isScopedMCPAuth(auth)) {
+      // A scoped MCP token is its own drive member — list the pages the TOKEN's
+      // role can see, not the owning user's.
+      const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
+      const accessibleIds = new Set(accessible.map(p => p.id));
+      const allPages = await db.query.pages.findMany({
         where: and(
           eq(pages.driveId, drive.id),
           eq(pages.isTrashed, false)
         ),
         orderBy: [asc(pages.position)],
       });
+      pageResults = allPages.filter(p => accessibleIds.has(p.id));
     } else {
-      // If user does not own the drive and is not an admin, fetch only permitted pages and their ancestors
-      pageResults = await getPermittedPages(drive.id, userId);
+      // Check if user is owner
+      const isOwner = drive.ownerId === userId;
+
+      // Check if user is admin
+      let isAdmin = false;
+      if (!isOwner) {
+        const adminMembership = await db.select()
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, drive.id),
+            eq(driveMembers.userId, userId),
+            eq(driveMembers.role, 'ADMIN'),
+            isNotNull(driveMembers.acceptedAt)
+          ))
+          .limit(1);
+
+        isAdmin = adminMembership.length > 0;
+      }
+
+      // If user owns the drive or is an admin, fetch all pages
+      if (isOwner || isAdmin) {
+        pageResults = await db.query.pages.findMany({
+          where: and(
+            eq(pages.driveId, drive.id),
+            eq(pages.isTrashed, false)
+          ),
+          orderBy: [asc(pages.position)],
+        });
+      } else {
+        // If user does not own the drive and is not an admin, fetch only permitted pages and their ancestors
+        pageResults = await getPermittedPages(drive.id, userId);
+      }
     }
 
     // Get task-linked page IDs scoped to this drive (task pages are children of task list pages)

@@ -6,8 +6,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isPrincipalDriveMember } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -82,8 +81,8 @@ export async function GET(request: Request) {
         const scopeError = checkMCPDriveScope(auth, params.driveId);
         if (scopeError) return scopeError;
 
-        // Verify user can view drive
-        const canViewDrive = await isUserDriveMember(userId, params.driveId);
+        // Verify principal can view drive
+        const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
           return NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },

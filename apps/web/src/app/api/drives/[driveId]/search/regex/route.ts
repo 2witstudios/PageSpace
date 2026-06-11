@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service'
+import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -42,17 +46,36 @@ export async function GET(
       );
     }
 
-    // Check drive access
-    const accessInfo = await checkDriveAccessForSearch(driveId, userId);
+    // Check drive access. A scoped MCP token is its own drive member — gate on
+    // the TOKEN's membership, not the owning user's.
+    let drive: { id: string; slug: string | null; name: string } | null;
+    if (isScopedMCPAuth(auth)) {
+      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      if (!level?.canView) {
+        return NextResponse.json(
+          { error: "You don't have access to this drive" },
+          { status: 403 }
+        );
+      }
+      const [row] = await db
+        .select({ id: drives.id, slug: drives.slug, name: drives.name })
+        .from(drives)
+        .where(eq(drives.id, driveId));
+      drive = row ?? null;
+    } else {
+      const accessInfo = await checkDriveAccessForSearch(driveId, userId);
 
-    if (!accessInfo.hasAccess) {
-      return NextResponse.json(
-        { error: "You don't have access to this drive" },
-        { status: 403 }
-      );
+      if (!accessInfo.hasAccess) {
+        return NextResponse.json(
+          { error: "You don't have access to this drive" },
+          { status: 403 }
+        );
+      }
+
+      drive = accessInfo.drive;
     }
 
-    if (!accessInfo.drive) {
+    if (!drive) {
       return NextResponse.json(
         { error: 'Drive not found' },
         { status: 404 }
@@ -64,7 +87,7 @@ export async function GET(
       driveId,
       userId,
       pattern,
-      accessInfo.drive.slug,
+      drive.slug,
       {
         searchIn,
         maxResults,

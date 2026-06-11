@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -206,7 +205,7 @@ export async function POST(request: Request) {
     }
 
     // Check view permissions
-    const canView = await canUserViewPage(userId, agentId);
+    const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_view_permission', action: 'consult', method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json(
@@ -336,7 +335,12 @@ export async function POST(request: Request) {
           name: drive.name,
           slug: drive.slug
         } : undefined
-      }
+      },
+      // Bind tool execution to the MCP token's drive scope and RBAC role so a
+      // scoped token cannot reach drives outside its scope — or exceed its own
+      // membership role — via the agent's broader ACL.
+      mcpAllowedDriveIds: getAllowedDriveIds(auth),
+      mcpTokenId: isMCPAuthResult(auth) ? auth.tokenId : undefined,
     };
 
     // Filter tools based on agent's enabled tools
