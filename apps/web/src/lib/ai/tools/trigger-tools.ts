@@ -6,7 +6,6 @@ import { pages } from '@pagespace/db/schema/core';
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
-import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import {
   upsertCalendarTriggerWorkflow,
   upsertCalendarTriggerWorkflowInTx,
