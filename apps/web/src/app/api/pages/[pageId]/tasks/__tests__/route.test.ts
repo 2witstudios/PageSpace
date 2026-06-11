@@ -8,6 +8,14 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(auth.userId, pageId);
+  },
+  canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(auth.userId, pageId);
+  },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

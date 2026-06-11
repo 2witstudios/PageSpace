@@ -582,6 +582,20 @@ export function checkMCPCreateScope(
 }
 
 // Re-export from other auth modules
+export {
+  isScopedMCPAuth,
+  getPrincipalAccessLevel,
+  canPrincipalViewPage,
+  canPrincipalEditPage,
+  canPrincipalDeletePage,
+  canPrincipalSharePage,
+  isPrincipalDriveMember,
+  getPrincipalDriveAccess,
+  isPrincipalDriveOwnerOrAdmin,
+  getPrincipalDriveIds,
+  getPrincipalAccessiblePagesInDrive,
+  getPrincipalBatchPagePermissions,
+} from './principal-permissions';
 export { verifyAuth, verifyAdminAuth, isAdminAuthError, withAdminAuth, type VerifiedUser, type AdminRouteContext } from './auth';
 export { validateCSRF } from './csrf-validation';
 export {

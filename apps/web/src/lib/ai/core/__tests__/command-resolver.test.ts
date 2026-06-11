@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
-      commands: { findFirst: vi.fn() },
+      commands: { findFirst: vi.fn(), findMany: vi.fn() },
       pages: { findMany: vi.fn() },
     },
   },
@@ -22,6 +22,7 @@ vi.mock('@pagespace/db/schema/commands', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   isUserDriveMember: vi.fn(),
+  getBatchPagePermissions: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -30,13 +31,19 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import {
+  canUserViewPage,
+  getBatchPagePermissions,
+  isUserDriveMember,
+} from '@pagespace/lib/permissions/permissions';
 import { planCommandExecution } from '../command-resolver';
 
 const mockCommandsFindFirst = db.query.commands.findFirst as unknown as Mock;
+const mockCommandsFindMany = db.query.commands.findMany as unknown as Mock;
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
+const mockBatchPermissions = vi.mocked(getBatchPagePermissions);
 
 const SENDER = 'usr9zmbrgj3atz4a98xxat96';
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';
@@ -70,8 +77,18 @@ function personalCommandRow(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockPagesFindMany.mockResolvedValue([]);
+  mockCommandsFindMany.mockResolvedValue([]);
   mockCanUserViewPage.mockResolvedValue(true);
   mockIsUserDriveMember.mockResolvedValue(true);
+  mockBatchPermissions.mockImplementation(
+    async (_userId, pageIds) =>
+      new Map(
+        pageIds.map((id) => [
+          id,
+          { canView: true, canEdit: false, canShare: false, canDelete: false },
+        ])
+      )
+  );
 });
 
 describe('planCommandExecution', () => {
@@ -189,7 +206,7 @@ describe('planCommandExecution', () => {
     }
   });
 
-  it('injects a built-in command from the registry without touching the DB', async () => {
+  it('injects a built-in command from the registry without a command-row lookup', async () => {
     const plan = await planCommandExecution('/[help](builtin:help:command) what can I do', SENDER);
     expect(plan).toMatchObject({
       kind: 'inject',
@@ -202,6 +219,95 @@ describe('planCommandExecution', () => {
     const plan = await planCommandExecution('/[nope](builtin:nope:command) hi', SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'not_found' });
     expect(mockCommandsFindFirst).not.toHaveBeenCalled();
+  });
+
+  describe('/help dynamic section', () => {
+    const HELP_TOKEN = '/[help](builtin:help:command) what can I do here?';
+    const DRIVE_ID = 'drv9zmbrgj3atz4a98xxat96';
+
+    const personalListRow = (trigger: string) => ({
+      id: `user-${trigger}`,
+      userId: SENDER,
+      driveId: null,
+      trigger,
+      description: `Personal ${trigger}`,
+      entryPageId: `page-${trigger}`,
+      type: 'document',
+      enabled: true,
+      entryPage: { driveId: 'anywhere', isTrashed: false },
+    });
+
+    const driveListRow = (trigger: string) => ({
+      id: `drive-${trigger}`,
+      userId: null,
+      driveId: DRIVE_ID,
+      trigger,
+      description: `Drive ${trigger}`,
+      entryPageId: `page-${trigger}`,
+      type: 'document',
+      enabled: true,
+      entryPage: { driveId: DRIVE_ID, isTrashed: false },
+    });
+
+    it("injects the sender's actual commands (builtins + personal + drive) in drive context", async () => {
+      mockCommandsFindMany
+        .mockResolvedValueOnce([personalListRow('release-checklist')])
+        .mockResolvedValueOnce([driveListRow('standup')]);
+
+      const plan = await planCommandExecution(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
+
+      expect(plan?.kind).toBe('inject');
+      if (plan?.kind !== 'inject') return;
+      expect(plan.injection.dynamicContent).toBeDefined();
+      const section = plan.injection.dynamicContent as string;
+      expect(section).toContain('/help');
+      expect(section).toContain('/release-checklist');
+      expect(section).toContain('Personal release-checklist');
+      expect(section).toContain('/standup');
+      expect(section).toContain('Drive standup');
+      expect(mockIsUserDriveMember).toHaveBeenCalledWith(SENDER, DRIVE_ID);
+    });
+
+    it('lists only builtins + personal commands when there is no drive context', async () => {
+      mockCommandsFindMany.mockResolvedValueOnce([personalListRow('release-checklist')]);
+
+      const plan = await planCommandExecution(HELP_TOKEN, SENDER);
+
+      expect(plan?.kind).toBe('inject');
+      if (plan?.kind !== 'inject') return;
+      const section = plan.injection.dynamicContent as string;
+      expect(section).toContain('/release-checklist');
+      // Exactly one command query: personal only, no drive lookup
+      expect(mockCommandsFindMany).toHaveBeenCalledTimes(1);
+      expect(mockIsUserDriveMember).not.toHaveBeenCalled();
+    });
+
+    it('drops drive commands when the sender is not a member of the context drive', async () => {
+      mockIsUserDriveMember.mockResolvedValue(false);
+      mockCommandsFindMany.mockResolvedValueOnce([personalListRow('mine')]);
+
+      const plan = await planCommandExecution(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
+
+      expect(plan?.kind).toBe('inject');
+      if (plan?.kind !== 'inject') return;
+      expect(plan.injection.dynamicContent).toContain('/mine');
+      expect(mockCommandsFindMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('degrades to the static description (no dynamic section, no throw) when loading fails', async () => {
+      mockCommandsFindMany.mockRejectedValue(new Error('db exploded'));
+
+      const plan = await planCommandExecution(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
+
+      expect(plan).toMatchObject({
+        kind: 'inject',
+        injection: { scope: 'builtin', trigger: 'help', entryPage: null },
+      });
+      if (plan?.kind === 'inject') {
+        expect(plan.injection.dynamicContent).toBeUndefined();
+        expect(plan.injection.description.length).toBeGreaterThan(0);
+      }
+    });
   });
 
   it('degrades to null (no injection, no throw) on unexpected resolution errors', async () => {

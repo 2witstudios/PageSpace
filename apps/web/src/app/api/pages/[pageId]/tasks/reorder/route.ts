@@ -4,7 +4,7 @@ import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -30,7 +30,7 @@ export async function PATCH(
   if (scopeError) return scopeError;
 
   // Check edit permission
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({
       error: 'You need edit permission to reorder tasks',

@@ -52,8 +52,12 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
-  filterDrivesByMCPScope: vi.fn((auth, driveIds) => driveIds), // Pass through all drive IDs by default
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
 }));
 
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'

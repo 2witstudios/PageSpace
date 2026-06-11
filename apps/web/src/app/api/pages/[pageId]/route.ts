@@ -4,10 +4,9 @@ import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserF
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage, canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
-import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -30,7 +29,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const userId = auth.userId;
 
   try {
-    const result = await pageService.getPage(pageId, userId);
+    // Scoped MCP tokens authorize with their OWN drive-membership role.
+    const result = await pageService.getPage(pageId, userId, {
+      authorizeView: (id) => canPrincipalViewPage(auth, id),
+    });
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });
@@ -79,7 +81,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     // Apply it through the service with skipPermissionCheck so users with canShare but not
     // canEdit (e.g. page creator) can still toggle privacy.
     if (isPrivateUpdate !== undefined) {
-      const canShare = await canUserSharePage(userId, pageId);
+      const canShare = await canPrincipalSharePage(auth, pageId);
       if (!canShare) {
         return NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 });
       }
@@ -110,6 +112,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       expectedRevision,
       context,
       skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
+      // Scoped MCP tokens authorize with their OWN drive-membership role.
+      authorizeEdit: (id) => canPrincipalEditPage(auth, id),
     });
 
     if (!result.success) {
@@ -257,6 +261,8 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const result = await pageService.trashPage(pageId, userId, {
       trashChildren,
       metadata: isMCP ? { source: 'mcp' } : undefined,
+      // Scoped MCP tokens authorize with their OWN drive-membership role.
+      authorizeDelete: (id) => canPrincipalDeletePage(auth, id),
     });
 
     if (!result.success) {

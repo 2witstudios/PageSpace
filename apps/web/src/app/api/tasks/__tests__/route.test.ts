@@ -86,6 +86,16 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(() => null),
   filterDrivesByMCPScope: vi.fn((_auth: unknown, driveIds: string[]) => driveIds),
+  isScopedMCPAuth: vi.fn(() => false),
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(auth.userId, driveId);
+  }),
+  getPrincipalDriveIds: vi.fn(async (auth: { userId: string }) => {
+    const { getDriveIdsForUser } = await import('@pagespace/lib/permissions/permissions');
+    return getDriveIdsForUser(auth.userId);
+  }),
+  getPrincipalBatchPagePermissions: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';

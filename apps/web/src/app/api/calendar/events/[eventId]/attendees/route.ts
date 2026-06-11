@@ -6,8 +6,7 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -114,7 +113,7 @@ export async function GET(
             );
           }
 
-          const isDriveMember = await isUserDriveMember(userId, event.driveId);
+          const isDriveMember = await isPrincipalDriveMember(auth, event.driveId);
           if (!isDriveMember) {
             return NextResponse.json(
               { error: 'Access denied - you do not have access to this drive' },

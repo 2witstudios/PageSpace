@@ -5,7 +5,7 @@ import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
@@ -38,7 +38,7 @@ export async function GET(
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
@@ -91,7 +91,7 @@ export async function POST(
   const postScopeError = await checkMCPPageScope(auth, pageId);
   if (postScopeError) return postScopeError;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
   }
@@ -206,7 +206,7 @@ export async function PUT(
   const putScopeError = await checkMCPPageScope(auth, pageId);
   if (putScopeError) return putScopeError;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
   }
@@ -295,7 +295,7 @@ export async function DELETE(
   const deleteScopeError = await checkMCPPageScope(auth, pageId);
   if (deleteScopeError) return deleteScopeError;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
   }

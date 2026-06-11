@@ -6,9 +6,8 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   removeCalendarTrigger,
   upsertCalendarTriggerWorkflow,
@@ -21,11 +20,11 @@ const SESSION_WRITE = { allow: ['session'] as const, requireCSRF: true };
 // Same auth shape as PATCH /api/calendar/events/[eventId]: creator OR drive
 // owner/admin. Personal events (no driveId) are creator-only by construction.
 async function canManageEventTrigger(
-  userId: string,
+  auth: AuthResult,
   event: typeof calendarEvents.$inferSelect,
 ): Promise<boolean> {
-  if (event.createdById === userId) return true;
-  if (event.driveId) return isDriveOwnerOrAdmin(userId, event.driveId);
+  if (event.createdById === auth.userId) return true;
+  if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }
 
@@ -64,7 +63,6 @@ async function loadAttendeeIds(eventId: string): Promise<string[]> {
 export async function GET(request: Request, context: { params: Promise<{ eventId: string }> }) {
   const auth = await authenticateRequestWithOptions(request, SESSION_READ);
   if (isAuthError(auth)) return auth.error;
-  const userId = auth.userId;
 
   const { eventId } = await context.params;
 
@@ -78,7 +76,7 @@ export async function GET(request: Request, context: { params: Promise<{ eventId
     if (scopeError) return scopeError;
   }
 
-  const canManage = await canManageEventTrigger(userId, event);
+  const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
@@ -172,7 +170,7 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     );
   }
 
-  const canManage = await canManageEventTrigger(userId, event);
+  const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
@@ -237,7 +235,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ even
     if (scopeError) return scopeError;
   }
 
-  const canManage = await canManageEventTrigger(userId, event);
+  const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

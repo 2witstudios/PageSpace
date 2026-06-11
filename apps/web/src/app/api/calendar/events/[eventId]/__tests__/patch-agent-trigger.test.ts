@@ -80,6 +80,17 @@ vi.mock('../../../../../../lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
+  // Session auth falls through to the user-level checks.
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(auth.userId, driveId);
+  }),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(auth.userId, driveId);
+  }),
 }));
 
 vi.mock('../../../../../../lib/websocket/calendar-events', () => ({

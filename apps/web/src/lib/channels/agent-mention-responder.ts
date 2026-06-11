@@ -381,7 +381,9 @@ export async function triggerMentionedAgentResponses(
     // message, but the command executes — with the SENDER's permissions —
     // when this message triggers an agent response. Resolution degrades,
     // never fails; a skipped command becomes a one-line notice.
-    const commandPlan = await planCommandExecution(params.content, params.userId);
+    const commandPlan = await planCommandExecution(params.content, params.userId, {
+      driveId: params.driveId ?? null,
+    });
     const commandContext = buildCommandPromptSection(commandPlan);
     const commandExecution = commandPlan ? commandExecutionDataFromPlan(commandPlan) : undefined;
 

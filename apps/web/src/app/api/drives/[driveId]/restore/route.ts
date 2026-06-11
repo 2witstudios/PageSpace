@@ -6,7 +6,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -26,8 +27,26 @@ export async function POST(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
+    // Restoring a drive is owner-only for users. An inherited key uses its
+    // owner's identity (same rule); an explicit-role key needs the OWNER role —
+    // ADMIN is not enough, mirroring the user-side ownership requirement.
+    let scopedExplicitRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null | undefined;
+    if (isScopedMCPAuth(auth)) {
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (!membership) {
+        return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      }
+      scopedExplicitRole = membership.role;
+      if (scopedExplicitRole !== null && scopedExplicitRole !== 'OWNER') {
+        return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      }
+    }
+
+    const requireUserOwnership = !isScopedMCPAuth(auth) || scopedExplicitRole === null;
     const drive = await db.query.drives.findFirst({
-      where: and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),
+      where: requireUserOwnership
+        ? and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId))
+        : eq(drives.id, driveId),
     });
 
     if (!drive) {

@@ -26,6 +26,9 @@ export interface DriveSearchInfo {
 export interface GlobSearchOptions {
   includeTypes?: PageTypeEnum[];
   maxResults?: number;
+  /** Per-result view predicate; defaults to the user-level check. Routes
+   * serving scoped MCP tokens inject the token's own page access. */
+  authorizeView?: (pageId: string) => Promise<boolean>;
 }
 
 export interface GlobSearchResult {
@@ -57,6 +60,9 @@ export interface GlobSearchResponse {
 export interface RegexSearchOptions {
   searchIn?: 'content' | 'title' | 'both';
   maxResults?: number;
+  /** Per-result view predicate; defaults to the user-level check. Routes
+   * serving scoped MCP tokens inject the token's own page access. */
+  authorizeView?: (pageId: string) => Promise<boolean>;
 }
 
 export interface RegexSearchResult {
@@ -161,6 +167,9 @@ export async function globSearchPages(
   options: GlobSearchOptions = {}
 ): Promise<GlobSearchResponse> {
   const { includeTypes, maxResults = 100 } = options;
+  const authorizeView =
+    options.authorizeView ??
+    (async (pageId: string) => (await getUserAccessLevel(userId, pageId))?.canView ?? false);
   const effectiveMaxResults = Math.min(maxResults, 200);
 
   // Build where conditions
@@ -195,8 +204,7 @@ export async function globSearchPages(
   // Second pass: build paths and check pattern
   for (const page of allPages) {
     // Check permissions
-    const accessLevel = await getUserAccessLevel(userId, page.id);
-    if (!accessLevel?.canView) continue;
+    if (!(await authorizeView(page.id))) continue;
 
     // Build full path
     const pathParts: string[] = [];
@@ -347,6 +355,9 @@ export async function regexSearchPages(
   options: RegexSearchOptions = {}
 ): Promise<RegexSearchResponse> {
   const { searchIn = 'content', maxResults = 50 } = options;
+  const authorizeView =
+    options.authorizeView ??
+    (async (pageId: string) => (await getUserAccessLevel(userId, pageId))?.canView ?? false);
   const effectiveMaxResults = Math.min(maxResults, MAX_REGEX_RESULTS);
 
   // Validate and limit pattern length to prevent ReDoS
@@ -423,8 +434,7 @@ export async function regexSearchPages(
   // Filter by permissions and build results
   const results: RegexSearchResult[] = [];
   for (const page of matchingPages) {
-    const accessLevel = await getUserAccessLevel(userId, page.id);
-    if (!accessLevel?.canView) continue;
+    if (!(await authorizeView(page.id))) continue;
 
     // Build semantic path
     const pathParts = [driveSlug || driveId];

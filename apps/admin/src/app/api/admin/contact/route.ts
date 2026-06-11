@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { asc, desc, ilike, or, count } from '@pagespace/db/operators'
+import { asc, desc, ilike, or, and, count, gte, sql } from '@pagespace/db/operators'
 import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
@@ -35,11 +35,27 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         )
       : undefined;
 
-    // Get total count for pagination
-    const totalCount = await db
-      .select({ count: count() })
-      .from(contactSubmissions)
-      .where(searchConditions);
+    // Date boundaries for stats
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    weekAgo.setHours(0, 0, 0, 0);
+
+    const todayCondition = searchConditions
+      ? and(searchConditions, gte(contactSubmissions.createdAt, todayStart))
+      : gte(contactSubmissions.createdAt, todayStart);
+    const weekCondition = searchConditions
+      ? and(searchConditions, gte(contactSubmissions.createdAt, weekAgo))
+      : gte(contactSubmissions.createdAt, weekAgo);
+
+    // Get total + stats counts in parallel
+    const [totalCountResult, todayCountResult, weekCountResult, uniqueEmailResult] = await Promise.all([
+      db.select({ count: count() }).from(contactSubmissions).where(searchConditions),
+      db.select({ count: count() }).from(contactSubmissions).where(todayCondition),
+      db.select({ count: count() }).from(contactSubmissions).where(weekCondition),
+      db.select({ count: sql<number>`COUNT(DISTINCT ${contactSubmissions.email})` }).from(contactSubmissions).where(searchConditions),
+    ]);
 
     // Build sort condition
     const validSortColumns = {
@@ -71,7 +87,10 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       .offset(offset);
 
     // Calculate pagination info
-    const total = totalCount[0]?.count || 0;
+    const total = totalCountResult[0]?.count || 0;
+    const todayCount = todayCountResult[0]?.count || 0;
+    const weekCount = weekCountResult[0]?.count || 0;
+    const uniqueEmailCount = Number(uniqueEmailResult[0]?.count ?? 0);
     const totalPages = Math.ceil(total / pageSize);
     const hasNextPage = page < totalPages;
     const hasPrevPage = page > 1;
@@ -85,6 +104,11 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         totalPages,
         hasNextPage,
         hasPrevPage
+      },
+      stats: {
+        todayCount,
+        weekCount,
+        uniqueEmailCount,
       },
       meta: {
         searchTerm,

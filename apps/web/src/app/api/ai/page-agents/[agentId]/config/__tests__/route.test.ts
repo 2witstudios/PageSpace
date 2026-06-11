@@ -23,6 +23,10 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(auth.userId, pageId);
+  }),
 }));
 
 // Mock permissions (boundary)

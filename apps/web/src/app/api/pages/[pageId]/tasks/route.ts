@@ -7,7 +7,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -90,7 +90,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (scopeError) return scopeError;
 
   // Check view permission
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json({
       error: 'You need view permission to access this task list',
@@ -321,7 +321,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   if (writeScopeError) return writeScopeError;
 
   // Check edit permission
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({
       error: 'You need edit permission to add tasks',

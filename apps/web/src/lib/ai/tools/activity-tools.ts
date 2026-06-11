@@ -20,7 +20,7 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import type { ToolExecutionContext } from '../core/types';
-import { filterDriveIdsByMcpScope, canActorViewPage } from './actor-permissions';
+import { filterDriveIdsByAppTokenScope, canActorViewPage } from './actor-permissions';
 
 /**
  * Activity tools for AI agents
@@ -490,7 +490,7 @@ When summarizing multiple changes, group them thematically and describe the over
         }
 
         // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
-        targetDriveIds = filterDriveIdsByMcpScope(context as ToolExecutionContext, targetDriveIds);
+        targetDriveIds = await filterDriveIdsByAppTokenScope(context as ToolExecutionContext, targetDriveIds);
 
         if (targetDriveIds.length === 0) {
           return {

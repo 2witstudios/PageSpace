@@ -26,6 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -330,7 +331,7 @@ describe('POST /api/pages', () => {
           parentId: 'parent_123',
           content: '<p>Custom content</p>',
         }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });
 
@@ -359,7 +360,7 @@ describe('POST /api/pages', () => {
           aiProvider: 'anthropic',
           aiModel: 'claude-3',
         }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });
 
@@ -375,7 +376,10 @@ describe('POST /api/pages', () => {
       expect(pageService.createPage).toHaveBeenCalledWith(
         mockUserId,
         expect.objectContaining({ title: 'MCP Page' }),
-        { context: { metadata: { source: 'mcp' } } },
+        expect.objectContaining({
+          context: { metadata: { source: 'mcp' } },
+          authorizeEdit: expect.any(Function),
+        }),
       );
     });
   });
@@ -533,7 +537,7 @@ describe('POST /api/pages', () => {
       expect(pageService.createPage).toHaveBeenCalledWith(
         mockUserId,
         expect.objectContaining({ contentMode: 'markdown' }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });
   });

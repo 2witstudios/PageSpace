@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -52,7 +51,7 @@ export async function GET(
     const includeTools = searchParams.get('includeTools') !== 'false'; // Default true
 
     // Verify drive access
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
+    const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
       return NextResponse.json(
         { error: 'You don\'t have access to this drive' },
@@ -99,7 +98,7 @@ export async function GET(
     // Filter agents by view permissions
     const accessibleAgents: DriveAgentSummary[] = [];
     for (const agent of allAgents) {
-      const canView = await canUserViewPage(userId, agent.id);
+      const canView = await canPrincipalViewPage(auth, agent.id);
       if (canView) {
         // Build agent info object
         const agentInfo: DriveAgentSummary = {

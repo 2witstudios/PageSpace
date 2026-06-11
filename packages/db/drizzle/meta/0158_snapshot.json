@@ -1,5 +1,5 @@
 {
-  "id": "19072520-8d01-4b02-b759-4b22539dd231",
+  "id": "880cf3d0-6d25-49c2-b581-06a8fcd6219e",
   "prevId": "1cde9a06-f6a6-45ad-ac34-7f0261bbb99e",
   "version": "7",
   "dialect": "postgresql",
@@ -3283,8 +3283,7 @@
           "type": "MemberRole",
           "typeSchema": "public",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'MEMBER'"
+          "notNull": false
         },
         "customRoleId": {
           "name": "customRoleId",
@@ -12391,127 +12390,6 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
-    },
-    "public.calendar_event_drives": {
-      "name": "calendar_event_drives",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "eventId": {
-          "name": "eventId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sharedBy": {
-          "name": "sharedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sharedAt": {
-          "name": "sharedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "calendar_event_drives_event_id_idx": {
-          "name": "calendar_event_drives_event_id_idx",
-          "columns": [
-            {
-              "expression": "eventId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_event_drives_drive_id_idx": {
-          "name": "calendar_event_drives_drive_id_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "calendar_event_drives_eventId_calendar_events_id_fk": {
-          "name": "calendar_event_drives_eventId_calendar_events_id_fk",
-          "tableFrom": "calendar_event_drives",
-          "tableTo": "calendar_events",
-          "columnsFrom": [
-            "eventId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_event_drives_driveId_drives_id_fk": {
-          "name": "calendar_event_drives_driveId_drives_id_fk",
-          "tableFrom": "calendar_event_drives",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_event_drives_sharedBy_users_id_fk": {
-          "name": "calendar_event_drives_sharedBy_users_id_fk",
-          "tableFrom": "calendar_event_drives",
-          "tableTo": "users",
-          "columnsFrom": [
-            "sharedBy"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "calendar_event_drives_event_drive_key": {
-          "name": "calendar_event_drives_event_drive_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "eventId",
-            "driveId"
-          ]
-        }
-      }
     },
     "public.calendar_events": {
       "name": "calendar_events",

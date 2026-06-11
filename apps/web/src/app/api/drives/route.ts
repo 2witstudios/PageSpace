@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service';
+import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { db } from '@pagespace/db/db';
+import { and, eq, inArray } from '@pagespace/db/operators';
+import { drives as drivesTable } from '@pagespace/db/schema/core';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPCreateScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
@@ -34,12 +38,32 @@ export async function GET(req: Request) {
   const tokenScopable = url.searchParams.get('tokenScopable') === 'true';
 
   try {
-    const allDrives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
-
-    // Filter drives by MCP token scope (no-op for session auth or unscoped tokens)
-    const allowedDriveIds = filterDrivesByMCPScope(auth, allDrives.map(d => d.id));
-    const allowedSet = new Set(allowedDriveIds);
-    const drives = allDrives.filter(d => allowedSet.has(d.id));
+    let drives: DriveWithAccess[];
+    if (isScopedMCPAuth(auth)) {
+      // A scoped MCP token is its own drive member: list exactly its member
+      // drives (with the TOKEN's role), not the owning user's drive universe.
+      const rows = await db.query.drives.findMany({
+        where: includeTrash
+          ? inArray(drivesTable.id, auth.allowedDriveIds)
+          : and(inArray(drivesTable.id, auth.allowedDriveIds), eq(drivesTable.isTrashed, false)),
+      });
+      drives = await Promise.all(
+        rows.map(async (drive) => {
+          const membership = await getAppDriveMembership(auth.tokenId, drive.id);
+          // Inherit rows present the owner's own relationship to the drive.
+          const role = membership?.role
+            ?? (drive.ownerId === userId ? ('OWNER' as const) : ('MEMBER' as const));
+          return {
+            ...drive,
+            isOwned: membership?.role === null && drive.ownerId === userId,
+            role,
+            lastAccessedAt: null,
+          };
+        })
+      );
+    } else {
+      drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+    }
 
     loggers.api.debug('[DEBUG] Drives API - Found drives:', {
       count: drives.length,

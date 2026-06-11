@@ -4,7 +4,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -36,7 +36,7 @@ export async function PATCH(
   if (scopeError) return scopeError;
 
   // Check edit permission
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({
       error: 'You need edit permission to update tasks',
@@ -437,7 +437,7 @@ export async function DELETE(
   if (scopeError) return scopeError;
 
   // Check edit permission
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({
       error: 'You need edit permission to delete tasks',

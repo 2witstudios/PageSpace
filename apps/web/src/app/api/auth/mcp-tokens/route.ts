@@ -15,12 +15,13 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
   name: z.string().min(1).max(100),
-  // Legacy: plain drive IDs, all get MEMBER role
+  // Legacy: plain drive IDs — scope only, role inherits from the owner
   driveIds: z.array(z.string()).optional(),
-  // Preferred: per-drive role assignment
+  // Preferred: per-drive scope. Omitted role = INHERIT (the key acts as its
+  // owner in that drive); an explicit role is an opt-in downgrade.
   drives: z.array(z.object({
     id: z.string(),
-    role: z.enum(['ADMIN', 'MEMBER']).default('MEMBER'),
+    role: z.enum(['ADMIN', 'MEMBER']).nullish(),
     customRoleId: z.string().optional(),
   })).optional(),
 }).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
@@ -35,8 +36,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { name, driveIds: rawDriveIds, drives: rawDrives } = createTokenSchema.parse(body);
 
-    const driveScopes = rawDrives
-      ?? (rawDriveIds ?? []).map(id => ({ id, role: 'MEMBER' as const, customRoleId: undefined }));
+    const driveScopes = (rawDrives
+      ?? (rawDriveIds ?? []).map(id => ({ id, role: null, customRoleId: undefined }))
+    ).map(scope => ({ ...scope, role: scope.role ?? null }));
     const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
     if (uniqueDriveScopes.length > 0) {

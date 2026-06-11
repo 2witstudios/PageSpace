@@ -9,7 +9,7 @@ import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-trig
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { isUserMemberOfAnyEventDrive, listEventDrives } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../core/types';
-import { driveOutsideMcpScope, filterDriveIdsByMcpScope } from './actor-permissions';
+import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 
 /**
@@ -21,8 +21,13 @@ async function canAccessEvent(
   context?: ToolExecutionContext
 ): Promise<boolean> {
   // A scoped MCP token may never reach a drive-tied event outside its scope,
-  // even one it created (no-op for unscoped callers / personal events).
-  if (context && event.driveId && driveOutsideMcpScope(context, event.driveId)) {
+  // even one it created (no-op for unscoped callers).
+  if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'view')) {
+    return false;
+  }
+  // A drive-scoped token has no identity power over the owner's PERSONAL
+  // (drive-less) events — it belongs to a workspace, not to all of you.
+  if (context && !event.driveId && isMcpScoped(context)) {
     return false;
   }
 
@@ -247,7 +252,7 @@ export const calendarReadTools = {
             };
           }
 
-          if (driveOutsideMcpScope(ctx as ToolExecutionContext, driveId)) {
+          if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'view')) {
             return { success: false, error: 'This token does not have access to this drive.' };
           }
 
@@ -339,7 +344,7 @@ export const calendarReadTools = {
 
         // User context: aggregate events from all sources. Ceiling a scoped MCP
         // token to its allowed drives (no-op for unscoped callers).
-        const driveIds = filterDriveIdsByMcpScope(
+        const driveIds = await filterDriveIdsByAppTokenScope(
           ctx as ToolExecutionContext,
           await getDriveIdsForUser(userId),
         );
@@ -416,11 +421,14 @@ export const calendarReadTools = {
         });
 
         // Final ceiling: drop any drive-tied event outside a scoped MCP token's
-        // drives (e.g. reached via the attendee branch). No-op for unscoped
-        // callers; personal events (no driveId) are unaffected.
-        const scopedEvents = events.filter(
-          (e) => !e.driveId || !driveOutsideMcpScope(ctx as ToolExecutionContext, e.driveId),
+        // drives or its own role's view access (e.g. reached via the attendee
+        // branch). No-op for unscoped callers; personal events (no driveId) are
+        // unaffected.
+        const eventDriveIds = Array.from(new Set(events.map((e) => e.driveId).filter((id): id is string => !!id)));
+        const allowedEventDriveIds = new Set(
+          await filterDriveIdsByAppTokenScope(ctx as ToolExecutionContext, eventDriveIds),
         );
+        const scopedEvents = events.filter((e) => !e.driveId || allowedEventDriveIds.has(e.driveId));
 
         const userTzForList = (ctx as ToolExecutionContext)?.timezone;
         const triggerMapAll = await fetchTriggerInfoForEvents(scopedEvents);
@@ -632,7 +640,7 @@ export const calendarReadTools = {
 
         // Validate drive access if specified
         if (driveId) {
-          if (driveOutsideMcpScope(ctx as ToolExecutionContext, driveId)) {
+          if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'view')) {
             return { success: false, error: 'This token does not have access to this drive.' };
           }
           const canView = await isUserDriveMember(userId, driveId);
@@ -646,7 +654,7 @@ export const calendarReadTools = {
 
         // Get user's events in the date range. Ceiling a scoped MCP token to its
         // allowed drives (no-op for unscoped callers).
-        const driveIds = filterDriveIdsByMcpScope(
+        const driveIds = await filterDriveIdsByAppTokenScope(
           ctx as ToolExecutionContext,
           driveId ? [driveId] : await getDriveIdsForUser(userId),
         );
@@ -699,11 +707,14 @@ export const calendarReadTools = {
         });
 
         // Final ceiling: a scoped MCP token must not learn the timing of
-        // out-of-scope drive events via the creator/attendee branches above
-        // (no-op for unscoped callers; personal events have no driveId).
-        const scopedEvents = events.filter(
-          (e) => !e.driveId || !driveOutsideMcpScope(ctx as ToolExecutionContext, e.driveId),
+        // out-of-scope drive events — or events in drives its role cannot view —
+        // via the creator/attendee branches above (no-op for unscoped callers;
+        // personal events have no driveId).
+        const busyEventDriveIds = Array.from(new Set(events.map((e) => e.driveId).filter((id): id is string => !!id)));
+        const allowedBusyDriveIds = new Set(
+          await filterDriveIdsByAppTokenScope(ctx as ToolExecutionContext, busyEventDriveIds),
         );
+        const scopedEvents = events.filter((e) => !e.driveId || allowedBusyDriveIds.has(e.driveId));
 
         // Find free slots using user's timezone for working hour boundaries
         const userTz = normalizeTimezone((ctx as ToolExecutionContext)?.timezone);
@@ -847,7 +858,7 @@ export const calendarReadTools = {
       const context = ctx as ToolExecutionContext | undefined;
       const drives = await listEventDrives(eventId);
 
-      if (context && drives.length > 0 && drives[0].driveId && driveOutsideMcpScope(context, drives[0].driveId)) {
+      if (context && drives.length > 0 && drives[0].driveId && await driveDeniedByAppToken(context, drives[0].driveId, 'view')) {
         return { success: false, error: 'Event is outside the scope of your access token.' };
       }
 

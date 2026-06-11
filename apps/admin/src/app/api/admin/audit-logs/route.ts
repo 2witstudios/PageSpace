@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, or, desc, count, gte, lte, ilike } from '@pagespace/db/operators'
+import { eq, and, or, desc, count, gte, lte, ilike, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -86,13 +86,20 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Get total count for pagination
-    const [countResult] = await db
-      .select({ count: count() })
-      .from(activityLogs)
-      .where(whereClause);
+    // Get total count + per-field totals in parallel
+    const [countResult, aiGenResult, hashChainResult] = await Promise.all([
+      db.select({ count: count() }).from(activityLogs).where(whereClause),
+      db.select({ count: count() }).from(activityLogs).where(
+        whereClause ? and(whereClause, eq(activityLogs.isAiGenerated, true)) : eq(activityLogs.isAiGenerated, true)
+      ),
+      db.select({ count: count() }).from(activityLogs).where(
+        whereClause ? and(whereClause, isNotNull(activityLogs.logHash)) : isNotNull(activityLogs.logHash)
+      ),
+    ]);
 
-    const totalCount = countResult?.count || 0;
+    const totalCount = countResult?.[0]?.count || 0;
+    const aiGeneratedTotal = aiGenResult?.[0]?.count || 0;
+    const hashChainTotal = hashChainResult?.[0]?.count || 0;
     const totalPages = Math.ceil(totalCount / limit);
 
     // Fetch paginated activity logs with user info
@@ -149,6 +156,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         totalPages,
         hasNextPage: page < totalPages,
         hasPreviousPage: page > 1,
+        aiGeneratedTotal,
+        hashChainTotal,
       },
       filters: {
         userId,

@@ -7,8 +7,7 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
-import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, canPrincipalDeletePage } from '@/lib/auth';
 import { canRestorePage } from './restore-authorization';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
@@ -118,7 +117,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     // `withinTokenScope` is always true here because `checkMCPPageScope` above
     // already returned on an out-of-scope token; we still pass it so the pure
     // decision models the full rule (defense-in-depth) rather than assuming it.
-    const canDelete = await canUserDeletePage(auth.userId, pageId);
+    const canDelete = await canPrincipalDeletePage(auth, pageId);
     if (!canRestorePage({ canDelete, withinTokenScope: scopeError === null })) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }

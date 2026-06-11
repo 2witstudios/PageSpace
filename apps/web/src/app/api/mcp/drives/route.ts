@@ -6,6 +6,8 @@ import { slugify } from '@pagespace/lib/utils/utils';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { eq } from '@pagespace/db/operators';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
@@ -104,9 +106,26 @@ export async function GET(req: NextRequest) {
     // Filter by token scope if applicable
     let filteredDrives;
     if (allowedDriveIds.length > 0) {
-      // Token is scoped to specific drives - only return those the user can access
-      const scopeSet = new Set(allowedDriveIds);
-      filteredDrives = allAccessibleDrives.filter(drive => scopeSet.has(drive.id));
+      // Scoped token: its drive universe is its mcp_token_drives memberships.
+      // Drives the user can also access keep the user-derived shape; drives the
+      // token holds an EXPLICIT role in (added by a drive admin) are listed
+      // even when the owning user is not a member — parity with /api/drives.
+      const accessibleById = new Map(allAccessibleDrives.map((d) => [d.id, d]));
+      const tokenId = isMCPAuthResult(auth) ? auth.tokenId : null;
+      filteredDrives = (
+        await Promise.all(
+          allowedDriveIds.map(async (driveId) => {
+            const userView = accessibleById.get(driveId);
+            if (userView) return userView;
+            if (!tokenId) return null;
+            const membership = await getAppDriveMembership(tokenId, driveId);
+            if (!membership || membership.role === null) return null; // dangling inherit
+            const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId) });
+            if (!drive || drive.isTrashed) return null;
+            return { ...drive, isOwned: false, role: membership.role, lastAccessedAt: null };
+          }),
+        )
+      ).filter((d): d is NonNullable<typeof d> => d !== null);
     } else {
       // Token has no scope restrictions - return all accessible drives
       filteredDrives = allAccessibleDrives;

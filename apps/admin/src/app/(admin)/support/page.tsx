@@ -25,9 +25,16 @@ interface PaginationData {
   hasPrevPage: boolean;
 }
 
+interface StatsData {
+  todayCount: number;
+  weekCount: number;
+  uniqueEmailCount: number;
+}
+
 interface ApiResponse {
   submissions: ContactSubmission[];
   pagination: PaginationData;
+  stats: StatsData;
   meta: {
     searchTerm: string;
     sortBy: string;
@@ -37,6 +44,7 @@ interface ApiResponse {
 
 export default function AdminSupportPage() {
   const [submissions, setSubmissions] = useState<ContactSubmission[]>([]);
+  const [stats, setStats] = useState<StatsData>({ todayCount: 0, weekCount: 0, uniqueEmailCount: 0 });
   const [pagination, setPagination] = useState<PaginationData>({
     page: 1,
     pageSize: 25,
@@ -73,6 +81,7 @@ export default function AdminSupportPage() {
       const data: ApiResponse = await response.json();
       setSubmissions(data.submissions);
       setPagination(data.pagination);
+      setStats(data.stats);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -99,21 +108,7 @@ export default function AdminSupportPage() {
     setPagination(prev => ({ ...prev, page: 1 })); // Reset to first page on sort
   };
 
-  // Calculate statistics
-  const todaySubmissions = submissions.filter(submission => {
-    const today = new Date();
-    const submissionDate = new Date(submission.createdAt);
-    return submissionDate.toDateString() === today.toDateString();
-  }).length;
-
-  const weekSubmissions = submissions.filter(submission => {
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    const submissionDate = new Date(submission.createdAt);
-    return submissionDate >= weekAgo;
-  }).length;
-
-  const uniqueEmails = new Set(submissions.map(s => s.email)).size;
+  const { todayCount: todaySubmissions, weekCount: weekSubmissions, uniqueEmailCount: uniqueEmails } = stats;
 
   if (error) {
     return (

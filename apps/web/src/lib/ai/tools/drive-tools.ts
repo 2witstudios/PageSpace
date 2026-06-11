@@ -11,7 +11,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { getAgentPageId, filterDriveIdsByMcpScope, driveOutsideMcpScope, isMcpScoped } from './actor-permissions';
+import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped } from './actor-permissions';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -54,9 +54,10 @@ export const driveTools = {
       if (agentPageId) {
         try {
           const allAgentDrives = await listAgentDrives(agentPageId);
-          // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+          // Ceiling a scoped MCP token to its allowed drives + its own role's
+          // view access (no-op otherwise).
           const scopedIds = new Set(
-            filterDriveIdsByMcpScope(context as ToolExecutionContext, allAgentDrives.map((d) => d.driveId)),
+            await filterDriveIdsByAppTokenScope(context as ToolExecutionContext, allAgentDrives.map((d) => d.driveId)),
           );
           const agentDrives = allAgentDrives.filter((d) => scopedIds.has(d.driveId));
           return {
@@ -133,9 +134,10 @@ export const driveTools = {
         // 4. Combine all drives and deduplicate
         const allDrives = [...ownedDrives, ...memberDrives, ...permissionDrives];
         const dedupedDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
-        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+        // Ceiling a scoped MCP token to its allowed drives + its own role's
+        // view access (no-op otherwise).
         const scopedIds = new Set(
-          filterDriveIdsByMcpScope(
+          await filterDriveIdsByAppTokenScope(
             context as ToolExecutionContext,
             dedupedDrives.map(d => d.id).filter((id): id is string => id != null),
           ),
@@ -281,7 +283,7 @@ export const driveTools = {
         throw new Error('User authentication required');
       }
 
-      if (driveOutsideMcpScope(context as ToolExecutionContext, driveId)) {
+      if (await driveDeniedByAppToken(context as ToolExecutionContext, driveId, 'manage')) {
         throw new Error('This token does not have access to this drive');
       }
 
@@ -399,7 +401,7 @@ This context persists across conversations and helps provide better assistance. 
         throw new Error('User authentication required');
       }
 
-      if (driveOutsideMcpScope(execContext as ToolExecutionContext, driveId)) {
+      if (await driveDeniedByAppToken(execContext as ToolExecutionContext, driveId, 'manage')) {
         throw new Error('This token does not have access to this drive');
       }
 

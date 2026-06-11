@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveById, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 
@@ -39,6 +40,32 @@ export async function GET(
     if (scopeError) return scopeError;
 
     const userId = auth.userId;
+
+    // A scoped MCP token is its own drive member — gate on and report the
+    // TOKEN's membership, not the owning user's.
+    if (isScopedMCPAuth(auth)) {
+      const drive = await getDriveById(driveId);
+      if (!drive) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      }
+      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      if (!level?.canView) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
+      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      if (membership?.role === null) {
+        // Inherit: the key is its owner — present the owner's own relationship.
+        const inherited = await getDriveWithAccess(driveId, userId);
+        if (inherited) return NextResponse.json(inherited);
+      }
+      return NextResponse.json({
+        ...drive,
+        isOwned: false,
+        isMember: true,
+        role: membership?.role ?? 'MEMBER',
+        lastAccessedAt: null,
+      });
+    }
 
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
@@ -88,9 +115,9 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const access = await getDriveAccess(driveId, userId);
-    if (!access.isOwner && !access.isAdmin) {
+    // Check authorization: owner/admin authority. Scoped tokens with an
+    // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json(
         { error: 'Only drive owners and admins can update drive settings' },
         { status: 403 }
@@ -194,9 +221,9 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const access = await getDriveAccess(driveId, userId);
-    if (!access.isOwner && !access.isAdmin) {
+    // Check authorization: owner/admin authority. Scoped tokens with an
+    // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json(
         { error: 'Only drive owners and admins can delete drives' },
         { status: 403 }

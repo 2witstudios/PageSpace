@@ -180,7 +180,10 @@ export const mcpTokenDrives = pgTable('mcp_token_drives', {
   id:           text('id').primaryKey().$defaultFn(() => createId()),
   tokenId:      text('tokenId').notNull().references(() => mcpTokens.id, { onDelete: 'cascade' }),
   driveId:      text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
-  role:         memberRole('role').default('MEMBER').notNull(),
+  // NULL = inherit: the token acts with its OWNER's access in this drive.
+  // An explicit role is an opt-in downgrade/override and means exactly what
+  // the same role means for a human drive member.
+  role:         memberRole('role'),
   customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
   addedBy:      text('addedBy').references(() => users.id, { onDelete: 'set null' }),
   createdAt:    timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

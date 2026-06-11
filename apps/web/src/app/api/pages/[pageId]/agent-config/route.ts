@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -34,7 +33,7 @@ export async function GET(
     if (scopeError) return scopeError;
 
     // Check if user has permission to view this page
-    const canView = await canUserEditPage(userId, pageId);
+    const canView = await canPrincipalEditPage(auth, pageId);
     if (!canView) {
       return NextResponse.json(
         { error: 'You do not have permission to view this page configuration' },
@@ -130,7 +129,7 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     // Check if user has permission to edit this page
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },
