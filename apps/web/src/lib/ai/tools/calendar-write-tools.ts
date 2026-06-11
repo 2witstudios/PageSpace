@@ -74,7 +74,7 @@ export const calendarWriteTools = {
    */
   create_calendar_event: tool({
     description:
-      'Create a new calendar event. Supports natural language dates like "tomorrow at 3pm" or "next Monday 10am" as well as ISO 8601 format. For recurring events, specify the recurrence rule. Optionally schedule an AI agent to execute when the event time arrives by providing agentTrigger.',
+      'Create a new calendar event. Supports natural language dates like "tomorrow at 3pm" or "next Monday 10am" as well as ISO 8601 format. For recurring events, specify the recurrence rule. To schedule an AI agent at a specific time, prefer set_calendar_trigger (dedicated tool with simpler schema). The agentTrigger param here works as a shortcut when creating the event and trigger together.',
     inputSchema: z.object({
       title: z.string().min(1).max(500).describe('Event title'),
       startAt: z
@@ -423,7 +423,7 @@ export const calendarWriteTools = {
    */
   update_calendar_event: tool({
     description:
-      'Update an existing calendar event. Only the event creator can update events. Supports partial updates - only specify the fields you want to change.',
+      'Update an existing calendar event. Only the event creator can update events. Supports partial updates - only specify the fields you want to change. To add or change an agent trigger on an existing event, prefer set_calendar_trigger instead.',
     inputSchema: z.object({
       eventId: z.string().describe('The unique ID of the event to update'),
       title: z.string().min(1).max(500).optional().describe('New event title'),
