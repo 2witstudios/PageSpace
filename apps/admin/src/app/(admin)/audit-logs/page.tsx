@@ -83,6 +83,8 @@ interface Pagination {
   totalPages: number;
   hasNextPage: boolean;
   hasPreviousPage: boolean;
+  aiGeneratedTotal: number;
+  hashChainTotal: number;
 }
 
 interface FiltersState {
@@ -358,8 +360,8 @@ export default function AdminAuditLogsPage() {
 
   // Calculate stats from pagination
   const totalLogs = pagination?.totalCount || 0;
-  const aiGeneratedCount = logs.filter(log => log.isAiGenerated).length;
-  const hasHashChain = logs.filter(log => log.logHash).length;
+  const aiGeneratedCount = pagination?.aiGeneratedTotal || 0;
+  const hasHashChain = pagination?.hashChainTotal || 0;
 
   return (
     <div className="space-y-6">
@@ -395,14 +397,14 @@ export default function AdminAuditLogsPage() {
               <div className="text-2xl font-bold text-purple-600">{aiGeneratedCount}</div>
               <div className="text-muted-foreground flex items-center justify-center">
                 <Bot className="h-4 w-4 mr-1" />
-                AI Generated (page)
+                AI Generated
               </div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-green-600">{hasHashChain}</div>
               <div className="text-muted-foreground flex items-center justify-center">
                 <Hash className="h-4 w-4 mr-1" />
-                Hash Chain (page)
+                Hash Chain
               </div>
             </div>
           </div>
