@@ -808,7 +808,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 
   list_event_drives: ({ parsedOutput }) => (
     <ActionResultRenderer
-      actionType="view"
+      actionType="update"
       success={parsedOutput.success !== false}
       message={parsedOutput.summary as string | undefined}
       errorMessage={parsedOutput.error as string | undefined}
