@@ -7,7 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 /**
  * GET /api/credits/breakdown — the authenticated user's prepaid-credit spend for the
  * current billing period, grouped by feature (chat, pulse, memory, voice, …) and by
- * model. Powers the usage-breakdown card on /settings/billing.
+ * model. Powers the usage-breakdown card on /settings/usage.
  */
 export async function GET(request: NextRequest) {
   try {

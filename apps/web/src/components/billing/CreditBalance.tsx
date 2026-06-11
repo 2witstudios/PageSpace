@@ -66,7 +66,7 @@ export function CreditBalance() {
           <TooltipTrigger asChild>
             <button
               type="button"
-              onClick={() => router.push('/settings/billing')}
+              onClick={() => router.push('/settings/usage')}
               className="hidden sm:flex items-center gap-1.5"
               aria-label="View AI credit balance"
             >
@@ -127,7 +127,11 @@ export function CreditBalance() {
         </Tooltip>
       </TooltipProvider>
 
-      {showBilling && <BuyCreditsButton variant={isLow ? 'default' : 'ghost'} size="sm" />}
+      {showBilling && (
+        <div className="hidden sm:flex">
+          <BuyCreditsButton variant={isLow ? 'default' : 'ghost'} size="sm" />
+        </div>
+      )}
     </div>
   );
 }
