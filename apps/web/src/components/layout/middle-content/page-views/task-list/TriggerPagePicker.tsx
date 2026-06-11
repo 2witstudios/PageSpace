@@ -67,9 +67,10 @@ type Props = SingleProps | MultiProps;
 // the props.value / onChange contract — this picker has no internal selection state
 // that a remote refetch could clobber. The two SWRs below (searchFetcher, pageFetcher)
 // are read-only display: they fetch search results and chip titles, but neither writes
-// back to selection. The hasLoadedRef + isPaused gates still apply so the chip label
-// and the search list don't flicker mid-edit when an editing session is active, mirroring
-// the contract the dialog uses for its own triggers/agents SWRs (see useEditingSession).
+// back to selection. PageLabel retains the hasLoadedRef + isPaused guard so the chip
+// label doesn't flicker mid-edit. The search SWR intentionally omits it: revalidateOnFocus:
+// false already blocks background refetch, and pausing on isAnyActive() froze results
+// whenever EventModal's long-lived 'form' session was open.
 // No dedicated "remote refetch must not clobber selection" test is added because the
 // data flow makes that property structural rather than behavioural.
 
