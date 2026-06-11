@@ -46,6 +46,9 @@ import {
   checkDriveAccessForRoles,
   listDriveRoles,
   getRoleById,
+  createDriveRole,
+  updateDriveRole,
+  deleteDriveRole,
 } from '@pagespace/lib/services/drive-role-service';
 import { driveDeniedByAppToken } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
@@ -53,6 +56,9 @@ import type { ToolExecutionContext } from '../../core/types';
 const mockCheckAccess = vi.mocked(checkDriveAccessForRoles);
 const mockListRoles = vi.mocked(listDriveRoles);
 const mockGetRole = vi.mocked(getRoleById);
+const mockCreateRole = vi.mocked(createDriveRole);
+const mockUpdateRole = vi.mocked(updateDriveRole);
+const mockDeleteRole = vi.mocked(deleteDriveRole);
 const mockDenied = vi.mocked(driveDeniedByAppToken);
 
 const makeContext = (userId?: string) => ({
@@ -64,6 +70,7 @@ const makeContext = (userId?: string) => ({
 const drive = { id: 'drive1', name: 'Test Drive', slug: 'test-drive', ownerId: 'owner1' };
 
 const memberAccess = { isOwner: false, isAdmin: false, isMember: true, drive };
+const adminAccess = { isOwner: false, isAdmin: true, isMember: true, drive };
 
 const makeRole = (overrides: Record<string, unknown> = {}) => ({
   id: 'role1',
@@ -184,6 +191,158 @@ describe('role-management-tools', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('create_drive_role', () => {
+    it('rejects a plain member (not admin)', async () => {
+      mockCheckAccess.mockResolvedValueOnce(memberAccess);
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Editors' },
+        makeContext('user1')
+      ) as { success: boolean; error: string };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('admin');
+    });
+
+    it('creates a role for an admin with a valid name', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockCreateRole.mockResolvedValueOnce(makeRole({ id: 'newrole', name: 'Editors' }));
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Editors' },
+        makeContext('admin1')
+      ) as { success: boolean; role: Record<string, unknown> };
+
+      expect(result.success).toBe(true);
+      expect(result.role).toMatchObject({ id: 'newrole', name: 'Editors' });
+    });
+
+    it('returns error when the name already exists in the drive', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockCreateRole.mockRejectedValueOnce(new Error('A role named "Editors" already exists'));
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Editors' },
+        makeContext('admin1')
+      ) as { success: boolean; error: string };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('already exists');
+    });
+
+    it('passes provided driveWidePermissions through to the created role', async () => {
+      const dwp = { canView: true, canEdit: true, canShare: false };
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockCreateRole.mockImplementationOnce(async (_driveId, input) =>
+        makeRole({ id: 'r9', name: input.name, driveWidePermissions: input.driveWidePermissions ?? null })
+      );
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Viewers', driveWidePermissions: dwp },
+        makeContext('admin1')
+      ) as { success: boolean; role: { driveWidePermissions: unknown } };
+
+      expect(result.success).toBe(true);
+      expect(result.role.driveWidePermissions).toEqual(dwp);
+    });
+
+    it('defaults driveWidePermissions to null when omitted', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockCreateRole.mockImplementationOnce(async (_driveId, input) =>
+        makeRole({ id: 'r10', name: input.name, driveWidePermissions: input.driveWidePermissions ?? null })
+      );
+
+      const result = await roleManagementTools.create_drive_role.execute!(
+        { driveId: 'drive1', name: 'Plain' },
+        makeContext('admin1')
+      ) as { success: boolean; role: { driveWidePermissions: unknown } };
+
+      expect(result.success).toBe(true);
+      expect(result.role.driveWidePermissions).toBeNull();
+    });
+  });
+
+  describe('update_drive_role', () => {
+    it('rejects a plain member', async () => {
+      mockCheckAccess.mockResolvedValueOnce(memberAccess);
+
+      const result = await roleManagementTools.update_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'role1', name: 'Renamed' },
+        makeContext('user1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(false);
+    });
+
+    it('updates a role for an admin with a valid roleId', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockUpdateRole.mockResolvedValueOnce({
+        role: makeRole({ name: 'Renamed' }),
+        wasDefault: false,
+      });
+
+      const result = await roleManagementTools.update_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'role1', name: 'Renamed' },
+        makeContext('admin1')
+      ) as { success: boolean; role: Record<string, unknown> };
+
+      expect(result.success).toBe(true);
+      expect(result.role).toMatchObject({ name: 'Renamed' });
+    });
+
+    it('returns error when roleId is not in this drive', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockUpdateRole.mockRejectedValueOnce(new Error('Role not found'));
+
+      const result = await roleManagementTools.update_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'ghost', name: 'X' },
+        makeContext('admin1')
+      ) as { success: boolean; error: string };
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('delete_drive_role', () => {
+    it('rejects a plain member', async () => {
+      mockCheckAccess.mockResolvedValueOnce(memberAccess);
+
+      const result = await roleManagementTools.delete_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'role1' },
+        makeContext('user1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(false);
+    });
+
+    it('deletes a role for an admin', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(makeRole());
+      mockDeleteRole.mockResolvedValueOnce(undefined);
+
+      const result = await roleManagementTools.delete_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'role1' },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+    });
+
+    it('succeeds when the role has members assigned (service cascades)', async () => {
+      mockCheckAccess.mockResolvedValueOnce(adminAccess);
+      mockGetRole.mockResolvedValueOnce(makeRole());
+      mockDeleteRole.mockResolvedValueOnce(undefined);
+
+      const result = await roleManagementTools.delete_drive_role.execute!(
+        { driveId: 'drive1', roleId: 'role1' },
+        makeContext('admin1')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
     });
   });
 });
