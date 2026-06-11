@@ -468,8 +468,14 @@ export async function createFileServiceToken(
   };
 }
 
-/** Scopes granted for file upload operations */
-const UPLOAD_SCOPES: ServiceScope[] = ['files:write'];
+/**
+ * Scopes granted for file upload operations.
+ *
+ * `files:ingest` is required by the processor's `/api/ingest` mount — the
+ * post-upload enqueue (`/api/upload/complete` → `/api/ingest/pull/{pageId}`)
+ * is rejected 403 without it, silently skipping thumbnails/OCR/extraction.
+ */
+const UPLOAD_SCOPES: ServiceScope[] = ['files:write', 'files:ingest'];
 
 /**
  * Options for creating an upload service token

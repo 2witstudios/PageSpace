@@ -685,8 +685,9 @@ describe('createValidatedServiceToken', () => {
         parentId: 'parent-page-1',
       });
 
-      // Assert
-      expect(result.grantedScopes).toEqual(['files:write']);
+      // Assert — files:ingest must be granted so the post-upload enqueue can
+      // pass the processor's requireScope('files:ingest') on /api/ingest
+      expect(result.grantedScopes).toEqual(['files:write', 'files:ingest']);
       expect(result.token).toBe('ps_svc_mock-session-token');
       expect(mockFindFirst).toHaveBeenCalledWith(expect.objectContaining({
         columns: { driveId: true },
@@ -698,7 +699,7 @@ describe('createValidatedServiceToken', () => {
           resourceId: 'new-page-1',
           resourceType: 'page',
           driveId: 'drive-1',
-          scopes: ['files:write'],
+          scopes: ['files:write', 'files:ingest'],
         })
       );
     });
@@ -721,7 +722,7 @@ describe('createValidatedServiceToken', () => {
       });
 
       // Assert
-      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(result.grantedScopes).toEqual(['files:write', 'files:ingest']);
       expect(result.token).toBe('ps_svc_mock-session-token');
       expect(getUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
       expect(getUserAccessLevel).not.toHaveBeenCalled();
@@ -730,7 +731,7 @@ describe('createValidatedServiceToken', () => {
           resourceId: 'new-page-1',
           resourceType: 'page',
           driveId: 'drive-1',
-          scopes: ['files:write'],
+          scopes: ['files:write', 'files:ingest'],
         })
       );
     });
@@ -885,7 +886,7 @@ describe('createValidatedServiceToken', () => {
           driveId: 'drive-1',
           pageId: 'new-page-1',
           permissionSource: 'drive',
-          scopes: ['files:write'],
+          scopes: ['files:write', 'files:ingest'],
         })
       );
     });
