@@ -15,7 +15,7 @@ async function copyToClipboard(text: string, label: string) {
     await navigator.clipboard.writeText(text);
     toast.success(`${label} copied to clipboard`);
   } catch {
-    toast.error(`Could not copy ${label.toLowerCase()} to clipboard`);
+    toast.error(`Could not copy ${label} to clipboard`);
   }
 }
 
