@@ -126,7 +126,7 @@ export default function BillingPage() {
       if (res.ok) {
         const data = await res.json();
         if (startingAfter) {
-          setInvoices(prev => [...prev, ...(data.invoices || [])]);
+          setInvoices((prev: Invoice[]) => [...prev, ...(data.invoices || [])]);
         } else {
           setInvoices(data.invoices || []);
         }
