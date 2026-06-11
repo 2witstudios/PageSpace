@@ -1,19 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
-import { commands } from '@pagespace/db/schema/commands';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import {
-  BUILTIN_COMMANDS,
-  resolveCommandPrecedence,
   COMMAND_TRIGGER_MAX_LENGTH,
   type CommandScope,
-  type CommandSummary,
 } from '@pagespace/lib/commands/command-core';
+import { loadAvailableCommands } from '@/lib/commands/available-commands';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -63,59 +58,10 @@ export async function GET(request: Request) {
       }
     }
 
-    const builtins: CommandSummary[] = BUILTIN_COMMANDS.map((builtin) => ({
-      id: `builtin:${builtin.trigger}`,
-      trigger: builtin.trigger,
-      description: builtin.description,
-      scope: 'builtin',
-      type: 'builtin',
-    }));
-
-    // Entry pages are loaded alongside each command so save-time invariants
-    // are re-checked at use: a trashed entry page suppresses the suggestion,
-    // and a drive command whose entry page has since moved to another drive
-    // (e.g. via bulk-move) is suppressed rather than offered while broken.
-    type EntryPageRef = { driveId: string; isTrashed: boolean };
-    const hasLiveEntryPage = <T extends { entryPage: EntryPageRef | null }>(
-      row: T
-    ): row is T & { entryPage: EntryPageRef } =>
-      row.entryPage !== null && !row.entryPage.isTrashed;
-
-    const personalRows = await db.query.commands.findMany({
-      where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
-      with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
-    });
-    const userCommands: CommandSummary[] = personalRows
-      .filter(hasLiveEntryPage)
-      .map((row) => ({
-        id: row.id,
-        trigger: row.trigger,
-        description: row.description,
-        scope: 'user',
-        type: row.type as CommandSummary['type'],
-        entryPageId: row.entryPageId,
-      }));
-
-    let driveCommands: CommandSummary[] = [];
-    if (driveId) {
-      const driveRows = await db.query.commands.findMany({
-        where: and(eq(commands.driveId, driveId), eq(commands.enabled, true)),
-        with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
-      });
-      driveCommands = driveRows
-        .filter((row) => hasLiveEntryPage(row) && row.entryPage.driveId === driveId)
-        .map((row) => ({
-          id: row.id,
-          trigger: row.trigger,
-          description: row.description,
-          scope: 'drive',
-          type: row.type as CommandSummary['type'],
-          entryPageId: row.entryPageId,
-          driveId: row.driveId ?? undefined,
-        }));
-    }
-
-    const { winners, shadowed } = resolveCommandPrecedence(builtins, userCommands, driveCommands);
+    // Shared with the /help built-in injection (available-commands.ts) so the
+    // picker and the AI's command list can never drift apart. Membership for
+    // driveId was verified above — the loader requires that contract.
+    const { winners, shadowed } = await loadAvailableCommands(userId, driveId || null);
 
     // q matching happens in JS over the caller's own small command set, so user
     // input never reaches a SQL LIKE pattern

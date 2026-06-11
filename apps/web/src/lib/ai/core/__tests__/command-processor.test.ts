@@ -137,6 +137,29 @@ describe('buildCommandSystemPrompt', () => {
     expect(prompt).toContain('/help');
     expect(prompt).toContain('Run the release checklist before shipping.');
   });
+
+  it('injects the dynamic section for a builtin that resolved one', () => {
+    const prompt = buildCommandSystemPrompt(
+      injection({
+        scope: 'builtin',
+        trigger: 'help',
+        label: 'help',
+        entryPage: null,
+        children: [],
+        dynamicContent: 'Available commands:\n- /alpha (personal) — does alpha things',
+      })
+    );
+    expect(prompt).toContain('/alpha (personal) — does alpha things');
+    // The dynamic section replaces the bare "act on the description" fallback
+    expect(prompt).not.toContain('Act according to that description.');
+  });
+
+  it('falls back to description-only instructions when a builtin has no dynamic section', () => {
+    const prompt = buildCommandSystemPrompt(
+      injection({ scope: 'builtin', trigger: 'help', label: 'help', entryPage: null, children: [] })
+    );
+    expect(prompt).toContain('Act according to that description.');
+  });
 });
 
 describe('buildCommandPromptSection', () => {

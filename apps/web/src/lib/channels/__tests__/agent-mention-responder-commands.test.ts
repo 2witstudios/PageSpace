@@ -124,10 +124,20 @@ beforeEach(() => {
 });
 
 describe('triggerMentionedAgentResponses — universal commands', () => {
-  it("resolves the command with the SENDER's permissions", async () => {
+  it("resolves the command with the SENDER's permissions and the channel's drive context", async () => {
+    mockPlanCommandExecution.mockResolvedValue(injectPlan);
+    await triggerMentionedAgentResponses({ ...baseParams, driveId: 'drive-1' });
+    expect(mockPlanCommandExecution).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+      driveId: 'drive-1',
+    });
+  });
+
+  it('resolves with a null drive context when the channel has none', async () => {
     mockPlanCommandExecution.mockResolvedValue(injectPlan);
     await triggerMentionedAgentResponses(baseParams);
-    expect(mockPlanCommandExecution).toHaveBeenCalledWith(baseParams.content, 'user-1');
+    expect(mockPlanCommandExecution).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+      driveId: null,
+    });
   });
 
   it('injects the command section into the agent ask context', async () => {

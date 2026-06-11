@@ -94,6 +94,13 @@ export interface CommandInjection {
   } | null;
   /** Direct, non-trashed children the sender can view — the resource manifest. */
   children: CommandChildResource[];
+  /**
+   * Resolved dynamic section for a built-in command (e.g. /help's actual
+   * command list). Built by the registry's pure buildPromptSection from data
+   * the resolver loaded; absent for page-backed commands and when loading
+   * failed (the static description is the fallback instruction).
+   */
+  dynamicContent?: string;
 }
 
 export type CommandExecutionPlan =
@@ -134,6 +141,8 @@ export function buildCommandSystemPrompt(injection: CommandInjection): string {
       content + truncationNote,
       '</command_instructions>'
     );
+  } else if (injection.dynamicContent) {
+    lines.push(injection.dynamicContent);
   } else {
     lines.push('Act according to that description.');
   }
