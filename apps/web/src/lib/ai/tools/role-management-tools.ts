@@ -1,5 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import {
   checkDriveAccessForRoles,
   listDriveRoles,
@@ -8,6 +11,7 @@ import {
   updateDriveRole,
   deleteDriveRole,
   type DriveRoleAccessInfo,
+  type RolePermissions,
 } from '@pagespace/lib/services/drive-role-service';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -44,6 +48,15 @@ async function requireDriveAdmin(
 
   return { ok: true, access: { ...access, drive: access.drive } };
 }
+
+const mergePagePermission = (
+  permissions: RolePermissions,
+  pageId: string,
+  perm: { canView: boolean; canEdit: boolean; canShare: boolean }
+): RolePermissions => ({ ...permissions, [pageId]: perm });
+
+const prunePagePermission = (permissions: RolePermissions, pageId: string): RolePermissions =>
+  Object.fromEntries(Object.entries(permissions).filter(([key]) => key !== pageId));
 
 async function logAndBroadcastRoleChange(
   context: ToolExecutionContext,
@@ -273,6 +286,128 @@ export const roleManagementTools = {
         };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : 'Failed to delete role' };
+      }
+    },
+  }),
+
+  set_role_page_permissions: tool({
+    description: 'Grant or change a role\'s permissions (view/edit/share) on a specific page. Merges into the role\'s per-page permission map. Requires drive admin or owner.',
+    inputSchema: z.object({
+      driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
+      roleId: z.string().describe('The ID of the role to modify'),
+      pageId: z.string().describe('The ID of the page to set permissions for (must be in the same drive)'),
+      canView: z.boolean().describe('Whether the role can view the page'),
+      canEdit: z.boolean().describe('Whether the role can edit the page'),
+      canShare: z.boolean().describe('Whether the role can share the page'),
+    }),
+    execute: async ({ driveId, roleId, pageId, canView, canEdit, canShare }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      const gate = await requireDriveAdmin(context as ToolExecutionContext, driveId);
+      if (!gate.ok) return gate.error;
+
+      try {
+        const role = await getRoleById(driveId, roleId);
+        if (!role) return { success: false, error: `Role "${roleId}" not found in this drive` };
+
+        const page = await db.query.pages.findFirst({
+          where: and(eq(pages.id, pageId), eq(pages.driveId, driveId)),
+        });
+        if (!page) return { success: false, error: `Page "${pageId}" not found in this drive` };
+
+        const merged = mergePagePermission(role.permissions, pageId, { canView, canEdit, canShare });
+        await updateDriveRole(driveId, roleId, { permissions: merged });
+
+        await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'update', role.name);
+
+        return {
+          success: true,
+          summary: `Set ${role.name}'s permissions on page ${pageId}: view=${canView}, edit=${canEdit}, share=${canShare}`,
+          stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(merged).length },
+          nextSteps: ['Use get_drive_role to see the full permission map'],
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to set page permissions' };
+      }
+    },
+  }),
+
+  set_role_drive_wide_permissions: tool({
+    description: 'Set a role\'s drive-wide permissions (view/edit/share applying to ALL pages in the drive, including future ones). Per-page permissions still override. Requires drive admin or owner.',
+    inputSchema: z.object({
+      driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
+      roleId: z.string().describe('The ID of the role to modify'),
+      canView: z.boolean().describe('Whether the role can view all pages'),
+      canEdit: z.boolean().describe('Whether the role can edit all pages'),
+      canShare: z.boolean().describe('Whether the role can share all pages'),
+    }),
+    execute: async ({ driveId, roleId, canView, canEdit, canShare }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      const gate = await requireDriveAdmin(context as ToolExecutionContext, driveId);
+      if (!gate.ok) return gate.error;
+
+      try {
+        const { role } = await updateDriveRole(driveId, roleId, {
+          driveWidePermissions: { canView, canEdit, canShare },
+        });
+
+        await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'update', role.name);
+
+        return {
+          success: true,
+          summary: `Set ${role.name}'s drive-wide permissions: view=${canView}, edit=${canEdit}, share=${canShare}`,
+          stats: { driveName: gate.access.drive.name },
+          nextSteps: ['Use get_drive_role to verify', 'Per-page grants override drive-wide settings'],
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to set drive-wide permissions' };
+      }
+    },
+  }),
+
+  remove_role_page_permissions: tool({
+    description: 'Remove a role\'s per-page permission entry for a specific page, so the role falls back to its drive-wide permissions (if any). Idempotent. Requires drive admin or owner.',
+    inputSchema: z.object({
+      driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
+      roleId: z.string().describe('The ID of the role to modify'),
+      pageId: z.string().describe('The ID of the page whose permission entry should be removed'),
+    }),
+    execute: async ({ driveId, roleId, pageId }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      const gate = await requireDriveAdmin(context as ToolExecutionContext, driveId);
+      if (!gate.ok) return gate.error;
+
+      try {
+        const role = await getRoleById(driveId, roleId);
+        if (!role) return { success: false, error: `Role "${roleId}" not found in this drive` };
+
+        if (!(pageId in role.permissions)) {
+          return {
+            success: true,
+            summary: `Role "${role.name}" had no permission entry for page ${pageId} — nothing to remove`,
+            stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(role.permissions).length },
+            nextSteps: ['Use get_drive_role to see the current permission map'],
+          };
+        }
+
+        const pruned = prunePagePermission(role.permissions, pageId);
+        await updateDriveRole(driveId, roleId, { permissions: pruned });
+
+        await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'update', role.name);
+
+        return {
+          success: true,
+          summary: `Removed ${role.name}'s permission entry for page ${pageId}`,
+          stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(pruned).length },
+          nextSteps: ['Use get_drive_role to see the remaining permission map'],
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to remove page permissions' };
       }
     },
   }),
