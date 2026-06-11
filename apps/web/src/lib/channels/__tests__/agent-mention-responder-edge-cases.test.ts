@@ -154,8 +154,15 @@ function askContext(): string {
   return (mockAskAgentExecute.mock.calls[0][0] as { context: string }).context;
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
+/** Mocked-query WHERE clause shape produced by the structured operator mocks. */
+interface WhereClause {
+  op: string;
+  args?: WhereClause[];
+  values?: unknown;
+}
+
+/** Baseline happy-path mock state; also used to re-arm after a mid-test reset. */
+function armDefaultMocks() {
   routePagesFindMany();
   mockChannelMessagesFindMany.mockResolvedValue([]);
   mockCommandsFindFirst.mockResolvedValue(commandRow());
@@ -163,6 +170,11 @@ beforeEach(() => {
   mockIsUserDriveMember.mockResolvedValue(true);
   mockAskAgentExecute.mockResolvedValue({ success: true, response: 'done' });
   mockSendChannelExecute.mockResolvedValue({ success: true });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  armDefaultMocks();
 });
 
 describe('command chip and @mention in one message — both pipelines run', () => {
@@ -194,11 +206,6 @@ describe('command chip and @mention in one message — both pipelines run', () =
     // The agent lookup's WHERE filters by exactly the mention id — a
     // regression that feeds the command id into mention resolution fails
     // here, not just at the column-shape level.
-    interface WhereClause {
-      op: string;
-      args?: WhereClause[];
-      values?: unknown;
-    }
     const agentLookupCall = mockPagesFindMany.mock.calls.find(
       (call) => (call[0] as { columns?: Record<string, boolean> })?.columns?.enabledTools
     ) as [{ where: WhereClause }] | undefined;
@@ -247,12 +254,8 @@ describe('command degradations never block the agent response', () => {
     expect(askContext()).toContain('the command is disabled');
 
     vi.clearAllMocks();
-    routePagesFindMany();
-    mockChannelMessagesFindMany.mockResolvedValue([]);
-    mockCanUserViewPage.mockResolvedValue(true);
-    mockAskAgentExecute.mockResolvedValue({ success: true, response: 'done' });
-    mockSendChannelExecute.mockResolvedValue({ success: true });
-    mockCommandsFindFirst.mockResolvedValueOnce(commandRow({ enabled: true }));
+    armDefaultMocks();
+    mockCommandsFindFirst.mockResolvedValue(commandRow({ enabled: true }));
 
     await triggerMentionedAgentResponses(params);
     expect(askContext()).toContain(SECRET_CONTENT);

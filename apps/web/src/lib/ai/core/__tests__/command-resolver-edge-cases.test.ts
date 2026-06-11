@@ -19,9 +19,11 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
+// eq is structured so tests can assert exactly which id reached the command
+// lookup (e.g. prove mention ids never do).
 vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
-  eq: vi.fn(),
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
   asc: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -41,6 +43,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { planCommandExecution } from '../command-resolver';
 import {
@@ -296,11 +299,16 @@ describe('command chip and @mentions in the same message', () => {
   });
 
   it('never mistakes a mention id for a command id', async () => {
+    const mockEq = vi.mocked(eq);
     mockCommandsFindFirst.mockResolvedValue(undefined);
-    await planCommandExecution(mixed, SENDER);
-    // The only id that may reach resolution is the chip's commandId — and a
-    // not_found result must reference it, not a mention id.
     const plan = await planCommandExecution(mixed, SENDER);
     expect(plan).toMatchObject({ commandId: CMD_ID });
+
+    // The only id that reaches the command lookup is the chip's commandId —
+    // never a mention id from either side of the chip.
+    const lookedUpIds = mockEq.mock.calls.map(([, value]) => value);
+    expect(lookedUpIds).toContain(CMD_ID);
+    expect(lookedUpIds).not.toContain('usrali9zmbrgj3atz4a98xx');
+    expect(lookedUpIds).not.toContain('pgeplan9zmbrgj3atz4a98xx');
   });
 });

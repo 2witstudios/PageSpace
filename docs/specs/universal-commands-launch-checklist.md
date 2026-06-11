@@ -343,8 +343,10 @@ Settings → AI Settings → Commands.
 ## 4. Merge sequencing & known follow-ups
 
 - **Phase 5 overlap (`pu/cmd-builtins`):** that branch owns
-  `packages/lib/src/commands/`, `command-resolver.ts` /
-  `command-processor.ts`, and the suggest route. Phase 6 (this branch) adds
+  `packages/lib/src/commands/`,
+  `apps/web/src/lib/ai/core/command-resolver.ts` /
+  `apps/web/src/lib/ai/core/command-processor.ts`, and the suggest route.
+  Phase 6 (this branch) adds
   **new test files only** against those modules — no source edits — so the
   merge is conflict-free in either order. If Phase 5 changes resolver
   behavior (e.g. built-ins gain entry pages), the new edge-case tests pin
@@ -357,3 +359,11 @@ Settings → AI Settings → Commands.
   *blocked* (not just hidden) for non-admins during dogfooding, that's a
   server-side check in `POST /api/commands` and a deliberate spec §0
   deviation; not currently planned.
+- **Resolve-endpoint batching (post-launch perf follow-up):**
+  `GET /api/commands/resolve` awaits `isUserDriveMember` /
+  `canUserViewPage` per id inside its loop
+  (`apps/web/src/app/api/commands/resolve/route.ts:101-115`). The
+  `MAX_IDS = 50` cap bounds the worst case, and chip resolution is
+  off the render critical path, so this is not a launch blocker — but a
+  long shared channel can pay up to ~50 sequential permission queries per
+  batch. Batch or memoize per-drive membership when widening usage.
