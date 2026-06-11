@@ -3,9 +3,9 @@ import { z } from 'zod';
 
 const {
   mockDbQuery,
-  mockInsert, mockInsertValues, mockInsertReturning,
-  mockUpdate, mockUpdateSet, mockUpdateWhere,
-  mockSelect, mockSelectFrom, mockSelectWhere,
+  mockInsert, _mockInsertValues, _mockInsertReturning,
+  mockUpdate, _mockUpdateSet, _mockUpdateWhere,
+  mockSelect, _mockSelectFrom, _mockSelectWhere,
   mockDbTransaction,
   mockUpsertCalendarTriggerWorkflow,
   mockUpsertCalendarTriggerWorkflowInTx,
@@ -31,9 +31,9 @@ const {
   const mockSelect = vi.fn(() => ({ from: mockSelectFrom }));
   return {
     mockDbQuery: vi.fn(),
-    mockInsert, mockInsertValues, mockInsertReturning,
-    mockUpdate, mockUpdateSet, mockUpdateWhere,
-    mockSelect, mockSelectFrom, mockSelectWhere,
+    mockInsert, _mockInsertValues: mockInsertValues, _mockInsertReturning: mockInsertReturning,
+    mockUpdate, _mockUpdateSet: mockUpdateSet, _mockUpdateWhere: mockUpdateWhere,
+    mockSelect, _mockSelectFrom: mockSelectFrom, _mockSelectWhere: mockSelectWhere,
     mockDbTransaction: vi.fn(),
     mockUpsertCalendarTriggerWorkflow: vi.fn(),
     mockUpsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'ct-1' }),
