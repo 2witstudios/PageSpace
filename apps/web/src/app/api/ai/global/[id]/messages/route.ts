@@ -21,6 +21,13 @@ import { createAIProvider, updateUserProviderSettings, createProviderErrorRespon
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
+import {
+  buildCommandPromptSection,
+  commandExecutionDataFromPlan,
+  COMMAND_EXECUTION_PART_TYPE,
+  type CommandExecutionPlan,
+} from '@/lib/ai/core/command-processor';
+import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
@@ -349,6 +356,10 @@ export async function POST(
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
+    // Universal Commands: resolved execution plan for the leading command
+    // token, if present. Resolution degrades, never fails.
+    let commandPlan: CommandExecutionPlan | null = null;
+    let commandSystemPrompt = '';
 
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
@@ -368,7 +379,26 @@ export async function POST(
             pageIds: mentionedPageIds
           });
         }
-        
+
+        // Resolve the message's slash command (if any) with the SENDER's
+        // permissions. The token stays in the saved content; only the
+        // system prompt gains the injection.
+        // The global assistant's drive context is wherever the user is
+        // browsing (the same locationContext.currentDrive the suggest picker
+        // uses, so the picker and /help can't drift). The id is
+        // client-supplied; the resolver membership-verifies it before any
+        // drive commands are included. No drive → personal + built-ins only.
+        commandPlan = await planCommandExecution(messageContent, userId, {
+          driveId: locationContext?.currentDrive?.id ?? null,
+        });
+        if (commandPlan) {
+          commandSystemPrompt = buildCommandPromptSection(commandPlan);
+          loggers.api.info('Global Assistant Chat API: Command resolution', {
+            kind: commandPlan.kind,
+            ...(commandPlan.kind === 'skip' ? { reason: commandPlan.reason } : {}),
+          });
+        }
+
         loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
         
         await saveGlobalAssistantMessageToDatabase({
@@ -605,7 +635,7 @@ export async function POST(
     }
 
     // Add global assistant specific instructions (including tool discovery — only this route has tool_search)
-    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + mentionSystemPrompt + timestampSystemPrompt + `
+    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + mentionSystemPrompt + commandSystemPrompt + timestampSystemPrompt + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
@@ -901,6 +931,15 @@ MENTION PROCESSING:
       originalMessages: processedMessages,
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
+        // Execution feedback (UX spec §7): announce the command indicator as
+        // the first part of the assistant message; persisted via onFinish.
+        if (commandPlan) {
+          writer.write({
+            type: COMMAND_EXECUTION_PART_TYPE,
+            id: `${serverAssistantMessageId}-command`,
+            data: commandExecutionDataFromPlan(commandPlan),
+          });
+        }
         // Resolve once outside the per-attempt factory (the factory is synchronous).
         const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
         // Server-side, in-request retry: transparently re-drive the loop under one

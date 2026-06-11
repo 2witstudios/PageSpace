@@ -7,6 +7,8 @@ import { useRouter } from 'next/navigation';
 import { isInternalUrl, openExternalUrl } from '@/lib/navigation/app-navigation';
 import { CheckIcon, CopyIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { preprocessCommandTokens } from '@/lib/commands/command-chip-model';
+import { CommandChip } from './CommandChip';
 
 interface RouterLike {
   push: (url: string) => void;
@@ -231,7 +233,7 @@ function CustomSpan({ children, ...props }: HTMLAttributes<HTMLSpanElement> & { 
   );
 }
 
-function createCustomAnchor(router: RouterLike) {
+function createCustomAnchor(router: RouterLike, commandChipInert?: boolean) {
   return function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
     const handleClick = async (e: MouseEvent<HTMLAnchorElement>) => {
       if (!href) return;
@@ -244,6 +246,21 @@ function createCustomAnchor(router: RouterLike) {
         await openExternalUrl(href);
       }
     };
+
+    // Command chip (UX spec §5) — rewritten by preprocessCommandTokens.
+    if (typeof href === 'string' && href.startsWith('/command/')) {
+      const commandId = href.slice('/command/'.length);
+      const rawLabel = typeof children === 'string'
+        ? children
+        : Array.isArray(children) && typeof children[0] === 'string'
+          ? children[0]
+          : '';
+      const label = rawLabel.replace(/^command:/, '');
+
+      if (commandId && label) {
+        return <CommandChip commandId={commandId} label={label} inertNoAI={commandChipInert} />;
+      }
+    }
 
     if (typeof href === 'string' && href.startsWith('/mention/')) {
       const label = typeof children === 'string'
@@ -294,9 +311,9 @@ function createCustomAnchor(router: RouterLike) {
   };
 }
 
-function createStreamdownComponents(router: RouterLike) {
+function createStreamdownComponents(router: RouterLike, commandChipInert?: boolean) {
   return {
-    a: createCustomAnchor(router),
+    a: createCustomAnchor(router, commandChipInert),
     code: CustomCode,
     pre: CustomPre,
     p: CustomParagraph,
@@ -313,15 +330,26 @@ interface RichTextProps {
   isStreaming?: boolean;
   renderHtmlAsText?: boolean;
   className?: string;
+  /**
+   * The message sits in a conversation with no AI participant, so its
+   * command chip ran nothing (UX spec §6) — adds the inert tooltip suffix.
+   */
+  commandChipInert?: boolean;
 }
 
 export const RichText = memo(
-  ({ content, isStreaming = false, renderHtmlAsText = false, className }: RichTextProps) => {
+  ({ content, isStreaming = false, renderHtmlAsText = false, className, commandChipInert }: RichTextProps) => {
     const router = useRouter();
 
-    const processedContent = useMemo(() => autoLinkUrls(preprocessMentions(content)), [content]);
+    const processedContent = useMemo(
+      () => autoLinkUrls(preprocessCommandTokens(preprocessMentions(content))),
+      [content]
+    );
 
-    const streamdownComponents = useMemo(() => createStreamdownComponents(router), [router]);
+    const streamdownComponents = useMemo(
+      () => createStreamdownComponents(router, commandChipInert),
+      [router, commandChipInert]
+    );
     const remarkPlugins = useMemo(() => {
       if (!renderHtmlAsText) {
         return undefined;
@@ -346,7 +374,8 @@ export const RichText = memo(
     return prevProps.content === nextProps.content &&
            prevProps.isStreaming === nextProps.isStreaming &&
            prevProps.renderHtmlAsText === nextProps.renderHtmlAsText &&
-           prevProps.className === nextProps.className;
+           prevProps.className === nextProps.className &&
+           prevProps.commandChipInert === nextProps.commandChipInert;
   }
 );
 

@@ -5,6 +5,26 @@ import { pages, drives } from './core';
 import { files, type AttachmentMeta } from './storage';
 import { createId } from '@paralleldrive/cuid2';
 
+/**
+ * Universal Commands execution feedback (UX spec §7): set on an agent reply
+ * when the triggering message carried a slash command, so the channel renders
+ * the "Using /foo" / "Skipped /foo — {reason}" indicator.
+ */
+export interface ChannelCommandExecution {
+  label: string;
+  status: 'used' | 'skipped';
+  reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
+  entryPageTitle?: string;
+}
+
+/** AI sender metadata: set when a channel message is posted by an AI tool. */
+export interface ChannelMessageAiMeta {
+  senderType: 'global_assistant' | 'agent';
+  senderName: string;
+  agentPageId?: string;
+  commandExecution?: ChannelCommandExecution;
+}
+
 export const channelMessages = pgTable('channel_messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   content: text('content').notNull(),
@@ -18,11 +38,7 @@ export const channelMessages = pgTable('channel_messages', {
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
   // AI sender metadata: set when message is posted by an AI tool
-  aiMeta: jsonb('aiMeta').$type<{
-    senderType: 'global_assistant' | 'agent';
-    senderName: string;
-    agentPageId?: string;
-  } | null>(),
+  aiMeta: jsonb('aiMeta').$type<ChannelMessageAiMeta | null>(),
   // Threading: parentId points at the thread root (top-level message). Replies are
   // exactly one level deep, so a parent must itself have parentId IS NULL.
   parentId: text('parentId').references((): AnyPgColumn => channelMessages.id, { onDelete: 'cascade' }),

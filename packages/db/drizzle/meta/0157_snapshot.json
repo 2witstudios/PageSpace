@@ -1,6 +1,6 @@
 {
-  "id": "6812b9f1-67a5-4bc8-b0cf-1c0ad2d5e952",
-  "prevId": "8ed4c923-ba92-471b-b65a-83943dbd4905",
+  "id": "1cde9a06-f6a6-45ad-ac34-7f0261bbb99e",
+  "prevId": "d7a30644-1311-4ef1-ac77-0ecb23589e51",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3283,7 +3283,8 @@
           "type": "MemberRole",
           "typeSchema": "public",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'MEMBER'"
         },
         "customRoleId": {
           "name": "customRoleId",
@@ -16249,6 +16250,202 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
+    },
+    "public.commands": {
+      "name": "commands",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "drive_id": {
+          "name": "drive_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_id": {
+          "name": "created_by_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entry_page_id": {
+          "name": "entry_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'document'"
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "commands_user_id_idx": {
+          "name": "commands_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "commands_drive_id_idx": {
+          "name": "commands_drive_id_idx",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "commands_entry_page_id_idx": {
+          "name": "commands_entry_page_id_idx",
+          "columns": [
+            {
+              "expression": "entry_page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "commands_user_id_users_id_fk": {
+          "name": "commands_user_id_users_id_fk",
+          "tableFrom": "commands",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "commands_drive_id_drives_id_fk": {
+          "name": "commands_drive_id_drives_id_fk",
+          "tableFrom": "commands",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "drive_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "commands_created_by_id_users_id_fk": {
+          "name": "commands_created_by_id_users_id_fk",
+          "tableFrom": "commands",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "commands_entry_page_id_pages_id_fk": {
+          "name": "commands_entry_page_id_pages_id_fk",
+          "tableFrom": "commands",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "entry_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "commands_user_trigger": {
+          "name": "commands_user_trigger",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "trigger"
+          ]
+        },
+        "commands_drive_trigger": {
+          "name": "commands_drive_trigger",
+          "nullsNotDistinct": false,
+          "columns": [
+            "drive_id",
+            "trigger"
+          ]
+        }
+      }
     }
   },
   "enums": {

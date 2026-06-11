@@ -125,11 +125,24 @@ interface ReconstructableMessage {
   messageType?: string;
 }
 
+/** Persisted shape of a custom `data-*` UI part (e.g. command execution feedback). */
+interface PersistedDataPart {
+  type: string;
+  id?: string;
+  data: unknown;
+}
+
 interface StructuredContentData {
   textParts: string[];
   fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>;
+  dataParts?: PersistedDataPart[];
   partsOrder: Array<{ index: number; type: string; toolCallId?: string }>;
   originalContent?: string;
+}
+
+/** Whether a UIMessage part is a custom data part (`data-*`). */
+function isDataPart(part: { type: string }): boolean {
+  return part.type.startsWith('data-');
 }
 
 /**
@@ -286,9 +299,10 @@ function reconstructFromStructuredContent(
   msg: ReconstructableMessage,
   structuredData: StructuredContentData
 ): UIMessage {
-  const parts: Array<TextUIPart | ToolPart | FileUIPart> = [];
+  const parts: Array<TextUIPart | ToolPart | FileUIPart | PersistedDataPart> = [];
   let textPartIndex = 0;
   let filePartIndex = 0;
+  let dataPartIndex = 0;
 
   // Parse tool calls and results for lookup
   const toolCallsMap = new Map<string, ToolCall>();
@@ -302,6 +316,7 @@ function reconstructFromStructuredContent(
   }
 
   const fileParts = structuredData.fileParts || [];
+  const dataParts = structuredData.dataParts || [];
 
   // Reconstruct parts in original order
   structuredData.partsOrder.forEach(partOrder => {
@@ -346,6 +361,11 @@ function reconstructFromStructuredContent(
         }
         parts.push(reconstructed);
       }
+    } else if (partOrder.type.startsWith('data-')) {
+      if (dataPartIndex < dataParts.length) {
+        parts.push(dataParts[dataPartIndex]);
+        dataPartIndex++;
+      }
     } else if (partOrder.type === 'step-start') {
       // Skip step-start parts for now - they're AI SDK internal
     }
@@ -378,7 +398,7 @@ function reconstructMessageFromStructuredContent(
 /**
  * Extract structured content data from UIMessage parts for database storage
  */
-function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): string {
+export function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): string {
   const textParts = uiParts
     .filter(isTextPart)
     .map(p => p.text || '');
@@ -391,6 +411,17 @@ function extractStructuredContentFromParts(uiParts: UIMessage['parts'], original
       filename: fp.filename,
     }));
 
+  const dataPartsData: PersistedDataPart[] = uiParts
+    .filter(isDataPart)
+    .map(p => {
+      const dp = p as { type: string; id?: unknown; data?: unknown };
+      return {
+        type: dp.type,
+        ...(typeof dp.id === 'string' ? { id: dp.id } : {}),
+        data: dp.data,
+      };
+    });
+
   const partsOrder = uiParts.map((p, i) => ({
     index: i,
     type: p.type,
@@ -400,6 +431,7 @@ function extractStructuredContentFromParts(uiParts: UIMessage['parts'], original
   return JSON.stringify({
     textParts,
     ...(filePartsData.length > 0 ? { fileParts: filePartsData } : {}),
+    ...(dataPartsData.length > 0 ? { dataParts: dataPartsData } : {}),
     partsOrder,
     originalContent,
   });

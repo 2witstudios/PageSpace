@@ -13,6 +13,7 @@ import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 import { checkObjectExists } from '@/lib/upload/s3-effects';
 
@@ -317,7 +318,13 @@ export async function POST(request: Request) {
     try {
       await enqueueProcessorJob(userId, driveId, newPage.id);
     } catch (err) {
-      console.error('Failed to enqueue processor job:', err);
+      // Best-effort by design, but the page now has no derived content
+      // (thumbnails/OCR/extraction) until reprocessed — keep this loud.
+      loggers.api.error('Failed to enqueue processor job', err instanceof Error ? err : new Error(String(err)), {
+        userId,
+        driveId,
+        pageId: newPage.id,
+      });
     }
 
     // M8: charge only on the first physical store of the blob (symmetric with the

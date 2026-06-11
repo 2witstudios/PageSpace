@@ -468,8 +468,14 @@ export async function createFileServiceToken(
   };
 }
 
-/** Scopes granted for file upload operations */
-const UPLOAD_SCOPES: ServiceScope[] = ['files:write'];
+/**
+ * Scopes granted for file upload operations.
+ *
+ * `files:ingest` is required by the processor's `/api/ingest` mount — the
+ * post-upload enqueue (`/api/upload/complete` → `/api/ingest/pull/{pageId}`)
+ * is rejected 403 without it, silently skipping thumbnails/OCR/extraction.
+ */
+const UPLOAD_SCOPES: ServiceScope[] = ['files:write', 'files:ingest'];
 
 /**
  * Options for creating an upload service token
@@ -485,6 +491,12 @@ export interface UploadTokenOptions {
   parentId?: string;
   /** Token expiration (default '10m') */
   expiresIn?: string;
+  /**
+   * Scopes to grant (default {@link UPLOAD_SCOPES}). All requested scopes are
+   * gated behind the same canEdit check; callers that never enqueue ingestion
+   * (e.g. channel attachments) should narrow to ['files:write'].
+   */
+  scopes?: ServiceScope[];
 }
 
 /**
@@ -500,7 +512,7 @@ export interface UploadTokenOptions {
 export async function createUploadServiceToken(
   options: UploadTokenOptions
 ): Promise<ValidatedTokenResult> {
-  const { userId, driveId, pageId, parentId, expiresIn = '10m' } = options;
+  const { userId, driveId, pageId, parentId, expiresIn = '10m', scopes = UPLOAD_SCOPES } = options;
 
   let hasPermission = false;
   let permissionSource: 'parent_page' | 'drive';
@@ -561,13 +573,13 @@ export async function createUploadServiceToken(
     pageId,
     parentId,
     permissionSource,
-    scopes: UPLOAD_SCOPES,
+    scopes,
   });
 
   const token = await sessionService.createSession({
     userId,
     type: 'service',
-    scopes: UPLOAD_SCOPES as string[],
+    scopes: scopes as string[],
     resourceType: 'page',
     resourceId: pageId,
     driveId,
@@ -577,7 +589,7 @@ export async function createUploadServiceToken(
 
   return {
     token,
-    grantedScopes: UPLOAD_SCOPES,
+    grantedScopes: scopes,
   };
 }
 

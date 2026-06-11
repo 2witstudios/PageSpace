@@ -85,12 +85,23 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
 
     setIsDownloading(true);
     try {
-      const response = await fetchWithAuth(`/api/files/${page.id}/download`);
+      // Two-step fetch: get the presigned URL as JSON, then fetch it without
+      // credentials. Letting fetchWithAuth follow the 307 into Tigris fails
+      // CORS — its credentialed mode needs Access-Control-Allow-Credentials,
+      // which the bucket never sends.
+      const response = await fetchWithAuth(`/api/files/${page.id}/download`, {
+        headers: { Accept: 'application/json' },
+      });
       if (!response.ok) {
         throw new Error('Failed to download file');
       }
+      const { url: presignedUrl } = await response.json() as { url: string };
 
-      const blob = await response.blob();
+      const fileRes = await fetch(presignedUrl);
+      if (!fileRes.ok) {
+        throw new Error(`Failed to download file bytes: ${fileRes.status}`);
+      }
+      const blob = await fileRes.blob();
       const url = window.URL.createObjectURL(blob);
       const a = window.document.createElement('a');
       a.href = url;

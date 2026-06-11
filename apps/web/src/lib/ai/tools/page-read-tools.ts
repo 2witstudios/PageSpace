@@ -7,11 +7,11 @@ import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive } from './actor-permissions';
-import { getPageTypeEmoji, isFolderPage, isCodePage } from '@pagespace/lib/content/page-types.config';
+import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
-import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
+import { serializePageContentForAI } from '../core/page-serializer';
 
 export const pageReadTools = {
   /**
@@ -587,12 +587,9 @@ export const pageReadTools = {
         }
 
         // Format content for AI line-based editing, then split into lines.
-        // CODE and markdown pages have natural line structure (and CODE may contain
-        // raw HTML/XML that addLineBreaksForAI would mangle); HTML documents need it.
-        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const formattedContent = isRawText
-          ? (page.content || '')
-          : addLineBreaksForAI(page.content || '');
+        // Shared with command injection (page-serializer) so both surfaces
+        // serialize page content identically.
+        const formattedContent = serializePageContentForAI(page);
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 

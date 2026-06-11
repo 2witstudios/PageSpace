@@ -13,8 +13,9 @@ import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
+import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -393,6 +394,12 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                     state: group.state,
                   }}
                 />
+              </div>
+            );
+          } else if (isCommandExecutionPart(group)) {
+            return (
+              <div key={`${message.id}-command-${index}`} className="mr-2 sm:mr-8">
+                <CommandExecutionIndicator data={group.data} />
               </div>
             );
           }

@@ -40,4 +40,15 @@ describe('extractMentionedUserIds', () => {
       expected: [],
     });
   });
+
+  it('ignores a leading command chip and still extracts mentions after it', () => {
+    assert({
+      given: 'a message starting with a /[Label](commandId:command) token',
+      should: 'leave the command token alone and extract the user mention',
+      actual: extractMentionedUserIds(
+        '/[release-checklist](cmd1:command) please review @[Alice](u-alice:user)'
+      ),
+      expected: ['u-alice'],
+    });
+  });
 });
