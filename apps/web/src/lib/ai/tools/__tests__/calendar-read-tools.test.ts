@@ -80,14 +80,13 @@ vi.mock('@/lib/logging/mask', () => ({
 import { calendarReadTools } from '../calendar-read-tools';
 import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
+import { isUserMemberOfAnyEventDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockGetDriveIdsForUser = vi.mocked(getDriveIdsForUser);
 const mockIsUserMemberOfAnyEventDrive = vi.mocked(isUserMemberOfAnyEventDrive);
-const mockGetAllDriveIdsForEvent = vi.mocked(getAllDriveIdsForEvent);
 
 const createMockEvent = (overrides = {}) => ({
   id: 'event-1',
