@@ -7,11 +7,14 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { mcpTokenDrives, driveRoles } from '@pagespace/db/schema/members';
+import { mcpTokens } from '@pagespace/db/schema/auth';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const patchBodySchema = z.object({
-  role: z.enum(['MEMBER', 'ADMIN']).optional(),
+  // null = clear back to INHERIT (the key acts as its owner in this drive)
+  role: z.enum(['MEMBER', 'ADMIN']).nullable().optional(),
   customRoleId: z.string().min(1).nullable().optional(),
 });
 
@@ -46,18 +49,31 @@ export async function PATCH(
 
     const { role, customRoleId } = parsed.data;
 
-    if (!role && customRoleId === undefined) {
+    if (role === undefined && customRoleId === undefined) {
       return NextResponse.json({ error: 'Provide at least one of: role, customRoleId' }, { status: 400 });
     }
 
     const existing = await db
-      .select({ id: mcpTokenDrives.id })
+      .select({ id: mcpTokenDrives.id, ownerUserId: mcpTokens.userId })
       .from(mcpTokenDrives)
+      .innerJoin(mcpTokens, eq(mcpTokenDrives.tokenId, mcpTokens.id))
       .where(and(eq(mcpTokenDrives.driveId, driveId), eq(mcpTokenDrives.tokenId, tokenId)))
       .limit(1);
 
     if (existing.length === 0) {
       return NextResponse.json({ error: 'App member not found' }, { status: 404 });
+    }
+
+    // Clearing back to inherit requires the token's OWNER to be a drive member —
+    // otherwise the row would resolve to nothing (confusing dead state).
+    if (role === null) {
+      const ownerIsMember = await isUserDriveMember(existing[0].ownerUserId, driveId);
+      if (!ownerIsMember) {
+        return NextResponse.json(
+          { error: "Cannot set this app to inherit: its owner is not a member of this drive. Assign an explicit role instead." },
+          { status: 400 },
+        );
+      }
     }
 
     if (customRoleId) {

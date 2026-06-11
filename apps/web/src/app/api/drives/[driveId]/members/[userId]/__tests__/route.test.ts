@@ -114,6 +114,10 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId' },
   pagePermissions: { pageId: 'pageId', userId: 'userId', canView: 'canView', canEdit: 'canEdit', canShare: 'canShare', canDelete: 'canDelete', grantedBy: 'grantedBy', note: 'note' },
+  mcpTokenDrives: { driveId: 'col_mtd_driveId', tokenId: 'col_mtd_tokenId' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  mcpTokens: { id: 'col_mt_id', userId: 'col_mt_userId' },
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -137,6 +141,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { getActorInfo, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db';
+import { mcpTokenDrives } from '@pagespace/db/schema/members';
+import { mcpTokens } from '@pagespace/db/schema/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokeAgentMembershipsGrantedBy, recapAgentMembershipsGrantedBy } from '@pagespace/lib/services/drive-agent-service';
 
@@ -1478,6 +1484,22 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       expect(response.status).toBe(200);
       // No permission revocations should be logged
       expect(logPermissionActivity).not.toHaveBeenCalled();
+    });
+
+    it('should also delete the removed user\'s MCP token drive-scope rows in the transaction', async () => {
+      const mockTx = createMockTx([], []);
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(mockTx));
+
+      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
+
+      expect(response.status).toBe(200);
+      // Empty drive: driveMembers delete + mcpTokenDrives cascade delete
+      // (the token-scope cascade is the +1 over the old removal transaction).
+      expect(mockTx.delete).toHaveBeenCalledTimes(2);
+      expect(mockTx.delete).toHaveBeenNthCalledWith(2, mcpTokenDrives);
+      // The cascade narrows by a subquery selecting the removed user's own tokens.
+      expect(mockTx.select).toHaveBeenCalledWith({ id: mcpTokens.id });
     });
 
     it('should revoke the removed user\'s external agent memberships in the drive', async () => {

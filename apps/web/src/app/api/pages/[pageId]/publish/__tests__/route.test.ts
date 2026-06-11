@@ -19,6 +19,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => authenticateRequestWithOptions(...args),
   isAuthError: (result: unknown) => typeof result === 'object' && result !== null && 'error' in result,
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalEditPage: (auth: { userId: string }, pageId: string) => canUserEditPage(auth.userId, pageId),
 }));
 
 const canUserEditPage = vi.fn();

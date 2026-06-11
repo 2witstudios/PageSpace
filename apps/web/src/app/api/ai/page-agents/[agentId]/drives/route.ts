@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { addAgentToDrive, listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -43,7 +42,7 @@ export async function GET(
     const scopeError = await checkMCPPageScope(auth, agentId);
     if (scopeError) return scopeError;
 
-    if (!(await canUserViewPage(auth.userId, agentId))) {
+    if (!(await canPrincipalViewPage(auth, agentId))) {
       return NextResponse.json({ error: 'Insufficient permissions to view this agent' }, { status: 403 });
     }
 
@@ -81,7 +80,7 @@ export async function POST(
       return NextResponse.json({ error: 'AI agent not found' }, { status: 404 });
     }
 
-    if (!(await canUserEditPage(userId, agentId))) {
+    if (!(await canPrincipalEditPage(auth, agentId))) {
       return NextResponse.json({ error: 'You do not have permission to manage this agent' }, { status: 403 });
     }
 

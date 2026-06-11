@@ -11,8 +11,7 @@ import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isScopedMCPAuth } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -295,7 +294,7 @@ export async function GET(request: Request) {
       const scopeError = checkMCPDriveScope(auth, params.driveId);
       if (scopeError) return scopeError;
 
-      const canView = await isUserDriveMember(userId, params.driveId);
+      const canView = await isPrincipalDriveMember(auth, params.driveId);
       if (!canView) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
@@ -388,10 +387,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ events: annotatedEvents, workflowEvents });
     }
 
-    // User context: aggregate events from all sources
-    const allDriveIds = await getDriveIdsForUser(userId);
-    // Filter drives by MCP token scope
-    const driveIds = filterDrivesByMCPScope(auth, allDriveIds);
+    // User context: aggregate events from all sources. User parity: any drive
+    // member sees DRIVE-visible events, so the principal's membership universe
+    // is the gate (inherit rows require the owner to still be a member).
+    const driveIds = await getPrincipalDriveIds(auth);
 
     // Build conditions for user's visible events:
     // 1. Personal events (driveId is null, created by user)
@@ -399,8 +398,9 @@ export async function GET(request: Request) {
     // 3. Events where user is an attendee
     const conditions = [];
 
-    // Personal events
-    if (params.includePersonal) {
+    // Personal events. A drive-scoped key has no identity power over the
+    // owner's PERSONAL (drive-less) events — it belongs to a workspace.
+    if (params.includePersonal && !isScopedMCPAuth(auth)) {
       conditions.push(
         and(
           isNull(calendarEvents.driveId),
@@ -472,10 +472,18 @@ export async function GET(request: Request) {
       orderBy: [asc(calendarEvents.startAt)],
     });
 
+    // Scoped keys: the creator/attendee branches above are identity-derived and
+    // can surface events outside the key's drive universe (or personal ones).
+    // Cap the result at the principal's drives — mirrors the calendar tools.
+    const principalDriveIdSet = new Set(driveIds);
+    const visibleEvents = isScopedMCPAuth(auth)
+      ? events.filter((e) => e.driveId !== null && principalDriveIdSet.has(e.driveId))
+      : events;
+
     // Annotate events with agent trigger presence
-    const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
+    const triggeredIds = await getTriggeredEventIds(visibleEvents.map(e => e.id));
     const annotatedEvents = expandRecurringEvents(
-      events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
+      visibleEvents.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
       params.startDate,
       params.endDate,
     );
@@ -535,7 +543,10 @@ export async function POST(request: Request) {
 
     // Validate drive access if driveId is provided
     if (data.driveId) {
-      const canAccess = await isUserDriveMember(userId, data.driveId);
+      // User parity: any accepted member may create drive events; the principal
+      // membership check applies the same rule to keys (explicit MEMBER roles
+      // included — a member user could do this, so a member key can too).
+      const canAccess = await isPrincipalDriveMember(auth, data.driveId);
       if (!canAccess) {
         return NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
@@ -572,7 +583,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: message }, { status: 400 });
       }
 
-      const canViewAgent = await canUserViewPage(userId, agentPageId);
+      const canViewAgent = await canPrincipalViewPage(auth, agentPageId);
       if (!canViewAgent) {
         return NextResponse.json(
           { error: 'Agent not found in this drive' },

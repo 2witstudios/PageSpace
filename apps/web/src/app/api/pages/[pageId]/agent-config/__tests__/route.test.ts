@@ -66,6 +66,9 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => mockIsAuthError(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+  // The route authorizes via the principal dispatch (scoped tokens use their own
+  // role); tests drive it through the same mock as the old user-level check.
+  canPrincipalEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
 }));
 
 vi.mock('@/lib/ai/core/ai-tools', () => ({

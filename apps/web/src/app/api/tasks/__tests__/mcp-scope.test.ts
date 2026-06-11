@@ -5,10 +5,12 @@ import { GET } from '../route';
 import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 
 // ============================================================================
-// MCP Drive Scope Enforcement Tests for GET /api/tasks
+// MCP Drive Scope + App-Member RBAC Enforcement Tests for GET /api/tasks
 //
-// Verifies that scoped MCP tokens cannot access tasks outside their
-// allowed drives. Session auth should pass through unchanged.
+// Verifies that scoped MCP tokens act as their OWN drive member (app RBAC):
+// drive universe = the token's memberships, drive access = the token's role,
+// task-list visibility = the token's per-page view permission. Session auth
+// passes through to user-level checks unchanged.
 // ============================================================================
 
 // Mock dependencies
@@ -67,20 +69,31 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  isUserDriveMember: vi.fn(),
-  getDriveIdsForUser: vi.fn(),
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
 }));
+
+const FULL_PERMS = { canView: true, canEdit: true, canShare: true, canDelete: true };
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPDriveScope: vi.fn(() => null),
-  filterDrivesByMCPScope: vi.fn((_auth: any, driveIds: string[]) => driveIds),
+  isScopedMCPAuth: vi.fn((auth: any) => auth.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0),
+  isPrincipalDriveMember: vi.fn(),
+  getPrincipalDriveIds: vi.fn(),
+  getPrincipalBatchPagePermissions: vi.fn(async (_auth: any, pageIds: string[]) =>
+    new Map(pageIds.map((id) => [id, { ...FULL_PERMS }]))),
 }));
 
-import { authenticateRequestWithOptions, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import {
+  authenticateRequestWithOptions,
+  checkMCPDriveScope,
+  isPrincipalDriveMember,
+  getPrincipalDriveIds,
+  getPrincipalBatchPagePermissions,
+} from '@/lib/auth';
+import { db } from '@pagespace/db/db';
 
 // ============================================================================
 // Test Fixtures
@@ -118,19 +131,36 @@ const createRequest = (params: Record<string, string> = {}) => {
 };
 
 // ============================================================================
-// MCP Scope Enforcement Tests
+// MCP Scope + RBAC Enforcement Tests
 // ============================================================================
 
-describe('GET /api/tasks - MCP drive scope enforcement', () => {
+describe('GET /api/tasks - MCP drive scope + app-member RBAC enforcement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getPrincipalBatchPagePermissions).mockImplementation(async (_auth: any, pageIds: string[]) =>
+      new Map(pageIds.map((id) => [id, { ...FULL_PERMS }])));
   });
 
   describe('drive context', () => {
+    it('should return 403 when the principal (token) is not a member of the drive', async () => {
+      const auth = mockMCPAuth(mockUserId, [driveA]);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
+      // The token has no membership row in driveB — even if the OWNING USER does.
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(false);
+
+      const request = createRequest({ context: 'drive', driveId: driveB });
+      const response = await GET(request);
+
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body.error).toContain('do not have access');
+      expect(isPrincipalDriveMember).toHaveBeenCalledWith(auth, driveB);
+    });
+
     it('should return 403 when scoped MCP token accesses a drive outside its scope', async () => {
       const auth = mockMCPAuth(mockUserId, [driveA]);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
-      vi.mocked(isUserDriveMember).mockResolvedValue(true);
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
 
       // Simulate checkMCPDriveScope returning 403 for out-of-scope drive
       vi.mocked(checkMCPDriveScope).mockReturnValue(
@@ -149,86 +179,116 @@ describe('GET /api/tasks - MCP drive scope enforcement', () => {
       expect(checkMCPDriveScope).toHaveBeenCalledWith(auth, driveB);
     });
 
-    it('should proceed when scoped MCP token accesses a drive within its scope', async () => {
+    it('should proceed when the token is a member and the drive is in scope', async () => {
       const auth = mockMCPAuth(mockUserId, [driveA]);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
-      vi.mocked(isUserDriveMember).mockResolvedValue(true);
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
       vi.mocked(checkMCPDriveScope).mockReturnValue(null);
 
       const request = createRequest({ context: 'drive', driveId: driveA });
       const response = await GET(request);
 
-      // Scope check was called and passed (returned null)
-      expect(checkMCPDriveScope).toHaveBeenCalledWith(auth, driveA);
-      // Route proceeds past scope check - should NOT be a 403 scope denial
+      expect(isPrincipalDriveMember).toHaveBeenCalledWith(auth, driveA);
       expect(response.status).not.toBe(403);
     });
 
-    it('should pass through for session auth without scope filtering', async () => {
+    it('should pass through for session auth (user-level membership)', async () => {
       const auth = mockWebAuth(mockUserId);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
-      vi.mocked(isUserDriveMember).mockResolvedValue(true);
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
       vi.mocked(checkMCPDriveScope).mockReturnValue(null);
 
       const request = createRequest({ context: 'drive', driveId: driveA });
       const response = await GET(request);
 
-      expect(checkMCPDriveScope).toHaveBeenCalledWith(auth, driveA);
-      // Session auth always passes scope check - should NOT be a 403 scope denial
+      expect(isPrincipalDriveMember).toHaveBeenCalledWith(auth, driveA);
       expect(response.status).not.toBe(403);
     });
   });
 
   describe('user context', () => {
-    it('should filter drives by MCP scope in user context', async () => {
+    it('should use the principal drive universe (token memberships for scoped tokens)', async () => {
       const auth = mockMCPAuth(mockUserId, [driveA]);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
-      vi.mocked(getDriveIdsForUser).mockResolvedValue([driveA, driveB]);
-
-      // filterDrivesByMCPScope should restrict to only driveA
-      vi.mocked(filterDrivesByMCPScope).mockReturnValue([driveA]);
+      vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA]);
 
       const request = createRequest({ context: 'user' });
       await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(auth, [driveA, driveB]);
+      expect(getPrincipalDriveIds).toHaveBeenCalledWith(auth);
     });
 
-    it('should return all drives for session auth in user context', async () => {
+    it('should return all user drives for session auth in user context', async () => {
       const auth = mockWebAuth(mockUserId);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
-      vi.mocked(getDriveIdsForUser).mockResolvedValue([driveA, driveB]);
-
-      // Session auth: filterDrivesByMCPScope returns all drives
-      vi.mocked(filterDrivesByMCPScope).mockReturnValue([driveA, driveB]);
+      vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA, driveB]);
 
       const request = createRequest({ context: 'user' });
       await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(auth, [driveA, driveB]);
+      expect(getPrincipalDriveIds).toHaveBeenCalledWith(auth);
     });
 
-    it('should enforce scope check when user context has explicit driveId filter', async () => {
+    it('should 403 when user context has an explicit driveId outside the principal universe', async () => {
       const auth = mockMCPAuth(mockUserId, [driveA]);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
-      vi.mocked(getDriveIdsForUser).mockResolvedValue([driveA, driveB]);
-
-      // First call is for the user-context driveIds, second for the explicit driveId check
-      vi.mocked(filterDrivesByMCPScope).mockReturnValue([driveA, driveB]);
-
-      // The explicit driveId check - scoped token trying to access driveB
-      vi.mocked(checkMCPDriveScope).mockReturnValue(
-        NextResponse.json(
-          { error: 'This token does not have access to this drive' },
-          { status: 403 }
-        )
-      );
+      // Token's drive universe contains only driveA; request filters driveB.
+      vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA]);
 
       const request = createRequest({ context: 'user', driveId: driveB });
       const response = await GET(request);
 
       expect(response.status).toBe(403);
-      expect(checkMCPDriveScope).toHaveBeenCalledWith(auth, driveB);
+      const body = await response.json();
+      expect(body.error).toContain('do not have access');
+    });
+  });
+
+  describe('task-list visibility (custom-role per-page filtering)', () => {
+    it('filters out task lists the scoped token cannot view', async () => {
+      const auth = mockMCPAuth(mockUserId, [driveA]);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
+      vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA]);
+
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        { id: 'list_visible', driveId: driveA, title: 'Visible' },
+        { id: 'list_hidden', driveId: driveA, title: 'Hidden' },
+      ] as any);
+
+      // Custom role grants view on only one of the two task lists.
+      vi.mocked(getPrincipalBatchPagePermissions).mockResolvedValue(
+        new Map([
+          ['list_visible', { ...FULL_PERMS }],
+          ['list_hidden', { canView: false, canEdit: false, canShare: false, canDelete: false }],
+        ])
+      );
+
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([] as any);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as any);
+
+      const request = createRequest({ context: 'user' });
+      const response = await GET(request);
+
+      expect(getPrincipalBatchPagePermissions).toHaveBeenCalledWith(auth, ['list_visible', 'list_hidden']);
+      expect(response.status).toBe(200);
+      // taskLists config lookup runs on the FILTERED set — only the visible list.
+      expect(db.query.taskLists.findMany).toHaveBeenCalled();
+    });
+
+    it('does not run per-page filtering for session auth', async () => {
+      const auth = mockWebAuth(mockUserId);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
+      vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA]);
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        { id: 'list_visible', driveId: driveA, title: 'Visible' },
+      ] as any);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([] as any);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as any);
+
+      const request = createRequest({ context: 'user' });
+      await GET(request);
+
+      expect(getPrincipalBatchPagePermissions).not.toHaveBeenCalled();
     });
   });
 });

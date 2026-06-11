@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
     // Check permissions for agent creation
     if (parentId) {
       // Creating in a folder - check permissions on parent page
-      const canEdit = await canUserEditPage(userId, parentId);
+      const canEdit = await canPrincipalEditPage(auth, parentId);
       if (!canEdit) {
         auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'no_edit_permission_on_parent', parentId, driveId, method: 'POST' }, riskScore: 0.5 });
         return NextResponse.json(
@@ -77,7 +77,19 @@ export async function POST(request: Request) {
         );
       }
     } else {
-      // Creating at root level - check if user owns the drive
+      // Creating at root level — owner-only. An explicit-role key needs the
+      // OWNER role (its role replaces its owner's identity); an inherited key
+      // falls through to the user ownership check (it IS the owner acting).
+      if (isScopedMCPAuth(auth)) {
+        const membership = await getAppDriveMembership(auth.tokenId, driveId);
+        if (!membership || (membership.role !== null && membership.role !== 'OWNER')) {
+          auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'token_role_not_owner', driveId, method: 'POST' }, riskScore: 0.5 });
+          return NextResponse.json(
+            { error: 'Only drive owners can create agents at the root level' },
+            { status: 403 }
+          );
+        }
+      }
       if (drive.ownerId !== userId) {
         auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'not_drive_owner', driveId, method: 'POST' }, riskScore: 0.5 });
         return NextResponse.json(

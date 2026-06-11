@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -48,7 +47,7 @@ export async function PATCH(
     }
 
     // Check permissions (need edit to modify conversations)
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'no_edit_permission', agentId, method: 'PATCH' }, riskScore: 0.5 });
       return NextResponse.json(
@@ -207,7 +206,7 @@ export async function DELETE(
 
     // Owners may always delete their own conversations; editors may delete any
     const [canEdit, conversationRow] = await Promise.all([
-      canUserEditPage(auth.userId, agentId),
+      canPrincipalEditPage(auth, agentId),
       conversationRepository.getConversation(conversationId),
     ]);
     const isOwner = conversationRow?.userId === auth.userId;

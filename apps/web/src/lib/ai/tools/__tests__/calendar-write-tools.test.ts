@@ -922,6 +922,42 @@ describe('calendar-write-tools', () => {
       });
     });
 
+    it('denies a drive-scoped token editing the owner\'s PERSONAL (drive-less) event — Story 6', async () => {
+      // The owner created this personal event; the key would pass the creator
+      // check, but a drive-scoped key has no identity power outside its drives.
+      const event = createMockEvent({ createdById: 'user-123', driveId: null });
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+
+      const scopedContext = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          mcpAllowedDriveIds: ['drive-A'],
+          mcpTokenId: 'token-1',
+        } as ToolExecutionContext,
+      };
+
+      const result = await calendarWriteTools.update_calendar_event.execute!(
+        { eventId: 'event-1', title: 'Updated Title' },
+        scopedContext
+      );
+
+      assert({
+        given: 'a drive-scoped token and a personal event',
+        should: 'deny the edit',
+        actual: (result as { success: boolean }).success,
+        expected: false,
+      });
+
+      assert({
+        given: 'a drive-scoped token and a personal event',
+        should: 'explain the personal-event lane',
+        actual: (result as { error?: string }).error?.toLowerCase().includes('personal'),
+        expected: true,
+      });
+    });
+
     it('returns error when user is not the creator', async () => {
       const event = createMockEvent({ createdById: 'other-user' });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);

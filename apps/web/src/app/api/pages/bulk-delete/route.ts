@@ -6,8 +6,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { and, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
-import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult, canPrincipalDeletePage } from '@/lib/auth';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
@@ -64,7 +63,7 @@ export async function DELETE(request: Request) {
 
     // Verify delete permissions for all pages
     for (const page of sourcePages) {
-      const canDelete = await canUserDeletePage(userId, page.id);
+      const canDelete = await canPrincipalDeletePage(auth, page.id);
       if (!canDelete) {
         return NextResponse.json(
           { error: `You do not have permission to delete page: ${page.title}` },

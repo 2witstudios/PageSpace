@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveIds, getPrincipalBatchPagePermissions } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { getBatchPagePermissions, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -43,10 +42,9 @@ export async function GET(request: Request) {
       );
     }
 
-    // Get drive IDs accessible by this user without scanning all drives.
-    const accessibleDriveIds = await getDriveIdsForUser(userId);
-    // Filter drives by MCP token scope to enforce scoped token restrictions
-    const scopedDriveIds = filterDrivesByMCPScope(auth, accessibleDriveIds);
+    // Get drive IDs accessible by this principal without scanning all drives
+    // (already scoped for MCP tokens).
+    const scopedDriveIds = await getPrincipalDriveIds(auth);
     if (scopedDriveIds.length === 0) {
       return NextResponse.json({
         success: true,
@@ -188,7 +186,7 @@ export async function GET(request: Request) {
 
     // Batch check permissions for all search results at once
     const allPageIds = allSearchResults.map(result => result.page.id);
-    const permissionsMap = await getBatchPagePermissions(userId, allPageIds);
+    const permissionsMap = await getPrincipalBatchPagePermissions(auth, allPageIds);
 
     // Group results by drive and filter by permissions
     const driveResultsMap = new Map<string, Array<{

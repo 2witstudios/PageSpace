@@ -23,6 +23,8 @@ vi.mock('@/lib/auth', () => ({
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 // --- Permissions ---------------------------------------------------------------

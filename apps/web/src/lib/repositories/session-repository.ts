@@ -51,7 +51,8 @@ export const sessionRepository = {
     tokenPrefix: string;
     name: string;
     isScoped: boolean;
-    drives: { id: string; role: 'ADMIN' | 'MEMBER'; customRoleId?: string }[];
+    // role null = INHERIT (the key acts as its owner in that drive)
+    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
   }): Promise<McpToken> {
     return db.transaction(async (tx) => {
       const [token] = await tx

@@ -4,10 +4,15 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && 'error' in r),
   checkMCPCreateScope: vi.fn(() => null),
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserDrivePermissions: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveAccessLevel: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({

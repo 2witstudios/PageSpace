@@ -233,9 +233,32 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         // getDriveAccess should only be called once (deduplication)
         expect(getDriveAccess).toHaveBeenCalledTimes(1);
 
-        // Repository should be called with deduplicated drives
+        // Repository should be called with deduplicated drives.
+        // Legacy driveIds carry no role: stored role is null (inherit owner).
         const createArgs = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0][0];
-        expect(createArgs.drives).toEqual([{ id: 'drive-1', role: 'MEMBER', customRoleId: undefined }]);
+        expect(createArgs.drives).toEqual([{ id: 'drive-1', role: null, customRoleId: undefined }]);
+      });
+
+      it('stores role null (inherit) when drives[] entries omit the role', async () => {
+        vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
+          { id: 'drive-1', name: 'My Drive' },
+        ]);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: 'ps_session=valid-token',
+            'X-CSRF-Token': 'valid-csrf-token',
+          },
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1' }] }),
+        });
+
+        const response = await POST(request);
+        expect(response.status).toBe(200);
+
+        const createArgs = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0][0];
+        expect(createArgs.drives).toEqual([{ id: 'drive-1', role: null, customRoleId: undefined }]);
       });
     });
 

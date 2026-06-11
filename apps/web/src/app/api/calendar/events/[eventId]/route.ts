@@ -5,8 +5,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -57,15 +56,23 @@ const updateEventSchema = z.object({
 });
 
 /**
- * Check if user can access an event
+ * Check if the principal can access an event
  */
-async function canAccessEvent(userId: string, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  // Creator always has access
+async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
+  const userId = auth.userId;
+
+  // A drive-scoped token acts as an app member of its drives only: it gets no
+  // identity power over the owner's PERSONAL (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) {
+    return false;
+  }
+
+  // Creator always has access (identity check)
   if (event.createdById === userId) {
     return true;
   }
 
-  // Check if user is an attendee
+  // Check if user is an attendee (identity check)
   const attendee = await db.query.eventAttendees.findFirst({
     where: and(
       eq(eventAttendees.eventId, event.id),
@@ -76,20 +83,23 @@ async function canAccessEvent(userId: string, event: typeof calendarEvents.$infe
     return true;
   }
 
-  // Check drive membership for drive events with DRIVE visibility
+  // Check drive membership for drive events with DRIVE visibility (user
+  // parity: any member sees DRIVE-visible events).
   if (event.driveId && event.visibility === 'DRIVE') {
-    return isUserDriveMember(userId, event.driveId);
+    return isPrincipalDriveMember(auth, event.driveId);
   }
 
   return false;
 }
 
 /**
- * Check if user can edit an event (only creator or drive admin)
+ * Check if the principal can edit an event (only creator or drive admin)
  */
-async function canEditEvent(userId: string, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  if (event.createdById === userId) return true;
-  if (event.driveId) return isDriveOwnerOrAdmin(userId, event.driveId);
+async function canEditEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
+  // Scoped tokens have no identity power over personal (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) return false;
+  if (event.createdById === auth.userId) return true;
+  if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }
 
@@ -107,8 +117,6 @@ export async function GET(
   if (isAuthError(auth)) {
     return auth.error;
   }
-
-  const userId = auth.userId;
 
   try {
     const event = await db.query.calendarEvents.findFirst({
@@ -147,7 +155,7 @@ export async function GET(
     }
 
     // Check access
-    const hasAccess = await canAccessEvent(userId, event);
+    const hasAccess = await canAccessEvent(auth, event);
     if (!hasAccess) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
@@ -199,7 +207,7 @@ export async function PATCH(
     }
 
     // Check edit permission
-    const canEdit = await canEditEvent(userId, event);
+    const canEdit = await canEditEvent(auth, event);
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You do not have permission to edit this event' },
@@ -415,7 +423,7 @@ export async function DELETE(
     }
 
     // Check edit permission
-    const canEdit = await canEditEvent(userId, event);
+    const canEdit = await canEditEvent(auth, event);
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You do not have permission to delete this event' },

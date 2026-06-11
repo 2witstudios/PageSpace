@@ -7,8 +7,9 @@ import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -49,25 +50,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
+    // Check authorization. A scoped MCP token is its own drive member — gate on
+    // the TOKEN's membership, not the owning user's.
     const isOwner = drive.ownerId === userId;
-    let hasAccess = isOwner;
+    if (isScopedMCPAuth(auth)) {
+      // Membership gate only — the tree below is filtered to the TOKEN's
+      // per-page view set, so per-page custom-role grants still work.
+      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
+    } else {
+      let hasAccess = isOwner;
 
-    if (!isOwner) {
-      // Authz read: pending invitee (acceptedAt IS NULL) must not read the
-      // page tree of a drive they have not joined. Closes Review C2.
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        ),
-      });
-      hasAccess = !!membership;
-    }
+      if (!isOwner) {
+        // Authz read: pending invitee (acceptedAt IS NULL) must not read the
+        // page tree of a drive they have not joined. Closes Review C2.
+        const membership = await db.query.driveMembers.findFirst({
+          where: and(
+            eq(driveMembers.driveId, driveId),
+            eq(driveMembers.userId, userId),
+            isNotNull(driveMembers.acceptedAt)
+          ),
+        });
+        hasAccess = !!membership;
+      }
 
-    if (!hasAccess) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      if (!hasAccess) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
     }
 
     // Fetch all non-trashed pages for the drive
@@ -81,8 +91,13 @@ export async function POST(request: Request) {
 
     // Non-owners must not see private pages they don't have explicit access to.
     // getUserAccessiblePagesInDrive handles owner/admin (returns all) vs member (non-private + explicit).
+    // Scoped MCP tokens filter by the TOKEN's own accessible pages.
     let visiblePages = pageResults;
-    if (!isOwner) {
+    if (isScopedMCPAuth(auth)) {
+      const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
+      const accessibleIds = new Set(accessible.map(page => page.id));
+      visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
+    } else if (!isOwner) {
       const accessibleIds = new Set(await getUserAccessiblePagesInDrive(userId, driveId));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     }

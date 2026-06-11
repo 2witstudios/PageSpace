@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import TurndownService from 'turndown';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
@@ -32,7 +31,7 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
     if (scopeError) return scopeError;
 
     // Check user permissions
-    const canView = await canUserViewPage(userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
       return new NextResponse('Forbidden', { status: 403 });
     }

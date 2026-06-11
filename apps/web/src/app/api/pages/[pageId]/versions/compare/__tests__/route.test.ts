@@ -48,6 +48,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => mockIsAuthError(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+  canPrincipalViewPage: (auth: { userId: string }, pageId: string) => mockCanUserViewPage(auth.userId, pageId),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

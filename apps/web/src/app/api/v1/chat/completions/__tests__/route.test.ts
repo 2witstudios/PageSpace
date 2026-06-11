@@ -6,8 +6,11 @@ import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
+  isMCPAuthResult: vi.fn((r: unknown) => (r as { tokenType?: string })?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -163,7 +166,7 @@ import { streamText } from 'ai';
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { sanitizeMessagesForModel, extractMessageContent, saveMessageToDatabase } from '@/lib/ai/core/message-utils';
@@ -210,8 +213,8 @@ describe('POST /api/v1/chat/completions', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mcpAuth);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
+    vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([agentPage]),
@@ -322,8 +325,8 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   test('returns 403 when the caller can view but cannot edit the agent page', async () => {
-    vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(canUserEditPage).mockResolvedValue(false);
+    vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
+    vi.mocked(canPrincipalEditPage).mockResolvedValue(false);
     const response = await POST(makeRequest(validBody));
     assert({
       given: 'a view-only caller (no edit permission) on an agent that exposes write tools',

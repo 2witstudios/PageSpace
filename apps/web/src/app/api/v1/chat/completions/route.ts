@@ -7,13 +7,15 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   authenticateRequestWithOptions,
   isAuthError,
+  isMCPAuthResult,
   checkMCPPageScope,
   getAllowedDriveIds,
+  canPrincipalViewPage,
+  canPrincipalEditPage,
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
@@ -104,12 +106,12 @@ export async function POST(request: Request): Promise<Response> {
   // the agent's server-side tools (including write tools) with the agent page as the
   // actor, so it requires the same edit gate the in-app page chat enforces before
   // sending a message. A view-only caller must not be able to drive writes.
-  const canView = await canUserViewPage(authResult.userId, pageId);
+  const canView = await canPrincipalViewPage(authResult, pageId);
   if (!canView) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
-  const canEdit = await canUserEditPage(authResult.userId, pageId);
+  const canEdit = await canPrincipalEditPage(authResult, pageId);
   if (!canEdit) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
@@ -449,9 +451,11 @@ export async function POST(request: Request): Promise<Response> {
         ),
         chatSource: { type: 'page' as const, agentPageId: pageId, agentTitle: page.title },
         enabledTools: agentEnabledTools ?? null,
-        // Bind tool execution to the MCP token's drive scope so a scoped token
-        // cannot reach drives outside its scope via the agent's broader ACL.
+        // Bind tool execution to the MCP token's drive scope and RBAC role so a
+        // scoped token cannot reach drives outside its scope — or exceed its own
+        // membership role — via the agent's broader ACL.
         mcpAllowedDriveIds: getAllowedDriveIds(authResult),
+        mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
       },
       maxRetries: 20,
     });

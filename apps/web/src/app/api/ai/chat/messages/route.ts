@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 // Auth options: GET is read-only operation
@@ -36,7 +35,7 @@ export async function GET(request: Request) {
     }
 
     // Check if user has view permission for this page
-    const canView = await canUserViewPage(auth.userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
       return NextResponse.json({

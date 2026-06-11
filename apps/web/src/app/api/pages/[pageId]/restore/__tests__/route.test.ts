@@ -66,6 +66,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
   isMCPAuthResult: (result: unknown) => mockIsMCPAuthResult(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+  canPrincipalDeletePage: (auth: { userId: string }, pageId: string) => mockCanUserDeletePage(auth.userId, pageId),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

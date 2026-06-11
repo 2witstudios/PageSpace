@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { and, eq, isNull } from '@pagespace/db/operators';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
+import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { updateActiveUploads, updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
@@ -197,12 +198,21 @@ export async function POST(request: Request) {
   const scopeError = checkMCPCreateScope(auth, driveId);
   if (scopeError) return scopeError;
 
-  const drivePerms = await getUserDrivePermissions(userId, driveId);
-  if (!drivePerms) {
-    return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-  }
-  if (!drivePerms.canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+  // A scoped MCP token is its own drive member — uploads require the TOKEN's
+  // role to grant edit, not the owning user's.
+  if (isScopedMCPAuth(auth)) {
+    const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+    if (!level?.canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+    }
+  } else {
+    const drivePerms = await getUserDrivePermissions(userId, driveId);
+    if (!drivePerms) {
+      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+    if (!drivePerms.canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to upload to this drive' }, { status: 403 });
+    }
   }
 
   // A client-supplied parentId is only gated by drive-level edit access above, so

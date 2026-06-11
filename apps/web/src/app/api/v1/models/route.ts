@@ -3,12 +3,12 @@ import { db } from '@pagespace/db/db';
 import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   authenticateRequestWithOptions,
   isAuthError,
   getAllowedDriveIds,
+  getPrincipalBatchPagePermissions,
 } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
@@ -27,7 +27,7 @@ export async function GET(request: Request): Promise<Response> {
     : and(eq(pages.type, PageType.AI_CHAT), eq(pages.isTrashed, false));
 
   const rows = await db.select({ id: pages.id, createdAt: pages.createdAt }).from(pages).where(whereClause);
-  const permissions = await getBatchPagePermissions(authResult.userId, rows.map((r) => r.id));
+  const permissions = await getPrincipalBatchPagePermissions(authResult, rows.map((r) => r.id));
 
   const models = rows
     .filter((page) => permissions.get(page.id)?.canView)

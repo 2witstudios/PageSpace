@@ -47,6 +47,11 @@ export interface ToolExecutionContext {
   // agent whose own ACL spans drives outside the token scope.
   mcpAllowedDriveIds?: string[];
 
+  // The MCP token id, set alongside mcpAllowedDriveIds. For scoped tokens this
+  // enables the app-member RBAC ceiling in actor-permissions: the token's own
+  // drive-membership role caps what tools may do, on top of the drive scope.
+  mcpTokenId?: string;
+
   // Chat source identification - determines sender identity for channel messages
   chatSource?: {
     type: 'global' | 'page';

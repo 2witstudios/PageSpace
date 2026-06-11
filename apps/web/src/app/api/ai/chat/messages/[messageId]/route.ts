@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -77,7 +76,7 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     // Check if user can edit the page this message belongs to
-    const canEdit = await canUserEditPage(userId, message.pageId);
+    const canEdit = await canPrincipalEditPage(auth, message.pageId);
     if (!canEdit) {
       loggers.api.warn('Edit message permission denied', {
         userId: maskIdentifier(userId),
@@ -200,7 +199,7 @@ export async function DELETE(
     if (scopeError) return scopeError;
 
     // Check if user can edit the page this message belongs to
-    const canEdit = await canUserEditPage(userId, message.pageId);
+    const canEdit = await canPrincipalEditPage(auth, message.pageId);
     if (!canEdit) {
       loggers.api.warn('Delete message permission denied', {
         userId: maskIdentifier(userId),

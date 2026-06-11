@@ -3,8 +3,11 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, isNull, gt, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions'
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
+// canUserViewPage below is only used for mention RECIPIENTS (other users), not
+// the requesting principal — those checks are keyed to arbitrary user ids and
+// must stay user-level.
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -124,8 +127,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
-  // Check if user has view permission for this channel
-  const canView = await canUserViewPage(userId, pageId);
+  // Check if the principal has view permission for this channel
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     return NextResponse.json({
       error: 'You need view permission to access this channel',
@@ -233,8 +236,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const writeScopeError = await checkMCPPageScope(auth, pageId);
   if (writeScopeError) return writeScopeError;
 
-  // Check if user has edit permission to post messages in this channel
-  const canEdit = await canUserEditPage(userId, pageId);
+  // Check if the principal has edit permission to post messages in this channel
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({
       error: 'You need edit permission to send messages in this channel',
@@ -269,7 +272,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Quote-reply validation. Quotes are top-level only — the quoted message
   // must (a) belong to this channel, (b) be active, and (c) itself be a
   // top-level message (parentId IS NULL), mirroring the parent_not_top_level
-  // rule the thread-reply path already enforces. canUserEditPage above
+  // rule the thread-reply path already enforces. canPrincipalEditPage above
   // already gated read access to the channel, so no second permission check
   // is needed for the quoted row.
   if (quotedMessageId.length > 0) {

@@ -91,6 +91,18 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: vi.fn(() => null),
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(auth.userId, driveId);
+  }),
+  getPrincipalDriveIds: vi.fn(async (auth: { userId: string }) => {
+    const { getDriveIdsForUser } = await import('@pagespace/lib/permissions/permissions');
+    return getDriveIdsForUser(auth.userId);
+  }),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(auth.userId, pageId);
+  }),
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({

@@ -5,7 +5,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, canPrincipalEditPage } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -55,8 +55,13 @@ export async function POST(request: Request) {
     // Track MCP source so the unread indicator (blue dot) shows for MCP-created pages.
     // Without this, MCP-created pages are filtered out as "the user's own changes" since
     // MCP tokens authenticate as the owning user.
+    // The principal authorizer makes scoped tokens create under their OWN
+    // drive-membership role (app member RBAC) instead of the owning user's.
     const isMCP = isMCPAuthResult(auth);
-    const createOptions = isMCP ? { context: { metadata: { source: 'mcp' } } } : undefined;
+    const createOptions = {
+      ...(isMCP ? { context: { metadata: { source: 'mcp' } } } : undefined),
+      authorizeEdit: (targetId: string) => canPrincipalEditPage(auth, targetId),
+    };
 
     const result = await pageService.createPage(userId, {
       title: validatedData.title,

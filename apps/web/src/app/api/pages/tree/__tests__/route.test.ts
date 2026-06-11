@@ -21,6 +21,12 @@ vi.mock('@/lib/auth', () => ({
     return result !== null && typeof result === 'object' && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null),
+  isScopedMCPAuth: vi.fn(() => false),
+  getPrincipalAccessiblePagesInDrive: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveAccessLevel: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/content/tree-utils', () => ({

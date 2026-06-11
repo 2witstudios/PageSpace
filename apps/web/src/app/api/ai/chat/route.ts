@@ -28,11 +28,13 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
+// canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
+// (other users), not the requesting principal.
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { buildProviderAvailabilityMap } from '@/lib/ai/core/ai-utils';
@@ -235,7 +237,7 @@ export async function POST(request: Request) {
       userId: maskedUserId,
       chatId: maskedChatId,
     });
-    const canView = await canUserViewPage(userId, chatId);
+    const canView = await canPrincipalViewPage(authResult, chatId);
     permissionLogger.debug('Page AI view permission evaluated', {
       userId: maskedUserId,
       chatId: maskedChatId,
@@ -251,7 +253,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'You do not have permission to view this AI chat' }, { status: 403 });
     }
 
-    const canEdit = await canUserEditPage(userId, chatId);
+    const canEdit = await canPrincipalEditPage(authResult, chatId);
     permissionLogger.debug('Page AI edit permission evaluated', {
       userId: maskedUserId,
       chatId: maskedChatId,
@@ -996,6 +998,11 @@ export async function POST(request: Request) {
                   agentTitle: page.title,
                 },
                 enabledTools: agentEnabledTools ?? null,
+                // Bind tool execution to the MCP token's drive scope and RBAC role
+                // so a scoped token cannot reach drives outside its scope — or
+                // exceed its own membership role — via the agent's broader ACL.
+                mcpAllowedDriveIds: getAllowedDriveIds(authResult),
+                mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
               onChunk: ({ chunk }) => {
@@ -1444,7 +1451,7 @@ export async function PATCH(request: Request) {
     }
 
     // Check if user has permission to edit this page (SECURITY: Critical permission enforcement)
-    const canEdit = await canUserEditPage(auth.userId, sanitizedPageId);
+    const canEdit = await canPrincipalEditPage(auth, sanitizedPageId);
     if (!canEdit) {
       loggers.ai.warn('AI Settings PATCH: User lacks edit permission', {
         userId: auth.userId,
