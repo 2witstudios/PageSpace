@@ -27,6 +27,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
+  canUserViewPage: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -37,12 +38,13 @@ vi.mock('@/lib/auth', () => ({
 
 import { GET } from '../suggest/route';
 import { db } from '@pagespace/db/db';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
 const mockedIsMember = vi.mocked(isUserDriveMember);
+const mockedCanViewPage = vi.mocked(canUserViewPage);
 
 const USER_ID = 'user_1';
 
@@ -97,6 +99,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedAuth.mockResolvedValue(webAuth());
   mockedIsMember.mockResolvedValue(true);
+  mockedCanViewPage.mockResolvedValue(true);
   mockedDb.query.commands.findMany.mockResolvedValue([] as never);
 });
 

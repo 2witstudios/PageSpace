@@ -64,6 +64,21 @@ const SCOPE_LABELS: Record<CommandScope, string> = {
 };
 
 /**
+ * Prompt-size guards for the /help section: descriptions may be up to 1,024
+ * chars and command creation has no aggregate cap, so an unbounded list could
+ * blow past a model's context limit and fail the chat request. Listed
+ * descriptions are clipped and the list itself is capped, with an omission
+ * note pointing at the "/" picker for the full set.
+ */
+export const HELP_COMMAND_LIST_LIMIT = 100;
+export const HELP_DESCRIPTION_CHAR_LIMIT = 200;
+
+function clipDescription(description: string): string {
+  if (description.length <= HELP_DESCRIPTION_CHAR_LIMIT) return description;
+  return `${description.slice(0, HELP_DESCRIPTION_CHAR_LIMIT)}…`;
+}
+
+/**
  * The /help dynamic section: the sender's actual command list plus a short
  * explanation of the command mechanics, so the AI can answer "what commands
  * do I have here?" with real data instead of guessing.
@@ -78,8 +93,18 @@ export function buildHelpPromptSection(context: BuiltinPromptContext): string {
     lines.push('No commands are available in this context.');
   } else {
     lines.push('These are the commands actually available to the user here:', '');
-    for (const command of context.availableCommands) {
-      lines.push(`- /${command.trigger} (${SCOPE_LABELS[command.scope]}) — ${command.description}`);
+    const listed = context.availableCommands.slice(0, HELP_COMMAND_LIST_LIMIT);
+    for (const command of listed) {
+      lines.push(
+        `- /${command.trigger} (${SCOPE_LABELS[command.scope]}) — ${clipDescription(command.description)}`
+      );
+    }
+    const omitted = context.availableCommands.length - listed.length;
+    if (omitted > 0) {
+      lines.push(
+        '',
+        `(${omitted} more command${omitted === 1 ? '' : 's'} not listed — the user can see the full list by typing "/" in the message box.)`
+      );
     }
   }
 

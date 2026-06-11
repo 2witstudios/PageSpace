@@ -15,6 +15,7 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
+import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import {
   BUILTIN_COMMANDS,
   resolveCommandPrecedence,
@@ -31,6 +32,21 @@ type EntryPageRef = { driveId: string; isTrashed: boolean };
 const hasLiveEntryPage = <T extends { entryPage: EntryPageRef | null }>(
   row: T
 ): row is T & { entryPage: EntryPageRef } => row.entryPage !== null && !row.entryPage.isTrashed;
+
+// Execution re-checks entry-page access with canUserViewPage (command
+// resolution skips with no_access otherwise), so the offered list must apply
+// the same predicate — a command the user can't actually run (private entry
+// page, custom-role denial, revoked cross-drive ref) is not "available".
+async function filterByEntryPageAccess<T extends { entryPageId: string }>(
+  rows: T[],
+  userId: string
+): Promise<T[]> {
+  if (rows.length === 0) return rows;
+  const checks = await Promise.all(
+    rows.map(async (row) => ({ row, canView: await canUserViewPage(userId, row.entryPageId) }))
+  );
+  return checks.filter((entry) => entry.canView).map((entry) => entry.row);
+}
 
 /**
  * Load and precedence-resolve every command available to `userId`:
@@ -56,7 +72,11 @@ export async function loadAvailableCommands(
     where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
     with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
   });
-  const userCommands: CommandSummary[] = personalRows.filter(hasLiveEntryPage).map((row) => ({
+  const livePersonalRows = await filterByEntryPageAccess(
+    personalRows.filter(hasLiveEntryPage),
+    userId
+  );
+  const userCommands: CommandSummary[] = livePersonalRows.map((row) => ({
     id: row.id,
     trigger: row.trigger,
     description: row.description,
@@ -71,9 +91,11 @@ export async function loadAvailableCommands(
       where: and(eq(commands.driveId, driveId), eq(commands.enabled, true)),
       with: { entryPage: { columns: { driveId: true, isTrashed: true } } },
     });
-    driveCommands = driveRows
-      .filter((row) => hasLiveEntryPage(row) && row.entryPage.driveId === driveId)
-      .map((row) => ({
+    const liveDriveRows = await filterByEntryPageAccess(
+      driveRows.filter((row) => hasLiveEntryPage(row) && row.entryPage.driveId === driveId),
+      userId
+    );
+    driveCommands = liveDriveRows.map((row) => ({
         id: row.id,
         trigger: row.trigger,
         description: row.description,

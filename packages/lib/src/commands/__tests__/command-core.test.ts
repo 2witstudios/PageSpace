@@ -5,6 +5,8 @@ import {
   isReservedTrigger,
   resolveCommandPrecedence,
   buildHelpPromptSection,
+  HELP_COMMAND_LIST_LIMIT,
+  HELP_DESCRIPTION_CHAR_LIMIT,
   RESERVED_TRIGGERS,
   BUILTIN_COMMANDS,
   COMMAND_TRIGGER_MAX_LENGTH,
@@ -240,5 +242,40 @@ describe('buildHelpPromptSection', () => {
     const help = BUILTIN_COMMANDS.find((command) => command.trigger === 'help');
     expect(typeof help?.buildPromptSection).toBe('function');
     expect(help?.buildPromptSection).toBe(buildHelpPromptSection);
+  });
+
+  it('truncates pathological descriptions instead of injecting them whole', () => {
+    const huge = 'x'.repeat(COMMAND_DESCRIPTION_MAX_LENGTH);
+    const section = buildHelpPromptSection({
+      availableCommands: [userCmd('big', { description: huge })],
+    });
+    const line = section.split('\n').find((l) => l.startsWith('- /big')) ?? '';
+    expect(line.length).toBeLessThan(HELP_DESCRIPTION_CHAR_LIMIT + 50);
+    expect(line).toContain('…');
+  });
+
+  it('keeps short descriptions intact (no truncation marker)', () => {
+    const section = buildHelpPromptSection({
+      availableCommands: [userCmd('small', { description: 'Does a small thing.' })],
+    });
+    expect(section).toContain('- /small (personal) — Does a small thing.');
+    expect(section).not.toContain('…');
+  });
+
+  it('caps the rendered list and reports how many commands were omitted', () => {
+    const many = Array.from({ length: HELP_COMMAND_LIST_LIMIT + 7 }, (_, i) =>
+      userCmd(`cmd-${String(i).padStart(3, '0')}`)
+    );
+    const section = buildHelpPromptSection({ availableCommands: many });
+    const listed = section.split('\n').filter((l) => l.startsWith('- /'));
+    expect(listed).toHaveLength(HELP_COMMAND_LIST_LIMIT);
+    expect(section).toContain('7 more');
+  });
+
+  it('does not emit an omission note when the list fits', () => {
+    const section = buildHelpPromptSection({
+      availableCommands: [builtinCmd('help'), userCmd('deploy')],
+    });
+    expect(section).not.toContain('more command');
   });
 });
