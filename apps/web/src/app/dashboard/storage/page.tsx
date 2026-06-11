@@ -6,5 +6,5 @@ import { redirect } from 'next/navigation';
  * is kept only to redirect existing links/bookmarks.
  */
 export default function StorageRedirectPage() {
-  redirect('/settings/billing');
+  redirect('/settings/usage');
 }

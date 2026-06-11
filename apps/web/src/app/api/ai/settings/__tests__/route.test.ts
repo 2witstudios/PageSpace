@@ -404,7 +404,7 @@ describe('AI settings route', () => {
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.upgradeUrl).toBe('/settings/billing');
+      expect(body.upgradeUrl).toBe('/settings/usage');
     });
 
     it('lets a free user select an allowlist model (default model)', async () => {

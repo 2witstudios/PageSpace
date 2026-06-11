@@ -145,7 +145,7 @@ export async function PATCH(request: Request) {
         {
           error: 'Subscription required',
           message: 'This model is available on paid plans. Upgrade to access the full model catalog.',
-          upgradeUrl: '/settings/billing',
+          upgradeUrl: '/settings/usage',
         },
         { status: 403 }
       );

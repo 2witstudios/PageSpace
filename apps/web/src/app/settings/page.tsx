@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 import { canUseCommands } from "@/lib/commands/command-gating";
 
@@ -71,8 +71,15 @@ export default function SettingsPage() {
           available: true,
         },
         {
-          title: "Billing & Subscription",
-          description: "Subscription, AI credits, usage & storage",
+          title: "Usage",
+          description: "AI credits, usage breakdown, automations & storage",
+          icon: Coins,
+          href: "/settings/usage",
+          available: true,
+        },
+        {
+          title: "Billing",
+          description: "Subscription, payment methods & invoices",
           icon: CreditCard,
           href: "/settings/billing",
           available: true,

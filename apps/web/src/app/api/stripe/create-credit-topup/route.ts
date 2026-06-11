@@ -114,8 +114,8 @@ export async function POST(request: NextRequest) {
       payment_intent_data: {
         metadata: { kind: 'credit_pack', packId: purchase.id, userId: user.id },
       },
-      success_url: `${baseUrl}/settings/billing?credits=success`,
-      cancel_url: `${baseUrl}/settings/billing?credits=canceled`,
+      success_url: `${baseUrl}/settings/usage?credits=success`,
+      cancel_url: `${baseUrl}/settings/usage?credits=canceled`,
     });
 
     if (!session.url) {

@@ -38,7 +38,7 @@ type TopupBody = { packId: string } | { amountCents: number };
  * via the in-app credits helper) PLUS a custom-amount field, and starts a one-time
  * Stripe Checkout session for the chosen amount, redirecting to the hosted page. On
  * success the webhook funds the user's top-up bucket (paying down any debt first);
- * Stripe returns the user to `/settings/billing?credits=success`.
+ * Stripe returns the user to `/settings/usage?credits=success`.
  */
 export function BuyCreditsButton({
   variant = 'default',
