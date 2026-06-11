@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { db } from '@pagespace/db/db';
 import { drives, pages } from '@pagespace/db/schema/core';
-import { and, eq, sql } from '@pagespace/db/operators';
+import { and, eq, isNotNull, sql } from '@pagespace/db/operators';
 import {
   createUploadServiceToken,
   isPermissionDeniedError,
@@ -24,6 +24,11 @@ import {
  *   fly proxy 3003:3003 -a pagespace-processor   # in another terminal
  *   DATABASE_URL=<prod> PROCESSOR_URL=http://localhost:3003 \
  *     bun scripts/reenqueue-unprocessed-uploads.ts [--dry-run] [--since 2026-05-29]
+ *
+ * Idempotency: pages leave 'pending' only after the pull pipeline completes,
+ * so rerunning while the processor queue is still draining enqueues duplicate
+ * jobs (harmless — the pipeline re-hashes and rewrites statuses — but wasted
+ * work). Rerun after the queue drains and already-processed pages drop out.
  */
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
@@ -96,7 +101,7 @@ async function main(): Promise<void> {
         // object), so re-enqueueing those can never succeed.
         eq(pages.processingStatus, 'pending'),
         sql`${pages.createdAt} >= ${SINCE.toISOString()}`,
-        sql`${pages.filePath} IS NOT NULL`,
+        isNotNull(pages.filePath),
       ),
     );
 

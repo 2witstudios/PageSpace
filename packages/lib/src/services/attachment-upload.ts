@@ -55,18 +55,22 @@ export async function createAttachmentUploadServiceToken(
 
   switch (target.type) {
     case 'page': {
+      // Attachments are verified via /api/verify (files:write) and never
+      // enqueue processor ingestion, so don't inherit files:ingest from the
+      // page-upload default scopes.
       const result = await createUploadServiceToken({
         userId,
         driveId: target.driveId,
         pageId: target.pageId,
         parentId: target.pageId,
+        scopes: UPLOAD_SCOPES,
       });
       loggers.api.info('Attachment upload token grant', {
         userId,
         targetType: 'page',
         pageId: target.pageId,
         driveId: target.driveId,
-        scopes: UPLOAD_SCOPES,
+        scopes: result.grantedScopes,
       });
       return { token: result.token };
     }

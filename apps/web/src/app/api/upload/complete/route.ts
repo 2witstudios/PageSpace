@@ -310,7 +310,7 @@ export async function POST(request: Request) {
     } catch (err) {
       // Best-effort by design, but the page now has no derived content
       // (thumbnails/OCR/extraction) until reprocessed — keep this loud.
-      loggers.api.error('Failed to enqueue processor job', err as Error, {
+      loggers.api.error('Failed to enqueue processor job', err instanceof Error ? err : new Error(String(err)), {
         userId,
         driveId,
         pageId: newPage.id,

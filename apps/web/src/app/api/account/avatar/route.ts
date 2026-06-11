@@ -78,7 +78,10 @@ export async function POST(request: NextRequest) {
             method: 'DELETE',
             headers: {
               'Authorization': `Bearer ${serviceToken}`
-            }
+            },
+            // Best-effort cleanup; bounded so a stalled processor can't pin
+            // the request slot before the upload fetch below is reached.
+            signal: AbortSignal.timeout(10_000),
           });
         } catch (error) {
           console.log('Could not delete old avatar:', error);

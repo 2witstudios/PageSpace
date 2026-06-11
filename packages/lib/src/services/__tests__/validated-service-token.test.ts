@@ -736,6 +736,32 @@ describe('createValidatedServiceToken', () => {
       );
     });
 
+    it('narrows granted scopes when an explicit scopes option is passed', async () => {
+      // Arrange - user has drive edit permission
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
+        hasAccess: true,
+        isOwner: false,
+        isAdmin: false,
+        isMember: true,
+        canEdit: true,
+      });
+
+      // Act — attachment flows pass ['files:write'] so they don't inherit
+      // files:ingest from the page-upload default
+      const result = await createUploadServiceToken({
+        userId: 'user-1',
+        driveId: 'drive-1',
+        pageId: 'new-page-1',
+        scopes: ['files:write'],
+      });
+
+      // Assert
+      expect(result.grantedScopes).toEqual(['files:write']);
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ scopes: ['files:write'] })
+      );
+    });
+
     it('throws PermissionDeniedError when user lacks page edit permission', async () => {
       // Arrange - parent page exists in correct drive
       mockFindFirst.mockResolvedValue({ driveId: 'drive-1' });
