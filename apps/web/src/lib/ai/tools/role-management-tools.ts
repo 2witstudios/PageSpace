@@ -201,7 +201,7 @@ export const roleManagementTools = {
           stats: { driveName: gate.access.drive.name },
           nextSteps: [
             'Use set_role_page_permissions to grant page access',
-            'Use assign_custom_role_to_member to give this role to a member',
+            'Use set_role_drive_wide_permissions to apply drive-wide access',
           ],
         };
       } catch (error) {
