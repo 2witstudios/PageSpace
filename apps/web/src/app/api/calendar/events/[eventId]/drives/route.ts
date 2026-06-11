@@ -7,6 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import {
+  isUserMemberOfAnyEventDrive,
   shareEventWithDrive,
   unshareEventFromDrive,
   listEventDrives,
@@ -35,7 +36,11 @@ export async function GET(
 
   try {
     const [event] = await db
-      .select({ driveId: calendarEvents.driveId })
+      .select({
+        id: calendarEvents.id,
+        driveId: calendarEvents.driveId,
+        createdById: calendarEvents.createdById,
+      })
       .from(calendarEvents)
       .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)))
       .limit(1);
@@ -47,6 +52,11 @@ export async function GET(
     if (event.driveId) {
       const scopeError = checkMCPDriveScope(auth, event.driveId);
       if (scopeError) return scopeError;
+    }
+
+    const canAccess = event.createdById === auth.userId || await isUserMemberOfAnyEventDrive(auth.userId, event);
+    if (!canAccess) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     const drives = await listEventDrives(eventId);

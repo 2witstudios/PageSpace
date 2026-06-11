@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: {
     id: 'calendarEvents.id',
     driveId: 'calendarEvents.driveId',
+    createdById: 'calendarEvents.createdById',
     isTrashed: 'calendarEvents.isTrashed',
   },
 }));
@@ -48,6 +49,7 @@ vi.mock('../../../../../../../lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn(),
   shareEventWithDrive: vi.fn(),
   unshareEventFromDrive: vi.fn(),
   listEventDrives: vi.fn(),
@@ -57,6 +59,7 @@ import { GET, POST, DELETE } from '../route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '../../../../../../../lib/auth';
 import {
+  isUserMemberOfAnyEventDrive,
   shareEventWithDrive,
   unshareEventFromDrive,
   listEventDrives,
@@ -88,11 +91,12 @@ function makeRequest(method: string, url: string, body?: unknown): Request {
   });
 }
 
-function stubEventSelect(event: { driveId: string | null } | null) {
+function stubEventSelect(event: { driveId: string | null; createdById?: string } | null) {
+  const row = event ? { id: EVENT_ID, createdById: USER_ID, ...event } : null;
   (db.select as Mock).mockReturnValue({
     from: vi.fn().mockReturnValue({
       where: vi.fn().mockReturnValue({
-        limit: vi.fn().mockResolvedValue(event ? [event] : []),
+        limit: vi.fn().mockResolvedValue(row ? [row] : []),
       }),
     }),
   });
@@ -106,6 +110,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuth(USER_ID));
   (checkMCPDriveScope as Mock).mockReturnValue(null);
+  (isUserMemberOfAnyEventDrive as Mock).mockResolvedValue(true);
 });
 
 // ---------------------------------------------------------------------------
@@ -152,6 +157,18 @@ describe('GET', () => {
     );
 
     expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when caller cannot access the event', async () => {
+    stubEventSelect({ driveId: HOME_DRIVE_ID, createdById: 'other_user' });
+    (isUserMemberOfAnyEventDrive as Mock).mockResolvedValue(false);
+
+    const res = await GET(
+      makeRequest('GET', `http://host/api/calendar/events/${EVENT_ID}/drives`),
+      { params: Promise.resolve({ eventId: EVENT_ID }) },
+    );
+
+    expect(res.status).toBe(403);
   });
 });
 
@@ -248,6 +265,22 @@ describe('POST', () => {
     );
 
     expect(res.status).toBe(404);
+  });
+
+  it('403: returns forbidden when caller lacks permission', async () => {
+    stubEventSelect({ driveId: HOME_DRIVE_ID });
+    (shareEventWithDrive as Mock).mockResolvedValue({
+      ok: false,
+      status: 403,
+      error: 'You do not have permission to share this event',
+    });
+
+    const res = await POST(
+      makeRequest('POST', `http://host/api/calendar/events/${EVENT_ID}/drives`, { driveId: OTHER_DRIVE_ID }),
+      { params: Promise.resolve({ eventId: EVENT_ID }) },
+    );
+
+    expect(res.status).toBe(403);
   });
 });
 
