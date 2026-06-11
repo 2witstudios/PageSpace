@@ -2,39 +2,24 @@
 
 import { useParams, usePathname } from 'next/navigation';
 
-// Full-page routes that render their own content in the center panel
-// (no GlobalAssistantView). The sidebar should show the chat tab for these.
-const FULL_PAGE_ROUTE_PATTERN = /\/(activity|calendar|channels|connections|dms|drives|files|members|storage|tasks|trash|workflows)(\/|$)/;
-
 /**
- * Hook to detect if we're on a "dashboard context" where GlobalAssistantView
- * is displayed in the middle panel.
+ * Hook to detect if we're on the dashboard or drive root where GlobalAssistantView
+ * is displayed in the center panel and its state is shared with the sidebar.
  *
- * Dashboard context includes:
+ * isDashboardContext = true ONLY at:
  * - /dashboard (main dashboard)
- * - /dashboard/[driveId] (drive root)
+ * - /dashboard/[driveId] (drive root, no sub-route)
  *
- * NOT dashboard context:
- * - /dashboard/[driveId]/[pageId] (viewing a specific page)
- * - /dashboard/[driveId]/settings (settings pages)
- * - /dashboard/activity, /dashboard/trash, /dashboard/storage, /dashboard/connections (full-page routes)
- * - /dashboard/calendar, /dashboard/tasks, /dashboard/dms, /dashboard/channels (full-page routes)
- * - /dashboard/[driveId]/activity, /dashboard/[driveId]/trash, /dashboard/[driveId]/workflows (drive-level full-page routes)
- * - /dashboard/[driveId]/files, /dashboard/[driveId]/members, /dashboard/[driveId]/calendar, etc.
+ * All other routes (pages, full-page routes, settings, notifications, etc.) use
+ * an independent sidebar chat and return isDashboardContext = false.
  */
 export function useDashboardContext() {
   const params = useParams();
   const pathname = usePathname();
 
-  // Full-page routes render their own content (no GlobalAssistantView),
-  // so the sidebar should show the chat tab independently
-  const isFullPageRoute = FULL_PAGE_ROUTE_PATTERN.test(pathname || '');
-
-  // Dashboard context = no pageId in params, not on special routes, not on full-page routes
-  const isDashboardContext = !params.pageId &&
-    !pathname.endsWith('/settings') &&
-    !pathname.endsWith('/settings/mcp') &&
-    !isFullPageRoute;
+  const isDashboardContext =
+    pathname === '/dashboard' ||
+    (!params.pageId && /^\/dashboard\/[^/]+$/.test(pathname || ''));
 
   return { isDashboardContext };
 }
