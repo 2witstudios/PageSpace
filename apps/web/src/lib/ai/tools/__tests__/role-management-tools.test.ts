@@ -24,6 +24,10 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
   deleteDriveRole: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue(['owner1', 'user1']),
+}));
+
 vi.mock('../actor-permissions', () => ({
   driveDeniedByAppToken: vi.fn(),
 }));

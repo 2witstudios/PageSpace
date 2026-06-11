@@ -4,11 +4,59 @@ import {
   checkDriveAccessForRoles,
   listDriveRoles,
   getRoleById,
+  createDriveRole,
+  updateDriveRole,
+  deleteDriveRole,
+  type DriveRoleAccessInfo,
 } from '@pagespace/lib/services/drive-role-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken } from './actor-permissions';
+import { getAiContextWithActor } from './task-helpers';
 
 const driveIdSchema = z.string().regex(/^[a-z][a-z0-9]{1,31}$/, 'Invalid drive ID format');
+
+const driveWidePermissionsSchema = z.object({
+  canView: z.boolean(),
+  canEdit: z.boolean(),
+  canShare: z.boolean(),
+});
+
+type AdminGate =
+  | { ok: true; access: DriveRoleAccessInfo & { drive: NonNullable<DriveRoleAccessInfo['drive']> } }
+  | { ok: false; error: { success: false; error: string } };
+
+async function requireDriveAdmin(
+  context: ToolExecutionContext,
+  driveId: string
+): Promise<AdminGate> {
+  if (await driveDeniedByAppToken(context, driveId, 'manage')) {
+    return { ok: false, error: { success: false, error: 'This token does not have access to this drive' } };
+  }
+
+  const access = await checkDriveAccessForRoles(driveId, context.userId);
+  if (!access.drive) return { ok: false, error: { success: false, error: 'Drive not found' } };
+  if (!access.isOwner && !access.isAdmin) {
+    return { ok: false, error: { success: false, error: 'You must be a drive admin or owner to manage roles' } };
+  }
+
+  return { ok: true, access: { ...access, drive: access.drive } };
+}
+
+async function logAndBroadcastRoleChange(
+  context: ToolExecutionContext,
+  driveId: string,
+  driveName: string,
+  action: 'create' | 'update' | 'delete',
+  roleName: string
+): Promise<void> {
+  const recipientUserIds = await getDriveRecipientUserIds(driveId);
+  await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+  logDriveActivity(context.userId, action, { id: driveId, name: `${driveName} — role "${roleName}"` },
+    await getAiContextWithActor(context));
+}
 
 export const roleManagementTools = {
   list_drive_roles: tool({
@@ -95,6 +143,137 @@ export const roleManagementTools = {
           'Use set_role_drive_wide_permissions to apply drive-wide access',
         ],
       };
+    },
+  }),
+
+  create_drive_role: tool({
+    description: 'Create a new custom role in a drive. Optionally set drive-wide permissions (canView/canEdit/canShare applying to all pages including future ones). Requires drive admin or owner.',
+    inputSchema: z.object({
+      driveId: driveIdSchema.describe('The ID of the drive to create the role in'),
+      name: z.string().min(1).describe('Role name, unique within the drive'),
+      description: z.string().optional().describe('What this role is for'),
+      color: z.string().optional().describe('Display color (hex)'),
+      driveWidePermissions: driveWidePermissionsSchema.nullable().optional()
+        .describe('Permissions applying to ALL pages in the drive, including future ones. Omit or null for per-page-only.'),
+    }),
+    execute: async ({ driveId, name, description, color, driveWidePermissions }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      const gate = await requireDriveAdmin(context as ToolExecutionContext, driveId);
+      if (!gate.ok) return gate.error;
+
+      try {
+        const role = await createDriveRole(driveId, {
+          name,
+          description: description ?? null,
+          color: color ?? null,
+          permissions: {},
+          driveWidePermissions: driveWidePermissions ?? null,
+        });
+
+        await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'create', role.name);
+
+        return {
+          success: true,
+          role: {
+            id: role.id,
+            name: role.name,
+            description: role.description,
+            color: role.color,
+            driveWidePermissions: role.driveWidePermissions,
+            position: role.position,
+          },
+          summary: `Created role "${role.name}" in "${gate.access.drive.name}"`,
+          stats: { driveName: gate.access.drive.name },
+          nextSteps: [
+            'Use set_role_page_permissions to grant page access',
+            'Use assign_custom_role_to_member to give this role to a member',
+          ],
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to create role' };
+      }
+    },
+  }),
+
+  update_drive_role: tool({
+    description: 'Update a custom role\'s name, description, color, or drive-wide permissions. Requires drive admin or owner.',
+    inputSchema: z.object({
+      driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
+      roleId: z.string().describe('The ID of the role to update'),
+      name: z.string().min(1).optional().describe('New role name'),
+      description: z.string().nullable().optional().describe('New description'),
+      color: z.string().nullable().optional().describe('New display color'),
+      driveWidePermissions: driveWidePermissionsSchema.nullable().optional()
+        .describe('New drive-wide permissions; null clears them'),
+    }),
+    execute: async ({ driveId, roleId, name, description, color, driveWidePermissions }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      const gate = await requireDriveAdmin(context as ToolExecutionContext, driveId);
+      if (!gate.ok) return gate.error;
+
+      try {
+        const { role } = await updateDriveRole(driveId, roleId, {
+          ...(name !== undefined && { name }),
+          ...(description !== undefined && { description }),
+          ...(color !== undefined && { color }),
+          ...(driveWidePermissions !== undefined && { driveWidePermissions }),
+        });
+
+        await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'update', role.name);
+
+        return {
+          success: true,
+          role: {
+            id: role.id,
+            name: role.name,
+            description: role.description,
+            color: role.color,
+            driveWidePermissions: role.driveWidePermissions,
+            position: role.position,
+          },
+          summary: `Updated role "${role.name}" in "${gate.access.drive.name}"`,
+          stats: { driveName: gate.access.drive.name },
+          nextSteps: ['Use get_drive_role to verify the changes'],
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to update role' };
+      }
+    },
+  }),
+
+  delete_drive_role: tool({
+    description: 'Delete a custom role from a drive. Members holding this role revert to plain members. Requires drive admin or owner.',
+    inputSchema: z.object({
+      driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
+      roleId: z.string().describe('The ID of the role to delete'),
+    }),
+    execute: async ({ driveId, roleId }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('User authentication required');
+
+      const gate = await requireDriveAdmin(context as ToolExecutionContext, driveId);
+      if (!gate.ok) return gate.error;
+
+      try {
+        const role = await getRoleById(driveId, roleId);
+        const roleName = role?.name ?? roleId;
+        await deleteDriveRole(driveId, roleId);
+
+        await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'delete', roleName);
+
+        return {
+          success: true,
+          summary: `Deleted role "${roleName}" from "${gate.access.drive.name}" — members with this role revert to plain members`,
+          stats: { driveName: gate.access.drive.name },
+          nextSteps: ['Use list_drive_roles to see remaining roles'],
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to delete role' };
+      }
     },
   }),
 };
