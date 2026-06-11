@@ -843,6 +843,47 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     />
   ),
 
+  // === TRIGGER TOOLS ===
+  set_calendar_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Calendar Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_calendar_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title="Calendar Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  set_task_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Task Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_task_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title="Task Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === CLI TOOLS (pi / pagespace-cli) ===
   // pi tool names are lowercase (read, write, edit, bash, find, grep, ls).
   // These tools return plain strings so `output` carries the content and `parsedOutput` is {}.

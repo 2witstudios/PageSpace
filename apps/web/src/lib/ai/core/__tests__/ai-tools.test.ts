@@ -119,6 +119,15 @@ vi.mock('../../tools/member-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/trigger-tools', () => ({
+  triggerTools: {
+    set_calendar_trigger: { name: 'set_calendar_trigger', description: 'Set calendar trigger' },
+    delete_calendar_trigger: { name: 'delete_calendar_trigger', description: 'Delete calendar trigger' },
+    set_task_trigger: { name: 'set_task_trigger', description: 'Set task trigger' },
+    delete_task_trigger: { name: 'delete_task_trigger', description: 'Delete task trigger' },
+  },
+}));
+
 // Stub the sandbox tools so the builder can be exercised without loading the DB
 // module graph or the real Fly Sprites driver.
 vi.mock('../../tools/sandbox-tools-runtime', () => ({
@@ -145,6 +154,7 @@ import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
 import { channelTools } from '../../tools/channel-tools';
 import { workflowTools } from '../../tools/workflow-tools';
+import { triggerTools } from '../../tools/trigger-tools';
 import { modelTools } from '../../tools/model-tools';
 
 describe('ai-tools', () => {
@@ -169,6 +179,7 @@ describe('ai-tools', () => {
         ...calendarWriteTools,
         ...channelTools,
         ...workflowTools,
+        ...triggerTools,
         ...modelTools,
       });
     });
@@ -189,6 +200,7 @@ describe('ai-tools', () => {
         Object.keys(calendarWriteTools),
         Object.keys(channelTools),
         Object.keys(workflowTools),
+        Object.keys(triggerTools),
         Object.keys(modelTools),
       ];
 
