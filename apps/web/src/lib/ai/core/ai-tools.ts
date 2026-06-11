@@ -1,6 +1,7 @@
 import type { Tool } from 'ai';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { memberTools } from '../tools/member-tools';
+import { roleManagementTools } from '../tools/role-management-tools';
 import { driveTools } from '../tools/drive-tools';
 import { pageReadTools } from '../tools/page-read-tools';
 import { pageWriteTools } from '../tools/page-write-tools';
@@ -20,6 +21,7 @@ import { CORE_TOOL_NAMES } from './stub-tools';
 
 const baseTools = {
   ...memberTools,
+  ...roleManagementTools,
   ...driveTools,
   ...pageReadTools,
   ...pageWriteTools,
