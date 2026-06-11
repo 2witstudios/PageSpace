@@ -63,7 +63,8 @@ Assignment:
 - Agents can assign tasks to themselves or other agents
 
 Agent Triggers:
-- Schedule an AI agent to run at task due date or on task completion
+- Prefer set_task_trigger for attaching triggers to existing tasks (dedicated tool, simpler schema)
+- The agentTrigger param here works as a shortcut when updating the task and setting the trigger together
 - Provide agentTrigger with agentPageId and either prompt or instructionPageId
 - triggerType 'due_date' fires when the due date arrives (requires dueDate)
 - triggerType 'completion' fires when the task is marked done`,
