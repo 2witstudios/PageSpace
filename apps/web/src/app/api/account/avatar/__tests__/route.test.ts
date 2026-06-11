@@ -363,6 +363,19 @@ describe('POST /api/account/avatar', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to upload avatar');
     });
+
+    it('returns 504 when the processor upload times out', async () => {
+      mockSelectChain([{ image: null }]);
+      // fetch with AbortSignal.timeout rejects with DOMException TimeoutError
+      mockFetch.mockRejectedValue(new DOMException('The operation timed out', 'TimeoutError'));
+
+      const file = createMockFile('image/png', 1024);
+      const response = await POST(createUploadRequest(file));
+      const body = await response.json();
+
+      expect(response.status).toBe(504);
+      expect(body.error).toBe('Avatar upload timed out, please try again');
+    });
   });
 
   describe('successful upload', () => {

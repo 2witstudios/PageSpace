@@ -103,6 +103,9 @@ describe('createAttachmentUploadServiceToken', () => {
         driveId: 'drive-1',
         pageId: 'page-1',
         parentId: 'page-1',
+        // Attachments verify via /api/verify and never enqueue ingestion, so
+        // they must NOT inherit files:ingest from the page-upload default.
+        scopes: ['files:write'],
       });
       expect(result.token).toBe('ps_svc_page-token');
       // Conversation path must not run

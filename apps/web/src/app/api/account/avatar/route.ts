@@ -78,7 +78,10 @@ export async function POST(request: NextRequest) {
             method: 'DELETE',
             headers: {
               'Authorization': `Bearer ${serviceToken}`
-            }
+            },
+            // Best-effort cleanup; bounded so a stalled processor can't pin
+            // the request slot before the upload fetch below is reached.
+            signal: AbortSignal.timeout(10_000),
           });
         } catch (error) {
           console.log('Could not delete old avatar:', error);
@@ -100,13 +103,28 @@ export async function POST(request: NextRequest) {
       userId: userId,
     });
 
-    const processorResponse = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${serviceToken}`
-      },
-      body: processorFormData,
-    });
+    // Bounded so a stalled processor can't pin this request slot open —
+    // the web instance has a hard cap on concurrent requests.
+    let processorResponse: Response;
+    try {
+      processorResponse = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${serviceToken}`
+        },
+        body: processorFormData,
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'TimeoutError') {
+        console.error('Processor avatar upload timed out', { userId });
+        return NextResponse.json(
+          { error: 'Avatar upload timed out, please try again' },
+          { status: 504 }
+        );
+      }
+      throw err;
+    }
 
     if (!processorResponse.ok) {
       const errorData = await processorResponse.json().catch(() => ({}));

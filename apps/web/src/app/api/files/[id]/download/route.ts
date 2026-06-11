@@ -32,6 +32,10 @@ export async function GET(
     const { id } = await context.params;
     const { searchParams } = new URL(request.url);
     const filenameParam = searchParams.get('filename');
+    // JSON mode lets the client fetch the presigned URL without credentials.
+    // A credentialed fetch following the 307 into Tigris fails CORS (the
+    // bucket never sends Access-Control-Allow-Credentials).
+    const wantsJson = request.headers.get('Accept')?.includes('application/json') ?? false;
 
     const user = await verifyAuth(request);
     if (!user) {
@@ -65,6 +69,7 @@ export async function GET(
 
       auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'download', mimeType } });
 
+      if (wantsJson) return NextResponse.json({ url: presignedUrl });
       return NextResponse.redirect(presignedUrl, 307);
     }
 
@@ -92,6 +97,7 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'download', mimeType } });
 
+    if (wantsJson) return NextResponse.json({ url: presignedUrl });
     return NextResponse.redirect(presignedUrl, 307);
 
   } catch (error) {
