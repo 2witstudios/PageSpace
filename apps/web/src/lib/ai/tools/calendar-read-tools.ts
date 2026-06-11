@@ -7,7 +7,7 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { isUserMemberOfAnyEventDrive } from '@pagespace/lib/services/calendar-event-drive-service';
+import { isUserMemberOfAnyEventDrive, listEventDrives } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../core/types';
 import { driveOutsideMcpScope, filterDriveIdsByMcpScope } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
@@ -829,6 +829,43 @@ export const calendarReadTools = {
           `Failed to check availability: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    },
+  }),
+
+  list_event_drives: tool({
+    description:
+      'List all drives an event is shared with. ' +
+      'The home drive (where the event was created) is always listed first with isHome=true. ' +
+      'Returns an empty array for personal events (not tied to any drive).',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event'),
+    }),
+    execute: async ({ eventId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+      const drives = await listEventDrives(eventId);
+
+      if (context && drives.length > 0 && drives[0].driveId && driveOutsideMcpScope(context, drives[0].driveId)) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+
+      return {
+        success: true,
+        data: { eventId, drives },
+        summary:
+          drives.length === 0
+            ? 'This is a personal event not shared with any drive.'
+            : `Event is visible in ${drives.length} drive(s): ${drives.map((d) => d.driveName).join(', ')}`,
+        nextSteps:
+          drives.length > 0
+            ? [
+                'Use share_event_with_drive to share with additional drives',
+                'Use unshare_event_from_drive to remove from a shared drive',
+              ]
+            : [],
+      };
     },
   }),
 };

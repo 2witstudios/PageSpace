@@ -15,7 +15,7 @@ import {
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
+import { getAllMemberUserIdsForEvent, shareEventWithDrive, unshareEventFromDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../core/types';
@@ -1156,6 +1156,82 @@ export const calendarWriteTools = {
           `Failed to remove attendee: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    },
+  }),
+
+  share_event_with_drive: tool({
+    description:
+      'Share a calendar event with an additional drive so members of that drive can see it. ' +
+      'No duplicate event is created — the original event appears in both drives. ' +
+      'Triggers remain tied to the home drive and are not affected by sharing.',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event to share'),
+      driveId: z.string().describe('The ID of the drive to share the event into'),
+    }),
+    execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+      if (context && driveOutsideMcpScope(context, driveId)) {
+        return { success: false, error: 'Target drive is outside the scope of your access token.' };
+      }
+
+      const result = await shareEventWithDrive({ actingUserId: userId, eventId, driveId });
+      if (!result.ok) {
+        return { success: false, error: result.error };
+      }
+
+      calendarWriteLogger.info('Event shared with drive via AI tool', {
+        eventId: maskIdentifier(eventId),
+        driveId: maskIdentifier(driveId),
+        userId: maskIdentifier(userId),
+      });
+
+      return {
+        success: true,
+        data: { eventId, driveId },
+        summary: `Event has been shared with the drive. Members of that drive can now see it.`,
+        nextSteps: [
+          'Use list_event_drives to see all drives the event is shared with',
+          'Use unshare_event_from_drive to remove the event from a drive',
+        ],
+      };
+    },
+  }),
+
+  unshare_event_from_drive: tool({
+    description:
+      'Remove a calendar event from a shared drive. The event itself is not deleted — ' +
+      'it continues to exist in its home drive. Cannot remove from the home drive.',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event to unshare'),
+      driveId: z.string().describe('The ID of the drive to remove the event from'),
+    }),
+    execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const result = await unshareEventFromDrive({ actingUserId: userId, eventId, driveId });
+      if (!result.ok) {
+        return { success: false, error: result.error };
+      }
+
+      calendarWriteLogger.info('Event unshared from drive via AI tool', {
+        eventId: maskIdentifier(eventId),
+        driveId: maskIdentifier(driveId),
+        userId: maskIdentifier(userId),
+      });
+
+      return {
+        success: true,
+        data: { eventId, driveId },
+        summary: `Event has been removed from the drive. It still exists in its home drive.`,
+        nextSteps: [
+          'Use list_event_drives to see the remaining drives the event is shared with',
+          'Use share_event_with_drive to share it again',
+        ],
+      };
     },
   }),
 };
