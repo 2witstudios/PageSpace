@@ -1,10 +1,10 @@
 import { db } from '@pagespace/db/db';
-import { eq, and, inArray } from '@pagespace/db/operators';
+import { eq, and, inArray, isNotNull } from '@pagespace/db/operators';
 import { calendarEvents, calendarEventDrives } from '@pagespace/db/schema/calendar';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { isDriveOwnerOrAdmin, isUserDriveMember } from '../permissions/permissions';
-import { getDriveMemberUserIds } from './drive-member-service';
+import { getDriveRecipientUserIds } from './drive-member-service';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -275,8 +275,9 @@ export async function listEventDrives(eventId: string): Promise<EventDriveEntry[
 }
 
 /**
- * Check if a user is a member of the event's home drive OR any shared drive.
- * Fast-path: skips junction query if home-drive membership is confirmed first.
+ * Check if a user is a member (or owner) of the event's home drive OR any shared drive.
+ * Fast-path: skips junction query if home-drive membership/ownership is confirmed first.
+ * Uses batched queries for shared drives — not N+1.
  */
 export async function isUserMemberOfAnyEventDrive(
   userId: string,
@@ -284,8 +285,9 @@ export async function isUserMemberOfAnyEventDrive(
 ): Promise<boolean> {
   if (!event.driveId) return false;
 
-  const homeDriveMembers = new Set(await getDriveMemberUserIds(event.driveId));
-  if (isUserInAnyDriveSet(userId, homeDriveMembers, [])) return true;
+  // getDriveRecipientUserIds includes the drive owner + all accepted members.
+  const homeRecipients = new Set(await getDriveRecipientUserIds(event.driveId));
+  if (homeRecipients.has(userId)) return true;
 
   const sharedRows = await db
     .select({ driveId: calendarEventDrives.driveId })
@@ -294,16 +296,25 @@ export async function isUserMemberOfAnyEventDrive(
 
   if (sharedRows.length === 0) return false;
 
-  const sharedMemberSets = await Promise.all(
-    sharedRows.map((r) => getDriveMemberUserIds(r.driveId).then((ids) => new Set(ids))),
-  );
+  const sharedDriveIds = sharedRows.map((r) => r.driveId);
+  const [sharedMembers, sharedOwners] = await Promise.all([
+    db.select({ userId: driveMembers.userId })
+      .from(driveMembers)
+      .where(and(inArray(driveMembers.driveId, sharedDriveIds), isNotNull(driveMembers.acceptedAt))),
+    db.select({ ownerId: drives.ownerId })
+      .from(drives)
+      .where(inArray(drives.id, sharedDriveIds)),
+  ]);
 
-  return isUserInAnyDriveSet(userId, homeDriveMembers, sharedMemberSets);
+  return sharedMembers.some((m) => m.userId === userId) ||
+    sharedOwners.some((d) => d.ownerId === userId);
 }
 
 /**
- * Return the union of all member user IDs across the home drive and all shared drives.
- * Uses a single batched query for shared-drive members — not N+1.
+ * Return the union of all member/owner user IDs across the home drive and all shared drives.
+ * Uses batched queries for shared drives — not N+1.
+ * Filters by acceptedAt IS NOT NULL to exclude pending invitations.
+ * Includes drive owners (stored on drives.ownerId, not in driveMembers).
  */
 export async function getAllMemberUserIdsForEvent(
   eventId: string,
@@ -311,22 +322,28 @@ export async function getAllMemberUserIdsForEvent(
 ): Promise<Set<string>> {
   if (!homeDriveId) return new Set();
 
-  const [homeMembers, sharedRows] = await Promise.all([
-    getDriveMemberUserIds(homeDriveId),
+  // getDriveRecipientUserIds includes the drive owner + all accepted members.
+  const [homeRecipients, sharedRows] = await Promise.all([
+    getDriveRecipientUserIds(homeDriveId),
     db.select({ driveId: calendarEventDrives.driveId })
       .from(calendarEventDrives)
       .where(eq(calendarEventDrives.eventId, eventId)),
   ]);
 
-  const result = new Set(homeMembers);
+  const result = new Set(homeRecipients);
 
   if (sharedRows.length > 0) {
     const sharedDriveIds = sharedRows.map((r) => r.driveId);
-    const sharedMembers = await db
-      .select({ userId: driveMembers.userId })
-      .from(driveMembers)
-      .where(inArray(driveMembers.driveId, sharedDriveIds));
+    const [sharedMembers, sharedOwners] = await Promise.all([
+      db.select({ userId: driveMembers.userId })
+        .from(driveMembers)
+        .where(and(inArray(driveMembers.driveId, sharedDriveIds), isNotNull(driveMembers.acceptedAt))),
+      db.select({ ownerId: drives.ownerId })
+        .from(drives)
+        .where(inArray(drives.id, sharedDriveIds)),
+    ]);
     for (const { userId } of sharedMembers) result.add(userId);
+    for (const { ownerId } of sharedOwners) result.add(ownerId);
   }
 
   return result;
