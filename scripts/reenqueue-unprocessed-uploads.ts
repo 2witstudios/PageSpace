@@ -1,8 +1,11 @@
 import 'dotenv/config';
 import { db } from '@pagespace/db/db';
-import { pages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { and, eq, sql } from '@pagespace/db/operators';
-import { createUploadServiceToken } from '@pagespace/lib/services/validated-service-token';
+import {
+  createUploadServiceToken,
+  isPermissionDeniedError,
+} from '@pagespace/lib/services/validated-service-token';
 
 /**
  * Re-enqueue processor ingestion for FILE pages whose post-upload enqueue was
@@ -33,8 +36,34 @@ if (Number.isNaN(SINCE.getTime())) {
   process.exit(1);
 }
 
-async function enqueue(userId: string, driveId: string, pageId: string): Promise<void> {
-  const { token } = await createUploadServiceToken({ userId, driveId, pageId });
+/**
+ * Mint an enqueue token as the original uploader, falling back to the drive
+ * owner. The uploader may have been removed or downgraded since the upload;
+ * the page and blob still belong to the drive, and the owner always has edit.
+ */
+async function mintToken(createdBy: string | null, driveId: string, pageId: string): Promise<string> {
+  if (createdBy) {
+    try {
+      const { token } = await createUploadServiceToken({ userId: createdBy, driveId, pageId });
+      return token;
+    } catch (err) {
+      if (!isPermissionDeniedError(err)) throw err;
+    }
+  }
+
+  const [drive] = await db
+    .select({ ownerId: drives.ownerId })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!drive) throw new Error(`Drive ${driveId} not found`);
+
+  const { token } = await createUploadServiceToken({ userId: drive.ownerId, driveId, pageId });
+  return token;
+}
+
+async function enqueue(createdBy: string | null, driveId: string, pageId: string): Promise<void> {
+  const token = await mintToken(createdBy, driveId, pageId);
   const res = await fetch(`${PROCESSOR_URL}/api/ingest/pull/${pageId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -61,7 +90,11 @@ async function main(): Promise<void> {
       and(
         eq(pages.type, 'FILE'),
         eq(pages.isTrashed, false),
-        sql`${pages.processingStatus} IN ('pending', 'failed')`,
+        // Only 'pending' — that's the state the missing-scope bug leaves
+        // behind. 'failed' means the processor actually ran and rejected the
+        // file (hash mismatch, disallowed type — rejectAndFail deletes the
+        // object), so re-enqueueing those can never succeed.
+        eq(pages.processingStatus, 'pending'),
         sql`${pages.createdAt} >= ${SINCE.toISOString()}`,
         sql`${pages.filePath} IS NOT NULL`,
       ),
@@ -71,17 +104,8 @@ async function main(): Promise<void> {
 
   let ok = 0;
   let failed = 0;
-  let skipped = 0;
 
   for (const row of rows) {
-    if (!row.createdBy) {
-      // Token minting validates the user's edit permission; without a creator
-      // there is no principal to mint for. Surface these for manual handling.
-      console.warn(`SKIP ${row.id} "${row.title}" — no createdBy user`);
-      skipped += 1;
-      continue;
-    }
-
     if (DRY_RUN) {
       console.log(`WOULD ENQUEUE ${row.id} "${row.title}" (status=${row.processingStatus}, created=${row.createdAt?.toISOString()})`);
       ok += 1;
@@ -98,7 +122,7 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`Done: ${ok} enqueued, ${failed} failed, ${skipped} skipped`);
+  console.log(`Done: ${ok} enqueued, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
