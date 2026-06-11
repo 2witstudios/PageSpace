@@ -21,10 +21,12 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
+// Structured operator mocks so tests can inspect WHERE clauses (e.g. prove
+// the agent lookup filters by the mention id, never the command id).
 vi.mock('@pagespace/db/operators', () => ({
-  and: vi.fn(),
-  eq: vi.fn(),
-  inArray: vi.fn(),
+  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  eq: vi.fn((field: unknown, value: unknown) => ({ op: 'eq', field, value })),
+  inArray: vi.fn((field: unknown, values: unknown) => ({ op: 'inArray', field, values })),
   desc: vi.fn(),
   asc: vi.fn(),
 }));
@@ -188,11 +190,23 @@ describe('command chip and @mention in one message — both pipelines run', () =
     await triggerMentionedAgentResponses(params);
     // Command resolution queried exactly the chip's commandId path once.
     expect(mockCommandsFindFirst).toHaveBeenCalledTimes(1);
-    // The agent lookup received the mention id, not the command id.
+
+    // The agent lookup's WHERE filters by exactly the mention id — a
+    // regression that feeds the command id into mention resolution fails
+    // here, not just at the column-shape level.
+    interface WhereClause {
+      op: string;
+      args?: WhereClause[];
+      values?: unknown;
+    }
     const agentLookupCall = mockPagesFindMany.mock.calls.find(
       (call) => (call[0] as { columns?: Record<string, boolean> })?.columns?.enabledTools
-    );
+    ) as [{ where: WhereClause }] | undefined;
     expect(agentLookupCall).toBeDefined();
+    const idFilter = agentLookupCall![0].where.args?.find(
+      (clause) => clause.op === 'inArray'
+    );
+    expect(idFilter?.values).toEqual([AGENT_ID]);
   });
 });
 

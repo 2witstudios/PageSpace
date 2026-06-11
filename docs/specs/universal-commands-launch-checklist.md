@@ -229,9 +229,11 @@ responses, and command execution itself.
 
 Concrete and checkable; run the checks over a trailing **7-day** window.
 
-1. **Creation volume:** ≥ 10 non-builtin commands exist across ≥ 3 drives
-   and ≥ 4 distinct authors.
-   `SELECT count(*), count(DISTINCT coalesce(drive_id, 'personal')), count(DISTINCT created_by_id) FROM commands;`
+1. **Creation volume:** ≥ 10 commands exist, drive commands span ≥ 3
+   distinct drives, and there are ≥ 4 distinct authors.
+   `SELECT count(*) AS total, count(DISTINCT drive_id) AS drives, count(DISTINCT created_by_id) AS authors FROM commands;`
+   (`count(DISTINCT drive_id)` ignores NULLs, so personal commands never
+   inflate the drive count.)
 2. **Execution volume:** ≥ 25 AI responses carry a command execution part
    (`data-command-execution` persisted in message parts — count via the
    messages store), including ≥ 5 uses of `/help`.
