@@ -88,6 +88,8 @@ export interface Drive {
   isOwned: boolean;
   role?: 'OWNER' | 'ADMIN' | 'MEMBER';
   lastAccessedAt?: string | null; // ISO8601 date string from API
+  // Optional: zustand-persisted Drive objects in localStorage predate this field
+  homePageId?: string | null;
 }
 
 // Inbox types for unified DM/Channel inbox

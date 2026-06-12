@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,8 +8,11 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2 } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home } from 'lucide-react';
+import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
+import { usePageTree } from '@/hooks/usePageTree';
+import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
@@ -43,9 +46,12 @@ export default function GeneralSettingsPage() {
   const drives = useDriveStore((state) => state.drives);
   const isLoading = useDriveStore((state) => state.isLoading);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const updateDriveInStore = useDriveStore((state) => state.updateDrive);
+  const { tree } = usePageTree(driveId);
 
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isClearingHomePage, setIsClearingHomePage] = useState(false);
   const startEditing = useEditingStore((s) => s.startEditing);
   const endEditing = useEditingStore((s) => s.endEditing);
 
@@ -76,6 +82,28 @@ export default function GeneralSettingsPage() {
     drive ? `/api/drives/${driveId}/apps/members` : null,
     fetcher
   );
+
+  const homePageId = drive?.homePageId ?? null;
+  // Memoized: the controlled name input re-renders this page per keystroke,
+  // and findNodeAndParent is a full tree walk.
+  const homePageNode = useMemo(
+    () => (homePageId ? findNodeAndParent(tree, homePageId)?.node ?? null : null),
+    [tree, homePageId]
+  );
+
+  const handleClearHomePage = async () => {
+    if (isClearingHomePage) return;
+    setIsClearingHomePage(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { homePageId: null });
+      updateDriveInStore(driveId, { homePageId: null });
+      toast.success('Home page cleared');
+    } catch {
+      toast.error('Failed to clear home page');
+    } finally {
+      setIsClearingHomePage(false);
+    }
+  };
 
   const handleSave = async () => {
     const nextName = name.trim();
@@ -167,6 +195,41 @@ export default function GeneralSettingsPage() {
             {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             Save
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Home Page</CardTitle>
+          <CardDescription>The page people land on when they enter this drive</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {homePageId ? (
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-sm min-w-0">
+                <Home className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <Link
+                  href={`/dashboard/${driveId}/${homePageId}`}
+                  className="truncate font-medium hover:underline"
+                >
+                  {homePageNode?.title ?? 'Unknown page'}
+                </Link>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleClearHomePage}
+                disabled={isClearingHomePage}
+              >
+                {isClearingHomePage && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Clear
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              None — right-click a page in the sidebar to set one
+            </p>
+          )}
         </CardContent>
       </Card>
 
