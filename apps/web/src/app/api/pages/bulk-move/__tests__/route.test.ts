@@ -74,9 +74,14 @@ vi.mock('@pagespace/db/db', () => {
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
   const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
   const txQueryPagesFindMany = vi.fn().mockResolvedValue([]);
+  const txQueryPagesFindFirst = vi.fn().mockResolvedValue(undefined);
+  const txQueryDrivesFindFirst = vi.fn().mockResolvedValue(undefined);
   const tx = {
     update: txUpdate,
-    query: { pages: { findMany: txQueryPagesFindMany } },
+    query: {
+      pages: { findMany: txQueryPagesFindMany, findFirst: txQueryPagesFindFirst },
+      drives: { findFirst: txQueryDrivesFindFirst },
+    },
   };
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
     await fn(tx);
@@ -90,7 +95,7 @@ vi.mock('@pagespace/db/db', () => {
       },
       transaction,
     },
-    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction },
+    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txQueryPagesFindFirst, txQueryDrivesFindFirst, transaction },
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
@@ -124,10 +129,12 @@ import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
 
-const { txUpdate, txUpdateSet, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
+const { txUpdate, txUpdateSet, txQueryPagesFindMany, txQueryPagesFindFirst, txQueryDrivesFindFirst, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;
   txUpdateSet: ReturnType<typeof vi.fn>;
   txQueryPagesFindMany: ReturnType<typeof vi.fn>;
+  txQueryPagesFindFirst: ReturnType<typeof vi.fn>;
+  txQueryDrivesFindFirst: ReturnType<typeof vi.fn>;
   transaction: ReturnType<typeof vi.fn>;
 };
 
@@ -666,6 +673,50 @@ describe('POST /api/pages/bulk-move', () => {
       );
     });
 
+  });
+
+  // ── Drive home page invariant ───────────────────────────────────────
+
+  describe('drive home page invariant', () => {
+    it('clears the source drive homePageId when its home page moves out', async () => {
+      setupSuccessScenario();
+      // Source drive's home page is the page being moved cross-drive
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: 'page-1' });
+      // After the move, the page no longer belongs to the source drive
+      txQueryPagesFindFirst.mockResolvedValue(undefined);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(txQueryDrivesFindFirst).toHaveBeenCalled();
+      expect(txUpdateSet).toHaveBeenCalledWith({ homePageId: null });
+    });
+
+    it('leaves homePageId untouched when the home page stays in the source drive', async () => {
+      setupSuccessScenario();
+      // Source drive's home page is some other page that did not move
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: 'page-still-here' });
+      txQueryPagesFindFirst.mockResolvedValue({ id: 'page-still-here' });
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(txUpdateSet).not.toHaveBeenCalledWith({ homePageId: null });
+    });
+
+    it('skips the check entirely for same-drive moves', async () => {
+      setupSuccessScenario();
+      // Page already lives in the target drive
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        mockSourcePage({ driveId: mockTargetDriveId }),
+      ] as never);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(txQueryDrivesFindFirst).not.toHaveBeenCalled();
+      expect(txUpdateSet).not.toHaveBeenCalledWith({ homePageId: null });
+    });
   });
 
   // ── Error handling ──────────────────────────────────────────────────
