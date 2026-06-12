@@ -14,7 +14,18 @@ import {
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../core/types';
+
+async function broadcastCommandChange(driveId: string): Promise<void> {
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', { resourceType: 'command' }), recipientUserIds);
+  } catch {
+    // best-effort; never surface broadcast failures to the caller
+  }
+}
 
 const commandLogger = loggers.ai.child({ module: 'command-tools' });
 
@@ -150,6 +161,8 @@ export const commandTools = {
           })
           .returning();
 
+        if (commandDriveId !== null) void broadcastCommandChange(commandDriveId);
+
         return {
           success: true,
           commandId: created.id,
@@ -251,6 +264,8 @@ export const commandTools = {
           .where(eq(commands.id, command.id))
           .returning();
 
+        if (command.driveId !== null) void broadcastCommandChange(command.driveId);
+
         return {
           success: true,
           commandId: updated.id,
@@ -286,6 +301,7 @@ export const commandTools = {
       try {
         const command = await loadCommandForManage(userId, commandId);
         await db.delete(commands).where(eq(commands.id, command.id));
+        if (command.driveId !== null) void broadcastCommandChange(command.driveId);
 
         return {
           success: true,
