@@ -197,7 +197,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (command.driveId !== null) {
       try {
         const recipientUserIds = await getDriveRecipientUserIds(command.driveId);
-        await broadcastDriveEvent(createDriveEventPayload(command.driveId, 'updated'), recipientUserIds);
+        await broadcastDriveEvent(createDriveEventPayload(command.driveId, 'updated', { resourceType: 'command' }), recipientUserIds);
       } catch (broadcastError) {
         loggers.api.error('[COMMANDS_PATCH_BROADCAST]', broadcastError as Error);
       }
@@ -240,7 +240,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (command.driveId !== null) {
       try {
         const recipientUserIds = await getDriveRecipientUserIds(command.driveId);
-        await broadcastDriveEvent(createDriveEventPayload(command.driveId, 'updated'), recipientUserIds);
+        await broadcastDriveEvent(createDriveEventPayload(command.driveId, 'updated', { resourceType: 'command' }), recipientUserIds);
       } catch (broadcastError) {
         loggers.api.error('[COMMANDS_DELETE_BROADCAST]', broadcastError as Error);
       }

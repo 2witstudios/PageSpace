@@ -138,7 +138,7 @@ export async function PATCH(
 
   try {
     const recipientUserIds = await getDriveRecipientUserIds(workflow.driveId);
-    await broadcastDriveEvent(createDriveEventPayload(workflow.driveId, 'updated'), recipientUserIds);
+    await broadcastDriveEvent(createDriveEventPayload(workflow.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
   } catch (broadcastError) {
     loggers.api.error('[WORKFLOWS_PATCH_BROADCAST]', broadcastError as Error);
   }
@@ -164,7 +164,7 @@ export async function DELETE(
 
   try {
     const recipientUserIds = await getDriveRecipientUserIds(result.workflow.driveId);
-    await broadcastDriveEvent(createDriveEventPayload(result.workflow.driveId, 'updated'), recipientUserIds);
+    await broadcastDriveEvent(createDriveEventPayload(result.workflow.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
   } catch (broadcastError) {
     loggers.api.error('[WORKFLOWS_DELETE_BROADCAST]', broadcastError as Error);
   }

@@ -42,7 +42,9 @@ export function useCommands(active: boolean = true) {
 
   useEffect(() => {
     if (!socket || !active) return;
-    const handleDriveUpdated = () => { void mutate(); };
+    const handleDriveUpdated = (payload: { resourceType?: string }) => {
+      if (payload.resourceType === 'command') void mutate();
+    };
     socket.on('drive:updated', handleDriveUpdated);
     return () => { socket.off('drive:updated', handleDriveUpdated); };
   }, [socket, active, mutate]);

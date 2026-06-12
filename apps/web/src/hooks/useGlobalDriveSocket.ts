@@ -40,6 +40,12 @@ export function useGlobalDriveSocket() {
 
     console.log(`🚀 GLOBAL DRIVE EVENT: ${operation}`, eventData);
 
+    // command/workflow events reuse the drive:updated channel but are handled by
+    // useCommands/useWorkflows — they don't affect the drives sidebar list.
+    if ('resourceType' in eventData && (eventData.resourceType === 'command' || eventData.resourceType === 'workflow')) {
+      return;
+    }
+
     switch (operation) {
       case 'created':
       case 'updated':

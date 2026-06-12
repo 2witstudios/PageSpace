@@ -180,7 +180,7 @@ export async function POST(request: Request) {
 
   try {
     const recipientUserIds = await getDriveRecipientUserIds(data.driveId);
-    await broadcastDriveEvent(createDriveEventPayload(data.driveId, 'updated'), recipientUserIds);
+    await broadcastDriveEvent(createDriveEventPayload(data.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
   } catch (broadcastError) {
     loggers.api.error('[WORKFLOWS_POST_BROADCAST]', broadcastError as Error);
   }

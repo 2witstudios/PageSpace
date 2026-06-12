@@ -259,7 +259,7 @@ export async function POST(request: Request) {
     if (commandDriveId !== null) {
       try {
         const recipientUserIds = await getDriveRecipientUserIds(commandDriveId);
-        await broadcastDriveEvent(createDriveEventPayload(commandDriveId, 'updated'), recipientUserIds);
+        await broadcastDriveEvent(createDriveEventPayload(commandDriveId, 'updated', { resourceType: 'command' }), recipientUserIds);
       } catch (broadcastError) {
         loggers.api.error('[COMMANDS_POST_BROADCAST]', broadcastError as Error);
       }

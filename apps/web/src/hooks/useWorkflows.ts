@@ -29,7 +29,7 @@ export function useWorkflows(driveId: string) {
   useEffect(() => {
     if (!socket || !driveId) return;
     const handleDriveUpdated = (payload: DriveEventPayload) => {
-      if (payload.driveId === driveId) void mutate();
+      if (payload.driveId === driveId && payload.resourceType === 'workflow') void mutate();
     };
     socket.on('drive:updated', handleDriveUpdated);
     return () => { socket.off('drive:updated', handleDriveUpdated); };
