@@ -1,28 +1,55 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
 import type { ToolExecutionContext } from '../../core/types';
+
+const {
+  mockCommandsFindFirst,
+  mockCommandsFindMany,
+  mockPagesFindFirst,
+  mockInsert,
+  mockUpdate,
+  mockDelete,
+  mockSelect,
+} = vi.hoisted(() => {
+  const mockCommandsFindFirst = vi.fn();
+  const mockCommandsFindMany = vi.fn();
+  const mockPagesFindFirst = vi.fn();
+  const mockSelectWhere = vi.fn().mockResolvedValue([]);
+  const mockSelectInnerJoinWhere = vi.fn().mockResolvedValue([]);
+  const mockSelectInnerJoin = vi.fn(() => ({ where: mockSelectInnerJoinWhere }));
+  const mockSelectFrom = vi.fn(() => ({ where: mockSelectWhere, innerJoin: mockSelectInnerJoin }));
+  const mockSelect = vi.fn(() => ({ from: mockSelectFrom }));
+  const mockInsert = vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) }));
+  const mockUpdate = vi.fn(() => ({
+    set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn() })) })),
+  }));
+  const mockDelete = vi.fn(() => ({ where: vi.fn() }));
+  return {
+    mockCommandsFindFirst,
+    mockCommandsFindMany,
+    mockPagesFindFirst,
+    mockInsert,
+    mockUpdate,
+    mockDelete,
+    mockSelect,
+  };
+});
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       commands: {
-        findFirst: vi.fn(),
-        findMany: vi.fn(),
+        findFirst: mockCommandsFindFirst,
+        findMany: mockCommandsFindMany,
       },
       pages: {
-        findFirst: vi.fn(),
+        findFirst: mockPagesFindFirst,
       },
     },
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn() })) })),
-    })),
-    delete: vi.fn(() => ({ where: vi.fn() })),
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn().mockResolvedValue([]),
-        innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
-      })),
-    })),
+    insert: mockInsert,
+    update: mockUpdate,
+    delete: mockDelete,
+    select: mockSelect,
   },
 }));
 
@@ -71,10 +98,8 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { commandTools } from '../command-tools';
-import { db } from '@pagespace/db/db';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 
-const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsDriveOwnerOrAdmin = vi.mocked(isDriveOwnerOrAdmin);
 
@@ -142,8 +167,8 @@ describe('command-tools', () => {
 
     it('creates a personal command successfully', async () => {
       mockCanUserViewPage.mockResolvedValue(true);
-      mockDb.query.pages.findFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: false });
-      mockDb.query.commands.findFirst.mockResolvedValue(null);
+      mockPagesFindFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: false });
+      mockCommandsFindFirst.mockResolvedValue(null);
       const insertReturning = vi.fn().mockResolvedValue([{
         id: 'cmd-1',
         userId: 'user-1',
@@ -153,7 +178,7 @@ describe('command-tools', () => {
         entryPageId: 'page-1',
         enabled: true,
       }]);
-      mockDb.insert.mockReturnValue({ values: vi.fn(() => ({ returning: insertReturning })) } as never);
+      (mockInsert as Mock).mockReturnValue({ values: vi.fn(() => ({ returning: insertReturning })) });
 
       const result = await run<{ success: boolean; trigger: string; scope: string }>(
         'create_command',
@@ -167,8 +192,8 @@ describe('command-tools', () => {
 
     it('rejects duplicate trigger in same scope', async () => {
       mockCanUserViewPage.mockResolvedValue(true);
-      mockDb.query.pages.findFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: false });
-      mockDb.query.commands.findFirst.mockResolvedValue({ id: 'existing-cmd' });
+      mockPagesFindFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: false });
+      mockCommandsFindFirst.mockResolvedValue({ id: 'existing-cmd' });
 
       await expect(
         run('create_command', { trigger: 'my-cmd', description: 'desc', entryPageId: 'page-1' })
@@ -176,7 +201,7 @@ describe('command-tools', () => {
     });
 
     it('rejects entry page in trash', async () => {
-      mockDb.query.pages.findFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: true });
+      mockPagesFindFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: true });
 
       await expect(
         run('create_command', { trigger: 'my-cmd', description: 'desc', entryPageId: 'page-1' })
@@ -184,7 +209,7 @@ describe('command-tools', () => {
     });
 
     it('rejects when caller cannot view entry page', async () => {
-      mockDb.query.pages.findFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: false });
+      mockPagesFindFirst.mockResolvedValue({ id: 'page-1', driveId: 'drive-1', isTrashed: false });
       mockCanUserViewPage.mockResolvedValue(false);
 
       await expect(
@@ -212,7 +237,7 @@ describe('command-tools', () => {
     });
 
     it('returns not found for a non-existent command', async () => {
-      mockDb.query.commands.findFirst.mockResolvedValue(null);
+      mockCommandsFindFirst.mockResolvedValue(null);
 
       await expect(
         run('update_command', { commandId: 'missing', enabled: false })
@@ -220,7 +245,7 @@ describe('command-tools', () => {
     });
 
     it('rejects when caller does not own the personal command', async () => {
-      mockDb.query.commands.findFirst.mockResolvedValue({
+      mockCommandsFindFirst.mockResolvedValue({
         id: 'cmd-1',
         userId: 'other-user',
         driveId: null,
@@ -233,7 +258,7 @@ describe('command-tools', () => {
     });
 
     it('updates a personal command successfully', async () => {
-      mockDb.query.commands.findFirst
+      mockCommandsFindFirst
         .mockResolvedValueOnce({
           id: 'cmd-1',
           userId: 'user-1',
@@ -250,9 +275,9 @@ describe('command-tools', () => {
         description: 'desc',
         enabled: true,
       }]);
-      mockDb.update.mockReturnValue({
+      (mockUpdate as Mock).mockReturnValue({
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning: updateReturning })) })),
-      } as never);
+      });
 
       const result = await run<{ success: boolean; trigger: string }>(
         'update_command',
@@ -277,19 +302,19 @@ describe('command-tools', () => {
     });
 
     it('returns not found for a non-existent command', async () => {
-      mockDb.query.commands.findFirst.mockResolvedValue(null);
+      mockCommandsFindFirst.mockResolvedValue(null);
       await expect(run('delete_command', { commandId: 'missing' })).rejects.toThrow(/not found/i);
     });
 
     it('deletes a personal command successfully', async () => {
-      mockDb.query.commands.findFirst.mockResolvedValue({
+      mockCommandsFindFirst.mockResolvedValue({
         id: 'cmd-1',
         userId: 'user-1',
         driveId: null,
         trigger: 'my-cmd',
       });
       const deleteWhere = vi.fn().mockResolvedValue(undefined);
-      mockDb.delete.mockReturnValue({ where: deleteWhere } as never);
+      (mockDelete as Mock).mockReturnValue({ where: deleteWhere });
 
       const result = await run<{ success: boolean; trigger: string }>(
         'delete_command',
@@ -302,7 +327,7 @@ describe('command-tools', () => {
     });
 
     it('rejects when caller is not drive admin for a drive command', async () => {
-      mockDb.query.commands.findFirst.mockResolvedValue({
+      mockCommandsFindFirst.mockResolvedValue({
         id: 'cmd-1',
         userId: null,
         driveId: 'drive-1',
@@ -327,7 +352,7 @@ describe('command-tools', () => {
     });
 
     it('returns commands visible to the caller', async () => {
-      mockDb.query.commands.findMany.mockResolvedValue([
+      mockCommandsFindMany.mockResolvedValue([
         {
           id: 'cmd-1',
           userId: 'user-1',
@@ -350,7 +375,7 @@ describe('command-tools', () => {
     });
 
     it('returns empty list when no commands exist', async () => {
-      mockDb.query.commands.findMany.mockResolvedValue([]);
+      mockCommandsFindMany.mockResolvedValue([]);
 
       const result = await run<{ commands: unknown[]; total: number }>('list_commands', {});
       expect(result.total).toBe(0);
@@ -366,14 +391,14 @@ describe('command-tools', () => {
 
     it('filters to a specific drive when caller is a member', async () => {
       // Simulate user owning 'drive-1' via the owned-drives select query
-      mockDb.select.mockReturnValueOnce({
+      (mockSelect as Mock).mockReturnValueOnce({
         from: vi.fn(() => ({
           where: vi.fn().mockResolvedValue([{ id: 'drive-1' }]),
           innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
         })),
-      } as never);
-      // second select call (memberships) returns []
-      mockDb.query.commands.findMany.mockResolvedValue([
+      });
+      // second select call (memberships) uses the default mock returning []
+      mockCommandsFindMany.mockResolvedValue([
         {
           id: 'cmd-2',
           userId: null,
