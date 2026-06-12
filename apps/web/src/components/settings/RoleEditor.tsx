@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ChevronLeft, Save } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { post, patch } from '@/lib/auth/auth-fetch';
@@ -20,6 +21,7 @@ interface Role {
   color?: string;
   isDefault: boolean;
   permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
   position: number;
 }
 
@@ -40,12 +42,14 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
   const [isDefault, setIsDefault] = useState(role?.isDefault || false);
   const [permissions, setPermissions] = useState<Map<string, { canView: boolean; canEdit: boolean; canShare: boolean }>>(
     () => {
-      // Initialize from role's permissions if editing
       if (role?.permissions) {
         return new Map(Object.entries(role.permissions));
       }
       return new Map();
     }
+  );
+  const [driveWidePerms, setDriveWidePerms] = useState<{ canView: boolean; canEdit: boolean; canShare: boolean } | null>(
+    role?.driveWidePermissions ?? null
   );
   const [saving, setSaving] = useState(false);
 
@@ -54,6 +58,22 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
       const newPerms = new Map(prev);
       newPerms.set(pageId, perms);
       return newPerms;
+    });
+  };
+
+  const handleDriveWideChange = (perm: 'canView' | 'canEdit' | 'canShare', value: boolean) => {
+    setDriveWidePerms(prev => {
+      const base = prev ?? { canView: false, canEdit: false, canShare: false };
+      const next = { ...base };
+      if (perm === 'canView' && !value) {
+        return null;
+      } else if ((perm === 'canEdit' || perm === 'canShare') && value) {
+        next.canView = true;
+        next[perm] = true;
+      } else {
+        next[perm] = value;
+      }
+      return (next.canView || next.canEdit || next.canShare) ? next : null;
     });
   };
 
@@ -93,6 +113,7 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         color,
         isDefault,
         permissions: permissionsObj,
+        driveWidePermissions: driveWidePerms,
       };
 
       if (isEditing && role) {
@@ -199,20 +220,55 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         </CardContent>
       </Card>
 
-      {/* Page Permissions */}
+      {/* Access Level */}
       <Card>
         <CardHeader>
-          <CardTitle>Page Permissions</CardTitle>
+          <CardTitle>Access Level</CardTitle>
           <CardDescription>
-            Select which pages members with this role can access
+            Set what members with this role can access across the drive
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <PermissionsGrid
-            driveId={driveId}
-            permissions={permissions}
-            onChange={handlePermissionChange}
-          />
+        <CardContent className="space-y-6">
+          {/* Drive-Wide Access */}
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium">Drive-Wide Access</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Grant the same permission to every page in the drive. Leave unchecked to control access per page below.
+              </p>
+            </div>
+            <div className="flex gap-6">
+              {(['canView', 'canEdit', 'canShare'] as const).map((perm) => (
+                <label key={perm} className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
+                    checked={driveWidePerms?.[perm] ?? false}
+                    onCheckedChange={(v) => handleDriveWideChange(perm, !!v)}
+                  />
+                  <span className="text-sm capitalize">{perm.replace('can', '')}</span>
+                </label>
+              ))}
+            </div>
+            {driveWidePerms && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Drive-wide access is active — per-page settings below add extra permissions on top.
+              </p>
+            )}
+          </div>
+
+          {/* Per-Page Overrides */}
+          <div className="space-y-2">
+            <div>
+              <p className="text-sm font-medium">Per-Page Overrides</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Fine-tune access for individual pages.
+              </p>
+            </div>
+            <PermissionsGrid
+              driveId={driveId}
+              permissions={permissions}
+              onChange={handlePermissionChange}
+            />
+          </div>
         </CardContent>
       </Card>
 
