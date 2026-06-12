@@ -18,7 +18,14 @@ export const HOME_DRIVE_NAME = 'Home';
  */
 export const RESERVED_DRIVE_NAMES = ['personal', 'home'] as const;
 
-export type HomeDriveAction = 'rename' | 'trash' | 'invite' | 'share' | 'publish';
+export type HomeDriveAction =
+  | 'rename'
+  | 'trash'
+  | 'restore'
+  | 'invite'
+  | 'share'
+  | 'publish'
+  | 'transfer';
 
 export function isReservedDriveName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
@@ -37,9 +44,15 @@ export function isHomeDrive(drive: { kind?: string | null }): boolean {
 const HOME_DRIVE_ACTION_ERRORS: Record<HomeDriveAction, string> = {
   rename: 'Your Home drive cannot be renamed.',
   trash: 'Your Home drive cannot be moved to trash or deleted.',
+  // Home can never be trashed, so restore is unreachable in practice; the
+  // guard (and its own copy) exists for defense in depth.
+  restore: 'Your Home drive is never in trash, so it cannot be restored.',
   invite: 'Your Home drive is private and cannot be shared.',
   share: 'Your Home drive is private and cannot be shared.',
   publish: 'Pages in your Home drive cannot be published.',
+  // Unreachable today (Home never has admin members to transfer to) — kept as
+  // defense in depth on the ownership-transfer path.
+  transfer: 'Your Home drive cannot be transferred to another user.',
 };
 
 /**

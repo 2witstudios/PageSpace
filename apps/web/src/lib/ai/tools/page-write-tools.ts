@@ -375,7 +375,7 @@ async function restoreDrive(
   }
 
   if (isHomeDrive(drive)) {
-    throw new Error(homeDriveActionError(drive, 'trash')!);
+    throw new Error(homeDriveActionError(drive, 'restore')!);
   }
 
   if (!drive.isTrashed) {

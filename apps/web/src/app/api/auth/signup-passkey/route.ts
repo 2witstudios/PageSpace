@@ -157,12 +157,12 @@ export async function POST(req: Request) {
 
     const { userId, passkeyId } = result.data;
 
-    // Provision getting started drive for new user
+    // Provision the Home drive (idempotent)
     let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
       provisionedDrive = await provisionHomeDriveIfNeeded(userId);
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId,
       });
     }

@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, isNotNull } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -40,6 +41,7 @@ export async function POST(req: Request) {
         id: true,
         ownerId: true,
         name: true,
+        kind: true,
       },
     });
 
@@ -49,6 +51,12 @@ export async function POST(req: Request) {
 
     if (drive.ownerId !== userId) {
       return Response.json({ error: 'You are not the owner of this drive' }, { status: 403 });
+    }
+
+    // Home stays bound to its owner. Deleting it here is allowed: this route is
+    // account-deletion prep, where the FK cascade would remove Home anyway.
+    if (action === 'transfer' && isHomeDrive(drive)) {
+      return Response.json({ error: homeDriveActionError(drive, 'transfer') }, { status: 403 });
     }
 
     if (action === 'transfer') {

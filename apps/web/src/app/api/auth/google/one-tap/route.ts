@@ -225,12 +225,12 @@ export async function POST(req: Request) {
       });
     }
 
-    // Provision Getting Started drive for new or existing users without drives
+    // Provision the Home drive (idempotent) for new or existing users
     let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
       provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
         provider: 'google-one-tap',
       });

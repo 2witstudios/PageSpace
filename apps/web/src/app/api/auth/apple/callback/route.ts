@@ -204,7 +204,7 @@ export async function POST(req: Request) {
       loggers.auth.info('New user created via Apple OAuth', { userId: user.id });
     }
 
-    // Provision getting started drive for new users
+    // Provision the Home drive (idempotent)
     let isNewlyProvisioned = false;
     try {
       const provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
@@ -215,7 +215,7 @@ export async function POST(req: Request) {
         }
       }
     } catch (provisionError) {
-      loggers.auth.error('Failed to provision Getting Started drive', provisionError as Error, {
+      loggers.auth.error('Failed to provision Home drive', provisionError as Error, {
         userId: user.id,
         provider: 'apple',
       });

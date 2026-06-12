@@ -297,6 +297,48 @@ describe('POST /api/account/handle-drive', () => {
       );
     });
 
+    it('rejects transfer of a Home drive with 403 (Home stays bound to its owner)', async () => {
+      const updateMock = setupUpdateMock();
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        ...mockDrive({ id: mockDriveId, name: 'Home', ownerId: mockUserId }),
+        kind: 'HOME' as const,
+      });
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({
+          driveId: mockDriveId,
+          action: 'transfer',
+          newOwnerId: mockNewOwnerId,
+        }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe('Your Home drive cannot be transferred to another user.');
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it('still allows DELETE of a Home drive (account-deletion prep; cascade would remove it anyway)', async () => {
+      const deleteMock = setupDeleteMock();
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+        ...mockDrive({ id: mockDriveId, name: 'Home', ownerId: mockUserId }),
+        kind: 'HOME' as const,
+      });
+
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'delete' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(deleteMock).toHaveBeenCalledTimes(1);
+    });
+
     it('should reject transfer when new owner is not an admin', async () => {
       vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
 

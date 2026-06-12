@@ -753,6 +753,46 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
+    it('provisions Home drive on a PAGE-invite login (redirect short-circuits the shared resolver)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_page' }),
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'page', invitedDriveId: 'drive_invited_42', invitedPageId: 'page_invited_7', connectionId: null,
+      });
+
+      const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_invited_42/pages/page_invited_7');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('provisions Home drive on a CONNECTION-invite login (redirect short-circuits the shared resolver)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_conn' }),
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection', invitedDriveId: null, invitedPageId: null, connectionId: 'conn_1',
+      });
+
+      const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/connections');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+    });
+
     it('given consumeAnyInviteIfPresent throws (DB blip), still completes login and lands on /dashboard (session is already committed)', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: true,

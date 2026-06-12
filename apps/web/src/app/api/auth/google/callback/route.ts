@@ -229,7 +229,7 @@ export async function GET(req: Request) {
         }
       }
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
         provider: 'google',
       });

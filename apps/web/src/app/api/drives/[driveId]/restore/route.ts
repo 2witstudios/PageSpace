@@ -55,7 +55,7 @@ export async function POST(
     }
 
     if (isHomeDrive(drive)) {
-      return NextResponse.json({ error: homeDriveActionError(drive, 'trash') }, { status: 403 });
+      return NextResponse.json({ error: homeDriveActionError(drive, 'restore') }, { status: 403 });
     }
 
     if (!drive.isTrashed) {

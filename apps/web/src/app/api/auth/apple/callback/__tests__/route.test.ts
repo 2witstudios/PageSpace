@@ -783,7 +783,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(response.status).toBe(307);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: mockNewUser.id, provider: 'apple' }
       );

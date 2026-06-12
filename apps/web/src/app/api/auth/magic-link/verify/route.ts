@@ -199,6 +199,21 @@ export async function GET(req: Request) {
     }
     const invitedDriveId = inviteResult?.invitedDriveId ?? null;
 
+    // Provision the Home drive unconditionally — idempotent, and run BEFORE the
+    // redirect branches so every login provisions, including page/connection
+    // invite logins whose redirect never consults the shared resolver below.
+    // Errors are logged and swallowed: the session is valid, and the next login
+    // through any auth path retries provisioning.
+    let provisionedDriveId: string | null = null;
+    try {
+      const provisionResult = await provisionHomeDriveIfNeeded(userId);
+      if (provisionResult.created) {
+        provisionedDriveId = provisionResult.driveId;
+      }
+    } catch (error) {
+      loggers.auth.error('Failed to provision Home drive', error as Error, { userId });
+    }
+
     // DESKTOP: additionally create device token + exchange code for desktop token handoff
     // The web session (cookies) is always created above — this is a supplementary step.
     // If the magic link opens outside the desktop device, the cookie session still works.
@@ -236,8 +251,8 @@ export async function GET(req: Request) {
               ? '/dashboard/connections'
               : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
                 ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
-                : await resolvePostLoginRedirectPath({
-                    userId, next: safeNext, invitedDriveId,
+                : resolvePostLoginRedirectPath({
+                    provisionedDriveId, next: safeNext, invitedDriveId,
                   });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
@@ -303,8 +318,8 @@ export async function GET(req: Request) {
         ? '/dashboard/connections'
         : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
           ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
-          : await resolvePostLoginRedirectPath({
-              userId, next: safeNext, invitedDriveId,
+          : resolvePostLoginRedirectPath({
+              provisionedDriveId, next: safeNext, invitedDriveId,
             });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -360,31 +375,18 @@ function redirectWithError(error: string): NextResponse {
  * both the desktop exchange and web cookie flows so the two paths cannot drift
  * out of sync on the next redirect-rule change. A successfully consumed invite
  * always wins (lands the user on the drive they joined); a pre-validated
- * `next` is the fallback for non-invite flows. Provisioning errors are logged
- * and swallowed — the user still lands on /dashboard.
+ * `next` is the fallback for non-invite flows. Pure on purpose — Home-drive
+ * provisioning happens once in the GET handler, before any redirect branch.
  */
-async function resolvePostLoginRedirectPath({
-  userId,
+function resolvePostLoginRedirectPath({
+  provisionedDriveId,
   next,
   invitedDriveId,
 }: {
-  userId: string;
+  provisionedDriveId: string | null;
   next?: string;
   invitedDriveId?: string | null;
-}): Promise<string> {
-  // Provision unconditionally — idempotent, so safe regardless of which redirect wins.
-  // Must run before the early-return branches so users with an invite or a `next` param
-  // still get a Home drive provisioned on their first login.
-  let provisionedDriveId: string | null = null;
-  try {
-    const result = await provisionHomeDriveIfNeeded(userId);
-    if (result.created) {
-      provisionedDriveId = result.driveId;
-    }
-  } catch (error) {
-    loggers.auth.error('Failed to provision Home drive', error as Error, { userId });
-  }
-
+}): string {
   if (invitedDriveId) {
     return `/dashboard/${invitedDriveId}`;
   }

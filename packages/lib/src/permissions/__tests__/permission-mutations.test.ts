@@ -54,6 +54,43 @@ describe('permission-mutations zero-trust', () => {
   });
 
   describe('grantPagePermission', () => {
+    describe('Home drive guard', () => {
+      it('rejects grants on pages inside a Home drive with HOME_DRIVE and writes nothing', async () => {
+        const homeDrive = await factories.createDrive(testUser.id, { kind: 'HOME' });
+        const homePage = await factories.createPage(homeDrive.id);
+        const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
+
+        const result = await grantPagePermission(ctx, {
+          pageId: homePage.id,
+          targetUserId: targetUser.id,
+          permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('HOME_DRIVE');
+        }
+
+        const rows = await db
+          .select()
+          .from(pagePermissions)
+          .where(eq(pagePermissions.pageId, homePage.id));
+        expect(rows).toHaveLength(0);
+      });
+
+      it('still allows grants on STANDARD drive pages (guard is kind-scoped)', async () => {
+        const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
+
+        const result = await grantPagePermission(ctx, {
+          pageId: testPage.id,
+          targetUserId: targetUser.id,
+          permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+        });
+
+        expect(result.ok).toBe(true);
+      });
+    });
+
     describe('validation', () => {
       it('rejects invalid pageId format', async () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));

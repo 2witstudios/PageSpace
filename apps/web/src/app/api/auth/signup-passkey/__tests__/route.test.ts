@@ -301,7 +301,7 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toBe('/dashboard?welcome=true');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', new Error('Drive error'), {
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Home drive', new Error('Drive error'), {
         userId: 'new-user-1',
       });
     });

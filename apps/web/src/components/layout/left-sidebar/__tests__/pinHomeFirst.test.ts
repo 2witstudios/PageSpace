@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pinHomeFirst } from '../DriveList';
+import { pinHomeFirst } from '../pin-home-first';
 import type { Drive } from '@/hooks/useDrive';
 
 function makeDrive(overrides: Partial<Drive>): Drive {

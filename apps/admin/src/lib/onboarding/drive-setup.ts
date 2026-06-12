@@ -15,11 +15,16 @@ type DbClient = TransactionType | DatabaseType;
  * Populates a new user's drive with starter content.
  * Each page type is a first-class item at the root so users immediately
  * see what PageSpace can do. Two general-purpose agents are included.
+ *
+ * Pass `options.rootParentId` to nest all top-level seed pages under a
+ * specific parent (e.g. a "Getting Started" folder). Children that already
+ * supply an explicit parentId are unaffected.
  */
 export async function populateUserDrive(
   userId: string,
   driveId: string,
-  client: DbClient = db
+  client: DbClient = db,
+  options?: { rootParentId?: string }
 ): Promise<void> {
   const now = new Date();
 
@@ -40,6 +45,7 @@ export async function populateUserDrive(
       ...values,
       id,
       content: values.content ?? '',
+      parentId: values.parentId ?? options?.rootParentId,
     });
     return id;
   };
