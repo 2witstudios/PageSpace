@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { z } from 'zod';
 
 const {
   mockDbQuery,
@@ -69,14 +68,6 @@ vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: {}, taskLists: {} }));
 vi.mock('@pagespace/db/schema/task-triggers', () => ({ taskTriggers: {} }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) } },
-}));
-vi.mock('@/lib/workflows/agent-trigger-shared', () => ({
-  agentTriggerBaseSchema: z.object({
-    agentPageId: z.string(),
-    prompt: z.string().optional(),
-    instructionPageId: z.string().nullable().optional(),
-    contextPageIds: z.array(z.string()).optional(),
-  }),
 }));
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   upsertCalendarTriggerWorkflow: mockUpsertCalendarTriggerWorkflow,
@@ -368,6 +359,16 @@ describe('triggerTools.set_task_trigger', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/prompt or instructionPageId/);
   });
+
+  it('rejects when app token is denied access to the drive', async () => {
+    mockDriveDeniedByAppToken.mockResolvedValue(true);
+    const result = await triggerTools.set_task_trigger.execute!(
+      { taskId: 'task-1', triggerType: 'due_date', agentPageId: 'agent-1', prompt: 'Run' },
+      ctx(),
+    ) as unknown as TR;
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/token/);
+  });
 });
 
 describe('triggerTools.delete_task_trigger', () => {
@@ -403,5 +404,15 @@ describe('triggerTools.delete_task_trigger', () => {
     )) as { success: boolean; error?: string };
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/edit access/);
+  });
+
+  it('rejects when app token is denied access to the drive', async () => {
+    mockDriveDeniedByAppToken.mockResolvedValue(true);
+    const result = (await triggerTools.delete_task_trigger.execute!(
+      { taskId: 'task-1', triggerType: 'due_date' },
+      ctx(),
+    )) as { success: boolean; error?: string };
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/token/);
   });
 });

@@ -281,6 +281,10 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
       if (!taskListPage || taskListPage.isTrashed) return { success: false, error: 'Task list not found.' };
       if (!taskListPage.driveId) return { success: false, error: 'Task triggers require a drive-based task list.' };
 
+      if (await driveDeniedByAppToken(ctx, taskListPage.driveId, 'edit')) {
+        return { success: false, error: 'This token does not have access to this task list\'s drive.' };
+      }
+
       if (!(await canActorEditPage(ctx, taskListPageId))) {
         return { success: false, error: 'You do not have edit access to this task list.' };
       }
@@ -339,7 +343,7 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
       const [taskListPage, taskList] = await Promise.all([
         db.query.pages.findFirst({
           where: eq(pages.id, taskListPageId),
-          columns: { id: true, isTrashed: true },
+          columns: { id: true, driveId: true, isTrashed: true },
         }),
         db.query.taskLists.findFirst({
           where: eq(taskLists.pageId, taskListPageId),
@@ -348,6 +352,11 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
       ]);
 
       if (!taskListPage || taskListPage.isTrashed) return { success: false, error: 'Task list not found.' };
+
+      if (taskListPage.driveId && await driveDeniedByAppToken(ctx, taskListPage.driveId, 'edit')) {
+        return { success: false, error: 'This token does not have access to this task list\'s drive.' };
+      }
+
       if (!(await canActorEditPage(ctx, taskListPageId))) {
         return { success: false, error: 'You do not have edit access to this task list.' };
       }
