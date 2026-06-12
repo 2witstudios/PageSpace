@@ -129,6 +129,10 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(isWriteTool('update_workflow')).toBe(true);
     expect(isWriteTool('delete_workflow')).toBe(true);
     expect(isWriteTool('list_workflows')).toBe(false);
+    expect(isWriteTool('set_calendar_trigger')).toBe(true);
+    expect(isWriteTool('delete_calendar_trigger')).toBe(true);
+    expect(isWriteTool('set_task_trigger')).toBe(true);
+    expect(isWriteTool('delete_task_trigger')).toBe(true);
   });
 
   it('excludes workflow write tools in read-only mode but keeps list_workflows', () => {
@@ -143,5 +147,21 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(filtered).not.toHaveProperty('create_workflow');
     expect(filtered).not.toHaveProperty('update_workflow');
     expect(filtered).not.toHaveProperty('delete_workflow');
+  });
+
+  it('excludes trigger write tools in read-only mode', () => {
+    const tools = {
+      set_calendar_trigger: 'w',
+      delete_calendar_trigger: 'w',
+      set_task_trigger: 'w',
+      delete_task_trigger: 'w',
+      list_calendar_events: 'r',
+    };
+    const filtered = filterToolsForReadOnly(tools, true);
+    expect(filtered).not.toHaveProperty('set_calendar_trigger');
+    expect(filtered).not.toHaveProperty('delete_calendar_trigger');
+    expect(filtered).not.toHaveProperty('set_task_trigger');
+    expect(filtered).not.toHaveProperty('delete_task_trigger');
+    expect(filtered).toHaveProperty('list_calendar_events');
   });
 });
