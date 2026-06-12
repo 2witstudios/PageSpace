@@ -27,26 +27,13 @@ import {
   DEFAULT_ELIDABLE_TOOLS,
   type ElisionMessage,
 } from '@pagespace/lib/ai/tool-result-eliding';
+import { WRITE_TOOLS } from '@/lib/ai/core/tool-filtering';
 
 // ─── Elision config ────────────────────────────────────────────────────────────
 
 const ELISION_KEEP_LAST_TURNS = 4;
 const ELISION_CHUNK_SIZE = 8;
 const ELISION_MIN_OUTPUT_CHARS = 1000;
-
-// Write-tool names mirrored from tool-filtering.ts WRITE_TOOLS.
-// These tools' results are never elided (side effects must be visible).
-const WRITE_TOOLS_FOR_ELISION = new Set([
-  'create_page', 'rename_page', 'replace_lines', 'move_page', 'edit_sheet_cells',
-  'create_drive', 'rename_drive', 'update_drive_context',
-  'trash_page', 'trash_drive', 'restore_page', 'restore_drive',
-  'update_agent_config',
-  'update_task', 'create_task', 'delete_task', 'reorder_task',
-  'send_channel_message', 'delete_channel_message',
-  'create_calendar_event', 'update_calendar_event', 'delete_calendar_event',
-  'rsvp_calendar_event', 'invite_calendar_attendees', 'remove_calendar_attendee',
-  'create_workflow', 'update_workflow', 'delete_workflow',
-]);
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -146,7 +133,7 @@ export async function prepareHistoryForModel(
           elisionBoundaryTurnIndex: elisionBoundary,
           minOutputChars: ELISION_MIN_OUTPUT_CHARS,
           elidableTools: new Set(DEFAULT_ELIDABLE_TOOLS),
-          writeTools: WRITE_TOOLS_FOR_ELISION,
+          writeTools: WRITE_TOOLS,
         }) as UIMessage[])
       : tailUIMessages;
 

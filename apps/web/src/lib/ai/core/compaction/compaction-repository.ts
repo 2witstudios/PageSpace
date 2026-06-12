@@ -1,21 +1,8 @@
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
-import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
+import { conversationCompactions, type SelectConversationCompaction } from '@pagespace/db/schema/ai-compaction';
 
-export interface CompactionStateRow {
-  conversationId: string;
-  source: string;
-  pageId: string | null;
-  summary: string;
-  summaryTokens: number;
-  compactedUpToMessageId: string | null;
-  compactedUpToCreatedAt: Date | null;
-  summaryVersion: number;
-  summarizerModel: string | null;
-  lastCompactedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export type CompactionStateRow = SelectConversationCompaction;
 
 export interface UpsertCompactionParams {
   conversationId: string;

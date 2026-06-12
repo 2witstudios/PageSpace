@@ -5,8 +5,8 @@
  * toggles that filter out specific tools based on user settings.
  */
 
-// Tools that modify content (excluded in read-only mode)
-const WRITE_TOOLS = new Set([
+// Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
+export const WRITE_TOOLS = new Set([
   // Page write operations
   'create_page',
   'rename_page',
