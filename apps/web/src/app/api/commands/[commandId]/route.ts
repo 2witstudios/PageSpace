@@ -6,6 +6,8 @@ import type { SelectCommand } from '@pagespace/db/schema/commands';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, type AuthResult } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
@@ -196,6 +198,15 @@ export async function PATCH(request: Request, context: RouteContext) {
       details: { action: 'update', fields: Object.keys(updateData) },
     });
 
+    if (command.driveId !== null) {
+      try {
+        const recipientUserIds = await getDriveRecipientUserIds(command.driveId);
+        await broadcastDriveEvent(createDriveEventPayload(command.driveId, 'updated', { resourceType: 'command' }), recipientUserIds);
+      } catch (broadcastError) {
+        loggers.api.error('[COMMANDS_PATCH_BROADCAST]', broadcastError as Error);
+      }
+    }
+
     return NextResponse.json({ command: toCommandResponse(updated) });
   } catch (error) {
     loggers.api.error('[COMMANDS_PATCH]', error as Error);
@@ -229,6 +240,15 @@ export async function DELETE(request: Request, context: RouteContext) {
         driveId: command.driveId,
       },
     });
+
+    if (command.driveId !== null) {
+      try {
+        const recipientUserIds = await getDriveRecipientUserIds(command.driveId);
+        await broadcastDriveEvent(createDriveEventPayload(command.driveId, 'updated', { resourceType: 'command' }), recipientUserIds);
+      } catch (broadcastError) {
+        loggers.api.error('[COMMANDS_DELETE_BROADCAST]', broadcastError as Error);
+      }
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

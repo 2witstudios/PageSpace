@@ -14,7 +14,8 @@ import {
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent, shareEventWithDrive, unshareEventFromDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../core/types';
@@ -253,11 +254,12 @@ export const calendarWriteTools = {
             };
           }
 
-          // For drive events, verify all proposed attendees are drive members
+          // For drive events, verify all proposed attendees are drive members.
+          // New events have no shared drives yet; getDriveRecipientUserIds suffices.
           if (driveId) {
-            const driveMemberIds = await getDriveMemberUserIds(driveId);
-            const driveMemberSet = new Set(driveMemberIds);
-            const nonMembers = otherAttendees.filter((id) => !driveMemberSet.has(id));
+            const memberIds = await getDriveRecipientUserIds(driveId);
+            const memberSet = new Set(memberIds);
+            const nonMembers = otherAttendees.filter((id) => !memberSet.has(id));
 
             if (nonMembers.length > 0) {
               return {
@@ -931,6 +933,7 @@ export const calendarWriteTools = {
 
       // Apply defaults
       const isOptional = isOptionalInput ?? false;
+      const context = ctx as ToolExecutionContext | undefined;
 
       try {
         // Verify event exists
@@ -943,6 +946,14 @@ export const calendarWriteTools = {
             success: false,
             error: 'Event not found.',
           };
+        }
+
+        // MCP scope ceiling: write operations are gated on the home drive
+        if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+          return { success: false, error: 'Event is outside the scope of your access token.' };
+        }
+        if (context && !event.driveId && isMcpScoped(context)) {
+          return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
         }
 
         // Only creator can add attendees
@@ -964,11 +975,11 @@ export const calendarWriteTools = {
         // Deduplicate userIds
         const uniqueUserIds = [...new Set(userIds)];
 
-        // For drive events, verify all proposed attendees are drive members
+        // For drive events, verify all proposed attendees are members of the
+        // home drive OR any drive the event is shared with.
         if (event.driveId) {
-          const driveMemberIds = await getDriveMemberUserIds(event.driveId);
-          const driveMemberSet = new Set(driveMemberIds);
-          const nonMembers = uniqueUserIds.filter((id) => !driveMemberSet.has(id));
+          const memberIds = await getAllMemberUserIdsForEvent(eventId, event.driveId);
+          const nonMembers = uniqueUserIds.filter((id) => !memberIds.has(id));
 
           if (nonMembers.length > 0) {
             return {
@@ -1164,6 +1175,112 @@ export const calendarWriteTools = {
           `Failed to remove attendee: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    },
+  }),
+
+  share_event_with_drive: tool({
+    description:
+      'Share a calendar event with an additional drive so members of that drive can see it. ' +
+      'No duplicate event is created — the original event appears in both drives. ' +
+      'Triggers remain tied to the home drive and are not affected by sharing.',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event to share'),
+      driveId: z.string().describe('The ID of the drive to share the event into'),
+    }),
+    execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+
+      // Load event for scope ceiling on the home drive
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+        columns: { id: true, driveId: true },
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+
+      if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+      if (context && !event.driveId && isMcpScoped(context)) {
+        return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
+      }
+      if (context && await driveDeniedByAppToken(context, driveId, 'edit')) {
+        return { success: false, error: 'Target drive is outside the scope of your access token.' };
+      }
+
+      const result = await shareEventWithDrive({ actingUserId: userId, eventId, driveId });
+      if (!result.ok) {
+        return { success: false, error: result.error };
+      }
+
+      calendarWriteLogger.info('Event shared with drive via AI tool', {
+        eventId: maskIdentifier(eventId),
+        driveId: maskIdentifier(driveId),
+        userId: maskIdentifier(userId),
+      });
+
+      return {
+        success: true,
+        data: { eventId, driveId },
+        summary: `Event has been shared with the drive. Members of that drive can now see it.`,
+        nextSteps: [
+          'Use list_event_drives to see all drives the event is shared with',
+          'Use unshare_event_from_drive to remove the event from a drive',
+        ],
+      };
+    },
+  }),
+
+  unshare_event_from_drive: tool({
+    description:
+      'Remove a calendar event from a shared drive. The event itself is not deleted — ' +
+      'it continues to exist in its home drive. Cannot remove from the home drive.',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event to unshare'),
+      driveId: z.string().describe('The ID of the drive to remove the event from'),
+    }),
+    execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+
+      // Load event for scope ceiling on the home drive
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+        columns: { id: true, driveId: true },
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+
+      if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+      if (context && !event.driveId && isMcpScoped(context)) {
+        return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
+      }
+
+      const result = await unshareEventFromDrive({ actingUserId: userId, eventId, driveId });
+      if (!result.ok) {
+        return { success: false, error: result.error };
+      }
+
+      calendarWriteLogger.info('Event unshared from drive via AI tool', {
+        eventId: maskIdentifier(eventId),
+        driveId: maskIdentifier(driveId),
+        userId: maskIdentifier(userId),
+      });
+
+      return {
+        success: true,
+        data: { eventId, driveId },
+        summary: `Event has been removed from the drive. It still exists in its home drive.`,
+        nextSteps: [
+          'Use list_event_drives to see the remaining drives the event is shared with',
+          'Use share_event_with_drive to share it again',
+        ],
+      };
     },
   }),
 };

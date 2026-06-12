@@ -8,6 +8,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
@@ -255,6 +257,15 @@ export async function POST(request: Request) {
         driveId: created.driveId,
       },
     });
+
+    if (commandDriveId !== null) {
+      try {
+        const recipientUserIds = await getDriveRecipientUserIds(commandDriveId);
+        await broadcastDriveEvent(createDriveEventPayload(commandDriveId, 'updated', { resourceType: 'command' }), recipientUserIds);
+      } catch (broadcastError) {
+        loggers.api.error('[COMMANDS_POST_BROADCAST]', broadcastError as Error);
+      }
+    }
 
     return NextResponse.json({ command: toCommandResponse(created) }, { status: 201 });
   } catch (error) {

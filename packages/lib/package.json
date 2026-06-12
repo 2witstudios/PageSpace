@@ -357,6 +357,11 @@
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
     },
+    "./services/calendar-event-drive-service": {
+      "types": "./dist/services/calendar-event-drive-service.d.ts",
+      "import": "./dist/services/calendar-event-drive-service.js",
+      "require": "./dist/services/calendar-event-drive-service.js"
+    },
     "./services/drive-agent-service": {
       "types": "./dist/services/drive-agent-service.d.ts",
       "import": "./dist/services/drive-agent-service.js",
@@ -1105,6 +1110,9 @@
       ],
       "services/drive-member-service": [
         "./dist/services/drive-member-service.d.ts"
+      ],
+      "services/calendar-event-drive-service": [
+        "./dist/services/calendar-event-drive-service.d.ts"
       ],
       "services/drive-agent-service": [
         "./dist/services/drive-agent-service.d.ts"

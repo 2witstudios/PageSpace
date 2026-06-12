@@ -4,6 +4,8 @@ import { db } from '@pagespace/db/db';
 import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../core/types';
 import { canActorManageDrive } from './actor-permissions';
 import { agentTriggerBaseSchema, validateAgentTrigger } from '@/lib/workflows/agent-trigger-shared';
@@ -17,6 +19,15 @@ import {
 const logger = loggers.api.child({ module: 'workflow-tools' });
 
 const DEFAULT_TRIGGER_PROMPT = 'Execute instructions from linked page.';
+
+async function broadcastWorkflowChange(driveId: string): Promise<void> {
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+    await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
+  } catch {
+    // best-effort; never surface broadcast failures to the caller
+  }
+}
 
 /**
  * Tools for standalone, recurring (cron) agent workflows.
@@ -95,6 +106,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
         cronExpression,
         timezone: tz,
       });
+      void broadcastWorkflowChange(driveId);
 
       return {
         success: true,
@@ -235,6 +247,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
       await db.update(workflows).set(updates).where(eq(workflows.id, workflowId));
 
       logger.info('Updated cron workflow', { workflowId, fields: Object.keys(updates) });
+      void broadcastWorkflowChange(workflow.driveId);
 
       return {
         success: true,
@@ -269,6 +282,7 @@ The cron expression must not fire more often than every 5 minutes (the polling c
       await db.delete(workflows).where(eq(workflows.id, workflowId));
 
       logger.info('Deleted cron workflow', { workflowId, driveId: workflow.driveId });
+      void broadcastWorkflowChange(workflow.driveId);
 
       return { success: true, workflowId, summary: `Deleted workflow "${workflow.name}".` };
     },

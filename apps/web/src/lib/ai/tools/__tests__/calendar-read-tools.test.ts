@@ -36,6 +36,10 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
     startAt: 'startAt',
     endAt: 'endAt',
   },
+  calendarEventDrives: {
+    eventId: 'eventId',
+    driveId: 'driveId',
+  },
   eventAttendees: {
     id: 'id',
     eventId: 'eventId',
@@ -47,6 +51,12 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn(),
+  listEventDrives: vi.fn().mockResolvedValue([]),
+  getAllDriveIdsForEvent: vi.fn().mockResolvedValue(['drive-1']),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -70,11 +80,13 @@ vi.mock('@/lib/logging/mask', () => ({
 import { calendarReadTools } from '../calendar-read-tools';
 import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { isUserMemberOfAnyEventDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockGetDriveIdsForUser = vi.mocked(getDriveIdsForUser);
+const mockIsUserMemberOfAnyEventDrive = vi.mocked(isUserMemberOfAnyEventDrive);
 
 const createMockEvent = (overrides = {}) => ({
   id: 'event-1',
@@ -250,8 +262,14 @@ describe('calendar-read-tools', () => {
 
       it('returns events for drive context with access', async () => {
         mockIsUserDriveMember.mockResolvedValue(true);
-        // Mock attendee events query
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        // First select: calendarEventDrives (shared events)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        // Second select: attendee events (innerJoin)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
           from: vi.fn().mockReturnValue({
             innerJoin: vi.fn().mockReturnValue({
               where: vi.fn().mockResolvedValue([]),
@@ -329,8 +347,14 @@ describe('calendar-read-tools', () => {
 
       it('returns events from accessible drives', async () => {
         mockGetDriveIdsForUser.mockResolvedValue(['drive-1', 'drive-2']);
-        // Mock attendee events query
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        // First select: calendarEventDrives (events shared into user's drives)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        // Second select: attendee events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockResolvedValue([]),
           }),
@@ -569,7 +593,7 @@ describe('calendar-read-tools', () => {
       });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
       mockDb.query.eventAttendees.findFirst = vi.fn().mockResolvedValue(null);
-      mockIsUserDriveMember.mockResolvedValue(true);
+      mockIsUserMemberOfAnyEventDrive.mockResolvedValue(true);
       const input = { eventId: 'event-1' };
 
       const result = await calendarReadTools.get_calendar_event.execute!(
