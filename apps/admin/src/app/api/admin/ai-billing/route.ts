@@ -129,6 +129,9 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       for (const r of negativeMargin) {
         rows.push(['alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents)]);
       }
+      for (const r of marginByPeriod) {
+        rows.push(['margin_period', typeof r.period === 'string' ? r.period : String(r.period), '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents)]);
+      }
 
       return new NextResponse(toCsv(rows), {
         status: 200,

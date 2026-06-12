@@ -298,12 +298,14 @@ export default function AdminAiBillingPage() {
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={data.marginByPeriod.map((r) => ({
-                period: String(r.period).slice(0, granularity === "month" ? 7 : 10),
-                realCost: +(r.realCostCents / 100).toFixed(2),
-                charged: +(r.chargedCents / 100).toFixed(2),
-                margin: +(r.marginCents / 100).toFixed(2),
-              }))} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+              <LineChart data={[...data.marginByPeriod]
+                .sort((a, b) => String(a.period) < String(b.period) ? -1 : 1)
+                .map((r) => ({
+                  period: String(r.period).slice(0, granularity === "month" ? 7 : 10),
+                  realCost: +(r.realCostCents / 100).toFixed(2),
+                  charged: +(r.chargedCents / 100).toFixed(2),
+                  margin: +(r.marginCents / 100).toFixed(2),
+                }))} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="period" tick={{ fontSize: 11 }} />
                 <YAxis tickFormatter={(v) => `$${v}`} tick={{ fontSize: 11 }} />

@@ -1204,7 +1204,8 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+  // Start of the month exactly 11 months ago → produces exactly 12 calendar months
+  const twelveMonthsAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
 
   const [totalUsersResult] = await db.select({ count: count() }).from(users);
   const totalUsers = totalUsersResult?.count ?? 0;
@@ -1282,11 +1283,17 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   // DATE_TRUNC returns Date objects from the node-postgres driver despite the sql<string>
   // annotation — normalise to ISO strings so Map key equality works across queries.
   const toKey = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
+
+  // Build exactly 12 fixed month buckets (UTC) ending at current month, ascending.
+  const monthBucketKeys: string[] = Array.from({ length: 12 }, (_, i) =>
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + i, 1)).toISOString()
+  );
+  const mauByMonth = new Map(mauTrendRaw.map(r => [toKey(r.month), r.mau]));
   const signupsByMonth = new Map(signupsByMonthRaw.map(r => [toKey(r.month), r.signups]));
-  const mauTrend: MAUTrendRow[] = mauTrendRaw.map(r => ({
-    period: toKey(r.month),
-    mau: r.mau,
-    newUsers: signupsByMonth.get(toKey(r.month)) ?? 0,
+  const mauTrend: MAUTrendRow[] = monthBucketKeys.map(key => ({
+    period: key,
+    mau: mauByMonth.get(key) ?? 0,
+    newUsers: signupsByMonth.get(key) ?? 0,
   }));
 
   // DAU trend (last 30 days) from activity_logs
@@ -1310,11 +1317,18 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     .groupBy(sql`DATE_TRUNC('day', ${users.createdAt})`)
     .orderBy(asc(sql`DATE_TRUNC('day', ${users.createdAt})`));
 
+  // Build exactly 30 fixed day buckets (UTC) ending at yesterday, ascending.
+  const dayBucketKeys: string[] = Array.from({ length: 30 }, (_, i) => {
+    const msAgo = (29 - i) * 24 * 60 * 60 * 1000;
+    const d = new Date(now.getTime() - msAgo);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+  });
+  const dauByDay = new Map(dauTrendRaw.map(r => [toKey(r.day), r.dau]));
   const signupsByDay = new Map(signupsByDayRaw.map(r => [toKey(r.day), r.signups]));
-  const dauTrend: DAUTrendRow[] = dauTrendRaw.map(r => ({
-    day: toKey(r.day),
-    dau: r.dau,
-    signups: signupsByDay.get(toKey(r.day)) ?? 0,
+  const dauTrend: DAUTrendRow[] = dayBucketKeys.map(key => ({
+    day: key,
+    dau: dauByDay.get(key) ?? 0,
+    signups: signupsByDay.get(key) ?? 0,
   }));
 
   // Tier breakdown

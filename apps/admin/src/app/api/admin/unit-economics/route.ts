@@ -79,6 +79,9 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       for (const r of debtByUser) {
         rows.push(['debt', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', '', '', centsToDollars(r.debtCents)]);
       }
+      for (const r of byTier) {
+        rows.push(['tier', r.tier, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.appliedCents), centsToDollars(r.marginCents), r.marginPct === null ? '' : r.marginPct.toFixed(2), r.requestCount, '']);
+      }
 
       return new NextResponse(toCsv(rows), {
         status: 200,

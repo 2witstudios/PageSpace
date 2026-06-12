@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, count, sql, isNull } from '@pagespace/db/operators'
+import { and, eq, inArray, desc, count, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages, chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations'
@@ -82,13 +82,15 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         .from(messages)
         .where(inArray(messages.userId, userIds))
         .groupBy(messages.userId),
-      // Last active: MAX(lastUsedAt) across non-revoked sessions per user
+      // Last active: across ALL sessions regardless of revoked state — a user who was
+      // active yesterday and then logged out still has a recent lastActiveAt. Use
+      // COALESCE to handle sessions where lastUsedAt was never set (fall back to createdAt).
       db.select({
         userId: sessions.userId,
-        lastActiveAt: sql<Date>`MAX(${sessions.lastUsedAt})`,
+        lastActiveAt: sql<Date>`MAX(COALESCE(${sessions.lastUsedAt}, ${sessions.createdAt}))`,
       })
         .from(sessions)
-        .where(and(inArray(sessions.userId, userIds), isNull(sessions.revokedAt)))
+        .where(inArray(sessions.userId, userIds))
         .groupBy(sessions.userId),
     ]);
 

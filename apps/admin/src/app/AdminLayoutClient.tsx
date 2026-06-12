@@ -13,6 +13,14 @@ interface AlertState {
   liveHoldsAlert: boolean;
 }
 
+function isAlertState(value: unknown): value is AlertState {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.errorRateAlert === "boolean"
+    && typeof v.negativeMarginAlert === "boolean"
+    && typeof v.liveHoldsAlert === "boolean";
+}
+
 function AlertDot() {
   return (
     <span className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-red-500 align-middle" aria-hidden />
@@ -39,8 +47,8 @@ export default function AdminLayoutClient({
 
   useEffect(() => {
     fetchWithAuth('/api/admin/alerts')
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => d && setAlerts(d))
+      .then(async (r): Promise<unknown> => (r.ok ? r.json() : null))
+      .then((d) => { if (isAlertState(d)) setAlerts(d); })
       .catch(() => null);
   }, []);
 

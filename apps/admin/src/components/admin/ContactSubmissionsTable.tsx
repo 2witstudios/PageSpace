@@ -102,6 +102,7 @@ export function ContactSubmissionsTable({
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [localResolved, setLocalResolved] = useState<Record<string, boolean>>({});
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const handleSearch = (value: string) => {
     setSearchTerm(value);
@@ -132,6 +133,7 @@ export function ContactSubmissionsTable({
       ? localResolved[submission.id]
       : submission.resolvedAt !== null;
     setResolvingId(submission.id);
+    setResolveError(null);
     try {
       const response = await fetchWithAuth(`/api/admin/contact/${submission.id}`, {
         method: 'PATCH',
@@ -140,7 +142,11 @@ export function ContactSubmissionsTable({
       });
       if (response.ok) {
         setLocalResolved(prev => ({ ...prev, [submission.id]: !isResolved }));
+      } else {
+        setResolveError(`Failed to update submission (${response.status})`);
       }
+    } catch {
+      setResolveError('Network error — please try again');
     } finally {
       setResolvingId(null);
     }
@@ -168,6 +174,11 @@ export function ContactSubmissionsTable({
 
   return (
     <div className="space-y-4">
+      {resolveError && (
+        <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded">
+          {resolveError}
+        </div>
+      )}
       <div className="flex gap-2 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />

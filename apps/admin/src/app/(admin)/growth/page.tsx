@@ -99,6 +99,7 @@ export default function GrowthPage() {
     setIsLoading(true);
     try {
       const res = await fetchWithAuth("/api/monitoring/growth");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json.data);
     } catch {
