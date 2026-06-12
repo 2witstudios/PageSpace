@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 export async function GET(
   request: Request,
@@ -16,6 +16,10 @@ export async function GET(
     const userId = auth.userId;
 
     const { driveId } = await context.params;
+
+    // Scope check: scoped MCP tokens must have explicit membership in this drive
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     // Check if user has access to this drive
     const access = await checkDriveAccess(driveId, userId);
@@ -35,7 +39,7 @@ export async function GET(
     // array (never undefined) so client-side SWR cache shape stays stable as
     // a viewer's role changes — avoids "field present for some users, missing
     // for others" type ambiguity in the UI.
-    const canSeePending = access.isOwner || access.isAdmin;
+    const canSeePending = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     const pendingInvites = canSeePending
       ? await driveInviteRepository.findUnconsumedInvitesByDrive(driveId)
       : [];

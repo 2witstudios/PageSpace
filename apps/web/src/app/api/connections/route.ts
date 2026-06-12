@@ -10,8 +10,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createNotification } from '@pagespace/lib/notifications/notifications';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 // GET /api/connections - Get user's connections
 export async function GET(request: Request) {

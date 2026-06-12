@@ -58,16 +58,17 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(
     (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)
   ),
+  canPrincipalViewPage: vi.fn(),
+  filterDrivesByMCPScope: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { db } from '@pagespace/db/db';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope } from '@/lib/auth';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
-const mockedCanView = vi.mocked(canUserViewPage);
+const mockedCanView = vi.mocked(canPrincipalViewPage);
 
 const USER_ID = 'user_1';
 const ENTRY_PAGE_ID = 'pge9zmbrgj3atz4a98xxat96';
@@ -114,6 +115,7 @@ const entryPage = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockedAuth.mockResolvedValue(webAuth());
+  vi.mocked(filterDrivesByMCPScope).mockImplementation((_auth, ids) => ids as string[]);
   mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
   mockedDb.query.pages.findMany.mockResolvedValue([entryPage] as never);
   mockedDb.query.users.findMany.mockResolvedValue([] as never);

@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq, ne } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, type AuthResult } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -29,9 +29,10 @@ type RouteContext = { params: Promise<{ commandId: string }> };
  * Drive commands: the drive's owner or an admin (403 otherwise).
  */
 async function loadCommandForManage(
-  userId: string,
+  auth: AuthResult,
   commandId: string
 ): Promise<{ command: SelectCommand } | { error: NextResponse }> {
+  const userId = auth.userId;
   const command = await db.query.commands.findFirst({
     where: eq(commands.id, commandId),
   });
@@ -46,6 +47,9 @@ async function loadCommandForManage(
     }
     return { command };
   }
+
+  const scopeError = checkMCPDriveScope(auth, command.driveId as string);
+  if (scopeError) return { error: scopeError };
 
   const allowed = await isDriveOwnerOrAdmin(userId, command.driveId as string);
   if (!allowed) {
@@ -130,7 +134,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'enabled must be a boolean' }, { status: 400 });
     }
 
-    const loaded = await loadCommandForManage(userId, commandId);
+    const loaded = await loadCommandForManage(auth, commandId);
     if ('error' in loaded) return loaded.error;
     const command = loaded.command;
 
@@ -154,7 +158,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
 
     if (typeof entryPageId === 'string') {
-      const entryPageError = await validateEntryPage(userId, entryPageId, command.driveId);
+      const entryPageError = await validateEntryPage(auth, entryPageId, command.driveId);
       if (entryPageError) return entryPageError;
     }
 
@@ -219,7 +223,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    const loaded = await loadCommandForManage(userId, commandId);
+    const loaded = await loadCommandForManage(auth, commandId);
     if ('error' in loaded) return loaded.error;
     const command = loaded.command;
 

@@ -48,6 +48,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
@@ -76,7 +78,7 @@ vi.mock('@pagespace/db/schema/workflows', () => ({
 
 import { GET, PATCH, DELETE } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 // ============================================================================
@@ -150,6 +152,8 @@ describe('GET /api/workflows/[workflowId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
   });
@@ -184,6 +188,7 @@ describe('GET /api/workflows/[workflowId]', () => {
 
   it('should return 403 when user is not owner or admin', async () => {
     mockSelectWhere.mockResolvedValue([mockWorkflow]);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isMember: true,
       drive: createDriveFixture({ id: 'drive_abc', name: 'Test', ownerId: 'other' }),
@@ -221,6 +226,8 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([mockWorkflow]);
@@ -280,6 +287,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
 
   it('should return 403 when user is not owner or admin', async () => {
     mockSelectWhere.mockResolvedValue([mockWorkflow]);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isMember: true,
       drive: createDriveFixture({ id: 'drive_abc', name: 'Test', ownerId: 'other' }),
@@ -344,6 +352,8 @@ describe('DELETE /api/workflows/[workflowId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([mockWorkflow]);
@@ -385,6 +395,7 @@ describe('DELETE /api/workflows/[workflowId]', () => {
   });
 
   it('should return 403 when user is not owner or admin', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isMember: true,
       drive: createDriveFixture({ id: 'drive_abc', name: 'Test', ownerId: 'other' }),

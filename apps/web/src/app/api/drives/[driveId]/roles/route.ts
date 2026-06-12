@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, validateDriveWidePermissions } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 // GET /api/drives/[driveId]/roles - List all roles for a drive
 export async function GET(
@@ -20,6 +20,9 @@ export async function GET(
     const userId = auth.userId;
 
     const { driveId } = await context.params;
+
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     // Check if user has access to this drive
     const access = await checkDriveAccessForRoles(driveId, userId);
@@ -53,6 +56,9 @@ export async function POST(
     const userId = auth.userId;
 
     const { driveId } = await context.params;
+
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     // Check if user is owner or admin
     const access = await checkDriveAccessForRoles(driveId, userId);
