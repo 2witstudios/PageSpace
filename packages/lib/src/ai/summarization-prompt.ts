@@ -5,10 +5,6 @@ interface TranscriptPart {
   toolName?: string;
   args?: unknown;
   result?: unknown;
-  // UIMessage SDK format
-  input?: unknown;
-  output?: unknown;
-  state?: string;
 }
 
 interface TranscriptMessage {
@@ -41,17 +37,6 @@ function renderTranscript(messages: TranscriptMessage[]): string {
             const out =
               typeof p.result === 'string' ? p.result : JSON.stringify(p.result ?? '');
             return `[tool_result: ${out.slice(0, 500)}${out.length > 500 ? '...' : ''}]`;
-          }
-          // UIMessage SDK format: type is 'tool-{name}', args in `input`, result in `output`
-          if (p.type.startsWith('tool-')) {
-            const name = p.toolName ?? p.type.replace(/^tool-/, '');
-            if ('output' in p) {
-              const out = typeof p.output === 'string' ? p.output : JSON.stringify(p.output ?? '');
-              return `[tool_result(${name}): ${out.slice(0, 500)}${out.length > 500 ? '...' : ''}]`;
-            }
-            if ('input' in p) {
-              return `[tool_call: ${name}(${JSON.stringify(p.input ?? {})})]`;
-            }
           }
           return '';
         })

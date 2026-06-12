@@ -112,37 +112,6 @@ describe('buildSummarizationPrompt', () => {
     expect(prompt).toContain('tool_result: page content here');
   });
 
-  it('renders UIMessage-format dynamic tool parts (tool-{name} with input/output)', () => {
-    const { prompt } = buildSummarizationPrompt({
-      previousSummary: null,
-      transcript: [
-        {
-          role: 'assistant',
-          parts: [
-            {
-              type: 'tool-read_page',
-              toolName: 'read_page',
-              toolCallId: 'tc1',
-              state: 'input-available',
-              input: { pageId: 'xyz' },
-            },
-            {
-              type: 'tool-read_page',
-              toolName: 'read_page',
-              toolCallId: 'tc1',
-              state: 'output-available',
-              output: 'page body text',
-            },
-          ],
-        },
-      ],
-      maxSummaryTokens: 2000,
-    });
-    expect(prompt).toContain('tool_call: read_page');
-    expect(prompt).toContain('tool_result(read_page)');
-    expect(prompt).toContain('page body text');
-  });
-
   it('truncates long tool output to 500 chars in the rendered transcript', () => {
     const longOutput = 'x'.repeat(600);
     const { prompt } = buildSummarizationPrompt({
@@ -151,13 +120,7 @@ describe('buildSummarizationPrompt', () => {
         {
           role: 'assistant',
           parts: [
-            {
-              type: 'tool-search',
-              toolName: 'regex_search',
-              toolCallId: 'tc2',
-              state: 'output-available',
-              output: longOutput,
-            },
+            { type: 'tool-result', toolName: 'regex_search', toolCallId: 'tc2', result: longOutput },
           ],
         },
       ],

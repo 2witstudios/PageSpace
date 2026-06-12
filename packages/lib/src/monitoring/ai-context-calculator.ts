@@ -127,10 +127,11 @@ export function estimateMessageTokens(message: UIMessage): number {
         part.type !== 'step-start' &&
         part.type.startsWith('tool-')
       ) {
-        // AI SDK v5 UIMessage format: type is 'tool-{name}' with `input`/`output`
-        // fields. Without this branch, large persisted tool results count as
-        // message overhead only — compaction/truncation thresholds never fire
-        // and the provider rejects the oversized context instead.
+        // AI SDK v5 UIMessage format: type is 'tool-{name}' with `input`/`output`.
+        // This branch is intentionally kept — the context calculator sees raw
+        // SDK-dialect histories from multiple callers (not just the compaction
+        // pipeline where normalize-parts.ts is applied). Without it, large tool
+        // results count as message overhead only and thresholds never fire.
         tokens += 10; // Tool call ID overhead
         tokens += estimateTokens(part.type.replace(/^tool-/, ''));
         const sdkPart = part as { input?: unknown; output?: unknown };

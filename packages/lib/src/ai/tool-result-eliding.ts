@@ -14,15 +14,20 @@
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
+// SDK-dialect fields (input/output) are intentionally preserved here.
+// Eliding operates on the same SDK-dialect UIMessage array that flows to
+// convertToModelMessages — normalization (normalize-parts.ts) is applied only
+// in the summarization pipeline (compaction-service.ts). Removing these fields
+// would break elision of the real persisted message format.
 export interface ElisionMessagePart {
   type: string;
   text?: string;
   toolCallId?: string;
   toolName?: string;
   args?: Record<string, unknown>;
-  input?: unknown; // UIMessage SDK field name for tool args
-  result?: unknown; // CompactionMessage / test format field name
-  output?: unknown; // UIMessage SDK field name for tool output
+  input?: unknown; // SDK: tool args (UIMessage format)
+  result?: unknown; // canonical: tool result (CompactionMessage format)
+  output?: unknown; // SDK: tool output (UIMessage format)
   [key: string]: unknown;
 }
 
@@ -124,7 +129,9 @@ function buildStub(toolName: string): string {
 }
 
 function getOutputValue(part: ElisionMessagePart): unknown {
-  // Support both CompactionMessage/test format (`result`) and UIMessage format (`output`)
+  // Dual-format: canonical CompactionMessage uses `result`; SDK UIMessage uses `output`.
+  // Both paths are live — eliding operates on SDK-dialect messages (normalize-parts.ts
+  // is applied only in the summarization pipeline, not here).
   return 'result' in part ? part.result : part.output;
 }
 
@@ -137,13 +144,16 @@ function outputCharLength(part: ElisionMessagePart): number {
 
 /**
  * Return true for parts that carry tool output, in either format:
- * - `type: 'tool-result'` (normalized / CompactionMessage format)
- * - `type: 'tool-{name}'` with an output/result field (UIMessage SDK format)
+ * - `type: 'tool-result'` (canonical CompactionMessage format)
+ * - `type: 'tool-{name}'` with an output field (SDK UIMessage format)
+ *
+ * Both arms are intentionally kept: eliding runs on SDK-dialect messages
+ * (normalize-parts.ts is applied only in the summarization pipeline, not here).
  * Text, file, and step-start parts are excluded.
  */
 function isToolOutputPart(part: ElisionMessagePart): boolean {
   if (part.type === 'tool-result') return true;
-  // UIMessage: type is 'tool-{toolName}', has output field set
+  // SDK dialect: type is 'tool-{name}' with output field set
   if (
     part.type !== 'text' &&
     part.type !== 'file' &&
@@ -159,9 +169,11 @@ function isToolOutputPart(part: ElisionMessagePart): boolean {
 /**
  * Return a new messages array with stale tool outputs replaced by a stub.
  *
- * Supports two part formats:
- * - CompactionMessage / test format: `type: 'tool-result'`, `result` field
- * - UIMessage SDK format: `type: 'tool-{name}'`, `output` field
+ * Dual-format: handles both canonical `type: 'tool-result'`/`result` field
+ * (CompactionMessage) and SDK-dialect `type: 'tool-{name}'`/`output` field
+ * (UIMessage). Both paths are live — eliding runs on SDK-dialect messages
+ * so that convertToModelMessages receives them intact (see normalize-parts.ts
+ * for why normalization is confined to the summarization pipeline).
  *
  * Tool inputs/args are never touched so the call/result pair structure
  * survives `convertToModelMessages`. Write-tool results are never elided.
