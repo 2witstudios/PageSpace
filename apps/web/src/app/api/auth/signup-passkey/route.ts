@@ -17,7 +17,7 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@/lib/onboarding/home-drive';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
@@ -158,9 +158,9 @@ export async function POST(req: Request) {
     const { userId, passkeyId } = result.data;
 
     // Provision getting started drive for new user
-    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
+    let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
+      provisionedDrive = await provisionHomeDriveIfNeeded(userId);
     } catch (error) {
       loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
         userId,

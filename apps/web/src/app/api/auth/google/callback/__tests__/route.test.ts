@@ -134,8 +134,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -183,7 +183,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { createId } from '@paralleldrive/cuid2';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
@@ -310,7 +310,7 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(createId).mockReturnValue('mock-cuid');
 
     // Default provisioning mock
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
 
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
@@ -717,7 +717,7 @@ describe('GET /api/auth/google/callback', () => {
 
   describe('drive provisioning', () => {
     it('redirects to provisioned drive when newly created', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -730,7 +730,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('uses original returnUrl when drive already exists', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'existing-drive',
         created: false,
       });
@@ -744,7 +744,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
@@ -898,7 +898,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('includes isNewUser flag in deep link for newly provisioned drives', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });
@@ -1062,7 +1062,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('includes isNewUser flag for newly provisioned iOS users', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });

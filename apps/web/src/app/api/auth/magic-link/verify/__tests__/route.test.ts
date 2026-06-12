@@ -88,8 +88,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
@@ -128,7 +128,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 
@@ -426,7 +426,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -435,7 +435,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard/provisioned-drive-id');
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
     it('uses default dashboard path when drive provisioning returns null', async () => {
@@ -443,7 +443,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue(null as never);
 
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
@@ -456,7 +456,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
@@ -478,7 +478,7 @@ describe('GET /api/auth/magic-link/verify', () => {
 
       await GET(createVerifyRequest('valid-token'));
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
     });
   });
 
@@ -626,7 +626,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
