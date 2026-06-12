@@ -272,7 +272,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
               AI agents with access to this drive
             </p>
           </div>
-          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+          {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
             <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)}>
               <UserPlus className="h-4 w-4 mr-2" />
               Invite Agent
