@@ -217,6 +217,18 @@ describe('triggerTools.set_calendar_trigger', () => {
     expect(result.error).toMatch(/not found/);
   });
 
+  it('returns error when triggerAt is unparseable', async () => {
+    mockIsUserDriveMember.mockResolvedValue(true);
+    const { parseDateTime } = await import('../../core/timestamp-utils');
+    (parseDateTime as ReturnType<typeof vi.fn>).mockImplementationOnce(() => { throw new Error('Invalid date: garbage'); });
+    const result = await triggerTools.set_calendar_trigger.execute!(
+      { triggerAt: 'garbage', driveId: 'drive-1', agentPageId: 'agent-1', prompt: 'Run' },
+      ctx(),
+    ) as unknown as TR;
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Invalid date/);
+  });
+
   it('rejects when unauthenticated', async () => {
     await expect(
       triggerTools.set_calendar_trigger.execute!(
