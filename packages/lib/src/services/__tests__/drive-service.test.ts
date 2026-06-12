@@ -44,6 +44,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
 import {
   listAccessibleDrives,
   createDrive,
@@ -602,6 +603,10 @@ describe('updateDrive', () => {
 describe('isValidDriveHomePage', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resetAllMocks clears the operator factory implementations; restore them
+    // so the where-clause composition is observable in the recorded call.
+    (eq as unknown as ReturnType<typeof vi.fn>).mockImplementation((a: unknown, b: unknown) => ({ op: 'eq', a, b }));
+    (and as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => ({ op: 'and', args }));
   });
 
   it('should return true when a non-trashed page exists in the drive', async () => {
