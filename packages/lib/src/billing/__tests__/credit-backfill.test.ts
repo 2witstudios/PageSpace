@@ -26,6 +26,7 @@ vi.mock('@pagespace/db/operators', () => ({
   lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
   gt: mockGt,
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
+  notInArray: vi.fn((a, b) => ({ op: 'notInArray', a, b })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
