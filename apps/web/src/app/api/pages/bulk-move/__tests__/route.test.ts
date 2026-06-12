@@ -203,10 +203,15 @@ function setupSuccessScenario() {
   txUpdateSet.mockReturnValue({ where: txUpdateWhere });
   txUpdate.mockReturnValue({ set: txUpdateSet });
   txQueryPagesFindMany.mockResolvedValue([]);
+  txQueryPagesFindFirst.mockResolvedValue(undefined);
+  txQueryDrivesFindFirst.mockResolvedValue(undefined);
   mockTransaction.mockImplementation(async (fn: (t: unknown) => Promise<void>) => {
     await fn({
       update: txUpdate,
-      query: { pages: { findMany: txQueryPagesFindMany } },
+      query: {
+        pages: { findMany: txQueryPagesFindMany, findFirst: txQueryPagesFindFirst },
+        drives: { findFirst: txQueryDrivesFindFirst },
+      },
     });
   });
 }
