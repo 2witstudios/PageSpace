@@ -356,5 +356,43 @@ describe('command-tools', () => {
       expect(result.total).toBe(0);
       expect(result.commands).toEqual([]);
     });
+
+    it('rejects when caller is not a member of the requested drive', async () => {
+      // getMemberDriveIds returns [] by default (no owned or member drives)
+      await expect(run('list_commands', { driveId: 'drive-not-mine' })).rejects.toThrow(
+        /not a member/i
+      );
+    });
+
+    it('filters to a specific drive when caller is a member', async () => {
+      // Simulate user owning 'drive-1' via the owned-drives select query
+      mockDb.select.mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ id: 'drive-1' }]),
+          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        })),
+      } as never);
+      // second select call (memberships) returns []
+      mockDb.query.commands.findMany.mockResolvedValue([
+        {
+          id: 'cmd-2',
+          userId: null,
+          driveId: 'drive-1',
+          trigger: 'drive-cmd',
+          description: 'Drive command',
+          enabled: true,
+          entryPageId: 'page-2',
+        },
+      ]);
+
+      const result = await run<{ commands: Array<{ trigger: string; scope: string }>; total: number }>(
+        'list_commands',
+        { driveId: 'drive-1' }
+      );
+
+      expect(result.total).toBe(1);
+      expect(result.commands[0].trigger).toBe('drive-cmd');
+      expect(result.commands[0].scope).toBe('drive');
+    });
   });
 });

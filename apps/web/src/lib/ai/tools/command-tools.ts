@@ -320,7 +320,13 @@ export const commandTools = {
       if (!userId) throw new Error('User authentication required');
 
       try {
-        const memberDriveIds = driveId ? [driveId] : await getMemberDriveIds(userId);
+        const allMemberDriveIds = await getMemberDriveIds(userId);
+
+        if (driveId && !allMemberDriveIds.includes(driveId)) {
+          throw new Error('Drive not found or you are not a member of that drive');
+        }
+
+        const memberDriveIds = driveId ? [driveId] : allMemberDriveIds;
 
         const visible = await db.query.commands.findMany({
           where: memberDriveIds.length

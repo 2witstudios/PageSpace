@@ -43,6 +43,13 @@ const WRITE_TOOLS = new Set([
   'create_workflow',
   'update_workflow',
   'delete_workflow',
+  // Role management operations
+  'create_drive_role',
+  'update_drive_role',
+  'delete_drive_role',
+  'set_role_page_permissions',
+  'set_role_drive_wide_permissions',
+  'remove_role_page_permissions',
   // Command operations
   'create_command',
   'update_command',
@@ -143,6 +150,8 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     // Read tools
     'list_drive_members',
     'list_collaborators',
+    'list_drive_roles',
+    'get_drive_role',
     'list_drives',
     'list_pages',
     'read_page',
