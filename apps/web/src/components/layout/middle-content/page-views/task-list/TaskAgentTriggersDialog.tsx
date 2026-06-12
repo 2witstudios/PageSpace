@@ -240,8 +240,8 @@ export function TaskAgentTriggersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-lg flex flex-col max-h-[85vh]">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-amber-500" />
             Agent triggers
@@ -254,7 +254,7 @@ export function TaskAgentTriggersDialog({
         {triggersLoading ? (
           <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
         ) : (
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">
             {noAgents && (
               <p className="text-xs text-muted-foreground">
                 No agents in this drive. Create an AI Chat page first.
@@ -262,6 +262,7 @@ export function TaskAgentTriggersDialog({
             )}
 
             {TRIGGER_TYPES.map(({ ui, label, help }) => {
+              const switchId = `trigger-switch-${ui}`;
               const section = sections[ui];
               const existing = (triggersData?.triggers ?? []).find(
                 (t) => t.triggerType === ui,
@@ -273,9 +274,10 @@ export function TaskAgentTriggersDialog({
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <Label className="font-medium cursor-pointer truncate">{label}</Label>
+                      <Label htmlFor={switchId} className="font-medium cursor-pointer truncate">{label}</Label>
                     </div>
                     <Switch
+                      id={switchId}
                       checked={section.enabled}
                       disabled={disabled}
                       onCheckedChange={(checked) => updateSection(ui, { enabled: checked })}
@@ -350,7 +352,7 @@ export function TaskAgentTriggersDialog({
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Done
           </Button>
