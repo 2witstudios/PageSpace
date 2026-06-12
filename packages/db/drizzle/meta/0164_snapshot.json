@@ -1,5 +1,5 @@
 {
-  "id": "31a03145-1e5d-468a-9146-048b72216fc4",
+  "id": "53cb3ece-9b56-4801-b734-a15031c52be8",
   "prevId": "5549e4cb-b0b8-4246-b78e-395f689b47a2",
   "version": "7",
   "dialect": "postgresql",
@@ -9471,6 +9471,13 @@
           "notNull": true,
           "default": false
         },
+        "gifted": {
+          "name": "gifted",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "stripeScheduleId": {
           "name": "stripeScheduleId",
           "type": "text",
@@ -16623,7 +16630,7 @@
         "conversation_id": {
           "name": "conversation_id",
           "type": "text",
-          "primaryKey": false,
+          "primaryKey": true,
           "notNull": true
         },
         "source": {
@@ -16716,15 +16723,7 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "conversation_compactions_conversation_id_source_pk": {
-          "name": "conversation_compactions_conversation_id_source_pk",
-          "columns": [
-            "conversation_id",
-            "source"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     }
   },
