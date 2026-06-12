@@ -96,6 +96,7 @@ const createDriveFixture = (overrides: Partial<DriveWithAccess> & { id: string; 
   isOwned: overrides.isOwned ?? true,
   role: overrides.role ?? 'OWNER',
   lastAccessedAt: overrides.lastAccessedAt ?? null,
+  homePageId: overrides.homePageId ?? null,
 });
 
 // ============================================================================

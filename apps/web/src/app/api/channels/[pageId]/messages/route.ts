@@ -17,6 +17,7 @@ import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 
 interface ChannelInboxFanoutInput {
@@ -647,26 +648,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
       });
 
-      try {
-        const mentionedIds = await expandMentionsToUserIds(messageContent, channel.driveId);
-        const candidates = mentionedIds.filter((id) => id !== userId);
-        if (candidates.length > 0) {
-          const viewChecks = await Promise.all(
-            candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
-          );
-          await Promise.all(
-            viewChecks
-              .filter((e) => e.canView)
-              .map((e) =>
-                createMentionNotification(e.id, pageId, userId).catch((err) =>
-                  loggers.realtime.error('Failed to send mention notification', err as Error)
-                )
-              )
-          );
-        }
-      } catch (mentionErr) {
-        loggers.realtime.error('Failed to resolve mention targets', mentionErr as Error);
-      }
+      await notifyMentionedUsers({
+        content: messageContent,
+        pageId,
+        driveId: channel.driveId,
+        triggeredByUserId: userId,
+      });
 
       // Broadcast read status change to sender to update their unread count
       await broadcastInboxEvent(userId, {

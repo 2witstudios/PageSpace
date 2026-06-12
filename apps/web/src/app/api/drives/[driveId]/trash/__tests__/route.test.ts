@@ -103,6 +103,7 @@ const createDriveFixture = (overrides: { id: string; name?: string; ownerId?: st
   updatedAt: new Date('2024-01-01'),
   drivePrompt: null,
   publishSubdomain: null,
+  homePageId: null,
 });
 
 // ============================================================================

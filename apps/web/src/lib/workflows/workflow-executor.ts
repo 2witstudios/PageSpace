@@ -371,6 +371,11 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
       userId: null,
       role: 'assistant',
       content: responseText,
+      mentionNotify: {
+        driveId: input.driveId,
+        triggeredByUserId: input.createdBy,
+        mentionerName: agent.title,
+      },
     });
 
     // 10. Track usage

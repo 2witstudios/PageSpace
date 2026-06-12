@@ -69,6 +69,11 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn(() => ({ 'x-signed': 'yes' })),
 }));
 
+const mockNotifyMentionedUsers = vi.fn();
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({
+  notifyMentionedUsers: (...args: unknown[]) => mockNotifyMentionedUsers(...args),
+}));
+
 const mockBroadcastInboxEvent = vi.fn();
 const mockBroadcastThreadReplyCountUpdated = vi.fn();
 vi.mock('@/lib/websocket/socket-utils', () => ({
@@ -425,6 +430,52 @@ describe('agent-mention-responder', () => {
     expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
     expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+  });
+
+  it('fires notifyMentionedUsers with agent title after a successful thread reply', async () => {
+    mockNotifyMentionedUsers.mockResolvedValue(undefined);
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Here is my analysis @[Alice](user-alice:user)'));
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      parentId: 'parent-thread',
+      content: 'Hey @[Budget Agent](agent-1:page) what do you think?',
+    });
+
+    // Flush microtasks for fire-and-forget
+    await Promise.resolve();
+
+    expect(mockNotifyMentionedUsers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Here is my analysis @[Alice](user-alice:user)',
+        pageId: 'channel-1',
+        driveId: 'drive-1',
+        triggeredByUserId: 'user-1',
+        mentionerNameOverride: 'Budget Agent',
+      })
+    );
+  });
+
+  it('skips notifyMentionedUsers when driveId is absent', async () => {
+    mockNotifyMentionedUsers.mockResolvedValue(undefined);
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Reply @[Alice](user-alice:user)'));
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      driveId: undefined,
+      parentId: 'parent-thread',
+      content: 'Hey @[Budget Agent](agent-1:page)',
+    });
+
+    await Promise.resolve();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
   });
 });
 

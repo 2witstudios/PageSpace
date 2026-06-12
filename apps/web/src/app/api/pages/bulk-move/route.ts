@@ -198,6 +198,28 @@ export async function POST(request: Request) {
 
         nextPosition += 1;
       }
+
+      // A drive's home page must live in that drive. Clearing here (after the
+      // moves, same transaction) also covers home pages that left as
+      // descendants of a moved subtree via updateChildrenDriveId.
+      const sourceDriveIds = [...affectedDriveIds].filter((id) => id !== targetDriveId);
+      for (const sourceDriveId of sourceDriveIds) {
+        const sourceDrive = await tx.query.drives.findFirst({
+          where: eq(drives.id, sourceDriveId),
+          columns: { homePageId: true },
+        });
+        if (!sourceDrive?.homePageId) continue;
+
+        const homePageStillInDrive = await tx.query.pages.findFirst({
+          where: and(eq(pages.id, sourceDrive.homePageId), eq(pages.driveId, sourceDriveId)),
+          columns: { id: true },
+        });
+        if (!homePageStillInDrive) {
+          await tx.update(drives)
+            .set({ homePageId: null })
+            .where(eq(drives.id, sourceDriveId));
+        }
+      }
     });
 
     // Log activity for each moved page

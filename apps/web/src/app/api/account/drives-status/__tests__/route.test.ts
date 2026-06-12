@@ -83,6 +83,7 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   trashedAt: null,
   drivePrompt: null,
   publishSubdomain: null,
+  homePageId: null,
 });
 
 describe('GET /api/account/drives-status', () => {
