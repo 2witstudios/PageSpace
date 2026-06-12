@@ -128,6 +128,19 @@ vi.mock('../../tools/trigger-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/role-management-tools', () => ({
+  roleManagementTools: {
+    list_drive_roles: { name: 'list_drive_roles', description: 'List drive roles' },
+    get_drive_role: { name: 'get_drive_role', description: 'Get drive role' },
+    create_drive_role: { name: 'create_drive_role', description: 'Create drive role' },
+    update_drive_role: { name: 'update_drive_role', description: 'Update drive role' },
+    delete_drive_role: { name: 'delete_drive_role', description: 'Delete drive role' },
+    set_role_page_permissions: { name: 'set_role_page_permissions', description: 'Set role page permissions' },
+    set_role_drive_wide_permissions: { name: 'set_role_drive_wide_permissions', description: 'Set role drive-wide permissions' },
+    remove_role_page_permissions: { name: 'remove_role_page_permissions', description: 'Remove role page permissions' },
+  },
+}));
+
 // Stub the sandbox tools so the builder can be exercised without loading the DB
 // module graph or the real Fly Sprites driver.
 vi.mock('../../tools/sandbox-tools-runtime', () => ({
@@ -141,6 +154,7 @@ vi.mock('../../tools/sandbox-tools-runtime', () => ({
 import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools } from '../ai-tools';
 import { CORE_TOOL_NAMES } from '../stub-tools';
 import { memberTools } from '../../tools/member-tools';
+import { roleManagementTools } from '../../tools/role-management-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
@@ -166,6 +180,7 @@ describe('ai-tools', () => {
     it('equals the merged object of all tool modules', () => {
       expect(pageSpaceTools).toEqual({
         ...memberTools,
+        ...roleManagementTools,
         ...driveTools,
         ...pageReadTools,
         ...pageWriteTools,
@@ -187,6 +202,7 @@ describe('ai-tools', () => {
     it('has no key collisions between tool modules', () => {
       const moduleKeysets = [
         Object.keys(memberTools),
+        Object.keys(roleManagementTools),
         Object.keys(driveTools),
         Object.keys(pageReadTools),
         Object.keys(pageWriteTools),
