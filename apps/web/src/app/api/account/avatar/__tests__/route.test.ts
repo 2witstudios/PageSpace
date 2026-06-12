@@ -146,13 +146,27 @@ describe('POST /api/account/avatar', () => {
       expect(body.error).toContain('Invalid file type');
     });
 
-    it('returns 400 when file exceeds 5MB', async () => {
-      const file = createMockFile('image/png', 6 * 1024 * 1024, 'huge.png');
+    it('returns 400 when file exceeds 25MB', async () => {
+      const file = createMockFile('image/png', 26 * 1024 * 1024, 'huge.png');
       const response = await POST(createUploadRequest(file));
       const body = await response.json();
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('File too large');
+    });
+
+    it('accepts a file between 5MB and 25MB', async () => {
+      mockSelectChain([{ image: null }]);
+      mockUpdateChain();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ filename: 'avatar.png' }),
+      });
+
+      const file = createMockFile('image/png', 6 * 1024 * 1024, 'big.png');
+      const response = await POST(createUploadRequest(file));
+
+      expect(response.status).toBe(200);
     });
 
     it('accepts image/jpeg', async () => {

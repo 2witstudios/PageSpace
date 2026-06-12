@@ -8,8 +8,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
 
-// Maximum file size: 5MB
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
+// Maximum file size: 25MB
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
 // Allowed image types
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     // Validate file size
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
-        { error: 'File too large. Maximum size is 5MB' },
+        { error: 'File too large. Maximum size is 25MB' },
         { status: 400 }
       );
     }

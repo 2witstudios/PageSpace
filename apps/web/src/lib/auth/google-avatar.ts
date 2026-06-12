@@ -2,7 +2,7 @@ import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/servic
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 25 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 5000;
 const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
 
