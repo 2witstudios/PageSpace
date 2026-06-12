@@ -82,8 +82,10 @@ export interface FinishRequestParams {
    * The exact tool set passed to streamText/generateText — same reference enforces
    * the budget=sent invariant: a divergence between budgeted and sent tools is
    * impossible when both come from the same variable.
+   * Required: callers must always thread their tool set through so convertToModelMessages
+   * can resolve tool result schemas and the budget=sent invariant is structurally enforced.
    */
-  tools?: ToolSet;
+  tools: ToolSet;
   /**
    * Pre-processed tail to convert instead of prepared.messages.
    * Use when routes inject visual content or other pre-conversion transforms.
@@ -202,7 +204,7 @@ export async function prepareHistoryForModel(
 export function finishModelRequest(params: FinishRequestParams): FinishRequestResult {
   const { prepared, tools, tail } = params;
   const toConvert = tail ?? (prepared.messages as Parameters<typeof convertToModelMessages>[0]);
-  const tailModelMessages = convertToModelMessages(toConvert, tools ? { tools } : undefined);
+  const tailModelMessages = convertToModelMessages(toConvert, { tools });
   const modelMessages: ModelMessage[] = prepared.summaryText
     ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
     : tailModelMessages;

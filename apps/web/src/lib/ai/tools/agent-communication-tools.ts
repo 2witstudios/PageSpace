@@ -1,7 +1,7 @@
 import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
-import { generateText, UIMessage } from 'ai';
+import { generateText, UIMessage, type ToolSet } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
@@ -611,7 +611,7 @@ export const agentCommunicationTools = {
           tools: executionTools,
           user: { id: userId, role: callerUserRole },
         });
-        const { modelMessages: agentModelMessages } = finishModelRequest({ prepared });
+        const { modelMessages: agentModelMessages } = finishModelRequest({ prepared, tools: executionTools as ToolSet });
 
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0

@@ -197,7 +197,7 @@ describe('finishModelRequest', () => {
 
   it('no summary — returns tail as modelMessages, stableBoundaryIndex=0', () => {
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
-    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared });
+    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared, tools: {} as never });
 
     expect(stableBoundaryIndex).toBe(0);
     // convertToModelMessages is mocked as identity — messages flow through unchanged
@@ -210,7 +210,7 @@ describe('finishModelRequest', () => {
       messages: tail,
       stableBoundaryIndex: 1,
     };
-    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared });
+    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared, tools: {} as never });
 
     expect(stableBoundaryIndex).toBe(1);
     expect(modelMessages[0]).toEqual({ role: 'user', content: 'summary text here' });
@@ -221,7 +221,7 @@ describe('finishModelRequest', () => {
   it('tail override — converts the provided tail instead of prepared.messages', () => {
     const overrideTail = [userMsg('u99', 'override')] as unknown as Parameters<typeof import('ai').convertToModelMessages>[0];
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
-    const { modelMessages } = finishModelRequest({ prepared, tail: overrideTail });
+    const { modelMessages } = finishModelRequest({ prepared, tail: overrideTail, tools: {} as never });
 
     expect(modelMessages).toEqual(overrideTail);
   });
@@ -240,14 +240,14 @@ describe('finishModelRequest', () => {
     );
   });
 
-  it('no tools — convertToModelMessages called without options', async () => {
+  it('empty tools — convertToModelMessages called with { tools: {} }', async () => {
     const { convertToModelMessages } = await import('ai');
     const mockConvert = vi.mocked(convertToModelMessages);
     mockConvert.mockClear();
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
 
-    finishModelRequest({ prepared });
+    finishModelRequest({ prepared, tools: {} as never });
 
-    expect(mockConvert).toHaveBeenCalledWith(expect.anything(), undefined);
+    expect(mockConvert).toHaveBeenCalledWith(expect.anything(), { tools: {} });
   });
 });

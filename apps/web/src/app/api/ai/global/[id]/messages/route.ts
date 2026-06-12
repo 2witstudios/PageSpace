@@ -889,18 +889,20 @@ MENTION PROCESSING:
         ] as Parameters<typeof convertToModelMessages>[0];
 
         // Post-compaction view for context tracking: summary (as a synthetic
-        // UIMessage) + retained tail — what the model is actually sent, not the
-        // full stored history.
+        // UIMessage) + the exact processed tail that was sent to the model.
+        // Using processedTail (not prepared.messages) ensures imageDataUrl stripping
+        // and data-visual-content injection are reflected in the tracked byte count.
         const contextMessagesForTracking = prepared.summaryText
           ? [
               { role: 'user' as const, parts: [{ type: 'text' as const, text: prepared.summaryText }] },
-              ...prepared.messages,
+              ...(processedTail as UIMessage[]),
             ]
-          : prepared.messages;
+          : (processedTail as UIMessage[]);
 
         const { modelMessages, stableBoundaryIndex } = finishModelRequest({
           prepared,
           tail: processedTail,
+          tools: finalTools,
         });
 
         return {
