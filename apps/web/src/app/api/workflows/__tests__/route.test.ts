@@ -45,6 +45,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
@@ -91,7 +93,7 @@ vi.mock('@pagespace/db/schema/workflow-runs', () => ({
 
 import { GET, POST } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 // ============================================================================
@@ -144,6 +146,7 @@ describe('GET /api/workflows', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
     mockValues.mockReturnValue({ returning: mockReturning });
     mockInsert.mockReturnValue({ values: mockValues });
     mockSelect.mockReturnValue({ from: mockFrom });
@@ -174,6 +177,7 @@ describe('GET /api/workflows', () => {
 
   it('should return 404 when drive not found', async () => {
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
+    // isPrincipalDriveOwnerOrAdmin defaults to undefined (falsy) after resetAllMocks
 
     const request = new Request(`https://example.com/api/workflows?driveId=${mockDriveId}`);
     const response = await GET(request);
@@ -198,6 +202,7 @@ describe('GET /api/workflows', () => {
   });
 
   it('should return workflow list with denormalized lastRun on success', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     const startedAt = new Date('2026-04-01T09:00:00Z');
     const endedAt = new Date('2026-04-01T09:00:05Z');
     // Each row from the projection: { workflow, lastRunStatus, lastRunStartedAt, ... }
@@ -252,6 +257,7 @@ describe('GET /api/workflows', () => {
     // triggerType='cron' but have cronExpression=null. Without an
     // isNotNull(cronExpression) gate they'd leak into this list and be
     // editable/deletable from the cron management UI.
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     mockOrderBy.mockResolvedValue([]);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isOwner: true,
@@ -293,6 +299,8 @@ describe('POST /api/workflows', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
 
     mockSelect.mockReturnValue({ from: mockFrom });
     mockFrom.mockReturnValue({ where: mockWhere });
@@ -348,6 +356,7 @@ describe('POST /api/workflows', () => {
   });
 
   it('should return 404 when drive not found', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
 
     const request = new Request('https://example.com/api/workflows', {
@@ -361,6 +370,7 @@ describe('POST /api/workflows', () => {
   });
 
   it('should return 403 when not owner or admin', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isMember: true,
       drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'other' }),

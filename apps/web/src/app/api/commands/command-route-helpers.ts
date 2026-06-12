@@ -3,11 +3,11 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import type { CommandScope } from '@pagespace/lib/commands/command-core';
 
-export const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-export const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+export const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+export const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 export interface CommandResponse {
   id: string;
@@ -65,7 +65,7 @@ export function isUniqueViolation(error: unknown): boolean {
  * destroys the whole request with a 500.
  */
 export async function validateEntryPage(
-  userId: string,
+  auth: AuthResult,
   entryPageId: string,
   commandDriveId: string | null
 ): Promise<NextResponse | null> {
@@ -81,7 +81,7 @@ export async function validateEntryPage(
     return NextResponse.json({ error: 'Entry page is in the trash' }, { status: 400 });
   }
 
-  const canView = await canUserViewPage(userId, entryPageId);
+  const canView = await canPrincipalViewPage(auth, entryPageId);
   if (!canView) {
     return NextResponse.json(
       { error: 'You do not have access to the entry page' },

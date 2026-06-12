@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  canPrincipalEditPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -61,7 +62,7 @@ vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: {}, taskLists: {} }));
 vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id', agentPageId: 'agentPageId', prompt: 'prompt', instructionPageId: 'instructionPageId', contextPageIds: 'contextPageIds' } }));
 vi.mock('@pagespace/db/schema/task-triggers', () => ({ taskTriggers: { id: 'id', taskItemId: 'taskItemId', triggerType: 'triggerType', workflowId: 'workflowId', isEnabled: 'isEnabled', nextRunAt: 'nextRunAt', lastFiredAt: 'lastFiredAt', lastFireError: 'lastFireError', createdAt: 'createdAt', updatedAt: 'updatedAt' } }));
 
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { createTaskTriggerWorkflow, recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
@@ -124,7 +125,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(false);
 
       const res = await GET(mkRequest('GET'), { params: mkParams() });
       expect(res.status).toBe(403);
@@ -135,7 +136,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
       const triggerRow = { id: 'trg-1', triggerType: 'completion', agentPageId, prompt: 'do it', isEnabled: true, workflowId: 'wf-1' };
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({
@@ -164,7 +165,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(false);
 
       const res = await PUT(
         mkRequest('PUT', { triggerType: 'completion', agentPageId, prompt: 'go' }),
@@ -178,7 +179,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
 
       const res = await PUT(
         mkRequest('PUT', { triggerType: 'due_date', agentPageId, prompt: 'go' }),
@@ -194,7 +195,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({
           innerJoin: vi.fn(() => ({
@@ -216,7 +217,7 @@ describe('Task triggers API', () => {
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
       // Simulate the post-upsert re-query coming back empty (race / constraint loss)
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({

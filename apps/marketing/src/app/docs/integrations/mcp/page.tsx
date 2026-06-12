@@ -71,10 +71,17 @@ Once connected, \`pagespace-mcp\` exposes tools that wrap the PageSpace API. The
 
 At a minimum the server covers:
 
-- **Drives** — list accessible drives; create new drives (unscoped tokens only). Backed by \`/api/mcp/drives\`.
-- **Pages** — list and navigate the page tree, create pages, read page content, perform line operations and sheet cell edits (\`read\`, \`replace\`, \`insert\`, \`delete\`, \`edit-cells\`). Backed by \`/api/mcp/documents\` and \`/api/pages\`.
-- **Search** — global and multi-drive search. Backed by \`/api/search\` and \`/api/search/multi-drive\`.
-- **Tasks** — query and manage tasks on \`TASK_LIST\` pages. Backed by \`/api/pages/[pageId]/tasks\`.
+- **Drives** — list accessible drives; create new drives (unscoped tokens only).
+- **Pages** — list and navigate the page tree, create pages, read page content, perform line operations and sheet cell edits (\`read\`, \`replace\`, \`insert\`, \`delete\`, \`edit-cells\`).
+- **Search** — global and multi-drive search.
+- **Tasks** — query and manage tasks on \`TASK_LIST\` pages.
+- **Calendar** — read availability, schedule events, invite attendees, RSVP, and set agent triggers on calendar events.
+- **Slash Commands** — create and manage \`/commands\` that invoke pages as executable skills.
+- **Role Management** — drive role CRUD and per-page permission assignment.
+- **Agent Triggers** — attach agent runs to calendar events and tasks so agents fire automatically when those events occur.
+- **Scheduled Workflows** — cron-based recurring agent automation.
+- **Drive Members** — list drive members and connections/collaborators.
+- **AI Models** — list available AI providers and models for dynamic model selection.
 
 Every tool respects the caller's permissions. If you cannot view a page in the web UI, the MCP server cannot see it either.
 

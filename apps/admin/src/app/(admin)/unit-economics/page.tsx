@@ -71,12 +71,22 @@ interface DebtRow {
   debtCents: number;
 }
 
+interface TierRow {
+  tier: string;
+  realCostCents: number;
+  chargedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
 interface UnitEconomicsResponse {
   range: Range;
   granularity: Granularity;
   summary: Summary;
   byPeriod: PeriodRow[];
   byModel: ModelRow[];
+  byTier: TierRow[];
   topSpenders: SpenderRow[];
   debtByUser: DebtRow[];
 }
@@ -265,6 +275,38 @@ export default function AdminUnitEconomicsPage() {
                 {data.topSpenders.map((row) => (
                   <TableRow key={row.userId}>
                     <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
+                    <TableCell className="text-right">{usd(row.realCostCents)}</TableCell>
+                    <TableCell className="text-right">{usd(row.chargedCents)}</TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{usd(row.marginCents)}</TableCell>
+                    <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{pct(row.marginPct)}</TableCell>
+                    <TableCell className="text-right">{row.requestCount.toLocaleString()}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Margin by tier</CardTitle><CardDescription>Cost and margin breakdown across subscription tiers.</CardDescription></CardHeader>
+        <CardContent>
+          {data.byTier.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No billed AI usage in this range.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tier</TableHead>
+                  <TableHead className="text-right">Real cost</TableHead><TableHead className="text-right">Charged</TableHead>
+                  <TableHead className="text-right">Margin</TableHead><TableHead className="text-right">Margin %</TableHead>
+                  <TableHead className="text-right">Requests</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.byTier.map((row) => (
+                  <TableRow key={row.tier}>
+                    <TableCell className="capitalize">{row.tier}</TableCell>
                     <TableCell className="text-right">{usd(row.realCostCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.chargedCents)}</TableCell>
                     <TableCell className={`text-right ${marginClass(row.marginPct)}`}>{usd(row.marginCents)}</TableCell>

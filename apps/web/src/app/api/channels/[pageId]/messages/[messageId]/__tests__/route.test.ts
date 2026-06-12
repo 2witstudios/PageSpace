@@ -14,6 +14,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
+  canPrincipalEditPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -45,7 +46,7 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 
 import { DELETE } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalEditPage } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 
 const PAGE_ID = 'page_chan';
@@ -79,6 +80,7 @@ describe('DELETE /api/channels/[pageId]/messages/[messageId]', () => {
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
     mockFindChannelMessageInPage.mockResolvedValue({ id: MESSAGE_ID, pageId: PAGE_ID, userId: USER_ID, isActive: true });
   });
 
