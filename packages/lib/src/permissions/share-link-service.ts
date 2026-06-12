@@ -18,7 +18,8 @@ export type ShareLinkError =
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
   | 'ALREADY_MEMBER'
-  | 'INVALID_PERMISSIONS';
+  | 'INVALID_PERMISSIONS'
+  | 'HOME_DRIVE';
 
 export type ShareLinkResult<T> =
   | { ok: true; data: T }
@@ -96,6 +97,12 @@ export async function createDriveShareLink(
 ): Promise<ShareLinkResult<{ id: string; rawToken: string }>> {
   const isAuthorized = await isDriveOwnerOrAdmin(ctx.userId, driveId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
+
+  const drive = await db.query.drives.findFirst({
+    where: eq(drives.id, driveId),
+    columns: { kind: true },
+  });
+  if (drive?.kind === 'HOME') return { ok: false, error: 'HOME_DRIVE' };
 
   // ADMIN ceiling: customRoleId is meaningless for admins and must never be stored.
   const role = opts.role ?? 'MEMBER';
@@ -274,6 +281,18 @@ export async function createPageShareLink(
 
   const isAuthorized = await canUserSharePage(ctx.userId, pageId);
   if (!isAuthorized) return { ok: false, error: 'UNAUTHORIZED' };
+
+  const pageRow = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+  if (pageRow) {
+    const driveRow = await db.query.drives.findFirst({
+      where: eq(drives.id, pageRow.driveId),
+      columns: { kind: true },
+    });
+    if (driveRow?.kind === 'HOME') return { ok: false, error: 'HOME_DRIVE' };
+  }
 
   const { token } = generateToken('ps_share');
 

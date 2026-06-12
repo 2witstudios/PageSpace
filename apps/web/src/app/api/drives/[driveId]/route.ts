@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getDriveById, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
+import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -115,6 +116,16 @@ export async function PATCH(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
+    // Home drives cannot be renamed; drivePrompt-only updates are allowed.
+    if (validatedBody.name !== undefined && isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'rename') }, { status: 403 });
+    }
+
+    // Reserved-name check for the new name.
+    if (validatedBody.name !== undefined && isReservedDriveName(validatedBody.name)) {
+      return NextResponse.json({ error: 'Cannot rename a drive to that name.' }, { status: 400 });
+    }
+
     // Check authorization: owner/admin authority. Scoped tokens with an
     // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
@@ -219,6 +230,11 @@ export async function DELETE(
     const drive = await getDriveById(driveId);
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    // Home drives cannot be trashed.
+    if (isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'trash') }, { status: 403 });
     }
 
     // Check authorization: owner/admin authority. Scoped tokens with an

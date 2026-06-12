@@ -86,6 +86,12 @@ export async function POST(
     if (result.error === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+    if (result.error === 'HOME_DRIVE') {
+      return NextResponse.json(
+        { error: 'Your Home drive is private and cannot be shared.' },
+        { status: 403 }
+      );
+    }
     if (result.error === 'NOT_FOUND') {
       return NextResponse.json(
         { error: 'Custom role not found for this drive' },

@@ -82,6 +82,12 @@ export async function POST(
     if (result.error === 'UNAUTHORIZED') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+    if (result.error === 'HOME_DRIVE') {
+      return NextResponse.json(
+        { error: 'Your Home drive is private and cannot be shared.' },
+        { status: 403 }
+      );
+    }
     if (result.error === 'INVALID_PERMISSIONS') {
       return NextResponse.json(
         { error: 'VIEW permission is required' },

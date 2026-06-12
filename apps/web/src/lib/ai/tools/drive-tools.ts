@@ -5,6 +5,7 @@ import { eq, and, ne, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '@pagespace/lib/utils/utils';
+import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveAccessWithDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -197,8 +198,8 @@ export const driveTools = {
           throw new Error('Drive name is required');
         }
 
-        if (name.toLowerCase() === 'personal') {
-          throw new Error('Cannot create a drive named "Personal"');
+        if (isReservedDriveName(name)) {
+          throw new Error(`Cannot create a drive named "${name.trim()}"`);
         }
 
         // Generate slug from name
@@ -293,8 +294,8 @@ export const driveTools = {
           throw new Error('Drive name is required');
         }
         
-        if (name.toLowerCase() === 'personal') {
-          throw new Error('Cannot rename a drive to "Personal"');
+        if (isReservedDriveName(name)) {
+          throw new Error(`Cannot rename a drive to "${name.trim()}"`);
         }
 
         // Find the drive and verify ownership
@@ -307,6 +308,10 @@ export const driveTools = {
 
         if (!drive) {
           throw new Error('Drive not found or you do not have permission to rename it');
+        }
+
+        if (isHomeDrive(drive)) {
+          throw new Error(homeDriveActionError(drive, 'rename')!);
         }
 
         // Update the drive name and regenerate slug

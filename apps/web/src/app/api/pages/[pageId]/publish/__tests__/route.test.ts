@@ -159,6 +159,20 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(json.error).toMatch(/canvas/i);
   });
 
+  it('returns 403 and touches nothing when the page is in a Home drive', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-home' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-home', slug: 'home', kind: 'HOME', publishSubdomain: null });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toMatch(/home/i);
+    // Must not allocate subdomain, upload, or write any row.
+    expect(updateWhere).not.toHaveBeenCalled();
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+  });
+
   it('first-publish: allocates the subdomain, uploads, upserts the row, returns the url', async () => {
     findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
     findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'Acme', publishSubdomain: null });
@@ -275,7 +289,18 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json).toEqual({ published: false, available: true });
-    expect(findFirstDrive).not.toHaveBeenCalled();
+  });
+
+  it('returns available: false when the page is in a Home drive (no published row)', async () => {
+    findFirstPublished.mockResolvedValue(undefined);
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', driveId: 'drive-home' });
+    findFirstDrive.mockResolvedValue({ kind: 'HOME', publishSubdomain: null });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.available).toBe(false);
+    expect(json.published).toBe(false);
   });
 
   it('reports available: false when the publish bucket is not configured (UI hides the control)', async () => {

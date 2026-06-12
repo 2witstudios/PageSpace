@@ -26,6 +26,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveById: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   isEmailVerified: vi.fn().mockResolvedValue(true),
 }));
@@ -70,6 +74,7 @@ vi.mock('@/lib/websocket', () => ({
 
 import { POST } from '../route';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
+import { getDriveById } from '@pagespace/lib/services/drive-service';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
@@ -150,6 +155,20 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
       expiresAt: new Date('2026-05-10T12:00:00.000Z'),
     });
     vi.mocked(sendPendingPageShareInvitationEmail).mockResolvedValue(undefined);
+    // Default: page's drive is standard (not Home)
+    vi.mocked(getDriveById).mockResolvedValue({
+      id: 'drive_xyz',
+      name: 'Test Drive',
+      slug: 'test-drive',
+      ownerId: mockUserId,
+      kind: 'STANDARD' as const,
+      isTrashed: false,
+      trashedAt: null,
+      drivePrompt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      publishSubdomain: null,
+    } as never);
   });
 
   // ==========================================================================
@@ -420,6 +439,55 @@ describe('POST /api/pages/[pageId]/share-invite', () => {
 
       const response = await POST(buildPost(mockPageId, validBody), createContext(mockPageId));
       expect(response.status).toBe(502);
+    });
+  });
+
+  // ==========================================================================
+  // Home drive guard
+  // ==========================================================================
+
+  describe('Home drive page guard', () => {
+    it('returns 403 when the page belongs to a Home drive', async () => {
+      vi.mocked(getDriveById).mockResolvedValue({
+        id: 'drive_xyz',
+        name: 'Home',
+        slug: 'home',
+        ownerId: mockUserId,
+        kind: 'HOME' as const,
+        isTrashed: false,
+        trashedAt: null,
+        drivePrompt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        publishSubdomain: null,
+      } as never);
+
+      const response = await POST(buildPost(mockPageId, validBody), createContext(mockPageId));
+      const json = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(json.error).toMatch(/home/i);
+    });
+
+    it('does not create any invite row when the page is in a Home drive', async () => {
+      vi.mocked(getDriveById).mockResolvedValue({
+        id: 'drive_xyz',
+        name: 'Home',
+        slug: 'home',
+        ownerId: mockUserId,
+        kind: 'HOME' as const,
+        isTrashed: false,
+        trashedAt: null,
+        drivePrompt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        publishSubdomain: null,
+      } as never);
+
+      await POST(buildPost(mockPageId, validBody), createContext(mockPageId));
+
+      expect(pageInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+      expect(pageInviteRepository.createDirectPagePermission).not.toHaveBeenCalled();
     });
   });
 });

@@ -34,6 +34,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  ne: vi.fn((a, b) => ({ op: 'ne', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),

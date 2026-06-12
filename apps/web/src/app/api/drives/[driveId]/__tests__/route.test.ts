@@ -95,7 +95,7 @@ const mockAuthError = (status = 401): AuthError => ({
 });
 
 // Raw drive fixture (without access info)
-const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: string }) => ({
+const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: string; kind?: 'STANDARD' | 'HOME' }) => ({
   id: overrides.id,
   name: overrides.name,
   slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
@@ -105,7 +105,7 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
-  kind: 'STANDARD' as const,
+  kind: (overrides.kind ?? 'STANDARD') as 'STANDARD' | 'HOME',
   publishSubdomain: null,
 });
 
@@ -795,5 +795,105 @@ describe('DELETE /api/drives/[driveId]', () => {
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error deleting drive:', error);
     });
+  });
+});
+
+// ============================================================================
+// Home Drive Guards
+// ============================================================================
+
+describe('PATCH /api/drives/[driveId] — Home drive guards', () => {
+  const mockUserId = 'user_123';
+  const mockDriveId = 'drive_home';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('returns 403 when trying to rename a Home drive', async () => {
+    vi.mocked(getDriveById).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', ownerId: mockUserId, kind: 'HOME' })
+    );
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    const response = await PATCH(request, createContext(mockDriveId));
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe('Your Home drive cannot be renamed.');
+    expect(updateDrive).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 when updating only drivePrompt on a Home drive', async () => {
+    vi.mocked(getDriveById).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', ownerId: mockUserId, kind: 'HOME' })
+    );
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    vi.mocked(updateDrive).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', kind: 'HOME' })
+    );
+
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ drivePrompt: 'New context' }),
+    });
+    const response = await PATCH(request, createContext(mockDriveId));
+
+    expect(response.status).toBe(200);
+    expect(updateDrive).toHaveBeenCalledWith(mockDriveId, { name: undefined, drivePrompt: 'New context' });
+  });
+
+  it('returns 400 when trying to rename any drive to a reserved name', async () => {
+    for (const reservedName of ['Home', 'home', 'Personal', 'personal']) {
+      vi.clearAllMocks();
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(getDriveById).mockResolvedValue(
+        createRawDriveFixture({ id: mockDriveId, name: 'My Work', ownerId: mockUserId })
+      );
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: reservedName }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      expect(response.status).toBe(400);
+      expect(updateDrive).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('DELETE /api/drives/[driveId] — Home drive guard', () => {
+  const mockUserId = 'user_123';
+  const mockDriveId = 'drive_home';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('returns 403 when trying to trash a Home drive', async () => {
+    vi.mocked(getDriveById).mockResolvedValue(
+      createRawDriveFixture({ id: mockDriveId, name: 'Home', ownerId: mockUserId, kind: 'HOME' })
+    );
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+
+    const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+      method: 'DELETE',
+    });
+    const response = await DELETE(request, createContext(mockDriveId));
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe('Your Home drive cannot be moved to trash or deleted.');
+    expect(trashDrive).not.toHaveBeenCalled();
   });
 });
