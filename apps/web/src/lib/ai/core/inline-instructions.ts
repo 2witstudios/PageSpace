@@ -46,7 +46,7 @@ CONTEXT:
 
 PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
-• DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
+• DOCUMENT: Rich text stored as HTML. Use find_and_replace to swap specific text, insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.
 • CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
 • CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
@@ -97,7 +97,7 @@ CONTEXT:
 `}
 PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
-• DOCUMENT: Rich text stored as HTML. Use replace_lines for content changes.
+• DOCUMENT: Rich text stored as HTML. Use find_and_replace to swap specific text, insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.
 • CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
 • CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.

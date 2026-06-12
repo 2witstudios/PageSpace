@@ -1008,6 +1008,259 @@ describe('page-write-tools', () => {
     });
   });
 
+  describe('find_and_replace', () => {
+    it('has correct tool definition', () => {
+      expect(pageWriteTools.find_and_replace).toBeDefined();
+      expect(pageWriteTools.find_and_replace.description).toContain('replace');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageWriteTools.find_and_replace.execute!(
+          { title: 'Doc', pageId: 'page-1', search: 'foo', replacement: 'bar' },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('throws when page not found', async () => {
+      mockPageRepo.findById.mockResolvedValue(null);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.find_and_replace.execute!(
+          { title: 'Doc', pageId: 'missing', search: 'foo', replacement: 'bar' },
+          context
+        )
+      ).rejects.toThrow('Page with ID "missing" not found');
+    });
+
+    it('returns error for FILE pages', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'file.pdf', type: 'FILE', content: '',
+        mimeType: 'application/pdf', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.find_and_replace.execute!(
+        { title: 'file.pdf', pageId: 'page-1', search: 'foo', replacement: 'bar' },
+        context
+      );
+
+      if (!('error' in result)) throw new Error('Expected error result');
+      expect((result as { success: boolean }).success).toBe(false);
+    });
+
+    it('returns not-found result when search string is absent', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Doc', type: 'DOCUMENT',
+        content: 'hello world', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.find_and_replace.execute!(
+        { title: 'Doc', pageId: 'page-1', search: 'missing', replacement: 'x' },
+        context
+      ) as { success: boolean; found: boolean; matchCount: number };
+
+      expect(result.success).toBe(true);
+      expect(result.found).toBe(false);
+      expect(result.matchCount).toBe(0);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('replaces first occurrence and calls applyPageMutation', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Doc', type: 'DOCUMENT',
+        content: 'foo bar foo', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.find_and_replace.execute!(
+        { title: 'Doc', pageId: 'page-1', search: 'foo', replacement: 'baz' },
+        context
+      ) as { success: boolean; found: boolean; matchCount: number };
+
+      expect(result.success).toBe(true);
+      expect(result.found).toBe(true);
+      expect(result.matchCount).toBe(1);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'page-1',
+          operation: 'update',
+          updatedFields: ['content'],
+        })
+      );
+    });
+
+    it('replaces all occurrences when replaceAll is true', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Doc', type: 'DOCUMENT',
+        content: 'foo bar foo baz foo', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.find_and_replace.execute!(
+        { title: 'Doc', pageId: 'page-1', search: 'foo', replacement: 'qux', replaceAll: true },
+        context
+      ) as { success: boolean; matchCount: number };
+
+      expect(result.success).toBe(true);
+      expect(result.matchCount).toBe(3);
+    });
+  });
+
+  describe('insert_content', () => {
+    it('has correct tool definition', () => {
+      expect(pageWriteTools.insert_content).toBeDefined();
+      expect(pageWriteTools.insert_content.description).toContain('insert');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageWriteTools.insert_content.execute!(
+          { title: 'Doc', pageId: 'page-1', anchor: 'Heading', content: 'new line', position: 'after' },
+          context
+        )
+      ).rejects.toThrow('User authentication required');
+    });
+
+    it('throws when page not found', async () => {
+      mockPageRepo.findById.mockResolvedValue(null);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.insert_content.execute!(
+          { title: 'Doc', pageId: 'missing', anchor: 'Heading', content: 'new', position: 'after' },
+          context
+        )
+      ).rejects.toThrow('not found');
+    });
+
+    it('returns not-found result when anchor is absent', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Doc', type: 'DOCUMENT',
+        content: 'line one\nline two', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.insert_content.execute!(
+        { title: 'Doc', pageId: 'page-1', anchor: 'missing anchor', content: 'new', position: 'after' },
+        context
+      ) as { success: boolean; inserted: boolean };
+
+      expect(result.success).toBe(true);
+      expect(result.inserted).toBe(false);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('inserts after anchor and calls applyPageMutation', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Doc', type: 'DOCUMENT',
+        content: 'line one\nline two\nline three', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.insert_content.execute!(
+        { title: 'Doc', pageId: 'page-1', anchor: 'line two', content: 'inserted', position: 'after' },
+        context
+      ) as { success: boolean; inserted: boolean; anchorLine: number };
+
+      expect(result.success).toBe(true);
+      expect(result.inserted).toBe(true);
+      expect(result.anchorLine).toBe(2);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'page-1',
+          operation: 'update',
+          updates: { content: 'line one\nline two\ninserted\nline three' },
+          updatedFields: ['content'],
+        })
+      );
+    });
+
+    it('inserts before anchor', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Doc', type: 'DOCUMENT',
+        content: 'line one\nline two', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.insert_content.execute!(
+        { title: 'Doc', pageId: 'page-1', anchor: 'line two', content: 'prepended', position: 'before' },
+        context
+      ) as { success: boolean; inserted: boolean };
+
+      expect(result.success).toBe(true);
+      expect(result.inserted).toBe(true);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: { content: 'line one\nprepended\nline two' },
+        })
+      );
+    });
+  });
+
   describe('edit_sheet_cells', () => {
     it('has correct tool definition', () => {
       expect(pageWriteTools.edit_sheet_cells).toBeDefined();

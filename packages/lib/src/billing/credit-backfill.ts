@@ -10,7 +10,7 @@
 import { db } from '@pagespace/db/db';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { and, eq, lt, gt, isNull } from '@pagespace/db/operators';
+import { and, eq, lt, gt, isNull, notInArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
 import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
@@ -18,6 +18,10 @@ import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
 
 const BATCH = 200;
+// Providers whose usage is metering-exempt (no credit_ledger row is ever created for them).
+// Must mirror METERING_EXEMPT_PROVIDERS in packages/lib/src/ai/model-defaults.ts plus
+// 'pagespace', the legacy provider alias used before the glm rename.
+const METERING_EXEMPT_PROVIDERS = ['glm', 'pagespace'];
 const GRACE_MS = 5 * 60 * 1000; // let an in-flight consume finish before sweeping
 // Safety cap on drain passes so a perpetually-stuck row (one that keeps failing
 // to settle and so re-appears in every sweep) can't spin the cron unbounded.
@@ -116,6 +120,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
           isNull(creditLedger.id),
           gt(aiUsageLogs.cost, 0),
           lt(aiUsageLogs.timestamp, cutoff),
+          notInArray(aiUsageLogs.provider, METERING_EXEMPT_PROVIDERS),
         ),
       )
       .limit(BATCH);

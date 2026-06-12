@@ -77,7 +77,11 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
-    getDriveMemberUserIds: vi.fn(),
+    getDriveRecipientUserIds: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+    getAllMemberUserIdsForEvent: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -166,14 +170,16 @@ vi.mock('chrono-node', () => ({
 import { calendarWriteTools } from '../calendar-write-tools';
 import { db } from '@pagespace/db/db'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { upsertCalendarTriggerWorkflowInTx } from '@/lib/workflows/calendar-trigger-helpers';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
-const mockGetDriveMemberUserIds = vi.mocked(getDriveMemberUserIds);
+const mockGetDriveRecipientUserIds = vi.mocked(getDriveRecipientUserIds);
+const mockGetAllMemberUserIdsForEvent = vi.mocked(getAllMemberUserIdsForEvent);
 const mockBroadcastCalendarEvent = vi.mocked(broadcastCalendarEvent);
 
 const createMockEvent = (overrides = {}) => ({
@@ -394,7 +400,7 @@ describe('calendar-write-tools', () => {
 
     it('returns error when attendees are not drive members', async () => {
       mockIsUserDriveMember.mockResolvedValue(true);
-      mockGetDriveMemberUserIds.mockResolvedValue(['user-123', 'user-456']);
+      mockGetDriveRecipientUserIds.mockResolvedValue(['user-123', 'user-456']);
 
       const input = {
         title: 'Test Event',
@@ -1757,7 +1763,7 @@ describe('calendar-write-tools', () => {
     it('returns error when attendees are not drive members', async () => {
       const event = createMockEvent({ createdById: 'user-123', driveId: 'drive-1' });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
-      mockGetDriveMemberUserIds.mockResolvedValue(['user-123', 'user-456']);
+      mockGetAllMemberUserIdsForEvent.mockResolvedValue(new Set(['user-123', 'user-456']));
       const input = { eventId: 'event-1', userIds: ['non-member'] };
 
       const result = await calendarWriteTools.invite_calendar_attendees.execute!(

@@ -175,6 +175,9 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // TRIGGER SAFETY: execution context is always the home drive (event.driveId).
+  // Drives shared via calendar_event_drives have read visibility only — they cannot
+  // manage or receive triggers. canManageEventTrigger above enforces this.
   try {
     await upsertCalendarTriggerWorkflow(db, {
       driveId: event.driveId,
