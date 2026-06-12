@@ -212,14 +212,13 @@ describe('useDashboardContext', () => {
       expect(result.current.isDashboardContext).toBe(true);
     });
 
-    it('should handle non-dashboard routes', () => {
+    it('should return false for non-dashboard routes like /account', () => {
       vi.mocked(useParams).mockReturnValue({});
       vi.mocked(usePathname).mockReturnValue('/account');
 
       const { result } = renderHook(() => useDashboardContext());
-      // No pageId and not settings, so technically "dashboard context" even though not on dashboard
-      // This is fine because the hook is only used within dashboard layout
-      expect(result.current.isDashboardContext).toBe(true);
+      // No driveId param → not a drive root → sidebar shows Chat tab
+      expect(result.current.isDashboardContext).toBe(false);
     });
   });
 });
