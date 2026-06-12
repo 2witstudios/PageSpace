@@ -125,6 +125,8 @@ export async function POST(request: Request): Promise<Response> {
   // supply a brand-new conversation_id. When the row doesn't exist yet we auto-create it
   // here (not deferred) so we can immediately re-read and catch a TOCTOU race where two
   // requests collide on the same new ID. We still 403 on wrong owner and 404 on inactive.
+  // Fail-closed: private by default. Only shared conversations get mention notifications.
+  let isConversationShared = false;
   if (incomingConversationId) {
     const conv = await conversationRepository.getConversation(incomingConversationId);
     if (clientManagesHistory) {
@@ -136,6 +138,7 @@ export async function POST(request: Request): Promise<Response> {
         if (conv.userId !== authResult.userId) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 });
         }
+        isConversationShared = conv.isShared === true;
       } else {
         // First use: create the row then re-read to verify ownership, guarding against
         // the unlikely TOCTOU case where two requests race on the same new UUID.
@@ -147,12 +150,14 @@ export async function POST(request: Request): Promise<Response> {
         if (owned.userId !== authResult.userId) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 });
         }
+        // newly created rows are always isShared: false — isConversationShared stays false
       }
     } else {
       const convAccess = validateConversationAccess(conv, authResult.userId);
       if (!convAccess.ok) {
         return NextResponse.json({ error: convAccess.message }, { status: convAccess.status });
       }
+      isConversationShared = conv?.isShared === true;
     }
   }
 
@@ -400,7 +405,7 @@ export async function POST(request: Request): Promise<Response> {
           content: text ?? '',
           toolCalls: extracted.toolCalls.length > 0 ? extracted.toolCalls : undefined,
           toolResults: extracted.toolResults.length > 0 ? extracted.toolResults : undefined,
-          ...(page?.driveId && {
+          ...(page?.driveId && isConversationShared && {
             mentionNotify: {
               driveId: page.driveId,
               triggeredByUserId: authResult.userId,

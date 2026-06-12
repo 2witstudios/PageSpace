@@ -94,6 +94,7 @@ export async function POST(request: Request) {
   let userId: string | undefined;
   let chatId: string | undefined;
   let conversationId: string | undefined;
+  let isConversationShared = false;
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   // Outcome of the retry shell, shared from execute() to onFinish(). Carries the
@@ -904,7 +905,8 @@ export async function POST(request: Request) {
       // Only broadcast to the page channel if the conversation is explicitly shared.
       // Fail closed: no broadcast if the row is missing or private.
       const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
-      const shouldBroadcast = convRow?.isShared === true;
+      isConversationShared = convRow?.isShared === true;
+      const shouldBroadcast = isConversationShared;
       if (shouldBroadcast) {
         broadcastChatUserMessage({
           message: userMessage,
@@ -1096,7 +1098,7 @@ export async function POST(request: Request) {
                 toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
                 toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
                 uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
-                ...(page?.driveId && userId && {
+                ...(page?.driveId && userId && isConversationShared && {
                   mentionNotify: {
                     driveId: page.driveId,
                     triggeredByUserId: userId,
