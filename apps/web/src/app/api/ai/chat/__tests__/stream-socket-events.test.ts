@@ -454,6 +454,32 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
       expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
+
+    it('should omit mentionNotify from saveMessageToDatabase when isShared=false', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: 'conv-1', userId: 'user-1', isShared: false,
+      });
+
+      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]?.mentionNotify).toBeUndefined();
+    });
+
+    it('should include mentionNotify in saveMessageToDatabase when isShared=true', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: 'conv-1', userId: 'user-1', isShared: true,
+      });
+
+      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]?.mentionNotify).toBeDefined();
+    });
   });
 
   describe('chunk forwarding', () => {
