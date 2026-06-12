@@ -89,7 +89,6 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'list_pages': 'List Pages',
   'read_page': 'Read',
   'replace_lines': 'Replace',
-  'find_and_replace': 'Find & Replace',
   'insert_content': 'Insert',
   'create_page': 'Create',
   'rename_page': 'Rename',
@@ -132,7 +131,6 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       case 'send_channel_message':
         return <MessageSquare className={iconClass} />;
       case 'replace_lines':
-      case 'find_and_replace':
       case 'insert_content':
         return <Edit className={iconClass} />;
       case 'create_page':
@@ -195,7 +193,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     const params = parsedInput;
 
     // File-based tools
-    if (['read_page', 'replace_lines', 'find_and_replace', 'insert_content', 'list_pages'].includes(toolName)) {
+    if (['read_page', 'replace_lines', 'insert_content', 'list_pages'].includes(toolName)) {
       if (params.title) return `${formattedToolName}: "${params.title}"`;
       if (params.dir) return `${formattedToolName}: ${params.dir}`;
     }
