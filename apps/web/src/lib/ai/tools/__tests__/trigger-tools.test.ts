@@ -14,7 +14,7 @@ const {
   mockCreateTaskTriggerWorkflow,
   mockRecomputeTaskTriggerMetadata,
   mockIsUserDriveMember,
-  mockCanUserEditPage,
+  mockCanActorEditPage,
   mockCanActorManageDrive,
   mockDriveDeniedByAppToken,
   mockBroadcastCalendarEvent,
@@ -42,7 +42,7 @@ const {
     mockCreateTaskTriggerWorkflow: vi.fn(),
     mockRecomputeTaskTriggerMetadata: vi.fn(),
     mockIsUserDriveMember: vi.fn(),
-    mockCanUserEditPage: vi.fn(),
+    mockCanActorEditPage: vi.fn(),
     mockCanActorManageDrive: vi.fn(),
     mockDriveDeniedByAppToken: vi.fn().mockResolvedValue(false),
     mockBroadcastCalendarEvent: vi.fn(),
@@ -90,9 +90,9 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: mockIsUserDriveMember,
-  canUserEditPage: mockCanUserEditPage,
 }));
 vi.mock('../actor-permissions', () => ({
+  canActorEditPage: mockCanActorEditPage,
   canActorManageDrive: mockCanActorManageDrive,
   driveDeniedByAppToken: mockDriveDeniedByAppToken,
 }));
@@ -290,7 +290,7 @@ describe('triggerTools.set_task_trigger', () => {
   });
 
   it('creates a due_date trigger on a task with due date', async () => {
-    mockCanUserEditPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
     const result = await triggerTools.set_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'due_date', agentPageId: 'agent-1', prompt: 'Review task' },
       ctx(),
@@ -303,7 +303,7 @@ describe('triggerTools.set_task_trigger', () => {
   });
 
   it('creates a completion trigger', async () => {
-    mockCanUserEditPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
     const result = await triggerTools.set_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'completion', agentPageId: 'agent-1', prompt: 'Post-completion work' },
       ctx(),
@@ -323,7 +323,7 @@ describe('triggerTools.set_task_trigger', () => {
       if (callCount === 2) return Promise.resolve(SAMPLE_TASKLIST_PAGE);
       return Promise.resolve(SAMPLE_TASKLIST);
     });
-    mockCanUserEditPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
     const result = await triggerTools.set_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'due_date', agentPageId: 'agent-1', prompt: 'Run' },
       ctx(),
@@ -333,7 +333,7 @@ describe('triggerTools.set_task_trigger', () => {
   });
 
   it('rejects when user lacks edit access', async () => {
-    mockCanUserEditPage.mockResolvedValue(false);
+    mockCanActorEditPage.mockResolvedValue(false);
     const result = await triggerTools.set_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'due_date', agentPageId: 'agent-1', prompt: 'Run' },
       ctx(),
@@ -351,7 +351,7 @@ describe('triggerTools.set_task_trigger', () => {
       if (callCount === 2) return Promise.resolve({ ...SAMPLE_TASKLIST_PAGE, driveId: null });
       return Promise.resolve(SAMPLE_TASKLIST);
     });
-    mockCanUserEditPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
     const result = await triggerTools.set_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'completion', agentPageId: 'agent-1', prompt: 'Run' },
       ctx(),
@@ -384,7 +384,7 @@ describe('triggerTools.delete_task_trigger', () => {
   });
 
   it('disables the trigger and recomputes metadata', async () => {
-    mockCanUserEditPage.mockResolvedValue(true);
+    mockCanActorEditPage.mockResolvedValue(true);
     const result = (await triggerTools.delete_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'due_date' },
       ctx(),
@@ -396,7 +396,7 @@ describe('triggerTools.delete_task_trigger', () => {
   });
 
   it('rejects when user lacks edit access', async () => {
-    mockCanUserEditPage.mockResolvedValue(false);
+    mockCanActorEditPage.mockResolvedValue(false);
     const result = (await triggerTools.delete_task_trigger.execute!(
       { taskId: 'task-1', triggerType: 'completion' },
       ctx(),

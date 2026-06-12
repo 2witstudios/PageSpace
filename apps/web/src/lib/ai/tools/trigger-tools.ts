@@ -16,12 +16,12 @@ import {
   createTaskTriggerWorkflow,
   recomputeTaskTriggerMetadata,
 } from '@/lib/workflows/task-trigger-helpers';
-import { isUserDriveMember, canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../core/types';
-import { canActorManageDrive, driveDeniedByAppToken } from './actor-permissions';
+import { canActorManageDrive, driveDeniedByAppToken, canActorEditPage } from './actor-permissions';
 import { parseDateTime, normalizeTimezone } from '../core/timestamp-utils';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 
@@ -281,7 +281,7 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
       if (!taskListPage || taskListPage.isTrashed) return { success: false, error: 'Task list not found.' };
       if (!taskListPage.driveId) return { success: false, error: 'Task triggers require a drive-based task list.' };
 
-      if (!(await canUserEditPage(userId, taskListPageId))) {
+      if (!(await canActorEditPage(ctx, taskListPageId))) {
         return { success: false, error: 'You do not have edit access to this task list.' };
       }
 
@@ -348,7 +348,7 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
       ]);
 
       if (!taskListPage || taskListPage.isTrashed) return { success: false, error: 'Task list not found.' };
-      if (!(await canUserEditPage(userId, taskListPageId))) {
+      if (!(await canActorEditPage(ctx, taskListPageId))) {
         return { success: false, error: 'You do not have edit access to this task list.' };
       }
 
