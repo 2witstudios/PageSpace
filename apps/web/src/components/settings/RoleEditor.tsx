@@ -251,7 +251,7 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
             </div>
             {driveWidePerms && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Drive-wide access is active — per-page settings below add extra permissions on top.
+                Drive-wide access is active — use per-page settings below to grant private pages or deny specific pages.
               </p>
             )}
           </div>
