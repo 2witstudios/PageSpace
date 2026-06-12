@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { checkDriveAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNotNull, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
@@ -175,6 +177,13 @@ export async function POST(request: Request) {
   }).returning();
 
   auditRequest(request, { eventType: 'data.write', userId, resourceType: 'workflow', resourceId: workflow.id, details: { driveId: data.driveId, triggerType: MANAGEABLE_TRIGGER_TYPE } });
+
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(data.driveId);
+    await broadcastDriveEvent(createDriveEventPayload(data.driveId, 'updated'), recipientUserIds);
+  } catch (broadcastError) {
+    loggers.api.error('[WORKFLOWS_POST_BROADCAST]', broadcastError as Error);
+  }
 
   return NextResponse.json(workflow, { status: 201 });
 }

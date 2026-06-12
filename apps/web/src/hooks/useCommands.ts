@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
+import { useSocket } from './useSocket';
 import {
   toggleCommandInList,
   removeCommandFromList,
@@ -31,11 +33,19 @@ const EMPTY_COMMANDS: CommandItem[] = [];
  * page title/availability, author name) stay authoritative.
  */
 export function useCommands(active: boolean = true) {
+  const socket = useSocket();
   const { data, error, isLoading, mutate } = useSWR<CommandsResponse>(
     active ? '/api/commands' : null,
     fetcher,
     { revalidateOnFocus: false }
   );
+
+  useEffect(() => {
+    if (!socket || !active) return;
+    const handleDriveUpdated = () => { void mutate(); };
+    socket.on('drive:updated', handleDriveUpdated);
+    return () => { socket.off('drive:updated', handleDriveUpdated); };
+  }, [socket, active, mutate]);
 
   const commands = data?.commands ?? EMPTY_COMMANDS;
 
