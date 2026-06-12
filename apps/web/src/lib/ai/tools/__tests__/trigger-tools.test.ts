@@ -269,6 +269,7 @@ describe('triggerTools.delete_calendar_trigger', () => {
 describe('triggerTools.set_task_trigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDriveDeniedByAppToken.mockResolvedValue(false);
     mockBroadcastTaskEvent.mockResolvedValue(undefined);
     // Default multi-query mock: task → tasklist page → tasklist
     let callCount = 0;
@@ -374,6 +375,7 @@ describe('triggerTools.set_task_trigger', () => {
 describe('triggerTools.delete_task_trigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDriveDeniedByAppToken.mockResolvedValue(false);
     mockBroadcastTaskEvent.mockResolvedValue(undefined);
     let callCount = 0;
     mockDbQuery.mockImplementation(() => {
