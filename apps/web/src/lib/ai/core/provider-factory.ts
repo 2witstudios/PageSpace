@@ -30,6 +30,17 @@ export interface ProviderRequest {
   selectedModel?: string;
 }
 
+/** Minimal user fields consumed by the provider factory. */
+export interface UserProviderRow {
+  currentAiProvider: string;
+  currentAiModel: string;
+}
+
+export interface ProviderFactoryOptions {
+  /** Pre-loaded user row. When provided the factory skips its own DB select. */
+  user?: UserProviderRow | null;
+}
+
 export interface ProviderResult {
   model: LanguageModel;
   provider: string;
@@ -50,11 +61,12 @@ function notConfigured(provider: string): ProviderError {
 
 export async function createAIProvider(
   userId: string,
-  request: ProviderRequest
+  request: ProviderRequest,
+  options?: ProviderFactoryOptions,
 ): Promise<ProviderResult | ProviderError> {
   const { selectedProvider, selectedModel } = request;
 
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  const user = options?.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
 
   // Resolve (provider, model) as one atomic pair, with catalog enforcement —
   // shared with the routes (credit gate, admin-only checks) via resolveProviderModel
@@ -220,16 +232,18 @@ export async function createAIProvider(
 }
 
 /**
- * Updates user's current provider and model settings if they've changed
+ * Updates user's current provider and model settings if they've changed.
+ * When `options.user` is provided the function skips its own DB select.
  */
 export async function updateUserProviderSettings(
   userId: string,
   selectedProvider?: string,
-  selectedModel?: string
+  selectedModel?: string,
+  options?: ProviderFactoryOptions,
 ): Promise<void> {
   if (!selectedProvider || !selectedModel) return;
 
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  const user = options?.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
 
   if (selectedProvider !== user?.currentAiProvider || selectedModel !== user?.currentAiModel) {
     await db

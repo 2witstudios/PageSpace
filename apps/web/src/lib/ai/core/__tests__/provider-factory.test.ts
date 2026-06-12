@@ -450,5 +450,62 @@ describe('provider-factory', () => {
 
       expect(mockDb.update).toHaveBeenCalled();
     });
+
+    describe('when a pre-loaded user row is provided', () => {
+      it('skips the DB select for the user', async () => {
+        const preloaded = { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-5.3-chat' };
+
+        await updateUserProviderSettings('user-123', 'anthropic', 'anthropic/claude-sonnet-4.6', {
+          user: preloaded,
+        });
+
+        // select() should NOT have been called for user look-up
+        expect(mockDb.select).not.toHaveBeenCalled();
+        // But update() IS called because provider changed
+        expect(mockDb.update).toHaveBeenCalled();
+      });
+
+      it('does not update when pre-loaded provider/model already match', async () => {
+        const preloaded = { currentAiProvider: 'anthropic', currentAiModel: 'anthropic/claude-sonnet-4.6' };
+
+        await updateUserProviderSettings('user-123', 'anthropic', 'anthropic/claude-sonnet-4.6', {
+          user: preloaded,
+        });
+
+        expect(mockDb.select).not.toHaveBeenCalled();
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe('createAIProvider — user row threading', () => {
+    it('skips the DB select when a pre-loaded user row is provided', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const preloaded = { currentAiProvider: 'anthropic', currentAiModel: 'anthropic/claude-sonnet-4.6' };
+
+      const result = await createAIProvider('user-123', {
+        selectedProvider: 'anthropic',
+        selectedModel: 'anthropic/claude-sonnet-4.6',
+      }, { user: preloaded });
+
+      expect(isProviderError(result)).toBe(false);
+      // The DB should not have been queried for the user row
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+
+    it('still resolves provider correctly from pre-loaded user defaults', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      // Pre-loaded row has google as the user's current provider
+      const preloaded = { currentAiProvider: 'google', currentAiModel: 'google/gemini-2.5-pro' };
+
+      // No selectedProvider/model → falls back to user defaults
+      const result = await createAIProvider('user-123', {}, { user: preloaded });
+
+      expect(isProviderError(result)).toBe(false);
+      if (!isProviderError(result)) {
+        expect(result.provider).toBe('google');
+        expect(result.modelName).toBe('google/gemini-2.5-pro');
+      }
+    });
   });
 });

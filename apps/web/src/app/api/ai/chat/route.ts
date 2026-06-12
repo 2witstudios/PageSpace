@@ -63,6 +63,7 @@ import {
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
 import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
+import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
@@ -578,7 +579,8 @@ export async function POST(request: Request) {
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(userId, providerRequest);
+    // Thread the already-loaded user row through the factory so it skips redundant DB selects.
+    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null });
 
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
@@ -595,8 +597,8 @@ export async function POST(request: Request) {
         ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, resolvedModelName ?? 'unknown')
         : null;
 
-    // Update user's current provider/model if changed
-    await updateUserProviderSettings(userId, selectedProvider, selectedModel);
+    // Update user's current provider/model if changed (thread the loaded row to skip a DB select).
+    await updateUserProviderSettings(userId, selectedProvider, selectedModel, { user: user ?? null });
 
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
@@ -857,6 +859,15 @@ export async function POST(request: Request) {
       }
     }
 
+    // Build agent memory section (AI_CHAT pages only). Fetches the "Agent Memory"
+    // child page content — stable per request, only changes when the agent edits
+    // the page, so it lives in the STABLE system section (not the volatile block).
+    let agentMemoryPrompt = '';
+    if (page.type === 'AI_CHAT') {
+      const memoryContent = await getAgentMemoryContext(chatId, userId);
+      agentMemoryPrompt = buildAgentMemorySection(memoryContent);
+    }
+
     loggers.ai.debug('AI Chat API: Loading conversation history', {
       pageId: chatId
     });
@@ -908,7 +919,7 @@ export async function POST(request: Request) {
       pageId,
       model: currentModel,
       provider: currentProvider,
-      systemPrompt: systemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+      systemPrompt: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
     });
@@ -1014,7 +1025,7 @@ export async function POST(request: Request) {
               model,
               // Stable system prompt — no volatile sections; stays byte-identical
               // across turns so provider prefix caches survive per request.
-              system: systemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+              system: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
               messages: cachedMessages,
               tools: filteredTools,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
