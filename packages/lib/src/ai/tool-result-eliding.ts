@@ -192,7 +192,8 @@ export function elideStaleToolOutputs(
     const newParts = msg.parts.map((part): ElisionMessagePart => {
       if (!isToolOutputPart(part)) return part;
 
-      const toolName = part.toolName ?? '';
+      // UIMessage parts carry the tool name in `type` as 'tool-{name}' when toolName is absent
+      const toolName = part.toolName ?? part.type.replace(/^tool-/, '');
 
       // Never elide write-tool results
       if (writeTools.has(toolName)) return part;

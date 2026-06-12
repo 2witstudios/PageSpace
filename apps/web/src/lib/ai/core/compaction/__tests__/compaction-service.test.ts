@@ -64,7 +64,7 @@ beforeEach(() => {
   });
   mockGenerateText.mockResolvedValue({
     text: 'Summary: user said hello, assistant responded.',
-    usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+    usage: { inputTokens: 10, outputTokens: 20 },
   } as never);
 });
 
@@ -156,11 +156,11 @@ describe('runCompaction', () => {
     mockGenerateText
       .mockResolvedValueOnce({
         text: longSummary,
-        usage: { promptTokens: 50, completionTokens: 10000, totalTokens: 10050 },
+        usage: { inputTokens: 50, outputTokens: 10000 },
       } as never)
       .mockResolvedValueOnce({
         text: 'Condensed summary.',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        usage: { inputTokens: 10, outputTokens: 5 },
       } as never);
 
     await runCompaction(BASE_PARAMS);

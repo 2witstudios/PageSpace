@@ -277,7 +277,7 @@ export const conversationRepository = {
         eq(chatMessages.conversationId, conversationId)
       ));
     // Whole conversation cleared — any summary is stale, drop it unconditionally
-    void invalidateCompaction(conversationId).catch(() => undefined);
+    await invalidateCompaction(conversationId);
   },
 
   /**

@@ -882,9 +882,15 @@ MENTION PROCESSING:
       scheduleCompaction = prepared.scheduleCompaction;
       stableBoundaryIndex = prepared.stableBoundaryIndex;
 
-      // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES of the tail
-      const recentTail = prepared.messages.slice(-MAX_MESSAGES_WITH_IMAGES);
-      const processedTail = injectVisualContent(recentTail);
+      // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES items;
+      // the earlier head is kept intact so the full prepared context reaches the model.
+      const visualCutoff = Math.max(0, prepared.messages.length - MAX_MESSAGES_WITH_IMAGES);
+      const headMessages = prepared.messages.slice(0, visualCutoff);
+      const recentTail = prepared.messages.slice(visualCutoff);
+      const processedTail = [
+        ...headMessages,
+        ...injectVisualContent(recentTail),
+      ] as Parameters<typeof convertToModelMessages>[0];
       const tailModelMessages = convertToModelMessages(processedTail);
       modelMessages = prepared.summaryText
         ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]

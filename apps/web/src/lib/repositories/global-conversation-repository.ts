@@ -364,7 +364,7 @@ export const globalConversationRepository = {
       .returning();
 
     // Whole conversation cleared — drop any compaction summary unconditionally
-    void invalidateCompaction(conversationId).catch(() => undefined);
+    await invalidateCompaction(conversationId);
 
     return deletedConversation || null;
   },

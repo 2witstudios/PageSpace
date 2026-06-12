@@ -258,7 +258,7 @@ export function buildModelContext(params: BuildModelContextParams): BuildModelCo
     // Need ≥1 full user turn pre-cut (user + assistant pair)
     const hasFullUserTurnPreCut = preCut.length >= 2 && preCut[0].role === 'user';
 
-    if (hasFullUserTurnPreCut && cutIdx > 0) {
+    if (hasFullUserTurnPreCut && cutIdx > 0 && cutIdx < tail.length) {
       const messagesToSummarize = preCut;
       const lastMsg = messagesToSummarize[messagesToSummarize.length - 1];
       compactionPlan = {

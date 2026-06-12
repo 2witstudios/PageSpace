@@ -113,9 +113,16 @@ export async function prepareHistoryForModel(
       ...compactionParams,
     });
 
-  // Detect whether compaction prepended a synthetic summary (no .id on first msg)
-  const hasSummary = compacted.length > 0 && !compacted[0].id;
-  const summaryText = hasSummary ? (compacted[0].parts?.[0]?.text ?? '') : '';
+  // Detect whether compaction prepended a synthetic summary.
+  // Guard: also check that the text starts with <conversation_summary> so that
+  // client-supplied UIMessages that legitimately lack DB ids (v1 route) are not
+  // misclassified as summaries when they arrive as the first message.
+  const firstText = compacted[0]?.parts?.[0]?.text ?? '';
+  const hasSummary =
+    compacted.length > 0 &&
+    !compacted[0].id &&
+    firstText.startsWith('<conversation_summary>');
+  const summaryText = hasSummary ? firstText : '';
   const tailUIMessages = (hasSummary ? compacted.slice(1) : compacted) as UIMessage[];
 
   // Step 3: elide stale tool outputs from the tail

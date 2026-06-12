@@ -16,7 +16,7 @@ function makeUser(id: string, text: string, createdAt?: Date): CompactionMessage
     id,
     role: 'user',
     parts: [{ type: 'text', text }],
-    createdAt: createdAt ?? new Date(`2024-01-01T00:00:0${id.slice(-1)}Z`),
+    createdAt: createdAt ?? new Date(`2024-01-01T00:00:${String(parseInt(id.replace(/\D/g, ''), 10)).padStart(2, '0')}Z`),
   };
 }
 
@@ -25,7 +25,7 @@ function makeAssistant(id: string, text: string, createdAt?: Date): CompactionMe
     id,
     role: 'assistant',
     parts: [{ type: 'text', text }],
-    createdAt: createdAt ?? new Date(`2024-01-01T00:00:0${id.slice(-1)}Z`),
+    createdAt: createdAt ?? new Date(`2024-01-01T00:00:${String(parseInt(id.replace(/\D/g, ''), 10)).padStart(2, '0')}Z`),
   };
 }
 
@@ -37,7 +37,7 @@ function makeAssistantWithTool(id: string, toolCallId: string, createdAt?: Date)
       { type: 'tool-call', toolCallId, toolName: 'read_page', args: {} },
       { type: 'tool-result', toolCallId, result: 'page content' },
     ],
-    createdAt: createdAt ?? new Date(`2024-01-01T00:00:0${id.slice(-1)}Z`),
+    createdAt: createdAt ?? new Date(`2024-01-01T00:00:${String(parseInt(id.replace(/\D/g, ''), 10)).padStart(2, '0')}Z`),
   };
 }
 
