@@ -216,7 +216,11 @@ export function buildModelContext(params: BuildModelContextParams): BuildModelCo
   const tail = messages.slice(tailStart);
 
   const summaryMessage = compaction?.summary ? formatSummaryMessage(compaction.summary) : null;
-  const summaryTokens = compaction ? compaction.summaryTokens : 0;
+  // Use the token count of the *formatted* summary (includes wrapper text overhead)
+  // rather than the stored raw-summary token count to get accurate budget calculations.
+  const summaryTokens = summaryMessage
+    ? estimateMessageTokens(summaryMessage as Parameters<typeof estimateMessageTokens>[0])
+    : 0;
 
   const tailTokens = estimateTailTokens(tail);
   const totalTokens = systemPromptTokens + toolTokens + summaryTokens + tailTokens;

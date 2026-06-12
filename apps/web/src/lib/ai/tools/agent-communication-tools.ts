@@ -595,13 +595,9 @@ export const agentCommunicationTools = {
           tools: allAgentTools,
           user: { id: userId, role: callerUserRole },
         });
-        const agentHasSummary = prepared.messages.length > 0 && !prepared.messages[0].id;
-        const agentSummaryText = agentHasSummary ? (prepared.messages[0].parts?.[0]?.text ?? '') : '';
-        const agentTailUIMessages = (agentHasSummary ? prepared.messages.slice(1) : prepared.messages) as Parameters<typeof convertToModelMessages>[0];
-        const agentTailModelMessages = convertToModelMessages(agentTailUIMessages);
-        const agentModelMessages: ModelMessage[] = agentHasSummary
-          ? [{ role: 'user' as const, content: agentSummaryText }, ...agentTailModelMessages]
-          : agentTailModelMessages;
+        const agentModelMessages: ModelMessage[] = convertToModelMessages(
+          prepared.messages as Parameters<typeof convertToModelMessages>[0]
+        );
 
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0
