@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NextResponse } from 'next/server';
 
 // ============================================================================
 // Contract tests for POST /api/drives/[driveId]/share-links
