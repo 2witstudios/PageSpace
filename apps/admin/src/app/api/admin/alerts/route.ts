@@ -1,24 +1,24 @@
 import { NextResponse } from 'next/server';
 import { withAdminAuth } from '@/lib/auth';
-import { getSystemHealth, getNegativeMarginAccounts, getLiveHolds } from '@/lib/monitoring';
+import { getApiMetrics, getNegativeMarginAccounts, getLiveHolds } from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Lightweight alert-state endpoint for nav badges. Cached 60s.
 export const GET = withAdminAuth(async () => {
   try {
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [health, negativeMargin, holds] = await Promise.all([
-      getSystemHealth(since24h),
+    const [metrics, negativeMargin, holds] = await Promise.all([
+      getApiMetrics(since24h),
       getNegativeMarginAccounts(since24h),
       getLiveHolds(),
     ]);
 
     return NextResponse.json(
       {
-        errorRateAlert: health.errorRate !== null && health.errorRate > 5,
+        errorRateAlert: metrics.errorRate > 5,
         negativeMarginAlert: negativeMargin.length > 0,
         liveHoldsAlert: holds.holdCount > 50,
-        errorRate: health.errorRate,
+        errorRate: metrics.errorRate,
         negativeMarginCount: negativeMargin.length,
         liveHoldsCount: holds.holdCount,
       },

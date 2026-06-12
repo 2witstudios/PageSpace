@@ -4,9 +4,11 @@ import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 
-export const PATCH = withAdminAuth(async (_adminUser, request, context) => {
+type RouteContext = { params: Promise<{ id: string }> };
+
+export const PATCH = withAdminAuth<RouteContext>(async (_adminUser, request, context) => {
   try {
-    const { id } = await (context as { params: Promise<{ id: string }> }).params;
+    const { id } = await context.params;
     const body = await request.json() as { resolved: boolean };
 
     const [updated] = await db
