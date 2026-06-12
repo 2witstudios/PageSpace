@@ -316,7 +316,7 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
         taskId,
         triggerType,
         summary: triggerType === 'due_date'
-          ? `Agent trigger set on task. The agent will run at the task's due date (${task.dueDate!.toISOString()}).`
+          ? `Agent trigger set on task. The agent will run at the task's due date (${task.dueDate?.toISOString() ?? 'unknown'}).`
           : 'Agent trigger set on task. The agent will run when the task is marked complete.',
       };
     },
