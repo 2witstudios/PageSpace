@@ -105,6 +105,7 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
   publishSubdomain: null,
 });
 
@@ -116,6 +117,7 @@ const createDriveWithAccessFixture = (
   name: overrides.name,
   slug: overrides.slug ?? overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'user_123',
+  kind: overrides.kind ?? 'STANDARD',
   createdAt: overrides.createdAt ?? new Date('2024-01-01'),
   updatedAt: overrides.updatedAt ?? new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,

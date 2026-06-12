@@ -89,6 +89,7 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
   publishSubdomain: null,
 });
 

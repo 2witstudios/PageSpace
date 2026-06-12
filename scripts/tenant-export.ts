@@ -56,7 +56,7 @@ const USER_PROFILE_COLUMNS = [
 ];
 
 const DRIVE_COLUMNS = [
-  'id', 'name', 'slug', 'ownerId', 'isTrashed', 'trashedAt',
+  'id', 'name', 'slug', 'ownerId', 'kind', 'isTrashed', 'trashedAt',
   'createdAt', 'updatedAt', 'drivePrompt',
 ];
 

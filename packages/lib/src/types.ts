@@ -81,6 +81,9 @@ export interface Drive {
   name: string;
   slug: string;
   ownerId: string;
+  // Optional on purpose: the zustand 'drive-storage' persist key serves stale
+  // cached drives without kind; consumers treat undefined as STANDARD.
+  kind?: 'STANDARD' | 'HOME';
   isTrashed: boolean;
   trashedAt: string | null; // ISO8601 date string from API
   createdAt: string; // ISO8601 date string from API

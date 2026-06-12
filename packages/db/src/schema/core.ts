@@ -1,16 +1,19 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, integer, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, uniqueIndex, integer, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
 export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE', 'TERMINAL']);
 export type PageTypeEnum = (typeof pageType.enumValues)[number];
+export const driveKind = pgEnum('DriveKind', ['STANDARD', 'HOME']);
+export type DriveKindEnum = (typeof driveKind.enumValues)[number];
 
 export const drives = pgTable('drives', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),
   slug: text('slug').notNull(),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  kind: driveKind('kind').default('STANDARD').notNull(),
   isTrashed: boolean('isTrashed').default(false).notNull(),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -21,6 +24,9 @@ export const drives = pgTable('drives', {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
         ownerSlugKey: index('drives_owner_id_slug_key').on(table.ownerId, table.slug),
+        // At most one Home drive per owner, forever. Race arbiter between lazy
+        // provisioning and the backfill script (both insert ON CONFLICT DO NOTHING).
+        ownerHomeKey: uniqueIndex('drives_owner_home_unique').on(table.ownerId).where(sql`${table.kind} = 'HOME'`),
     }
 });
 
