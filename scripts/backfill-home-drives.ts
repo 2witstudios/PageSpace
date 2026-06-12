@@ -75,6 +75,8 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
 
     if (needsHome.length > 0) {
       if (dryRun) {
+        // In dry-run, count projected inserts so the summary is accurate.
+        inserted += needsHome.length;
         console.log(`  would insert ${needsHome.length} Home drives (cursor: ${cursor || '<start>'})`);
       } else {
         const userIds = needsHome.map((r) => r.userId);
@@ -104,19 +106,24 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
         const rows = toInsert.map((r) => ({
           id: createId(),
           ...r,
+          // kind must be explicit — the DB default is STANDARD, not HOME.
+          kind: 'HOME' as const,
           createdAt: now,
           updatedAt: now,
         }));
 
-        await (dbInstance as typeof defaultDb)
+        // Use .returning() so the count reflects only rows actually written,
+        // not the attempted batch size (onConflictDoNothing skips races).
+        const written = await (dbInstance as typeof defaultDb)
           .insert(drives)
           .values(rows)
           .onConflictDoNothing({
             target: [drives.ownerId],
             targetWhere: sql`"kind" = 'HOME'`,
-          });
+          })
+          .returning({ id: drives.id });
 
-        inserted += toInsert.length;
+        inserted += written.length;
       }
     }
 

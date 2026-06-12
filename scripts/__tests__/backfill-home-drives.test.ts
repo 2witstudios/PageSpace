@@ -79,12 +79,17 @@ function setupSelect(batchRows: unknown[], slugRows: unknown[] = []) {
   selectMock.mockReturnValueOnce(makeChain(slugRows));
 }
 
-/** Set up a chainable insert mock. Returns the inner spy for assertion. */
-function setupInsert() {
-  const onConflictSpy = vi.fn().mockResolvedValue(undefined);
+/**
+ * Set up a chainable insert mock that supports .values().onConflictDoNothing().returning().
+ * writtenRows controls what .returning() resolves to — this is the count that
+ * `backfill` uses for `inserted` in live mode (only actually-written rows).
+ */
+function setupInsert(writtenRows: Array<{ id: string }> = [{ id: 'test-cuid-id' }]) {
+  const returningSpy = vi.fn().mockResolvedValue(writtenRows);
+  const onConflictSpy = vi.fn().mockReturnValue({ returning: returningSpy });
   const valuesSpy = vi.fn().mockReturnValue({ onConflictDoNothing: onConflictSpy });
   insertMock.mockReturnValue({ values: valuesSpy });
-  return { valuesSpy, onConflictSpy };
+  return { valuesSpy, onConflictSpy, returningSpy };
 }
 
 // ─── Pure-function tests (no DB, no mocks needed) ────────────────────────────
@@ -167,8 +172,8 @@ describe('backfill (dry-run)', () => {
     insertMock.mockReset();
   });
 
-  it('reports users lacking Home and inserts nothing', async () => {
-    // batch: user-1 has no Home, user-2 already has one
+  it('reports the projected count of users lacking Home and inserts nothing', async () => {
+    // batch: user-1 has no Home (projected insert), user-2 already has one (skipped)
     setupSelect([
       { userId: 'user-1', homeDriveId: null },
       { userId: 'user-2', homeDriveId: 'drive-home-2' },
@@ -176,8 +181,9 @@ describe('backfill (dry-run)', () => {
 
     const { inserted, skipped } = await backfill(true);
 
-    expect(inserted).toBe(0);
-    expect(skipped).toBe(1); // user-2 already had Home
+    // inserted = projected count (1 user lacks Home); skipped = already-have-Home count
+    expect(inserted).toBe(1);
+    expect(skipped).toBe(1);
     expect(insertMock).not.toHaveBeenCalled();
   });
 
@@ -213,31 +219,39 @@ describe('backfill (live)', () => {
       [{ userId: 'user-needs-home', homeDriveId: null }],
       [], // no existing slugs for this user
     );
-    const { onConflictSpy } = setupInsert();
+    const { valuesSpy, onConflictSpy } = setupInsert([{ id: 'test-cuid-id' }]);
 
     const { inserted, skipped } = await backfill(false);
 
     expect(insertMock).toHaveBeenCalledTimes(1);
+    // inserted reflects .returning() count — only actually-written rows
     expect(inserted).toBe(1);
     expect(skipped).toBe(0);
+
+    // Verify kind: 'HOME' is included in the inserted rows
+    const insertedRows = valuesSpy.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(insertedRows[0]).toMatchObject({ kind: 'HOME', ownerId: 'user-needs-home', name: 'Home' });
+
     // Verify conflict is swallowed via onConflictDoNothing (partial-unique-index guard)
-    expect(onConflictSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('swallows a conflict via onConflictDoNothing (race with lazy provisioning)', async () => {
-    setupSelect(
-      [{ userId: 'user-race', homeDriveId: null }],
-      [],
-    );
-    const { onConflictSpy } = setupInsert();
-
-    await backfill(false);
-
-    // onConflictDoNothing must be called — the partial unique index handles races silently
     expect(onConflictSpy).toHaveBeenCalledTimes(1);
     const callArg = onConflictSpy.mock.calls[0][0] as Record<string, unknown>;
     expect(callArg).toHaveProperty('target');
     expect(callArg).toHaveProperty('targetWhere');
+  });
+
+  it('swallows a conflict via onConflictDoNothing: counts only actually-written rows', async () => {
+    // Lazy provisioning raced and created the Home drive — returning() returns [] (conflict)
+    setupSelect(
+      [{ userId: 'user-race', homeDriveId: null }],
+      [],
+    );
+    const { onConflictSpy } = setupInsert([]); // returning empty = conflict was skipped
+
+    const { inserted } = await backfill(false);
+
+    expect(onConflictSpy).toHaveBeenCalledTimes(1);
+    // inserted = 0 because the race was won by lazy provisioning (row not written)
+    expect(inserted).toBe(0);
   });
 
   it('returns zero counts for an empty database (idempotent second run)', async () => {

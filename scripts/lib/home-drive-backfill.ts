@@ -1,6 +1,5 @@
 /**
  * Pure decision functions for the Home drive backfill.
- *
  * Intentionally self-contained (no @pagespace/* imports) so that the
  * scripts/ vitest context — which runs in a forked Node process without
  * bun's workspace resolver — can load this file without aliases or stubs.
@@ -9,10 +8,8 @@
  * mirrored here.
  */
 
-// Mirrors HOME_DRIVE_NAME from @pagespace/lib/services/drive-guards
 const HOME_DRIVE_NAME = 'Home';
 
-// Mirrors resolveUniqueSlug from @pagespace/lib/services/drive-guards
 function resolveUniqueSlug(existingSlugs: string[], base: string): string {
   const taken = new Set(existingSlugs);
   if (!taken.has(base)) return base;
@@ -38,7 +35,7 @@ export type DriveInsertData = {
 /**
  * Given a batch of users (with their Home-drive status and existing slugs),
  * returns the drive rows to insert. Users who already have a Home drive are
- * skipped. The caller stamps `id` and timestamps before inserting.
+ * skipped. The caller stamps `id`, `kind`, and timestamps before inserting.
  */
 export function computeHomeBackfillInserts(users: UserBackfillData[]): DriveInsertData[] {
   const result: DriveInsertData[] = [];
