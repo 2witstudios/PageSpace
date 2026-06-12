@@ -51,6 +51,15 @@ const TOOL_NAME_MAP: Record<string, string> = {
   // Member tools
   'list_drive_members': 'Members',
   'list_collaborators': 'Collaborators',
+  // Role management tools
+  'list_drive_roles': 'Roles',
+  'get_drive_role': 'Role',
+  'create_drive_role': 'Create Role',
+  'update_drive_role': 'Update Role',
+  'delete_drive_role': 'Delete Role',
+  'set_role_page_permissions': 'Set Role Page Access',
+  'set_role_drive_wide_permissions': 'Set Role Drive Access',
+  'remove_role_page_permissions': 'Remove Role Page Access',
   // Page read tools
   'list_pages': 'Pages',
   'read_page': 'Read Page',

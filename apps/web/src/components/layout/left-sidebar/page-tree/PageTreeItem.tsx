@@ -20,6 +20,7 @@ import {
   Lock,
   LockOpen,
   Users,
+  Home,
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useCapacitor } from "@/hooks/useCapacitor";
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useFavorites } from "@/hooks/useFavorites";
+import { useDriveStore } from "@/hooks/useDrive";
 import { toast } from "sonner";
 import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
@@ -121,6 +123,18 @@ export const PageTreeItem = React.memo(function PageTreeItem({
   const hideTabActions = isNative && !isTablet;
   const hasChildren = item.children && item.children.length > 0;
   const driveId = params.driveId as string;
+
+  // Drive home page (owner/admin can set any page as the drive's landing page).
+  // Primitive selectors: a tree row only re-renders when these booleans flip,
+  // not on every drives-store refresh.
+  const canManageDrive = useDriveStore((state) => {
+    const drive = state.drives.find((d) => d.id === driveId);
+    return !!drive && (drive.isOwned || drive.role === 'ADMIN');
+  });
+  const isHomePage = useDriveStore(
+    (state) => state.drives.find((d) => d.id === driveId)?.homePageId === item.id
+  );
+  const updateDriveInStore = useDriveStore((state) => state.updateDrive);
 
   // Multi-select state
   const isMultiSelectMode = useMultiSelectStore((state) => state.isMultiSelectMode);
@@ -246,6 +260,20 @@ export const PageTreeItem = React.memo(function PageTreeItem({
       toast.success(`Page ${actionVerb.toLowerCase()} favorites.`, { id: toastId });
     } catch {
       toast.error(`Error updating favorites.`, { id: toastId });
+    }
+  };
+
+  const handleHomePageToggle = async () => {
+    const next = isHomePage ? null : item.id;
+    const toastId = toast.loading(next ? "Setting home page..." : "Removing home page...");
+    try {
+      await patch(`/api/drives/${driveId}`, { homePageId: next });
+      // No tree mutate: the page tree itself didn't change. The server's
+      // drive:updated broadcast refreshes other clients.
+      updateDriveInStore(driveId, { homePageId: next });
+      toast.success(next ? "Home page set." : "Home page removed.", { id: toastId });
+    } catch {
+      toast.error("Error updating home page.", { id: toastId });
     }
   };
 
@@ -376,6 +404,11 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                 <Lock className="h-3 w-3 flex-shrink-0 text-muted-foreground ml-1" aria-label="Private page" />
               )}
 
+              {/* Drive home page indicator */}
+              {isHomePage && (
+                <Home className="h-3 w-3 flex-shrink-0 text-muted-foreground ml-1" aria-label="Drive home page" />
+              )}
+
               {/* Currently viewing indicators */}
               <PageViewersInline pageId={item.id} />
 
@@ -459,6 +492,12 @@ export const PageTreeItem = React.memo(function PageTreeItem({
                   <Users className="mr-2 h-4 w-4" />
                   <span>Permissions</span>
                 </ContextMenuItem>
+                {canManageDrive && (
+                  <ContextMenuItem onSelect={handleHomePageToggle}>
+                    <Home className="mr-2 h-4 w-4" />
+                    <span>{isHomePage ? "Remove as home page" : "Set as home page"}</span>
+                  </ContextMenuItem>
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem onSelect={handleEnterMultiSelect}>
                   <CheckSquare className="mr-2 h-4 w-4" />

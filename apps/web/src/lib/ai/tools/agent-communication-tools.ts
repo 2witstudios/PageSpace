@@ -688,6 +688,11 @@ export const agentCommunicationTools = {
           role: 'assistant',
           content: agentResponse,
           sourceAgentId: null, // Assistant responses are native to this agent, not forwarded
+          mentionNotify: {
+            driveId: targetAgent.driveId,
+            triggeredByUserId: userId,
+            mentionerName: targetAgent.title,
+          },
         });
 
         loggers.ai.debug('Saved ask_agent conversation:', {

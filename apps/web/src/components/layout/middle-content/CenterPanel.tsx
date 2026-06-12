@@ -26,6 +26,7 @@ import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
+import { useDriveHomeRedirect } from '@/hooks/useDriveHomeRedirect';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
@@ -245,10 +246,11 @@ export default function CenterPanel() {
   const pathname = usePathname();
   const activeDriveId = params.driveId as string | undefined;
   const activePageId = params.pageId as string || null;
+  const { isHomeRedirectPending } = useDriveHomeRedirect(activeDriveId, activePageId);
 
   // Determine visibility states
   const isSettingsRoute = pathname.endsWith('/settings') || pathname.endsWith('/settings/mcp');
-  const showGlobalAssistant = !activePageId && !isSettingsRoute;
+  const showGlobalAssistant = !activePageId && !isSettingsRoute && !isHomeRedirectPending;
   const showPageContent = activePageId || isSettingsRoute;
 
   const setPageId = usePageStore(state => state.setPageId);
