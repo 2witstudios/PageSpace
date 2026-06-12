@@ -106,6 +106,18 @@ vi.mock('../../core/context-assembly', () => ({
       pendingCompaction: null,
     })
   ),
+  // Mirrors the real finisher logic (summary-prepend + pass-through) without
+  // calling convertToModelMessages — the conversion is an implementation detail
+  // of finishModelRequest; ask_agent tests verify the assembly shape, not the SDK call.
+  finishModelRequest: vi.fn().mockImplementation(
+    ({ prepared, tail }: { prepared: { summaryText: string; messages: unknown[]; stableBoundaryIndex: number }; tail?: unknown[] }) => {
+      const msgs = tail ?? prepared.messages;
+      const modelMessages = prepared.summaryText
+        ? [{ role: 'user' as const, content: prepared.summaryText }, ...msgs]
+        : msgs;
+      return { modelMessages, stableBoundaryIndex: prepared.stableBoundaryIndex };
+    }
+  ),
 }));
 vi.mock('../../core/compaction/compaction-service', () => ({
   runCompaction: vi.fn().mockResolvedValue(undefined),
@@ -144,10 +156,10 @@ import { canActorViewPage } from '../actor-permissions';
 import { createAIProvider } from '../../core/provider-factory';
 import { saveMessageToDatabase } from '../../core/message-utils';
 import type { ToolExecutionContext } from '../../core/types';
-import { generateText, convertToModelMessages } from 'ai';
+import { generateText } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { prepareHistoryForModel } from '../../core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 
 const mockDb = vi.mocked(db);
@@ -758,7 +770,6 @@ describe('agent-communication-tools', () => {
           parts: [{ type: 'text', text: 'current question' }],
           createdAt: new Date(),
         };
-        const mockModelMessages = [{ role: 'user', content: 'converted' }];
 
         vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
           messages: [tailMsg] as never,
@@ -767,7 +778,6 @@ describe('agent-communication-tools', () => {
           pendingCompaction: null,
           scheduleCompaction: vi.fn(),
         });
-        vi.mocked(convertToModelMessages).mockReturnValueOnce(mockModelMessages as never);
 
         const context = {
           toolCallId: '1', messages: [],
@@ -778,14 +788,16 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        // convertToModelMessages receives the tail only (summary travels as summaryText)
-        expect(convertToModelMessages).toHaveBeenCalledWith(
-          expect.arrayContaining([tailMsg])
+        // finishModelRequest is called with the prepared context (owns summary-prepend + convert)
+        expect(finishModelRequest).toHaveBeenCalledWith(
+          expect.objectContaining({
+            prepared: expect.objectContaining({ summaryText, messages: [tailMsg] }),
+          })
         );
         // generateText receives the summary prepended as a user ModelMessage
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
-            messages: [{ role: 'user', content: summaryText }, ...mockModelMessages],
+            messages: [{ role: 'user', content: summaryText }, tailMsg],
           })
         );
       });

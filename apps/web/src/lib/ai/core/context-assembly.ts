@@ -10,11 +10,11 @@
  *
  * Returns the elided UIMessage tail plus metadata needed by each route
  * (summaryText, stableBoundaryIndex for cache breakpoints, scheduleCompaction).
- * Each route still calls convertToModelMessages — kept separate because routes
- * differ in their pre-conversion steps (visual-content injection, tool set).
+ * Routes call finishModelRequest to convert the tail and prepend the summary —
+ * the one owned seam between the seam output and streamText/generateText input.
  */
 
-import type { UIMessage } from 'ai';
+import { convertToModelMessages, type UIMessage, type ToolSet, type ModelMessage } from 'ai';
 import { sanitizeMessagesForModel } from '@/lib/ai/core/message-utils';
 import {
   prepareConversationContext,
@@ -49,12 +49,12 @@ export interface PrepareHistoryParams extends Omit<PrepareConversationContextPar
 export interface PrepareHistoryResult {
   /**
    * Sanitized, compacted, and elided UIMessages — the tail that each route
-   * converts to ModelMessages via convertToModelMessages.
+   * passes to finishModelRequest for conversion.
    */
   messages: UIMessage[];
   /**
    * Non-empty when sliding-window compaction added a synthetic summary.
-   * Routes must prepend `{ role: 'user', content: summaryText }` before
+   * finishModelRequest prepends `{ role: 'user', content: summaryText }` before
    * the converted tail ModelMessages.
    */
   summaryText: string;
@@ -70,6 +70,37 @@ export interface PrepareHistoryResult {
   scheduleCompaction: () => void;
   /** Ready-to-use compaction params for tool-execution contexts where after() is unavailable. */
   pendingCompaction: PreparedContext['pendingCompaction'];
+}
+
+export interface FinishRequestParams {
+  /**
+   * Output of prepareHistoryForModel (or any object with the three required fields).
+   * The finisher reads summaryText, messages, and stableBoundaryIndex.
+   */
+  prepared: Pick<PrepareHistoryResult, 'summaryText' | 'messages' | 'stableBoundaryIndex'>;
+  /**
+   * The exact tool set passed to streamText/generateText — same reference enforces
+   * the budget=sent invariant: a divergence between budgeted and sent tools is
+   * impossible when both come from the same variable.
+   * Required: callers must always thread their tool set through so convertToModelMessages
+   * can resolve tool result schemas and the budget=sent invariant is structurally enforced.
+   */
+  tools: ToolSet;
+  /**
+   * Pre-processed tail to convert instead of prepared.messages.
+   * Use when routes inject visual content or other pre-conversion transforms.
+   */
+  tail?: Parameters<typeof convertToModelMessages>[0];
+}
+
+export interface FinishRequestResult {
+  /** Model messages ready for streamText/generateText (summary prepended when present). */
+  modelMessages: ModelMessage[];
+  /**
+   * Same as prepared.stableBoundaryIndex — passed through for per-step
+   * withCacheBreakpoints(messages, stableBoundaryIndex) calls in route callbacks.
+   */
+  stableBoundaryIndex: number;
 }
 
 // ─── Seam ──────────────────────────────────────────────────────────────────────
@@ -153,4 +184,29 @@ export async function prepareHistoryForModel(
     scheduleCompaction,
     pendingCompaction,
   };
+}
+
+// ─── Finisher ──────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a prepared history into model-ready messages.
+ *
+ * Owns the three steps that every entry point must perform after
+ * prepareHistoryForModel:
+ *   1. Convert UIMessages to ModelMessages via convertToModelMessages
+ *   2. Prepend the compaction summary (when present)
+ *   3. Pass through stableBoundaryIndex for per-step withCacheBreakpoints
+ *
+ * The `tools` param enforces the budget=sent invariant: pass the exact same
+ * ToolSet reference given to streamText/generateText so divergence is
+ * structurally impossible.
+ */
+export function finishModelRequest(params: FinishRequestParams): FinishRequestResult {
+  const { prepared, tools, tail } = params;
+  const toConvert = tail ?? (prepared.messages as Parameters<typeof convertToModelMessages>[0]);
+  const tailModelMessages = convertToModelMessages(toConvert, { tools });
+  const modelMessages: ModelMessage[] = prepared.summaryText
+    ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
+    : tailModelMessages;
+  return { modelMessages, stableBoundaryIndex: prepared.stableBoundaryIndex };
 }

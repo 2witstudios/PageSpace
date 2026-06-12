@@ -1,10 +1,10 @@
-import { pgTable, text, timestamp, integer, index, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, index, check, primaryKey } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const conversationCompactions = pgTable(
   'conversation_compactions',
   {
-    conversationId: text('conversation_id').primaryKey(),
+    conversationId: text('conversation_id').notNull(),
     source: text('source').notNull(),
     pageId: text('page_id'),
     summary: text('summary').notNull().default(''),
@@ -21,6 +21,7 @@ export const conversationCompactions = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    pk: primaryKey({ columns: [table.conversationId, table.source] }),
     pageIdIdx: index('conversation_compactions_page_id_idx').on(table.pageId),
     sourceCheck: check(
       'conversation_compactions_source_chk',

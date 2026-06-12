@@ -5,9 +5,10 @@ import { conversationCompactions, type SelectConversationCompaction } from '@pag
 export type CompactionStateRow = SelectConversationCompaction;
 
 /**
- * Scope for compaction reads/invalidation. conversationId is the PK, but reused
- * or colliding IDs across sources must never attach another conversation's
- * summary — reads are constrained to the same source (and page for 'page').
+ * Scope for compaction reads/invalidation. The composite PK (conversationId, source)
+ * allows page and global compaction rows to coexist for the same conversationId.
+ * Per-page isolation (when source = 'page') is still enforced by a pageId predicate
+ * since pageId is nullable and not part of the PK.
  */
 export interface CompactionScope {
   source: 'page' | 'global';
@@ -61,8 +62,9 @@ export async function upsertState(params: UpsertCompactionParams): Promise<boole
   } = params;
 
   if (expectedVersion === null) {
-    // First insert — onConflictDoNothing: concurrent insert (or an invalidation
-    // tombstone written meanwhile) wins, we lose
+    // First insert — onConflictDoNothing: the composite PK (conversationId, source)
+    // ensures a concurrent insert for the same scope loses; a different scope's row
+    // is a distinct key slot and is unaffected.
     const result = await db
       .insert(conversationCompactions)
       .values({
@@ -81,15 +83,16 @@ export async function upsertState(params: UpsertCompactionParams): Promise<boole
     return (result.rowCount ?? 0) > 0;
   }
 
-  // Version-guarded update, scoped to the writer's source/page: even if a
-  // colliding conversationId carries another scope's row, a matching version
-  // must never let this writer overwrite it. (The PK is conversationId alone,
-  // so same-id-cross-scope coexistence is intentionally unsupported — a
-  // colliding insert is blocked rather than corrupted; see invalidate().)
-  const scopeCondition =
-    source === 'page' && pageId
-      ? sql` AND ${conversationCompactions.source} = ${source} AND ${conversationCompactions.pageId} = ${pageId}`
-      : sql` AND ${conversationCompactions.source} = ${source}`;
+  // Version-guarded CAS update, scoped to the writer's (source, pageId).
+  // Composite PK ensures only this scope's row is reachable by conversationId + source.
+  const updateConditions = [
+    eq(conversationCompactions.conversationId, conversationId),
+    eq(conversationCompactions.summaryVersion, expectedVersion),
+    eq(conversationCompactions.source, source),
+  ];
+  if (source === 'page' && pageId) {
+    updateConditions.push(eq(conversationCompactions.pageId, pageId));
+  }
   const result = await db
     .update(conversationCompactions)
     .set({
@@ -104,9 +107,7 @@ export async function upsertState(params: UpsertCompactionParams): Promise<boole
       summaryVersion: sql`${conversationCompactions.summaryVersion} + 1`,
       updatedAt: new Date(),
     })
-    .where(
-      sql`${conversationCompactions.conversationId} = ${conversationId} AND ${conversationCompactions.summaryVersion} = ${expectedVersion}${scopeCondition}`
-    );
+    .where(and(...updateConditions));
   return (result.rowCount ?? 0) > 0;
 }
 
@@ -116,20 +117,26 @@ export async function upsertState(params: UpsertCompactionParams): Promise<boole
  * Why a tombstone: if a first compaction is in flight when a pre-pointer message
  * is edited/deleted, a plain DELETE is a no-op (no row exists yet) and the
  * pending null-version insert would land a stale summary afterwards. The
- * tombstone makes that pending insert hit the PK conflict (onConflictDoNothing →
- * lost race) and bumps the version so any pending CAS update misses too.
+ * tombstone makes that pending insert hit the composite-PK conflict
+ * (onConflictDoNothing → lost race) and bumps the version so any pending CAS
+ * update misses too.
  *
  * A tombstone row reads as "no compaction": empty summary, null pointers — the
  * context builder sends the full tail. The next over-threshold compaction
  * overwrites it through the normal version-guarded path.
+ *
+ * Cross-scope isolation: the composite PK (conversationId, source) means each
+ * scope owns its own key slot. Tombstoning 'page' never touches the 'global'
+ * row for the same conversationId, and vice versa.
  */
 export async function invalidate(
   conversationId: string,
   scope: CompactionScope
 ): Promise<void> {
-  // Step 1: claim the PK if no row exists (atomic; a pending first-compaction
-  // insert that arrives later hits this conflict and loses). If another SCOPE
-  // already holds the PK, this no-ops — we must not tombstone their state.
+  // Step 1: claim the (conversationId, source) composite key slot for this scope
+  // if no row exists yet. A pending first-compaction insert that arrives later
+  // hits this conflict and loses. A different scope's row is a distinct key slot
+  // and is unaffected — scopes are independently owned.
   await db
     .insert(conversationCompactions)
     .values({
@@ -146,16 +153,19 @@ export async function invalidate(
     })
     .onConflictDoNothing();
 
-  // Step 2: clear + version-bump the row, scoped to OUR source/page only.
+  // Step 2: clear + version-bump the row, scoped to OUR (source, pageId) only.
   // Covers the pre-existing-row case (kills any pending CAS update via the
   // bump) and is a harmless extra bump on the row step 1 just inserted.
   // All interleavings with a concurrent compaction are safe: its insert loses
   // to step 1's row, and its CAS update either lands before step 2 (then gets
   // cleared) or after (version mismatch — discarded).
-  const scopeCondition =
-    scope.source === 'page' && scope.pageId
-      ? sql` AND ${conversationCompactions.source} = ${scope.source} AND ${conversationCompactions.pageId} = ${scope.pageId}`
-      : sql` AND ${conversationCompactions.source} = ${scope.source}`;
+  const clearConditions = [
+    eq(conversationCompactions.conversationId, conversationId),
+    eq(conversationCompactions.source, scope.source),
+  ];
+  if (scope.source === 'page' && scope.pageId) {
+    clearConditions.push(eq(conversationCompactions.pageId, scope.pageId));
+  }
   await db
     .update(conversationCompactions)
     .set({
@@ -167,7 +177,5 @@ export async function invalidate(
       summaryVersion: sql`${conversationCompactions.summaryVersion} + 1`,
       updatedAt: new Date(),
     })
-    .where(
-      sql`${conversationCompactions.conversationId} = ${conversationId}${scopeCondition}`
-    );
+    .where(and(...clearConditions));
 }
