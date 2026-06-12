@@ -352,6 +352,11 @@
       "import": "./dist/services/drive-service.js",
       "require": "./dist/services/drive-service.js"
     },
+    "./services/drive-guards": {
+      "types": "./dist/services/drive-guards.d.ts",
+      "import": "./dist/services/drive-guards.js",
+      "require": "./dist/services/drive-guards.js"
+    },
     "./services/drive-member-service": {
       "types": "./dist/services/drive-member-service.d.ts",
       "import": "./dist/services/drive-member-service.js",

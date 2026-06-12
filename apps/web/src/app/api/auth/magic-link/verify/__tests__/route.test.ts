@@ -88,8 +88,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
@@ -128,7 +128,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 
@@ -426,7 +426,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -435,7 +435,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard/provisioned-drive-id');
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
     it('uses default dashboard path when drive provisioning returns null', async () => {
@@ -443,7 +443,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue(null as never);
 
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
@@ -456,7 +456,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
@@ -464,21 +464,25 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('/dashboard');
       expect(location).not.toContain('provisioned');
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: 'test-user-id' }
       );
     });
 
-    it('does not provision drive for existing users', async () => {
+    it('provisions Home drive for existing users (lazy idempotent); uses default redirect when created:false', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: true,
         data: { userId: 'test-user-id', isNewUser: false },
       });
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
-      await GET(createVerifyRequest('valid-token'));
+      const response = await GET(createVerifyRequest('valid-token'));
+      const location = response.headers.get('Location')!;
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('existing-drive');
     });
   });
 
@@ -594,6 +598,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_abc');
       expect(location).toContain('auth=success');
+      // Provisioning must run even when `next` is present
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
     it('falls back to /dashboard when next is /invite/<token> (invite acceptance no longer travels via next; the inviteToken metadata path consumes invites server-side)', async () => {
@@ -626,7 +632,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -636,6 +642,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_abc');
       expect(location).not.toContain('provisioned-drive-id');
+      // Provisioning still fires even though `next` wins the redirect
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
   });
 
@@ -721,6 +729,68 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_invited_42');
       expect(location).not.toContain('some_other_drive');
+    });
+
+    it('provisions Home drive even when invite redirect wins (invitedDriveId takes priority over provisioned drive)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
+      });
+
+      const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
+
+      // Redirect goes to the invited drive
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_invited_42');
+      // But provisioning still ran unconditionally
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('provisions Home drive on a PAGE-invite login (redirect short-circuits the shared resolver)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_page' }),
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'page', invitedDriveId: 'drive_invited_42', invitedPageId: 'page_invited_7', connectionId: null,
+      });
+
+      const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_invited_42/pages/page_invited_7');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('provisions Home drive on a CONNECTION-invite login (redirect short-circuits the shared resolver)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_conn' }),
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection', invitedDriveId: null, invitedPageId: null, connectionId: 'conn_1',
+      });
+
+      const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/connections');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
     it('given consumeAnyInviteIfPresent throws (DB blip), still completes login and lands on /dashboard (session is already committed)', async () => {

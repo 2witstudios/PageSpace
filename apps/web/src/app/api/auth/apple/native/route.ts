@@ -9,7 +9,7 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
@@ -175,15 +175,12 @@ export async function POST(req: Request) {
       loggers.auth.info('New user created via native Apple OAuth', { userId: user.id, platform });
     }
 
-    // Provision getting started drive for new users
-    if (isNewUser) {
-      await provisionGettingStartedDriveIfNeeded(user.id).catch((error) => {
-        loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
-          userId: user.id,
-          provider: 'apple-native',
-        });
+    await provisionHomeDriveIfNeeded(user.id).catch((error) => {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
+        userId: user.id,
+        provider: 'apple-native',
       });
-    }
+    });
 
     // SESSION FIXATION PREVENTION: Revoke existing web sessions before creating a
     // new one. Admin-console sessions are scoped separately and left intact.

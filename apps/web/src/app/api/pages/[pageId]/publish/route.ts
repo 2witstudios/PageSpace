@@ -9,6 +9,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { renderPublishedPage } from '@/lib/canvas/render-published';
 import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact, isPublishConfigured } from '@/lib/canvas/published-storage';
 
@@ -45,7 +46,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     // Publish control instead of offering a button that only ever returns 503. This
     // must mirror EVERY 503 fast-path in POST below: the dedicated public bucket must
     // be configured AND the operational kill-switch must not be engaged.
-    const available =
+    let available =
       isPublishConfigured() && process.env.CANVAS_PUBLISHING_DISABLED !== 'true';
 
     const row = await db.query.publishedPages.findFirst({
@@ -54,6 +55,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     });
 
     if (!row) {
+      // Home drive guard: suppress Publish button for pages inside a Home drive.
+      if (available) {
+        const pg = await db.query.pages.findFirst({
+          where: eq(pages.id, pageId),
+          columns: { driveId: true },
+        });
+        if (pg) {
+          const drv = await db.query.drives.findFirst({
+            where: eq(drives.id, pg.driveId),
+            columns: { kind: true },
+          });
+          if (drv?.kind === 'HOME') available = false;
+        }
+      }
       return NextResponse.json({ published: false, available });
     }
 
@@ -144,11 +159,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     const drive = await db.query.drives.findFirst({
       where: eq(drives.id, page.driveId),
-      columns: { id: true, slug: true, publishSubdomain: true },
+      columns: { id: true, slug: true, publishSubdomain: true, kind: true },
     });
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    if (isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'publish') }, { status: 403 });
     }
 
     // Resolve the drive's publish subdomain: reuse if already allocated,

@@ -16,7 +16,7 @@ import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
@@ -221,7 +221,7 @@ export async function GET(req: Request) {
 
     let isNewlyProvisioned = false;
     try {
-      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      const provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
         isNewlyProvisioned = true;
         if (!returnUrl.startsWith('/s/')) {
@@ -229,7 +229,7 @@ export async function GET(req: Request) {
         }
       }
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
         provider: 'google',
       });

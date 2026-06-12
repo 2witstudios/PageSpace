@@ -16,6 +16,7 @@ import { driveAgentMembers, driveMembers } from '@pagespace/db/schema/members';
 import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../permissions/permissions';
 import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../permissions/membership-queries';
 import type { CustomRolePerms } from '../permissions/membership-queries';
+import { isHomeDrive, homeDriveActionError } from './drive-guards';
 
 export type AgentDriveRole = 'MEMBER' | 'ADMIN';
 
@@ -52,15 +53,16 @@ export interface AgentDriveMembership {
 async function resolveGranterAccess(
   userId: string,
   driveId: string,
-): Promise<{ canGrant: boolean; maxRole: AgentDriveRole; customRoleId: string | null }> {
+): Promise<{ canGrant: boolean; maxRole: AgentDriveRole; customRoleId: string | null; driveKind: string | null }> {
   const [drive] = await db
-    .select({ ownerId: drives.ownerId })
+    .select({ ownerId: drives.ownerId, kind: drives.kind })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  if (!drive) return { canGrant: false, maxRole: 'MEMBER', customRoleId: null };
-  if (drive.ownerId === userId) return { canGrant: true, maxRole: 'ADMIN', customRoleId: null };
+  if (!drive) return { canGrant: false, maxRole: 'MEMBER', customRoleId: null, driveKind: null };
+  const driveKind = drive.kind ?? null;
+  if (drive.ownerId === userId) return { canGrant: true, maxRole: 'ADMIN', customRoleId: null, driveKind };
 
   const [membership] = await db
     .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
@@ -77,12 +79,13 @@ async function resolveGranterAccess(
       canGrant: true,
       maxRole: membership.role === 'ADMIN' ? 'ADMIN' : 'MEMBER',
       customRoleId: membership.customRoleId ?? null,
+      driveKind,
     };
   }
 
   // Page-level collaborator only (no drive membership): may grant, capped at MEMBER.
   const hasAccess = await getUserDriveAccess(userId, driveId);
-  return { canGrant: hasAccess, maxRole: 'MEMBER', customRoleId: null };
+  return { canGrant: hasAccess, maxRole: 'MEMBER', customRoleId: null, driveKind };
 }
 
 /**
@@ -117,6 +120,15 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
   const granter = await resolveGranterAccess(actingUserId, driveId);
   if (!granter.canGrant) {
     return { ok: false, status: 403, error: 'You do not have access to this drive' };
+  }
+
+  // Home drives never take agent memberships: an agent living in another
+  // (possibly shared) drive would let everyone who can run it read Home
+  // content. AI_CHAT pages inside Home keep their native access — this only
+  // blocks cross-drive membership grants. Enforced here so both entry points
+  // (drive-side invite and agent-side settings) share the guard.
+  if (isHomeDrive({ kind: granter.driveKind })) {
+    return { ok: false, status: 403, error: homeDriveActionError({ kind: granter.driveKind }, 'invite')! };
   }
 
   let effectiveRole: AgentDriveRole;

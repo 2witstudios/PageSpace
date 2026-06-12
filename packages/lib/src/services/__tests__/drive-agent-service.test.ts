@@ -120,6 +120,24 @@ describe('addAgentToDrive', () => {
     expect(res).toMatchObject({ ok: false, status: 403 });
   });
 
+  it('403 when the target drive is a Home drive — even for its owner (no agent memberships in Home)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))                          // agent lookup
+      .mockReturnValueOnce(stubSelect([{ ownerId: USER, kind: 'HOME' }]));    // drive lookup → owner of Home
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    const captured: Record<string, unknown>[] = [];
+    stubInsert(captured);
+
+    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 403,
+      error: 'Your Home drive is private and cannot be shared.',
+    });
+    expect(captured).toHaveLength(0);
+  });
+
   it('inherits ADMIN when the granter owns the drive', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))            // agent lookup

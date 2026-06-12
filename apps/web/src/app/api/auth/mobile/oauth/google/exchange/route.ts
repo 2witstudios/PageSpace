@@ -66,6 +66,7 @@ import type { MobileOAuthResponse } from '@pagespace/lib/auth/oauth-types';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -263,6 +264,15 @@ export async function POST(req: Request) {
       userId: user.id,
       email: maskEmail(user.email),
       provider: user.provider,
+    });
+
+    // Provision the user's Home drive (idempotent). Non-fatal: a failure is
+    // retried lazily on the next login through any auth path.
+    await provisionHomeDriveIfNeeded(user.id).catch((error) => {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
+        userId: user.id,
+        provider: 'google-mobile-exchange',
+      });
     });
 
     // Create session token (opaque, stored in DB)

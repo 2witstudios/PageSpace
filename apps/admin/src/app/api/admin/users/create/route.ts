@@ -7,7 +7,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
 import { withAdminAuth } from '@/lib/auth/auth';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const createUserSchema = z.object({
@@ -56,11 +56,11 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       ...(onPrem ? getOnPremUserDefaults() : { subscriptionTier: 'free' }),
     });
 
-    // Provision Getting Started drive
+    // Provision the Home drive (idempotent; seeded since the user is brand-new)
     try {
-      await provisionGettingStartedDriveIfNeeded(userId);
+      await provisionHomeDriveIfNeeded(userId);
     } catch (error) {
-      loggers.api.warn('Failed to provision Getting Started drive for admin-created user', {
+      loggers.api.warn('Failed to provision Home drive for admin-created user', {
         userId,
         error: error instanceof Error ? error.message : 'Unknown error',
       });

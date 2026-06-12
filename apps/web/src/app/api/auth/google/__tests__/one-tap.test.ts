@@ -111,8 +111,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn(),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -126,7 +126,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Test fixtures
@@ -182,7 +182,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
       created: true,
     });
@@ -214,7 +214,7 @@ describe('POST /api/auth/google/one-tap', () => {
     it('given valid credential for existing user, should return success with user data', async () => {
       vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -229,18 +229,18 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
     });
 
     it('given existing user, should check for drive provisioning', async () => {
       vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
     it('should create session and set session cookie for web platform', async () => {
@@ -348,7 +348,7 @@ describe('POST /api/auth/google/one-tap', () => {
     it('given desktop platform without deviceId, should succeed without device token', async () => {
       vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
       const request = createOneTapRequest({
         credential: 'valid-token',
@@ -367,7 +367,7 @@ describe('POST /api/auth/google/one-tap', () => {
     it('given desktop platform with deviceId, should return top-level tokens', async () => {
       vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
       const request = createOneTapRequest({
         credential: 'valid-token',
@@ -403,7 +403,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);

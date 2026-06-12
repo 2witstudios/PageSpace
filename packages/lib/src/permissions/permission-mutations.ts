@@ -16,6 +16,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { EnforcedAuthContext } from './enforced-context';
 import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './schemas';
 import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logger';
+import { isHomeDrive, homeDriveActionError } from '../services/drive-guards';
 
 // ============================================================================
 // Error Types
@@ -27,7 +28,8 @@ export type PermissionMutationError =
   | { code: 'PAGE_NOT_ACCESSIBLE'; pageId: string }
   | { code: 'USER_NOT_FOUND'; userId: string }
   | { code: 'INSUFFICIENT_PERMISSION'; required: 'share' | 'admin' }
-  | { code: 'SELF_PERMISSION_DENIED'; reason: string };
+  | { code: 'SELF_PERMISSION_DENIED'; reason: string }
+  | { code: 'HOME_DRIVE'; message: string };
 
 // ============================================================================
 // Result Types
@@ -81,6 +83,7 @@ function validateNotSelfGrant(
 interface PageForSharing {
   pageId: string;
   driveId: string;
+  driveKind: string | null;
 }
 
 /**
@@ -98,6 +101,7 @@ async function getPageIfCanShare(
       id: pages.id,
       driveId: pages.driveId,
       driveOwnerId: drives.ownerId,
+      driveKind: drives.kind,
       createdBy: pages.createdBy,
     })
     .from(pages)
@@ -119,7 +123,7 @@ async function getPageIfCanShare(
   if (page.driveOwnerId === userId) {
     return {
       ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
     };
   }
 
@@ -140,7 +144,7 @@ async function getPageIfCanShare(
     if (creatorMembership.length > 0) {
       return {
         ok: true,
-        page: { pageId: page.id, driveId: page.driveId },
+        page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
       };
     }
   }
@@ -162,7 +166,7 @@ async function getPageIfCanShare(
   if (adminMembership.length > 0) {
     return {
       ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
     };
   }
 
@@ -181,7 +185,7 @@ async function getPageIfCanShare(
   if (sharePermission.length > 0 && sharePermission[0].canShare) {
     return {
       ok: true,
-      page: { pageId: page.id, driveId: page.driveId },
+      page: { pageId: page.id, driveId: page.driveId, driveKind: page.driveKind },
     };
   }
 
@@ -251,6 +255,18 @@ export async function grantPagePermission(
   }
 
   const { page } = pageResult;
+
+  // 4.5. Home drive guard — Home is an exfiltration boundary: no direct
+  // permission grants, mirroring the invite/share-link/publish blocks.
+  if (isHomeDrive({ kind: page.driveKind })) {
+    return {
+      ok: false,
+      error: {
+        code: 'HOME_DRIVE',
+        message: homeDriveActionError({ kind: page.driveKind }, 'share')!,
+      },
+    };
+  }
 
   // 5. Target user existence check
   const userExists = await checkUserExists(targetUserId);

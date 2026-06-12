@@ -171,3 +171,73 @@ describe('drive-tools', () => {
     });
   });
 });
+
+// ============================================================================
+// Home Drive Guards
+// ============================================================================
+
+describe('create_drive — Home name reservation', () => {
+  const context = {
+    toolCallId: '1', messages: [],
+    experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(['Home', 'home', 'HOME', '  home  '])(
+    'throws for reserved name %j',
+    async (name) => {
+      await expect(
+        driveTools.create_drive.execute!({ name }, context)
+      ).rejects.toThrow();
+    }
+  );
+});
+
+describe('rename_drive — Home drive guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('throws when renaming a Home drive', async () => {
+    mockDb.query.drives.findFirst = vi.fn().mockResolvedValue({
+      id: 'home-drive',
+      name: 'Home',
+      slug: 'home',
+      ownerId: 'user-123',
+      kind: 'HOME',
+      isTrashed: false,
+    });
+
+    const context = {
+      toolCallId: '1', messages: [],
+      experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+    };
+
+    await expect(
+      driveTools.rename_drive.execute!(
+        { currentName: 'Home', driveId: 'home-drive', name: 'My Space' },
+        context
+      )
+    ).rejects.toThrow();
+  });
+
+  it('throws when renaming any drive to a reserved name', async () => {
+    const context = {
+      toolCallId: '1', messages: [],
+      experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+    };
+
+    for (const reservedName of ['Home', 'home', 'Personal', 'personal']) {
+      mockDb.query.drives.findFirst = vi.fn().mockResolvedValue(null);
+      await expect(
+        driveTools.rename_drive.execute!(
+          { currentName: 'Work', driveId: 'drive-1', name: reservedName },
+          context
+        )
+      ).rejects.toThrow();
+    }
+  });
+});

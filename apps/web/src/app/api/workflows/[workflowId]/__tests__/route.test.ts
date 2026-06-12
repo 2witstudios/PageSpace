@@ -115,6 +115,7 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
   publishSubdomain: null,
   homePageId: null,
 });

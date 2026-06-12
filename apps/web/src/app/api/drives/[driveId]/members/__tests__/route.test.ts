@@ -78,6 +78,7 @@ const createDriveFixture = (overrides: {
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
   publishSubdomain: null,
   homePageId: null,
 });

@@ -105,6 +105,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           return NextResponse.json({ error: result.error.reason }, { status: 400 });
         case 'PAGE_NOT_ACCESSIBLE':
           return NextResponse.json({ error: 'You do not have permission to share this page' }, { status: 403 });
+        case 'HOME_DRIVE':
+          return NextResponse.json({ error: result.error.message }, { status: 403 });
         case 'USER_NOT_FOUND':
           return NextResponse.json({ error: 'Target user not found' }, { status: 404 });
         case 'INSUFFICIENT_PERMISSION':
