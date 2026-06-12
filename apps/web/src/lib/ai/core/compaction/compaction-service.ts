@@ -100,6 +100,8 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       plan.reason === 'summary-over-cap' ? null : previousSummary,
       MAX_SUMMARY_TOKENS
     );
+    let totalInputTokens = summaryResult.inputTokens;
+    let totalOutputTokens = summaryResult.outputTokens;
 
     // One re-condense pass if output still exceeds cap
     const outputTokens = summaryResult.outputTokens || estimateTokens(summaryResult.text);
@@ -110,6 +112,8 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
         null,
         MAX_SUMMARY_TOKENS
       );
+      totalInputTokens += summaryResult.inputTokens;
+      totalOutputTokens += summaryResult.outputTokens;
     }
 
     const summaryTokens =
@@ -150,8 +154,8 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       userId,
       provider,
       model: compactionModel,
-      inputTokens: summaryResult.inputTokens,
-      outputTokens: summaryResult.outputTokens,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
       conversationId,
       pageId: pageId ?? undefined,
       source: 'compaction',

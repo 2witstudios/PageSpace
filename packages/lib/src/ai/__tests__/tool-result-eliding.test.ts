@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeElisionBoundary,
   elideStaleToolOutputs,
+  DEFAULT_ELIDABLE_TOOLS,
   type ElisionOptions,
   type ElisionMessage,
 } from '../tool-result-eliding';
@@ -292,5 +293,17 @@ describe('elideStaleToolOutputs', () => {
       expect(JSON.stringify(r8[i])).toBe(JSON.stringify(r9[i]));
       expect(JSON.stringify(r9[i])).toBe(JSON.stringify(r10[i]));
     }
+  });
+});
+
+describe('DEFAULT_ELIDABLE_TOOLS', () => {
+  it('does not include execute_tool (may dispatch write-side-effect operations)', () => {
+    expect(DEFAULT_ELIDABLE_TOOLS.has('execute_tool')).toBe(false);
+  });
+
+  it('includes refetchable read tools', () => {
+    expect(DEFAULT_ELIDABLE_TOOLS.has('read_page')).toBe(true);
+    expect(DEFAULT_ELIDABLE_TOOLS.has('regex_search')).toBe(true);
+    expect(DEFAULT_ELIDABLE_TOOLS.has('web_search')).toBe(true);
   });
 });

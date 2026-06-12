@@ -78,7 +78,8 @@ export const DEFAULT_ELIDABLE_TOOLS: ReadonlySet<string> = new Set([
   'get_activity',
   'web_search',
   'list_calendar_events',
-  'execute_tool', // large outputs only — size guard handles this
+  // execute_tool intentionally excluded: in search-exposure mode it can dispatch write
+  // operations (task/calendar/trash mutations) whose results must not be re-played.
 ]);
 
 // ─── Boundary computation ──────────────────────────────────────────────────────

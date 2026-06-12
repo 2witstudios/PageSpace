@@ -65,15 +65,14 @@ export async function PATCH(
     // Update the message content
     await globalConversationRepository.updateMessageContent(messageId, updatedContent);
 
-    // Invalidate compaction when a message in this conversation is edited (stale summary guard)
-    void (async () => {
-      try {
-        const state = await getState(conversationId);
-        if (state) await invalidate(conversationId);
-      } catch (err) {
-        loggers.api.error('Failed to invalidate compaction state after global message edit', err as Error);
-      }
-    })();
+    // Invalidate compaction when a message in this conversation is edited (stale summary guard).
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(conversationId);
+      if (state) await invalidate(conversationId);
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after global message edit', err as Error);
+    }
 
     // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
     void (async () => {
@@ -179,15 +178,14 @@ export async function DELETE(
     // Soft delete the message
     await globalConversationRepository.softDeleteMessage(messageId);
 
-    // Invalidate compaction when a message in this conversation is deleted (stale summary guard)
-    void (async () => {
-      try {
-        const state = await getState(conversationId);
-        if (state) await invalidate(conversationId);
-      } catch (err) {
-        loggers.api.error('Failed to invalidate compaction state after global message delete', err as Error);
-      }
-    })();
+    // Invalidate compaction when a message in this conversation is deleted (stale summary guard).
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(conversationId);
+      if (state) await invalidate(conversationId);
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after global message delete', err as Error);
+    }
 
     // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
     void (async () => {

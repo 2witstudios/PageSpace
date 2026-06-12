@@ -103,17 +103,16 @@ export async function PATCH(
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
 
-    // Invalidate compaction if the edited message was in the compacted range
-    void (async () => {
-      try {
-        const state = await getState(message.conversationId);
-        if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
-          await invalidate(message.conversationId);
-        }
-      } catch (err) {
-        loggers.api.error('Failed to invalidate compaction state after message edit', err as Error);
+    // Invalidate compaction if the edited message was in the compacted range.
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(message.conversationId);
+      if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
+        await invalidate(message.conversationId);
       }
-    })();
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after message edit', err as Error);
+    }
 
     // Broadcast to remote viewers. Failure must never break the request.
     void (async () => {
@@ -235,17 +234,16 @@ export async function DELETE(
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
 
-    // Invalidate compaction if the deleted message was in the compacted range
-    void (async () => {
-      try {
-        const state = await getState(message.conversationId);
-        if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
-          await invalidate(message.conversationId);
-        }
-      } catch (err) {
-        loggers.api.error('Failed to invalidate compaction state after message delete', err as Error);
+    // Invalidate compaction if the deleted message was in the compacted range.
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(message.conversationId);
+      if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
+        await invalidate(message.conversationId);
       }
-    })();
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after message delete', err as Error);
+    }
 
     // Broadcast to remote viewers. Failure must never break the request.
     void (async () => {
