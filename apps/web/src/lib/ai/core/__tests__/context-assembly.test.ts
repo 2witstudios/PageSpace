@@ -13,9 +13,18 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   WRITE_TOOLS: new Set(['create_page', 'replace_lines']),
 }));
+// convertToModelMessages: identity — returns the messages array unchanged so tests
+// can assert on the shape without pulling in the real AI SDK conversion.
+vi.mock('ai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('ai')>();
+  return {
+    ...actual,
+    convertToModelMessages: vi.fn((msgs: unknown) => msgs),
+  };
+});
 
 import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
-import { prepareHistoryForModel } from '../context-assembly';
+import { prepareHistoryForModel, finishModelRequest } from '../context-assembly';
 
 const mockPrepare = vi.mocked(prepareConversationContext);
 
@@ -180,5 +189,65 @@ describe('prepareHistoryForModel — metadata passthrough', () => {
 
     expect(result.scheduleCompaction).toBe(scheduleCompaction);
     expect(result.pendingCompaction).toBe(pendingCompaction);
+  });
+});
+
+describe('finishModelRequest', () => {
+  const tail = [userMsg('u0', 'hello'), assistantReadMsg('a0')];
+
+  it('no summary — returns tail as modelMessages, stableBoundaryIndex=0', () => {
+    const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
+    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared });
+
+    expect(stableBoundaryIndex).toBe(0);
+    // convertToModelMessages is mocked as identity — messages flow through unchanged
+    expect(modelMessages).toEqual(tail);
+  });
+
+  it('with summary — prepends summary message and stableBoundaryIndex=1', () => {
+    const prepared = {
+      summaryText: 'summary text here',
+      messages: tail,
+      stableBoundaryIndex: 1,
+    };
+    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared });
+
+    expect(stableBoundaryIndex).toBe(1);
+    expect(modelMessages[0]).toEqual({ role: 'user', content: 'summary text here' });
+    expect(modelMessages.slice(1)).toEqual(tail);
+    expect(modelMessages).toHaveLength(tail.length + 1);
+  });
+
+  it('tail override — converts the provided tail instead of prepared.messages', () => {
+    const overrideTail = [userMsg('u99', 'override')] as unknown as Parameters<typeof import('ai').convertToModelMessages>[0];
+    const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
+    const { modelMessages } = finishModelRequest({ prepared, tail: overrideTail });
+
+    expect(modelMessages).toEqual(overrideTail);
+  });
+
+  it('tools identity — the tools param is passed through to convertToModelMessages', async () => {
+    const { convertToModelMessages } = await import('ai');
+    const mockConvert = vi.mocked(convertToModelMessages);
+    const myTools = { tool_a: {} } as never;
+    const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
+
+    finishModelRequest({ prepared, tools: myTools });
+
+    expect(mockConvert).toHaveBeenCalledWith(
+      expect.anything(),
+      { tools: myTools }
+    );
+  });
+
+  it('no tools — convertToModelMessages called without options', async () => {
+    const { convertToModelMessages } = await import('ai');
+    const mockConvert = vi.mocked(convertToModelMessages);
+    mockConvert.mockClear();
+    const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
+
+    finishModelRequest({ prepared });
+
+    expect(mockConvert).toHaveBeenCalledWith(expect.anything(), undefined);
   });
 });

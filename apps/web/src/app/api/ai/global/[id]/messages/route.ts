@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet, type ModelMessage } from 'ai';
+import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
+import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
@@ -68,7 +69,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -886,7 +887,6 @@ MENTION PROCESSING:
           ...headMessages,
           ...injectVisualContent(recentTail),
         ] as Parameters<typeof convertToModelMessages>[0];
-        const tailModelMessages = convertToModelMessages(processedTail);
 
         // Post-compaction view for context tracking: summary (as a synthetic
         // UIMessage) + retained tail — what the model is actually sent, not the
@@ -898,11 +898,14 @@ MENTION PROCESSING:
             ]
           : prepared.messages;
 
+        const { modelMessages, stableBoundaryIndex } = finishModelRequest({
+          prepared,
+          tail: processedTail,
+        });
+
         return {
-          modelMessages: prepared.summaryText
-            ? ([{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages] as ModelMessage[])
-            : (tailModelMessages as ModelMessage[]),
-          stableBoundaryIndex: prepared.stableBoundaryIndex,
+          modelMessages,
+          stableBoundaryIndex,
           scheduleCompaction: prepared.scheduleCompaction,
           contextMessagesForTracking,
         };

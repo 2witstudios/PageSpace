@@ -1,13 +1,12 @@
 import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
-import { generateText, convertToModelMessages, UIMessage } from 'ai';
-import type { ModelMessage } from 'ai';
+import { generateText, UIMessage } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
@@ -612,12 +611,7 @@ export const agentCommunicationTools = {
           tools: executionTools,
           user: { id: userId, role: callerUserRole },
         });
-        const tailModelMessages: ModelMessage[] = convertToModelMessages(
-          prepared.messages as Parameters<typeof convertToModelMessages>[0]
-        );
-        const agentModelMessages: ModelMessage[] = prepared.summaryText
-          ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
-          : tailModelMessages;
+        const { modelMessages: agentModelMessages } = finishModelRequest({ prepared });
 
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0

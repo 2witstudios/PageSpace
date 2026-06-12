@@ -44,8 +44,7 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
-import { isSyntheticSummaryMessage } from '@pagespace/lib/ai/context-window';
+import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 
 export const maxDuration = 300;
 
@@ -369,11 +368,11 @@ export async function POST(request: Request): Promise<Response> {
     let compactedModelMessages: ModelMessage[] = convertToModelMessages(sanitized);
     let v1ScheduleCompaction: () => void = () => undefined;
     if (isThreadMode && !clientManagesHistory) {
-      const prepared = await prepareConversationContext({
+      const prepared = await prepareHistoryForModel({
+        history: sanitized,
         conversationId,
         source: 'page',
         pageId,
-        messages: sanitized as never,
         model: providerResult.modelName,
         provider: providerResult.provider,
         systemPrompt: systemPrompt + (callerSystemPrompt ? `\n\n${callerSystemPrompt}` : '') + toolDiscoveryPrompt,
@@ -381,18 +380,7 @@ export async function POST(request: Request): Promise<Response> {
         user: { id: authResult.userId, role: gateUser?.role ?? null },
       });
       v1ScheduleCompaction = prepared.scheduleCompaction;
-      // Shared sentinel check — keeps this route in lockstep with the
-      // context-assembly seam if the synthetic summary format ever changes.
-      const hasSummary =
-        prepared.messages.length > 0 && isSyntheticSummaryMessage(prepared.messages[0]);
-      const summaryContent = hasSummary
-        ? (prepared.messages[0].parts?.find((p) => p.type === 'text')?.text ?? '')
-        : '';
-      const tailUIMessages = (hasSummary ? prepared.messages.slice(1) : prepared.messages) as Parameters<typeof convertToModelMessages>[0];
-      const tailModelMessages = convertToModelMessages(tailUIMessages);
-      compactedModelMessages = hasSummary
-        ? [{ role: 'user' as const, content: summaryContent }, ...tailModelMessages]
-        : tailModelMessages;
+      ({ modelMessages: compactedModelMessages } = finishModelRequest({ prepared, tools: finalTools }));
     }
 
     // Standard OpenAI-style cancel: the consumer closing the HTTP connection stops generation.
