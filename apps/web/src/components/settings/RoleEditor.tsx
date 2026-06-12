@@ -99,10 +99,11 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
 
     setSaving(true);
     try {
-      // Convert Map to object for JSON - only include pages with at least one permission
       const permissionsObj: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> = {};
       permissions.forEach((perms, pageId) => {
-        if (perms.canView || perms.canEdit || perms.canShare) {
+        // When drive-wide access is active, retain all-false entries as explicit denials —
+        // the permission resolver uses canView:false entries to remove pages from the drive-wide grant.
+        if (perms.canView || perms.canEdit || perms.canShare || driveWidePerms) {
           permissionsObj[pageId] = perms;
         }
       });
@@ -234,7 +235,7 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
             <div>
               <p className="text-sm font-medium">Drive-Wide Access</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Grant the same permission to every page in the drive. Leave unchecked to control access per page below.
+                Grant the same permission to every non-private page in the drive. Leave unchecked to control access per page below.
               </p>
             </div>
             <div className="flex gap-6">
