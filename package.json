@@ -41,6 +41,8 @@
     "setup:admin": "bun scripts/setup-onprem-admin.ts"
   },
   "devDependencies": {
+    "@pagespace/db": "workspace:*",
+    "@pagespace/lib": "workspace:*",
     "@faker-js/faker": "^9.3.0",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",

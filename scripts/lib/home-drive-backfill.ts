@@ -1,22 +1,4 @@
-/**
- * Pure decision functions for the Home drive backfill.
- * Intentionally self-contained (no @pagespace/* imports) so that the
- * scripts/ vitest context — which runs in a forked Node process without
- * bun's workspace resolver — can load this file without aliases or stubs.
- * The canonical definitions of HOME_DRIVE_NAME and resolveUniqueSlug live in
- * packages/lib/src/services/drive-guards.ts; any changes there must be
- * mirrored here.
- */
-
-const HOME_DRIVE_NAME = 'Home';
-
-function resolveUniqueSlug(existingSlugs: string[], base: string): string {
-  const taken = new Set(existingSlugs);
-  if (!taken.has(base)) return base;
-  let suffix = 2;
-  while (taken.has(`${base}-${suffix}`)) suffix++;
-  return `${base}-${suffix}`;
-}
+import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards';
 
 export type UserBackfillData = {
   userId: string;
