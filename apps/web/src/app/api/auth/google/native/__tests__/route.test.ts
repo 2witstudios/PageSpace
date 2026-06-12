@@ -133,8 +133,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -156,7 +156,7 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
@@ -264,7 +264,7 @@ describe('POST /api/auth/google/native', () => {
     } as never);
 
     // Default provisioning mock
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: true });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: true });
 
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
@@ -318,7 +318,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
     });
 
     it('given existing user, should not provision Getting Started drive', async () => {
@@ -328,7 +328,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
     });
 
     it('should create session with correct parameters', async () => {
@@ -657,7 +657,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(
         new Error('Provisioning failed')
       );
 

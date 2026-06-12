@@ -97,8 +97,8 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -146,7 +146,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const createNativeRequest = (body: Record<string, unknown> = {}) =>
@@ -397,11 +397,11 @@ describe('POST /api/auth/apple/native', () => {
     it('provisions getting started drive for new users', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-id');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('new-user-id');
     });
 
     it('continues if drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -473,7 +473,7 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
     });
 
     it('handles re-fetch returning null after update', async () => {

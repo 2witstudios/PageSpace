@@ -18,7 +18,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import {
@@ -387,7 +387,7 @@ async function resolvePostLoginRedirectPath({
   }
 
   try {
-    const provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
+    const provisionedDrive = await provisionHomeDriveIfNeeded(userId);
     if (provisionedDrive) {
       return `/dashboard/${provisionedDrive.driveId}`;
     }

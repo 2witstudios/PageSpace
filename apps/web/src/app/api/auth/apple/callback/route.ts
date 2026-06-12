@@ -17,7 +17,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
@@ -207,7 +207,7 @@ export async function POST(req: Request) {
     // Provision getting started drive for new users
     let isNewlyProvisioned = false;
     try {
-      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      const provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
         isNewlyProvisioned = true;
         if (!returnUrl.startsWith('/s/')) {

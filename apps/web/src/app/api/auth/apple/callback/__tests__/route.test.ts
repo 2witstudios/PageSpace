@@ -100,8 +100,8 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -156,7 +156,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   consumeAnyInviteIfPresent,
@@ -240,7 +240,7 @@ describe('POST /api/auth/apple/callback', () => {
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
 
     // vi.resetAllMocks() above wipes the vi.mock factory implementations of
     // the dispatcher; re-prime them so the route's await-and-destructure
@@ -735,7 +735,7 @@ describe('POST /api/auth/apple/callback', () => {
 
   describe('drive provisioning', () => {
     it('redirects to provisioned drive when newly created', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -753,7 +753,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('uses original returnUrl when drive already exists', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'existing-drive-id',
         created: false,
       });
@@ -771,7 +771,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -923,7 +923,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('includes isNewUser flag in deep link for new users', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });
@@ -1029,7 +1029,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('includes isNewUser flag for newly provisioned iOS users', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });

@@ -123,8 +123,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn(),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/google-avatar', () => ({
@@ -160,7 +160,7 @@ import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 
 // Test fixtures
 const mockExistingUser = {
@@ -207,7 +207,7 @@ describe('GET /api/auth/google/callback', () => {
 
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
     // Default to existing user
     vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
@@ -281,7 +281,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('given provisioned drive, should redirect to that drive', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive-123',
         created: true,
       });
