@@ -81,7 +81,15 @@ export async function upsertState(params: UpsertCompactionParams): Promise<boole
     return (result.rowCount ?? 0) > 0;
   }
 
-  // Version-guarded update
+  // Version-guarded update, scoped to the writer's source/page: even if a
+  // colliding conversationId carries another scope's row, a matching version
+  // must never let this writer overwrite it. (The PK is conversationId alone,
+  // so same-id-cross-scope coexistence is intentionally unsupported — a
+  // colliding insert is blocked rather than corrupted; see invalidate().)
+  const scopeCondition =
+    source === 'page' && pageId
+      ? sql` AND ${conversationCompactions.source} = ${source} AND ${conversationCompactions.pageId} = ${pageId}`
+      : sql` AND ${conversationCompactions.source} = ${source}`;
   const result = await db
     .update(conversationCompactions)
     .set({
@@ -97,7 +105,7 @@ export async function upsertState(params: UpsertCompactionParams): Promise<boole
       updatedAt: new Date(),
     })
     .where(
-      sql`${conversationCompactions.conversationId} = ${conversationId} AND ${conversationCompactions.summaryVersion} = ${expectedVersion}`
+      sql`${conversationCompactions.conversationId} = ${conversationId} AND ${conversationCompactions.summaryVersion} = ${expectedVersion}${scopeCondition}`
     );
   return (result.rowCount ?? 0) > 0;
 }
@@ -119,6 +127,9 @@ export async function invalidate(
   conversationId: string,
   scope: CompactionScope
 ): Promise<void> {
+  // Step 1: claim the PK if no row exists (atomic; a pending first-compaction
+  // insert that arrives later hits this conflict and loses). If another SCOPE
+  // already holds the PK, this no-ops — we must not tombstone their state.
   await db
     .insert(conversationCompactions)
     .values({
@@ -133,16 +144,30 @@ export async function invalidate(
       lastCompactedAt: null,
       summaryVersion: 1,
     })
-    .onConflictDoUpdate({
-      target: conversationCompactions.conversationId,
-      set: {
-        summary: '',
-        summaryTokens: 0,
-        compactedUpToMessageId: null,
-        compactedUpToCreatedAt: null,
-        summarizerModel: 'invalidated',
-        summaryVersion: sql`${conversationCompactions.summaryVersion} + 1`,
-        updatedAt: new Date(),
-      },
-    });
+    .onConflictDoNothing();
+
+  // Step 2: clear + version-bump the row, scoped to OUR source/page only.
+  // Covers the pre-existing-row case (kills any pending CAS update via the
+  // bump) and is a harmless extra bump on the row step 1 just inserted.
+  // All interleavings with a concurrent compaction are safe: its insert loses
+  // to step 1's row, and its CAS update either lands before step 2 (then gets
+  // cleared) or after (version mismatch — discarded).
+  const scopeCondition =
+    scope.source === 'page' && scope.pageId
+      ? sql` AND ${conversationCompactions.source} = ${scope.source} AND ${conversationCompactions.pageId} = ${scope.pageId}`
+      : sql` AND ${conversationCompactions.source} = ${scope.source}`;
+  await db
+    .update(conversationCompactions)
+    .set({
+      summary: '',
+      summaryTokens: 0,
+      compactedUpToMessageId: null,
+      compactedUpToCreatedAt: null,
+      summarizerModel: 'invalidated',
+      summaryVersion: sql`${conversationCompactions.summaryVersion} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(
+      sql`${conversationCompactions.conversationId} = ${conversationId}${scopeCondition}`
+    );
 }

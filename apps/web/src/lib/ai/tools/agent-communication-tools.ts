@@ -588,6 +588,15 @@ export const agentCommunicationTools = {
         } catch {
           // Fallback: role unknown → non-admin path
         }
+        // Budget against the EXACT tool set generateText will receive below —
+        // the tool-enabled branch adds finishTool, and undercounting schema
+        // bytes here could pass context-window prep yet exceed the model limit
+        // at generation time.
+        const executionTools =
+          Object.keys(allAgentTools).length > 0
+            ? ({ ...allAgentTools, ...finishTool } as Record<string, unknown>)
+            : (allAgentTools as Record<string, unknown>);
+
         // Full seam (sanitize → compact → elide): sub-agent histories accumulate the
         // same stale read-tool outputs as top-level chats, so they get the same
         // chunk-aligned elision treatment, not just compaction. The seam re-sanitizes
@@ -600,7 +609,7 @@ export const agentCommunicationTools = {
           model: resolvedModelName,
           provider: resolvedProvider,
           systemPrompt,
-          tools: allAgentTools,
+          tools: executionTools,
           user: { id: userId, role: callerUserRole },
         });
         const tailModelMessages: ModelMessage[] = convertToModelMessages(

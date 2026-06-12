@@ -9,7 +9,7 @@ import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/acti
 import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { invalidate } from '@/lib/ai/core/compaction/compaction-repository';
+import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -68,9 +68,14 @@ export async function PATCH(
     // Invalidate compaction when a message in this conversation is edited (stale summary guard).
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
     try {
-      // Tombstone even when no row exists: a first compaction may be in
-      // flight and its pending insert must lose to the invalidation.
-      await invalidate(conversationId, { source: 'global' });
+      const state = await getState(conversationId, { source: 'global' });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range (later edits
+      // leave the still-valid summary in place).
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'global' });
+      }
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after global message edit', err as Error);
     }
@@ -182,9 +187,14 @@ export async function DELETE(
     // Invalidate compaction when a message in this conversation is deleted (stale summary guard).
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
     try {
-      // Tombstone even when no row exists: a first compaction may be in
-      // flight and its pending insert must lose to the invalidation.
-      await invalidate(conversationId, { source: 'global' });
+      const state = await getState(conversationId, { source: 'global' });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range (later edits
+      // leave the still-valid summary in place).
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'global' });
+      }
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after global message delete', err as Error);
     }

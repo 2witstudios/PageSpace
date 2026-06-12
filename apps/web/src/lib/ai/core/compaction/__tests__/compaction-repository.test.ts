@@ -137,9 +137,10 @@ describe('upsertState — version-guarded update (CAS)', () => {
 });
 
 describe('invalidate — tombstone semantics', () => {
-  it('writes an empty-state tombstone via insert + onConflictDoUpdate (never a delete)', async () => {
+  it('writes an empty-state tombstone: PK-claiming insert, then scope-guarded clear+bump (never a delete)', async () => {
     await invalidate('conv-1', PAGE_SCOPE);
 
+    // Step 1: claim the PK so a pending first-compaction insert loses
     expect(db.insert).toHaveBeenCalledTimes(1);
     expect(insertChain.values).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -153,12 +154,13 @@ describe('invalidate — tombstone semantics', () => {
         summaryVersion: 1,
       })
     );
-    // Conflict path must clear the state AND bump the version so any pending
-    // CAS update from an in-flight compaction misses.
-    expect(insertChain.onConflictDoUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        set: expect.objectContaining({ summary: '', summaryTokens: 0 }),
-      })
+    expect(insertChain.onConflictDoNothing).toHaveBeenCalledTimes(1);
+
+    // Step 2: scoped clear + version bump so a pending CAS update misses —
+    // and so another scope's row holding the same PK is never touched.
+    expect(db.update).toHaveBeenCalledTimes(1);
+    expect(updateChain.set).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: '', summaryTokens: 0 })
     );
   });
 

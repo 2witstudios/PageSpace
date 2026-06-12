@@ -104,12 +104,14 @@ const mockMessage = (overrides: Partial<{
   content: string;
   role: string;
   isActive: boolean;
+  createdAt: Date;
 }> = {}) => ({
   id: overrides.id ?? mockMessageId,
   conversationId: overrides.conversationId ?? mockConversationId,
   content: overrides.content ?? 'Hello, AI!',
   role: overrides.role ?? 'user',
   isActive: overrides.isActive ?? true,
+  createdAt: overrides.createdAt ?? new Date('2024-01-01T00:00:10Z'),
 });
 
 const createContext = (id: string, messageId: string) => ({

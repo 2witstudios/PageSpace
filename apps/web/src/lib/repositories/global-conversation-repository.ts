@@ -38,6 +38,7 @@ export interface Message {
   content: string;
   role: string;
   isActive: boolean;
+  createdAt: Date;
 }
 
 export interface UsageLog {
