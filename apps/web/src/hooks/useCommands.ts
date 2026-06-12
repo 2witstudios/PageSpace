@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
+import type { DriveEventPayload } from '@/lib/websocket';
 import {
   toggleCommandInList,
   removeCommandFromList,
@@ -42,7 +43,7 @@ export function useCommands(active: boolean = true) {
 
   useEffect(() => {
     if (!socket || !active) return;
-    const handleDriveUpdated = (payload: { resourceType?: string }) => {
+    const handleDriveUpdated = (payload: DriveEventPayload) => {
       if (payload.resourceType === 'command') void mutate();
     };
     socket.on('drive:updated', handleDriveUpdated);
