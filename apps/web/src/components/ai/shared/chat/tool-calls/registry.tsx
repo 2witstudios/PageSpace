@@ -920,6 +920,55 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     />
   ),
 
+  // === COMMAND TOOLS ===
+  create_command: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      title={typeof parsedOutput.trigger === 'string' ? `/${parsedOutput.trigger}` : undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  update_command: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title={typeof parsedOutput.trigger === 'string' ? `/${parsedOutput.trigger}` : undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_command: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title={typeof parsedOutput.trigger === 'string' ? `/${parsedOutput.trigger}` : undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  list_commands: ({ parsedOutput }) => {
+    const cmds = parsedOutput.commands;
+    if (!Array.isArray(cmds) || cmds.length === 0) return null;
+    return (
+      <PageTreeRenderer
+        tree={(cmds as Array<{ id: string; trigger: string; description: string; scope: string; enabled?: boolean }>).map((c) => ({
+          path: `/${c.trigger}`,
+          title: `/${c.trigger}`,
+          type: 'DOCUMENT',
+          pageId: c.id,
+          children: [],
+        }))}
+        title="Commands"
+      />
+    );
+  },
+
+
   // === WORKFLOWS ===
   list_workflows: ({ parsedOutput }) => {
     if (!Array.isArray(parsedOutput.workflows)) return null;

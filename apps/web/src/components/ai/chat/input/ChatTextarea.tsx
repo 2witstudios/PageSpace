@@ -13,8 +13,6 @@ import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overl
 import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 import { useMessageTokens } from '@/hooks/useMessageTokens';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
-import { useAuthStore } from '@/stores/useAuthStore';
-import { canUseCommands } from '@/lib/commands/command-gating';
 import { useCommandSuggestion } from '@/hooks/useCommandSuggestion';
 import { CommandPickerPortal } from '@/components/commands/CommandPickerPortal';
 import { commandResultsAnnouncement } from '@/lib/commands/command-picker-core';
@@ -86,14 +84,6 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     const [isComposing, setIsComposing] = useState(false);
     const enterToSend = useEnterToSend();
 
-    // Exposure gating (spec §0): the `/` trigger and picker exist only for
-    // admin accounts at launch; for everyone else `/` is a literal character.
-    // Reads the auth store directly (same user object useAuth returns) to keep
-    // every chat input from mounting useAuth's session/router machinery, and
-    // selects the derived boolean so background session refreshes (which swap
-    // the user object identity) don't re-render every chat input.
-    const commandsEnabled = useAuthStore((state) => canUseCommands(state.user));
-
     // Convert between markdown (parent) and display text (textarea).
     // Tracks both mention tokens and command chips through edits.
     const {
@@ -122,7 +112,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
 
     const command = useCommandSuggestion({
       inputRef: textareaRef,
-      enabled: commandsEnabled && !disabled,
+      enabled: !disabled,
       driveId,
       popupPlacement,
       getTokens,
@@ -205,18 +195,16 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
 
     // Combobox wiring for the command picker (spec §9). DOM focus stays in
     // the textarea while the picker is open — there is no inner search field.
-    const commandComboboxProps = commandsEnabled
-      ? {
-          role: 'combobox' as const,
-          'aria-expanded': command.isOpen,
-          'aria-haspopup': 'listbox' as const,
-          'aria-controls': command.isOpen ? commandListboxId : undefined,
-          'aria-activedescendant':
-            command.isOpen && command.items.length > 0
-              ? commandOptionId(command.selectedIndex)
-              : undefined,
-        }
-      : {};
+    const commandComboboxProps = {
+      role: 'combobox' as const,
+      'aria-expanded': command.isOpen,
+      'aria-haspopup': 'listbox' as const,
+      'aria-controls': command.isOpen ? commandListboxId : undefined,
+      'aria-activedescendant':
+        command.isOpen && command.items.length > 0
+          ? commandOptionId(command.selectedIndex)
+          : undefined,
+    };
 
     return (
       <div className="relative flex-1 min-w-0 overflow-hidden">
@@ -289,34 +277,32 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           onClose={suggestion.actions.close}
         />
 
-        {commandsEnabled && (
-          <>
-            <CommandPickerPortal
-              isOpen={command.isOpen}
-              position={command.position}
-              anchorRef={textareaRef}
-              items={command.items}
-              loading={command.loading}
-              loadFailed={command.loadFailed}
-              query={command.query}
-              selectedIndex={command.selectedIndex}
-              onSelect={command.actions.select}
-              onSelectionChange={command.actions.setSelectedIndex}
-              listboxId={commandListboxId}
-              optionId={commandOptionId}
-              hasAnyCommands={command.hasAnyCommands}
-              onNavigateToSettings={command.actions.close}
-              onClose={command.actions.close}
-              onDismiss={command.actions.dismiss}
-            />
-            {/* Polite live region announcing result counts (spec §9) */}
-            <span role="status" aria-live="polite" className="sr-only">
-              {command.isOpen && !command.loading
-                ? commandResultsAnnouncement(command.items.length)
-                : ''}
-            </span>
-          </>
-        )}
+        <>
+          <CommandPickerPortal
+            isOpen={command.isOpen}
+            position={command.position}
+            anchorRef={textareaRef}
+            items={command.items}
+            loading={command.loading}
+            loadFailed={command.loadFailed}
+            query={command.query}
+            selectedIndex={command.selectedIndex}
+            onSelect={command.actions.select}
+            onSelectionChange={command.actions.setSelectedIndex}
+            listboxId={commandListboxId}
+            optionId={commandOptionId}
+            hasAnyCommands={command.hasAnyCommands}
+            onNavigateToSettings={command.actions.close}
+            onClose={command.actions.close}
+            onDismiss={command.actions.dismiss}
+          />
+          {/* Polite live region announcing result counts (spec §9) */}
+          <span role="status" aria-live="polite" className="sr-only">
+            {command.isOpen && !command.loading
+              ? commandResultsAnnouncement(command.items.length)
+              : ''}
+          </span>
+        </>
       </div>
     );
   }
@@ -329,7 +315,7 @@ ChatTextareaInner.displayName = 'ChatTextareaInner';
  * Provides:
  * - Auto-growing textarea
  * - @ mention suggestions with search
- * - / slash-command picker at message start (admin-gated at launch, spec §0)
+ * - / slash-command picker at message start
  * - Platform-aware Enter key: sends on desktop/external keyboard, newline on mobile
  * - Cross-drive mention support
  */
