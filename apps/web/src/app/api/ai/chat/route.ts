@@ -56,6 +56,11 @@ import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+import {
+  buildVolatileTurnContext,
+  appendTurnContextToLastUserMessage,
+  withCacheBreakpoints,
+} from '@/lib/ai/core/prompt-assembly';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
@@ -679,8 +684,11 @@ export async function POST(request: Request) {
 
         // Create execute functions that signal client-side execution
         // The AI SDK will call these, but we throw a special error that the client intercepts
+        // Sort keys so tool array order is deterministic across requests (only real config
+        // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
         const mcpToolsWithExecute: Record<string, unknown> = {};
-        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
+        for (const toolName of Object.keys(mcpToolSchemas).sort()) {
+          const toolSchema = mcpToolSchemas[toolName];
           mcpToolsWithExecute[toolName] = {
             ...toolSchema,
             execute: async (args: Record<string, unknown>) => {
@@ -957,10 +965,27 @@ export async function POST(request: Request) {
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
-            buildStreamText: (messages) => streamText({
+            buildStreamText: (messages) => {
+              // Volatile per-turn data (timestamp/mention/command) is appended
+              // to the last user message so the system prefix stays byte-stable
+              // and provider prefix caches (Anthropic/OpenAI/Gemini) are not
+              // invalidated on every turn.
+              const turnContext = buildVolatileTurnContext({
+                timestampPrompt: timestampSystemPrompt,
+                mentionPrompt: mentionSystemPrompt,
+                commandPrompt: commandSystemPrompt,
+              });
+              const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+              // Apply cache breakpoints: mark last message (A) so tools+system+
+              // history cache on every step after step 1. No stable boundary (B)
+              // yet — PR 2/3 will set stableBoundaryIndex to the summary position.
+              const cachedMessages = withCacheBreakpoints(messagesWithContext, 0);
+              return streamText({
               model,
-              system: systemPrompt + mentionSystemPrompt + commandSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
-              messages,
+              // Stable system prompt — no volatile sections; stays byte-identical
+              // across turns so provider prefix caches survive per request.
+              system: systemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+              messages: cachedMessages,
               tools: filteredTools,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
               // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
@@ -1019,7 +1044,19 @@ export async function POST(request: Request) {
                 });
                 lifecycle!.finish(true);
               },
-            }),
+              // Re-mark the tail breakpoint per step so mid-loop tool results
+              // are covered by the Anthropic prefix cache on each subsequent step.
+              // prepareStep(messages) receives the cumulative history for that
+              // step; re-applying withCacheBreakpoints(_, 0) marks only the
+              // final message without touching the stable boundary (index 0
+              // means no B breakpoint). The original messages array passed to
+              // buildStreamText already has breakpoints from the outer call;
+              // this per-step pass keeps them current as the tail grows.
+              prepareStep: ({ messages: stepMessages }) => ({
+                messages: withCacheBreakpoints(stepMessages, 0),
+              }),
+            })
+          },
           });
 
           // Billing reads the SUMMED usage / OpenRouter cost across every attempt

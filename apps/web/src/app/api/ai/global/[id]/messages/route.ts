@@ -63,6 +63,11 @@ import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
+import {
+  buildVolatileTurnContext,
+  appendTurnContextToLastUserMessage,
+  withCacheBreakpoints,
+} from '@/lib/ai/core/prompt-assembly';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -634,8 +639,12 @@ export async function POST(
       }
     }
 
-    // Add global assistant specific instructions (including tool discovery — only this route has tool_search)
-    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + mentionSystemPrompt + commandSystemPrompt + timestampSystemPrompt + `
+    // Add global assistant specific instructions (including tool discovery — only this route has tool_search).
+    // Stable order: base → TOOL_DISCOVERY → global instructions → drivePrompt → agentAwareness → pageTree → nonCoreToolNames.
+    // Volatile sections (timestamp/mention/command) are NOT concatenated here; they are
+    // appended to the last user message at assembly time so the system prefix stays
+    // byte-identical across turns and provider prefix caches are not invalidated.
+    const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
 
@@ -809,9 +818,12 @@ MENTION PROCESSING:
         // Convert MCP tools to AI SDK format
         const mcpToolSchemas = convertMCPToolsToAISDKSchemas(mcpTools);
 
-        // Create execute functions that proxy to WebSocket bridge
+        // Create execute functions that proxy to WebSocket bridge.
+        // Sort keys so tool array order is deterministic across requests (only real config
+        // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
         const mcpToolsWithExecute: Record<string, unknown> = {};
-        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
+        for (const toolName of Object.keys(mcpToolSchemas).sort()) {
+          const toolSchema = mcpToolSchemas[toolName];
           mcpToolsWithExecute[toolName] = {
             ...toolSchema,
             execute: async (args: Record<string, unknown>) => {
@@ -953,10 +965,25 @@ MENTION PROCESSING:
           maxSteps: AGENT_MAX_STEPS,
           startTimeMs: startTime,
           logger: loggers.api,
-          buildStreamText: (messages) => streamText({
+          buildStreamText: (messages) => {
+            // Volatile per-turn data (timestamp/mention/command) is appended
+            // to the last user message so the stable system prefix stays
+            // byte-identical across turns and provider prefix caches survive.
+            const turnContext = buildVolatileTurnContext({
+              timestampPrompt: timestampSystemPrompt,
+              mentionPrompt: mentionSystemPrompt,
+              commandPrompt: commandSystemPrompt,
+            });
+            const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+            // Apply cache breakpoints: mark last message (A). No stable boundary
+            // (B) yet — PR 2/3 will set stableBoundaryIndex to the summary position.
+            const cachedMessages = withCacheBreakpoints(messagesWithContext, 0);
+            return streamText({
             model,
+            // Stable system prompt — volatile sections removed; stays byte-identical
+            // across turns so provider prefix caches are not invalidated.
             system: finalSystemPrompt,
-            messages,
+            messages: cachedMessages,
             tools: finalTools,
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
             // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
@@ -986,7 +1013,13 @@ MENTION PROCESSING:
               });
               lifecycle!.finish(true);
             },
-          }),
+            // Re-mark the tail breakpoint per step so mid-loop tool results
+            // are covered by the Anthropic prefix cache on each subsequent step.
+            prepareStep: ({ messages: stepMessages }) => ({
+              messages: withCacheBreakpoints(stepMessages, 0),
+            }),
+            })
+          },
         });
 
         // Billing reads the SUMMED usage / OpenRouter cost across every attempt.

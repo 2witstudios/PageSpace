@@ -138,3 +138,49 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
     expect(result).toEqual({});
   });
 });
+
+// ─── Tool key order determinism ──────────────────────────────────────────────
+
+describe('integration tool key order determinism', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('resolvePageAgentIntegrationTools — two identical builds produce identical JSON.stringify(Object.keys(tools))', async () => {
+    // Simulate a converter returning keys in non-alphabetical order
+    const unorderedTools = {
+      'int__z_tool': { description: 'Z', inputSchema: { type: 'object', properties: {} } as never, execute: vi.fn() },
+      'int__a_tool': { description: 'A', inputSchema: { type: 'object', properties: {} } as never, execute: vi.fn() },
+      'int__m_tool': { description: 'M', inputSchema: { type: 'object', properties: {} } as never, execute: vi.fn() },
+    };
+
+    mockResolveAgentIntegrations.mockResolvedValue([{} as never]);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    // Return the SAME object reference both times so any non-determinism comes
+    // only from the sort step (not from mockConvert itself).
+    mockConvert.mockReturnValue(unorderedTools);
+
+    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+    mockConvert.mockReturnValue(unorderedTools);
+    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+
+    expect(JSON.stringify(Object.keys(build1))).toBe(JSON.stringify(Object.keys(build2)));
+    // Keys must be alphabetically sorted
+    expect(Object.keys(build1)).toEqual(['int__a_tool', 'int__m_tool', 'int__z_tool']);
+  });
+
+  it('resolvePageAgentIntegrationTools — serialized schemas are identical across two builds', async () => {
+    const toolDef = { description: 'T', inputSchema: { type: 'object', properties: { x: { type: 'string' } } } as never, execute: vi.fn() };
+    const tools = { 'tool_b': toolDef, 'tool_a': toolDef };
+
+    mockResolveAgentIntegrations.mockResolvedValue([{} as never]);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue(tools);
+    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+    mockConvert.mockReturnValue(tools);
+    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+
+    // Both serializations must be byte-identical
+    expect(JSON.stringify(build1)).toBe(JSON.stringify(build2));
+  });
+});

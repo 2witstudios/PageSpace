@@ -5,11 +5,9 @@
  * Used by the admin global-prompt viewer to show the exact context window.
  */
 
-import { buildSystemPrompt, buildNonCoreToolNamesPrompt } from './system-prompt';
+import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from './system-prompt';
 import { filterToolsForReadOnly, isWriteTool } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
-import { buildTimestampSystemPrompt } from './timestamp-utils';
-import { buildMentionSystemPrompt } from './mention-processor';
 import {
   buildInlineInstructions,
   buildGlobalAssistantInstructions,
@@ -127,12 +125,6 @@ export function buildCompleteRequest(
     isReadOnly
   );
 
-  // Build additional prompt sections
-  const timestampSystemPrompt = buildTimestampSystemPrompt();
-  const mentionSystemPrompt = buildMentionSystemPrompt([
-    { id: 'example-page-id', label: 'Example Document', type: 'page' },
-  ]);
-
   // Build inline instructions based on context type
   let inlineInstructions: string;
   if (contextType === 'page' && locationContext?.currentPage) {
@@ -169,11 +161,12 @@ export function buildCompleteRequest(
   // Append non-core tool names to system prompt (matches real Global Assistant behavior)
   const nonCoreNamesSection = buildNonCoreToolNamesPrompt(nonCoreToolNames);
 
-  // Complete system prompt (with non-core tool names section, matching real Global Assistant)
+  // Stable system prompt: base → TOOL_DISCOVERY → global instructions → nonCoreToolNames.
+  // Volatile sections (timestamp/mention/command) are omitted here — they are
+  // appended to the last user message at assembly time in production routes.
   const systemPrompt =
     baseSystemPrompt +
-    mentionSystemPrompt +
-    timestampSystemPrompt +
+    '\n\n' + TOOL_DISCOVERY_PROMPT +
     inlineInstructions +
     (nonCoreNamesSection ? '\n\n' + nonCoreNamesSection : '');
 
