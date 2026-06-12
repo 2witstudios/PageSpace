@@ -163,7 +163,7 @@ describe('GET /api/drives/[driveId]/members', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });

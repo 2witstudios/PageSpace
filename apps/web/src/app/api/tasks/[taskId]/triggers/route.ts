@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -81,7 +80,7 @@ export async function GET(request: Request, context: { params: Promise<{ taskId:
 
   // Trigger configs include agent IDs and prompt text, so restrict reads to editors
   // — same gate as PUT/DELETE. View-only users cannot inspect trigger configuration.
-  const canEdit = await canUserEditPage(userId, ctx.taskListPageId);
+  const canEdit = await canPrincipalEditPage(auth, ctx.taskListPageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
@@ -146,7 +145,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
-  const canEdit = await canUserEditPage(userId, ctx.taskListPageId);
+  const canEdit = await canPrincipalEditPage(auth, ctx.taskListPageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

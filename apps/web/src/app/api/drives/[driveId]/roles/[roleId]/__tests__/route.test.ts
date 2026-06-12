@@ -295,7 +295,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });
@@ -577,7 +577,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });

@@ -123,7 +123,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -303,7 +303,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });

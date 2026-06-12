@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -21,7 +20,7 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
   }
@@ -91,7 +90,7 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You need edit permission to modify channel messages' }, { status: 403 });
   }
