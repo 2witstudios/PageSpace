@@ -17,6 +17,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AlertCircle, Download, Receipt, ShieldAlert, ShieldCheck } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
 type Range = "24h" | "7d" | "30d" | "all";
@@ -61,6 +71,14 @@ interface Enforcement {
   tierAllowanceCents: Record<Tier, number>;
 }
 
+interface MarginPeriodRow {
+  period: string;
+  realCostCents: number;
+  chargedCents: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
 interface AiBillingResponse {
   range: Range; granularity: Granularity; enforcement: Enforcement;
   tokens: { summary: TokenTotals; byModel: TokenModelRow[]; byPeriod: TokenPeriodRow[]; byUser: TokenUserRow[]; };
@@ -69,6 +87,7 @@ interface AiBillingResponse {
   liability: { monthlyRemainingCents: number; topupRemainingCents: number; totalLiabilityCents: number; userCount: number; };
   holds: { holdCount: number; heldCents: number; };
   alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[]; };
+  marginByPeriod: MarginPeriodRow[];
 }
 
 const TIERS: Tier[] = ["free", "pro", "founder", "business"];
@@ -270,6 +289,34 @@ export default function AdminAiBillingPage() {
         <Card><CardHeader className="pb-2"><CardDescription>Outstanding liability</CardDescription><CardTitle className="text-2xl">{usd(liability.totalLiabilityCents)}</CardTitle></CardHeader></Card>
         <Card><CardHeader className="pb-2"><CardDescription>Live holds</CardDescription><CardTitle className="text-2xl">{usd(holds.heldCents)}<span className="ml-2 text-base text-muted-foreground">({num(holds.holdCount)})</span></CardTitle></CardHeader></Card>
       </div>
+
+      {data.marginByPeriod.length > 1 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Margin trend</CardTitle>
+            <CardDescription>Real provider cost vs charged credits per {granularity === "month" ? "month" : "day"} — gap is your gross margin.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={data.marginByPeriod.map((r) => ({
+                period: String(r.period).slice(0, granularity === "month" ? 7 : 10),
+                realCost: +(r.realCostCents / 100).toFixed(2),
+                charged: +(r.chargedCents / 100).toFixed(2),
+                margin: +(r.marginCents / 100).toFixed(2),
+              }))} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                <YAxis tickFormatter={(v) => `$${v}`} tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v: number) => [`$${v.toFixed(2)}`]} />
+                <Legend />
+                <Line type="monotone" dataKey="charged" name="Charged" stroke="#2563eb" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="realCost" name="Real cost" stroke="#dc2626" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="margin" name="Margin" stroke="#16a34a" strokeWidth={2} dot={false} strokeDasharray="4 2" />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

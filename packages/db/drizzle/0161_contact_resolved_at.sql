@@ -1,0 +1,1 @@
+ALTER TABLE "contact_submissions" ADD COLUMN "resolvedAt" timestamp;

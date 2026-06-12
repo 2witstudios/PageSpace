@@ -13,6 +13,7 @@ import {
   getLiveHolds,
   getBalanceDriftAlerts,
   getNegativeMarginAccounts,
+  getMarginByPeriod,
   type Granularity,
 } from '@/lib/monitoring';
 import {
@@ -70,6 +71,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       holds,
       balanceDrift,
       negativeMargin,
+      marginByPeriod,
     ] = await Promise.all([
       getTokenUsageSummary(startDate, endDate),
       getTokenUsageByModel(startDate, endDate, 50),
@@ -82,6 +84,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       getLiveHolds(),
       getBalanceDriftAlerts(),
       getNegativeMarginAccounts(startDate, endDate),
+      getMarginByPeriod(startDate, endDate, granularity),
     ]);
 
     const enforcement = {
@@ -153,6 +156,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       liability,
       holds,
       alerts: { balanceDrift, negativeMargin },
+      marginByPeriod,
     });
   } catch (error) {
     loggers.api.error('Error fetching ai-billing data:', error as Error);

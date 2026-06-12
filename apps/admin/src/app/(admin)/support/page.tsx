@@ -7,6 +7,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { MessageSquare, AlertCircle, Mail, Calendar, TrendingUp, Users } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
+interface RegisteredUser {
+  id: string;
+  subscriptionTier: string | null;
+}
+
 interface ContactSubmission {
   id: string;
   name: string;
@@ -14,6 +19,8 @@ interface ContactSubmission {
   subject: string;
   message: string;
   createdAt: string;
+  resolvedAt: string | null;
+  registeredUser: RegisteredUser | null;
 }
 
 interface PaginationData {
@@ -39,6 +46,7 @@ interface ApiResponse {
     searchTerm: string;
     sortBy: string;
     sortOrder: string;
+    statusFilter: string;
   };
 }
 
@@ -58,6 +66,7 @@ export default function AdminSupportPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("createdAt");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
 
   const fetchSubmissions = useCallback(async () => {
     setLoading(true);
@@ -68,6 +77,7 @@ export default function AdminSupportPage() {
         search: searchTerm,
         sortBy,
         sortOrder,
+        status: statusFilter,
         page: pagination.page.toString(),
         pageSize: pagination.pageSize.toString()
       });
@@ -87,7 +97,7 @@ export default function AdminSupportPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, sortBy, sortOrder, pagination.page, pagination.pageSize]);
+  }, [searchTerm, sortBy, sortOrder, statusFilter, pagination.page, pagination.pageSize]);
 
   useEffect(() => {
     fetchSubmissions();
@@ -95,7 +105,7 @@ export default function AdminSupportPage() {
 
   const handleSearch = (newSearchTerm: string) => {
     setSearchTerm(newSearchTerm);
-    setPagination(prev => ({ ...prev, page: 1 })); // Reset to first page on search
+    setPagination(prev => ({ ...prev, page: 1 }));
   };
 
   const handlePageChange = (newPage: number) => {
@@ -105,7 +115,12 @@ export default function AdminSupportPage() {
   const handleSort = (newSortBy: string, newSortOrder: "asc" | "desc") => {
     setSortBy(newSortBy);
     setSortOrder(newSortOrder);
-    setPagination(prev => ({ ...prev, page: 1 })); // Reset to first page on sort
+    setPagination(prev => ({ ...prev, page: 1 }));
+  };
+
+  const handleStatusFilter = (status: "all" | "open" | "closed") => {
+    setStatusFilter(status);
+    setPagination(prev => ({ ...prev, page: 1 }));
   };
 
   const { todayCount: todaySubmissions, weekCount: weekSubmissions, uniqueEmailCount: uniqueEmails } = stats;
@@ -174,6 +189,8 @@ export default function AdminSupportPage() {
         onSearch={handleSearch}
         onPageChange={handlePageChange}
         onSort={handleSort}
+        onStatusFilter={handleStatusFilter}
+        statusFilter={statusFilter}
         isLoading={loading}
       />
 

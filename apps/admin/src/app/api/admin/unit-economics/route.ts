@@ -5,6 +5,7 @@ import {
   getUnitEconomicsSummary,
   getMarginByPeriod,
   getMarginByModel,
+  getMarginByTier,
   getTopSpendersByMargin,
   getOutstandingDebtByUser,
   type Granularity,
@@ -48,10 +49,11 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
     const { startDate, endDate } = getDateRange(range);
 
-    const [summary, byPeriod, byModel, topSpenders, debtByUser] = await Promise.all([
+    const [summary, byPeriod, byModel, byTier, topSpenders, debtByUser] = await Promise.all([
       getUnitEconomicsSummary(startDate, endDate),
       getMarginByPeriod(startDate, endDate, granularity),
       getMarginByModel(startDate, endDate),
+      getMarginByTier(startDate, endDate),
       getTopSpendersByMargin(startDate, endDate, 10),
       getOutstandingDebtByUser(10),
     ]);
@@ -87,7 +89,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       });
     }
 
-    return NextResponse.json({ range, granularity, startDate, endDate, summary, byPeriod, byModel, topSpenders, debtByUser });
+    return NextResponse.json({ range, granularity, startDate, endDate, summary, byPeriod, byModel, byTier, topSpenders, debtByUser });
   } catch (error) {
     loggers.api.error('Error fetching unit-economics data:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch unit-economics data' }, { status: 500 });

@@ -1,9 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+
+interface AlertState {
+  errorRateAlert: boolean;
+  negativeMarginAlert: boolean;
+  liveHoldsAlert: boolean;
+}
+
+function AlertDot() {
+  return (
+    <span className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-red-500 align-middle" aria-hidden />
+  );
+}
 
 export default function AdminLayoutClient({
   children,
@@ -12,6 +26,7 @@ export default function AdminLayoutClient({
 }) {
   const pathname = usePathname();
   const currentTab = pathname === '/' || pathname === '/dashboard' ? 'overview' :
+                     pathname.includes('/growth') ? 'growth' :
                      pathname.includes('/monitoring') ? 'monitoring' :
                      pathname.includes('/tables') ? 'tables' :
                      pathname.includes('/global-prompt') ? 'global-prompt' :
@@ -19,6 +34,18 @@ export default function AdminLayoutClient({
                      pathname.includes('/ai-billing') ? 'ai-billing' :
                      pathname.includes('/audit-logs') ? 'audit-logs' :
                      pathname.includes('/support') ? 'support' : 'users';
+
+  const [alerts, setAlerts] = useState<AlertState | null>(null);
+
+  useEffect(() => {
+    fetchWithAuth('/api/admin/alerts')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d && setAlerts(d))
+      .catch(() => null);
+  }, []);
+
+  const monitoringAlert = alerts?.errorRateAlert;
+  const billingAlert = alerts?.negativeMarginAlert || alerts?.liveHoldsAlert;
 
   return (
     <div className="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-10">
@@ -37,8 +64,13 @@ export default function AdminLayoutClient({
             <TabsTrigger value="overview" asChild>
               <Link href="/dashboard">Overview</Link>
             </TabsTrigger>
+            <TabsTrigger value="growth" asChild>
+              <Link href="/growth">Growth</Link>
+            </TabsTrigger>
             <TabsTrigger value="monitoring" asChild>
-              <Link href="/monitoring">Monitoring</Link>
+              <Link href="/monitoring">
+                Monitoring{monitoringAlert && <AlertDot />}
+              </Link>
             </TabsTrigger>
             <TabsTrigger value="tables" asChild>
               <Link href="/tables">Database Tables</Link>
@@ -47,10 +79,14 @@ export default function AdminLayoutClient({
               <Link href="/global-prompt">Global Prompt</Link>
             </TabsTrigger>
             <TabsTrigger value="unit-economics" asChild>
-              <Link href="/unit-economics">Unit Economics</Link>
+              <Link href="/unit-economics">
+                Unit Economics{billingAlert && <AlertDot />}
+              </Link>
             </TabsTrigger>
             <TabsTrigger value="ai-billing" asChild>
-              <Link href="/ai-billing">AI Billing</Link>
+              <Link href="/ai-billing">
+                AI Billing{billingAlert && <AlertDot />}
+              </Link>
             </TabsTrigger>
             <TabsTrigger value="users" asChild>
               <Link href="/users">User Management</Link>

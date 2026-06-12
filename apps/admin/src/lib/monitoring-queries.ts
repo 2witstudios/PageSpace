@@ -3,9 +3,10 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { sql, eq, and, or, gt, asc, gte, lte, desc, count, inArray } from '@pagespace/db/operators'
+import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
+import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
+import { sessions } from '@pagespace/db/schema/sessions';
 import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
@@ -55,14 +56,15 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
     .orderBy(desc(errorLogs.timestamp))
     .limit(20);
 
-  // Get active users in last 15 minutes for the summary card
+  // Active users: distinct sessions touched in last 15 minutes (sessions.lastUsedAt is
+  // updated non-blocking on every authenticated request — reliable signal)
   const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
   const activeUsers = await db
     .select({
-      count: sql<number>`COUNT(DISTINCT ${userActivities.userId})::int`,
+      count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int`,
     })
-    .from(userActivities)
-    .where(gte(userActivities.timestamp, fifteenMinutesAgo));
+    .from(sessions)
+    .where(and(gte(sessions.lastUsedAt, fifteenMinutesAgo), isNull(sessions.revokedAt)));
 
   return {
     logsByLevel: logsByLevel.map((entry) => ({
@@ -144,54 +146,54 @@ export async function getApiMetrics(startDate?: Date, endDate?: Date) {
 
 /**
  * Get user activity data
+ * Uses activityLogs (comprehensive audit trail written on every page/drive/member operation)
+ * NOT userActivities (only written on conversation deletion — effectively empty)
  */
 export async function getUserActivity(startDate?: Date, endDate?: Date) {
-  const conditions = [];
-  
+  const conditions: SQL[] = [isNotNull(activityLogs.userId)];
+
   if (startDate) {
-    conditions.push(gte(userActivities.timestamp, startDate));
+    conditions.push(gte(activityLogs.timestamp, startDate));
   }
   if (endDate) {
-    conditions.push(lte(userActivities.timestamp, endDate));
+    conditions.push(lte(activityLogs.timestamp, endDate));
   }
 
-  // Get activity heatmap data - using Drizzle query
   const heatmapData = await db
     .select({
-      day_of_week: sql<number>`EXTRACT(DOW FROM ${userActivities.timestamp})`,
-      hour_of_day: sql<number>`EXTRACT(HOUR FROM ${userActivities.timestamp})`,
+      day_of_week: sql<number>`EXTRACT(DOW FROM ${activityLogs.timestamp})`,
+      hour_of_day: sql<number>`EXTRACT(HOUR FROM ${activityLogs.timestamp})`,
       activity_count: count(),
     })
-    .from(userActivities)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .from(activityLogs)
+    .where(and(...conditions))
     .groupBy(
-      sql`EXTRACT(DOW FROM ${userActivities.timestamp})`,
-      sql`EXTRACT(HOUR FROM ${userActivities.timestamp})`
+      sql`EXTRACT(DOW FROM ${activityLogs.timestamp})`,
+      sql`EXTRACT(HOUR FROM ${activityLogs.timestamp})`
     );
 
-  // Get most active users
   const mostActiveUsers = await db
     .select({
-      userId: userActivities.userId,
+      userId: activityLogs.userId,
       userName: users.name,
       actionCount: count(),
     })
-    .from(userActivities)
-    .innerJoin(users, eq(userActivities.userId, users.id))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(userActivities.userId, users.name)
+    .from(activityLogs)
+    .innerJoin(users, eq(activityLogs.userId, users.id))
+    .where(and(...conditions))
+    .groupBy(activityLogs.userId, users.name)
     .orderBy(desc(count()))
     .limit(10);
 
-  // Get feature usage
+  // operation column stores the action type (create, update, delete, rename, etc.)
   const featureUsage = await db
     .select({
-      action: userActivities.action,
+      action: activityLogs.operation,
       count: count(),
     })
-    .from(userActivities)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(userActivities.action)
+    .from(activityLogs)
+    .where(and(...conditions))
+    .groupBy(activityLogs.operation)
     .orderBy(desc(count()))
     .limit(15);
 
@@ -684,6 +686,46 @@ export async function getTopSpendersByMargin(
   }));
 }
 
+export interface MarginByTierRow {
+  tier: string;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export async function getMarginByTier(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<MarginByTierRow[]> {
+  const rows = await db
+    .select({
+      tier: users.subscriptionTier,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(users.subscriptionTier)
+    .orderBy(desc(realCostSum));
+
+  return rows.map((r) => ({
+    tier: r.tier ?? 'free',
+    realCostCents: r.realCostCents,
+    chargedCents: r.chargedCents,
+    appliedCents: r.appliedCents,
+    requestCount: r.requestCount,
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
 export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
   const rows = await db
     .select({
@@ -1114,5 +1156,187 @@ export async function getLiveHolds(): Promise<LiveHolds> {
   return {
     holdCount: rows[0]?.holdCount ?? 0,
     heldCents: rows[0]?.heldCents ?? 0,
+  };
+}
+
+// ── Growth & MAU queries ──────────────────────────────────────────────────────
+
+export interface GrowthSummary {
+  totalUsers: number;
+  mau: number;
+  wau: number;
+  dau: number;
+  dauMauRatio: number;
+  newUsersThisMonth: number;
+  newUsersLastMonth: number;
+  momGrowthPct: number | null;
+  payingUsers: number;
+  payingUsersPct: number;
+}
+
+export interface MAUTrendRow {
+  period: string;
+  mau: number;
+  newUsers: number;
+}
+
+export interface DAUTrendRow {
+  day: string;
+  dau: number;
+  signups: number;
+}
+
+export interface TierBreakdownRow {
+  tier: string;
+  count: number;
+  pct: number;
+}
+
+export interface GrowthMetrics {
+  summary: GrowthSummary;
+  mauTrend: MAUTrendRow[];
+  dauTrend: DAUTrendRow[];
+  tierBreakdown: TierBreakdownRow[];
+}
+
+export async function getGrowthMetrics(): Promise<GrowthMetrics> {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+
+  const [totalUsersResult] = await db.select({ count: count() }).from(users);
+  const totalUsers = totalUsersResult?.count ?? 0;
+
+  // Current MAU/WAU/DAU from session activity (most reliable signal)
+  const [mauResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
+    .from(sessions)
+    .where(and(gte(sessions.lastUsedAt, thirtyDaysAgo), isNull(sessions.revokedAt)));
+
+  const [wauResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
+    .from(sessions)
+    .where(and(gte(sessions.lastUsedAt, sevenDaysAgo), isNull(sessions.revokedAt)));
+
+  const [dauResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
+    .from(sessions)
+    .where(and(gte(sessions.lastUsedAt, oneDayAgo), isNull(sessions.revokedAt)));
+
+  const mau = mauResult?.count ?? 0;
+  const wau = wauResult?.count ?? 0;
+  const dau = dauResult?.count ?? 0;
+
+  const [newThisMonthResult] = await db
+    .select({ count: count() })
+    .from(users)
+    .where(gte(users.createdAt, startOfThisMonth));
+
+  const [newLastMonthResult] = await db
+    .select({ count: count() })
+    .from(users)
+    .where(and(gte(users.createdAt, startOfLastMonth), lt(users.createdAt, startOfThisMonth)));
+
+  const newUsersThisMonth = newThisMonthResult?.count ?? 0;
+  const newUsersLastMonth = newLastMonthResult?.count ?? 0;
+  const momGrowthPct = newUsersLastMonth > 0
+    ? ((newUsersThisMonth - newUsersLastMonth) / newUsersLastMonth) * 100
+    : null;
+
+  const [payingResult] = await db
+    .select({ count: count() })
+    .from(users)
+    .where(sql`${users.subscriptionTier} != 'free'`);
+  const payingUsers = payingResult?.count ?? 0;
+
+  // MAU trend (12 months) from activity_logs — comprehensive audit trail
+  const mauTrendRaw = await db
+    .select({
+      month: sql<string>`DATE_TRUNC('month', ${activityLogs.timestamp})`,
+      mau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
+    })
+    .from(activityLogs)
+    .where(and(gte(activityLogs.timestamp, twelveMonthsAgo), isNotNull(activityLogs.userId)))
+    .groupBy(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`)
+    .orderBy(asc(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`));
+
+  const signupsByMonthRaw = await db
+    .select({
+      month: sql<string>`DATE_TRUNC('month', ${users.createdAt})`,
+      signups: count(),
+    })
+    .from(users)
+    .where(gte(users.createdAt, twelveMonthsAgo))
+    .groupBy(sql`DATE_TRUNC('month', ${users.createdAt})`)
+    .orderBy(asc(sql`DATE_TRUNC('month', ${users.createdAt})`));
+
+  const signupsByMonth = new Map(signupsByMonthRaw.map(r => [r.month, r.signups]));
+  const mauTrend: MAUTrendRow[] = mauTrendRaw.map(r => ({
+    period: r.month,
+    mau: r.mau,
+    newUsers: signupsByMonth.get(r.month) ?? 0,
+  }));
+
+  // DAU trend (last 30 days) from activity_logs
+  const dauTrendRaw = await db
+    .select({
+      day: sql<string>`DATE_TRUNC('day', ${activityLogs.timestamp})`,
+      dau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
+    })
+    .from(activityLogs)
+    .where(and(gte(activityLogs.timestamp, thirtyDaysAgo), isNotNull(activityLogs.userId)))
+    .groupBy(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`)
+    .orderBy(asc(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`));
+
+  const signupsByDayRaw = await db
+    .select({
+      day: sql<string>`DATE_TRUNC('day', ${users.createdAt})`,
+      signups: count(),
+    })
+    .from(users)
+    .where(gte(users.createdAt, thirtyDaysAgo))
+    .groupBy(sql`DATE_TRUNC('day', ${users.createdAt})`)
+    .orderBy(asc(sql`DATE_TRUNC('day', ${users.createdAt})`));
+
+  const signupsByDay = new Map(signupsByDayRaw.map(r => [r.day, r.signups]));
+  const dauTrend: DAUTrendRow[] = dauTrendRaw.map(r => ({
+    day: r.day,
+    dau: r.dau,
+    signups: signupsByDay.get(r.day) ?? 0,
+  }));
+
+  // Tier breakdown
+  const tierRaw = await db
+    .select({ tier: users.subscriptionTier, count: count() })
+    .from(users)
+    .groupBy(users.subscriptionTier)
+    .orderBy(desc(count()));
+
+  const tierBreakdown: TierBreakdownRow[] = tierRaw.map(r => ({
+    tier: r.tier,
+    count: r.count,
+    pct: totalUsers > 0 ? (r.count / totalUsers) * 100 : 0,
+  }));
+
+  return {
+    summary: {
+      totalUsers,
+      mau,
+      wau,
+      dau,
+      dauMauRatio: mau > 0 ? (dau / mau) * 100 : 0,
+      newUsersThisMonth,
+      newUsersLastMonth,
+      momGrowthPct,
+      payingUsers,
+      payingUsersPct: totalUsers > 0 ? (payingUsers / totalUsers) * 100 : 0,
+    },
+    mauTrend,
+    dauTrend,
+    tierBreakdown,
   };
 }

@@ -7,6 +7,7 @@ import {
   getAiUsageMetrics,
   getErrorAnalytics,
   getPerformanceMetrics,
+  getGrowthMetrics,
   getDateRange
 } from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -52,7 +53,11 @@ export const GET = withAdminAuth<RouteContext>(async (_adminUser, request, conte
       case 'performance':
         data = await getPerformanceMetrics(startDate, endDate);
         break;
-        
+
+      case 'growth':
+        data = await getGrowthMetrics();
+        break;
+
       default:
         return NextResponse.json(
           { error: 'Invalid metric type' },
