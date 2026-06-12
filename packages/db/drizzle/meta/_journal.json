@@ -1121,13 +1121,6 @@
       "when": 1781223659318,
       "tag": "0159_peaceful_silver_samurai",
       "breakpoints": true
-    },
-    {
-      "idx": 160,
-      "version": "7",
-      "when": 1781232504645,
-      "tag": "0160_cuddly_ben_parker",
-      "breakpoints": true
     }
   ]
 }
