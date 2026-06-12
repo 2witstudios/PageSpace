@@ -1072,4 +1072,56 @@ describe('POST /api/v1/chat/completions', () => {
       expected: { status: 500, released: true },
     });
   });
+
+  test('mention notifications: omits mentionNotify for private conversations (isShared=false)', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-private',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: false,
+      type: 'page',
+      lastMessageAt: null,
+    });
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-private' }));
+    await response.text();
+
+    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
+    assert({
+      given: 'an assistant message in a private conversation (isShared=false)',
+      should: 'not include mentionNotify in the saveMessageToDatabase call',
+      actual: assistantSave?.[0]?.mentionNotify,
+      expected: undefined,
+    });
+  });
+
+  test('mention notifications: includes mentionNotify for shared conversations (isShared=true)', async () => {
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-shared',
+      userId: 'user-1',
+      isActive: true,
+      title: null,
+      contextId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isShared: true,
+      type: 'page',
+      lastMessageAt: null,
+    });
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-shared' }));
+    await response.text();
+
+    const saveCalls = vi.mocked(saveMessageToDatabase).mock.calls;
+    const assistantSave = saveCalls.find((c) => c[0].role === 'assistant');
+    assert({
+      given: 'an assistant message in a shared conversation (isShared=true)',
+      should: 'include mentionNotify in the saveMessageToDatabase call',
+      actual: typeof assistantSave?.[0]?.mentionNotify,
+      expected: 'object',
+    });
+  });
 });
