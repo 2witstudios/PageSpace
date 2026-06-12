@@ -5,7 +5,8 @@ import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
+import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
@@ -83,10 +84,9 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
     return true;
   }
 
-  // Check drive membership for drive events with DRIVE visibility (user
-  // parity: any member sees DRIVE-visible events).
-  if (event.driveId && event.visibility === 'DRIVE') {
-    return isPrincipalDriveMember(auth, event.driveId);
+  // Check membership in home drive OR any shared drive for DRIVE-visible events
+  if (event.visibility === 'DRIVE') {
+    return isUserMemberOfAnyEventDrive(userId, event);
   }
 
   return false;
@@ -354,19 +354,22 @@ export async function PATCH(
       },
     });
 
-    // Get all attendee IDs for broadcasting
-    const attendees = await db
-      .select({ userId: eventAttendees.userId })
-      .from(eventAttendees)
-      .where(eq(eventAttendees.eventId, eventId));
+    // Get all attendee IDs and shared drive IDs for broadcasting
+    const [attendees, allDriveIds] = await Promise.all([
+      db.select({ userId: eventAttendees.userId })
+        .from(eventAttendees)
+        .where(eq(eventAttendees.eventId, eventId)),
+      getAllDriveIdsForEvent(eventId),
+    ]);
 
-    // Broadcast event update
+    // Broadcast event update to home drive + all shared drives
     await broadcastCalendarEvent({
       eventId,
       driveId: updatedEvent.driveId,
       operation: 'updated',
       userId,
       attendeeIds: attendees.map(a => a.userId),
+      extraDriveIds: allDriveIds.slice(1), // skip home drive (index 0)
     });
 
     // Push update to Google Calendar (fire-and-forget)
@@ -431,11 +434,13 @@ export async function DELETE(
       );
     }
 
-    // Get all attendee IDs before deletion for broadcasting
-    const attendees = await db
-      .select({ userId: eventAttendees.userId })
-      .from(eventAttendees)
-      .where(eq(eventAttendees.eventId, eventId));
+    // Get all attendee IDs and shared drive IDs before deletion for broadcasting
+    const [attendees, allDriveIds] = await Promise.all([
+      db.select({ userId: eventAttendees.userId })
+        .from(eventAttendees)
+        .where(eq(eventAttendees.eventId, eventId)),
+      getAllDriveIdsForEvent(eventId),
+    ]);
 
     // Delete from Google Calendar before soft-deleting locally (fire-and-forget)
     after(() => {
@@ -454,13 +459,14 @@ export async function DELETE(
       })
       .where(eq(calendarEvents.id, eventId));
 
-    // Broadcast event deletion
+    // Broadcast event deletion to home drive + all shared drives
     await broadcastCalendarEvent({
       eventId,
       driveId: event.driveId,
       operation: 'deleted',
       userId,
       attendeeIds: attendees.map(a => a.userId),
+      extraDriveIds: allDriveIds.slice(1), // skip home drive (index 0)
     });
 
     auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'event', resourceId: eventId });

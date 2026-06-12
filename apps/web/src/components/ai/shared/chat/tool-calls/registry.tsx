@@ -893,6 +893,33 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  list_event_drives: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  share_event_with_drive: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  unshare_event_from_drive: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === COMMAND TOOLS ===
   create_command: ({ parsedOutput }) => (
     <ActionResultRenderer
@@ -940,6 +967,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       />
     );
   },
+
 
   // === WORKFLOWS ===
   list_workflows: ({ parsedOutput }) => {

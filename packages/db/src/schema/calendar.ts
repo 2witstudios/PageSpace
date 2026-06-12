@@ -192,6 +192,25 @@ export const googleCalendarConnections = pgTable('google_calendar_connections', 
   }
 });
 
+/**
+ * Calendar Event Drives
+ * Junction table: one event visible in multiple drives beyond its home drive.
+ * The home drive remains authoritative (calendarEvents.driveId) — this table
+ * records additional drives that share visibility. Binary: no roles needed since
+ * the event's visibility enum already controls per-user access within a drive.
+ */
+export const calendarEventDrives = pgTable('calendar_event_drives', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  eventId: text('eventId').notNull().references(() => calendarEvents.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  sharedBy: text('sharedBy').references(() => users.id, { onDelete: 'set null' }),
+  sharedAt: timestamp('sharedAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  eventDriveKey: unique('calendar_event_drives_event_drive_key').on(table.eventId, table.driveId),
+  eventIdx: index('calendar_event_drives_event_id_idx').on(table.eventId),
+  driveIdx: index('calendar_event_drives_drive_id_idx').on(table.driveId),
+}));
+
 // Relations
 export const calendarEventsRelations = relations(calendarEvents, ({ one, many }) => ({
   drive: one(drives, {
@@ -216,6 +235,22 @@ export const calendarEventsRelations = relations(calendarEvents, ({ one, many })
     relationName: 'recurringInstances',
   }),
   attendees: many(eventAttendees),
+  sharedDrives: many(calendarEventDrives),
+}));
+
+export const calendarEventDrivesRelations = relations(calendarEventDrives, ({ one }) => ({
+  event: one(calendarEvents, {
+    fields: [calendarEventDrives.eventId],
+    references: [calendarEvents.id],
+  }),
+  drive: one(drives, {
+    fields: [calendarEventDrives.driveId],
+    references: [drives.id],
+  }),
+  sharedByUser: one(users, {
+    fields: [calendarEventDrives.sharedBy],
+    references: [users.id],
+  }),
 }));
 
 export const eventAttendeesRelations = relations(eventAttendees, ({ one }) => ({
@@ -249,3 +284,6 @@ export type NewEventAttendee = typeof eventAttendees.$inferInsert;
 
 export type GoogleCalendarConnection = typeof googleCalendarConnections.$inferSelect;
 export type NewGoogleCalendarConnection = typeof googleCalendarConnections.$inferInsert;
+
+export type CalendarEventDrive = typeof calendarEventDrives.$inferSelect;
+export type NewCalendarEventDrive = typeof calendarEventDrives.$inferInsert;
