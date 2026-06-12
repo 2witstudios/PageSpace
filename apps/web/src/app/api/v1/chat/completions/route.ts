@@ -380,12 +380,15 @@ export async function POST(request: Request): Promise<Response> {
         user: { id: authResult.userId, role: gateUser?.role ?? null },
       });
       v1ScheduleCompaction = prepared.scheduleCompaction;
-      const hasSummary = prepared.messages.length > 0 && !prepared.messages[0].id;
-      const summaryText = hasSummary ? (prepared.messages[0].parts?.[0]?.text ?? '') : '';
+      const firstText = prepared.messages[0]?.parts?.[0]?.text ?? '';
+      const hasSummary =
+        prepared.messages.length > 0 &&
+        !prepared.messages[0].id &&
+        firstText.startsWith('<conversation_summary>');
       const tailUIMessages = (hasSummary ? prepared.messages.slice(1) : prepared.messages) as Parameters<typeof convertToModelMessages>[0];
       const tailModelMessages = convertToModelMessages(tailUIMessages);
       compactedModelMessages = hasSummary
-        ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
+        ? [{ role: 'user' as const, content: firstText }, ...tailModelMessages]
         : tailModelMessages;
     }
 
