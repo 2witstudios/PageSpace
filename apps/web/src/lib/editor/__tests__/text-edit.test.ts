@@ -348,6 +348,26 @@ describe('insertAtAnchor', () => {
       expect(insertionIdx).toBeGreaterThan(blockquoteCloseIdx);
     });
 
+    it('backs up past multiple opening tags for nested before-blocks', () => {
+      // <blockquote><p>Quote text</p></blockquote>
+      const htmlContent = '<blockquote><p>Quote text</p></blockquote>';
+
+      const result = insertAtAnchor({
+        content: htmlContent,
+        anchor: 'Quote text',
+        insertion: 'Before blockquote',
+        position: 'before',
+        isRawText: false,
+      });
+
+      expect(result.inserted).toBe(true);
+      // Insertion should be before the entire <blockquote>, not between <blockquote> and <p>
+      const newLines = result.newContent.split('\n');
+      const blockquoteOpenIdx = newLines.findIndex(l => l.includes('<blockquote>'));
+      const insertionIdx = newLines.findIndex(l => l === 'Before blockquote');
+      expect(insertionIdx).toBeLessThan(blockquoteOpenIdx);
+    });
+
     it('does not snap boundaries for raw text (markdown/code)', () => {
       // Raw text has no HTML tags — the current line-based behavior is correct
       const result = insertAtAnchor({

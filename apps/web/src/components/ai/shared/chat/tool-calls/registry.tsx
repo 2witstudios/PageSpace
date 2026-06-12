@@ -317,12 +317,12 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 
   // === PAGE WRITE TOOLS ===
   find_and_replace: ({ parsedOutput }) => {
-    if (parsedOutput.success && parsedOutput.oldContent && parsedOutput.newContent) {
+    if (parsedOutput.success && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
       return (
         <RichDiffRenderer
           title={(parsedOutput.title as string | undefined) || 'Document'}
-          oldContent={parsedOutput.oldContent as string}
-          newContent={parsedOutput.newContent as string}
+          oldContent={parsedOutput.oldContent}
+          newContent={parsedOutput.newContent}
           pageId={parsedOutput.pageId as string | undefined}
           changeSummary={parsedOutput.message as string | undefined}
         />
@@ -334,18 +334,19 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         success={parsedOutput.success !== false}
         title={parsedOutput.title as string | undefined}
         pageId={parsedOutput.pageId as string | undefined}
+        message={parsedOutput.message as string | undefined}
         errorMessage={parsedOutput.error as string | undefined}
       />
     );
   },
 
   insert_content: ({ parsedOutput }) => {
-    if (parsedOutput.success && parsedOutput.oldContent && parsedOutput.newContent) {
+    if (parsedOutput.success && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
       return (
         <RichDiffRenderer
           title={(parsedOutput.title as string | undefined) || 'Document'}
-          oldContent={parsedOutput.oldContent as string}
-          newContent={parsedOutput.newContent as string}
+          oldContent={parsedOutput.oldContent}
+          newContent={parsedOutput.newContent}
           pageId={parsedOutput.pageId as string | undefined}
           changeSummary={parsedOutput.message as string | undefined}
         />
@@ -357,6 +358,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         success={parsedOutput.success !== false}
         title={parsedOutput.title as string | undefined}
         pageId={parsedOutput.pageId as string | undefined}
+        message={parsedOutput.message as string | undefined}
         errorMessage={parsedOutput.error as string | undefined}
       />
     );
