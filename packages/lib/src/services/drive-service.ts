@@ -20,6 +20,7 @@ export interface DriveWithAccess {
   name: string;
   slug: string;
   ownerId: string;
+  kind: 'STANDARD' | 'HOME';
   isTrashed: boolean;
   trashedAt: Date | null;
   drivePrompt: string | null;

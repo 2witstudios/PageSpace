@@ -62,6 +62,7 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   name: overrides.name,
   slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'owner_123',
+  kind: 'STANDARD' as const,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,

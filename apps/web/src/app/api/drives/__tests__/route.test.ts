@@ -88,6 +88,7 @@ const createDriveFixture = (overrides: Partial<DriveWithAccess> & { id: string; 
   name: overrides.name,
   slug: overrides.slug ?? overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'user_123',
+  kind: overrides.kind ?? 'STANDARD',
   createdAt: overrides.createdAt ?? new Date('2024-01-01'),
   updatedAt: overrides.updatedAt ?? new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,
