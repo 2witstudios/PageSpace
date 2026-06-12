@@ -169,6 +169,27 @@ describe('runCompaction', () => {
     expect(upsertCall.summary).toBe('Condensed summary.');
   });
 
+  it('accumulates usage across both summarize calls when re-condensing', async () => {
+    const longSummary = 'x'.repeat(40000); // triggers re-condense
+    mockGenerateText
+      .mockResolvedValueOnce({
+        text: longSummary,
+        usage: { inputTokens: 100, outputTokens: 8000 },
+      } as never)
+      .mockResolvedValueOnce({
+        text: 'Short condensed.',
+        usage: { inputTokens: 30, outputTokens: 10 },
+      } as never);
+
+    await runCompaction(BASE_PARAMS);
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    expect(mockTrackUsage).toHaveBeenCalledOnce();
+    const usageCall = mockTrackUsage.mock.calls[0][0];
+    // Both calls' tokens should be summed (100+30=130 in, 8000+10=8010 out)
+    expect(usageCall.inputTokens).toBe(130);
+    expect(usageCall.outputTokens).toBe(8010);
+  });
+
   it('never throws when createAIProvider returns an error', async () => {
     mockCreateAIProvider.mockResolvedValue({ error: 'No provider', status: 503 });
     await expect(runCompaction(BASE_PARAMS)).resolves.not.toThrow();
