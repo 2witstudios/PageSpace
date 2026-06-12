@@ -114,12 +114,15 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
 
         // Use .returning() so the count reflects only rows actually written,
         // not the attempted batch size (onConflictDoNothing skips races).
+        // NOTE: the option key is `where` in drizzle-orm 0.32.x — `targetWhere`
+        // (the onConflictDoUpdate key) is silently ignored here, which drops
+        // the predicate and breaks partial-unique-index inference at runtime.
         const written = await (dbInstance as typeof defaultDb)
           .insert(drives)
           .values(rows)
           .onConflictDoNothing({
             target: [drives.ownerId],
-            targetWhere: sql`"kind" = 'HOME'`,
+            where: sql`"kind" = 'HOME'`,
           })
           .returning({ id: drives.id });
 
