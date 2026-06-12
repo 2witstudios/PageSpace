@@ -25,10 +25,11 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
 import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
@@ -99,6 +100,7 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -258,6 +260,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(validateRolePermissions).mockReturnValue(true);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -545,6 +548,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {

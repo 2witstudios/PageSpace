@@ -37,12 +37,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 // ============================================================================
@@ -134,6 +136,7 @@ describe('GET /api/drives/[driveId]/members', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
     vi.mocked(driveInviteRepository.findUnconsumedInvitesByDrive).mockResolvedValue([]);
   });
 
@@ -346,6 +349,7 @@ describe('GET /api/drives/[driveId]/members', () => {
     }];
 
     it('returns populated pendingInvites for OWNER', async () => {
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true, isMember: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }),
@@ -368,6 +372,7 @@ describe('GET /api/drives/[driveId]/members', () => {
     });
 
     it('returns populated pendingInvites for ADMIN', async () => {
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: false, isAdmin: true, isMember: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
