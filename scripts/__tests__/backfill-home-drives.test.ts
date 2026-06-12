@@ -232,11 +232,14 @@ describe('backfill (live)', () => {
     const insertedRows = valuesSpy.mock.calls[0][0] as Array<Record<string, unknown>>;
     expect(insertedRows[0]).toMatchObject({ kind: 'HOME', ownerId: 'user-needs-home', name: 'Home' });
 
-    // Verify conflict is swallowed via onConflictDoNothing (partial-unique-index guard)
+    // Verify conflict is swallowed via onConflictDoNothing (partial-unique-index guard).
+    // The predicate key MUST be `where` — drizzle 0.32.x silently ignores
+    // `targetWhere` on onConflictDoNothing, which breaks index inference in prod.
     expect(onConflictSpy).toHaveBeenCalledTimes(1);
     const callArg = onConflictSpy.mock.calls[0][0] as Record<string, unknown>;
     expect(callArg).toHaveProperty('target');
-    expect(callArg).toHaveProperty('targetWhere');
+    expect(callArg).toHaveProperty('where');
+    expect(callArg).not.toHaveProperty('targetWhere');
   });
 
   it('swallows a conflict via onConflictDoNothing: counts only actually-written rows', async () => {
