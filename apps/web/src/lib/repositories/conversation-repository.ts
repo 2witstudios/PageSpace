@@ -276,8 +276,9 @@ export const conversationRepository = {
         eq(chatMessages.pageId, agentId),
         eq(chatMessages.conversationId, conversationId)
       ));
-    // Whole conversation cleared — any summary is stale, drop it unconditionally
-    await invalidateCompaction(conversationId);
+    // Whole conversation cleared — any summary is stale; the tombstone also
+    // guards against a first compaction that may still be in flight.
+    await invalidateCompaction(conversationId, { source: 'page', pageId: agentId });
   },
 
   /**

@@ -52,6 +52,9 @@ async function summarize(
     model: model.model,
     system,
     prompt,
+    // Hard output ceiling: the prompt's token-cap instruction is advisory; this
+    // bounds the spend and prevents repeated paid summary-over-cap recompactions.
+    maxOutputTokens: maxSummaryTokens,
   });
 
   return {
@@ -67,8 +70,8 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
   try {
     const compactionModel = process.env.COMPACTION_MODEL ?? model;
 
-    // Re-check the 60s gap using the live state
-    const currentState = await getState(conversationId);
+    // Re-check the 60s gap using the live state (scoped to this source/page)
+    const currentState = await getState(conversationId, { source, pageId });
     if (currentState?.lastCompactedAt) {
       const gapMs = Date.now() - currentState.lastCompactedAt.getTime();
       if (gapMs < MIN_GAP_SECONDS * 1000) {
@@ -123,8 +126,37 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       totalOutputTokens += summaryResult.outputTokens;
     }
 
-    const summaryTokens =
-      summaryResult.outputTokens || estimateTokens(summaryResult.text);
+    // Provider spend has happened — record it now, regardless of whether the
+    // summary below wins persistence, passes validation, or loses the race.
+    await AIMonitoring.trackUsage({
+      userId,
+      provider,
+      model: compactionModel,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      conversationId,
+      pageId: pageId ?? undefined,
+      source: 'compaction',
+      success: true,
+    });
+
+    // Never persist an empty summary: advancing the pointer with falsy summary
+    // text would silently discard all pre-pointer history from the model's view.
+    if (!summaryResult.text.trim()) {
+      console.warn('[compaction] empty summary generated, state unchanged for:', maskIdentifier(conversationId));
+      return;
+    }
+
+    let summaryText = summaryResult.text;
+    let summaryTokens = summaryResult.outputTokens || estimateTokens(summaryText);
+
+    // Final cap guard: maxOutputTokens bounds real output, but the chars/4
+    // estimate can still exceed the cap. Clamp before persistence so the stored
+    // summaryTokens can never re-trigger a paid summary-over-cap loop.
+    if (summaryTokens > MAX_SUMMARY_TOKENS) {
+      summaryText = `${summaryText.slice(0, MAX_SUMMARY_TOKENS * 4)}\n[summary truncated at token cap]`;
+      summaryTokens = MAX_SUMMARY_TOKENS;
+    }
 
     const expectedVersion =
       plan.currentSummaryVersion ?? currentState?.summaryVersion ?? null;
@@ -143,7 +175,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       conversationId,
       source,
       pageId: pageId ?? null,
-      summary: summaryResult.text,
+      summary: summaryText,
       summaryTokens,
       compactedUpToMessageId,
       compactedUpToCreatedAt,
@@ -153,21 +185,10 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     });
 
     if (!won) {
+      // Usage was already tracked above — only the persistence is discarded.
       console.debug('[compaction] lost race, discarding result for:', maskIdentifier(conversationId));
       return;
     }
-
-    await AIMonitoring.trackUsage({
-      userId,
-      provider,
-      model: compactionModel,
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      conversationId,
-      pageId: pageId ?? undefined,
-      source: 'compaction',
-      success: true,
-    });
   } catch (err) {
     // Never throw — compaction failures are non-fatal
     console.error('[compaction] failed silently:', err);

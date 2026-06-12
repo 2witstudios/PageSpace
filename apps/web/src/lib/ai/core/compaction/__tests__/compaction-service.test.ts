@@ -107,6 +107,29 @@ describe('runCompaction', () => {
     await expect(runCompaction(BASE_PARAMS)).resolves.not.toThrow();
   });
 
+  it('records provider usage even when the version race is lost', async () => {
+    mockUpsertState.mockResolvedValue(false);
+    await runCompaction(BASE_PARAMS);
+    // The paid model call happened — spend must be tracked regardless of
+    // whether the generated summary won persistence.
+    expect(mockTrackUsage).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to persist an empty summary (pointer must not advance over lost history)', async () => {
+    mockGenerateText.mockResolvedValue({ text: '   \n', usage: { inputTokens: 5, outputTokens: 0 } } as never);
+    await runCompaction(BASE_PARAMS);
+    expect(mockUpsertState).not.toHaveBeenCalled();
+    // ...but the spend is still recorded
+    expect(mockTrackUsage).toHaveBeenCalledOnce();
+  });
+
+  it('bounds generation with maxOutputTokens at the summary cap', async () => {
+    await runCompaction(BASE_PARAMS);
+    expect(mockGenerateText).toHaveBeenCalledWith(
+      expect.objectContaining({ maxOutputTokens: expect.any(Number) })
+    );
+  });
+
   it('skips compaction if lastCompactedAt gap < 60s', async () => {
     const recent = new Date(Date.now() - 10_000); // 10s ago
     mockGetState.mockResolvedValue({

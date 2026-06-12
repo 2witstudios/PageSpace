@@ -363,8 +363,12 @@ export const globalConversationRepository = {
       ))
       .returning();
 
-    // Whole conversation cleared — drop any compaction summary unconditionally
-    await invalidateCompaction(conversationId);
+    // Invalidate only when the user-scoped delete actually matched a row —
+    // a caller holding someone else's conversation ID must not be able to
+    // disturb that conversation's compaction state.
+    if (deletedConversation) {
+      await invalidateCompaction(conversationId, { source: 'global' });
+    }
 
     return deletedConversation || null;
   },

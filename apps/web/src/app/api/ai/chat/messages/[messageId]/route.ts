@@ -106,9 +106,12 @@ export async function PATCH(
     // Invalidate compaction if the edited message was in the compacted range.
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
     try {
-      const state = await getState(message.conversationId);
-      if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
-        await invalidate(message.conversationId);
+      const state = await getState(message.conversationId, { source: 'page', pageId: message.pageId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(message.conversationId, { source: 'page', pageId: message.pageId });
       }
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after message edit', err as Error);
@@ -237,9 +240,12 @@ export async function DELETE(
     // Invalidate compaction if the deleted message was in the compacted range.
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
     try {
-      const state = await getState(message.conversationId);
-      if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
-        await invalidate(message.conversationId);
+      const state = await getState(message.conversationId, { source: 'page', pageId: message.pageId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(message.conversationId, { source: 'page', pageId: message.pageId });
       }
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after message delete', err as Error);

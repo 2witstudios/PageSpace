@@ -3,12 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const insertChain = {
   values: vi.fn(),
   onConflictDoNothing: vi.fn(),
+  onConflictDoUpdate: vi.fn(),
 };
 const updateChain = {
   set: vi.fn(),
-  where: vi.fn(),
-};
-const deleteChain = {
   where: vi.fn(),
 };
 const selectChain = {
@@ -21,24 +19,30 @@ vi.mock('@pagespace/db/db', () => ({
     select: vi.fn(() => selectChain),
     insert: vi.fn(() => insertChain),
     update: vi.fn(() => updateChain),
-    delete: vi.fn(() => deleteChain),
   },
 }));
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
+  and: vi.fn((...conditions: unknown[]) => ({ and: conditions })),
   sql: vi.fn(() => 'sql-fragment'),
 }));
 
 vi.mock('@pagespace/db/schema/ai-compaction', () => ({
   conversationCompactions: {
     conversationId: 'conversationId',
+    source: 'source',
+    pageId: 'pageId',
     summaryVersion: 'summaryVersion',
   },
 }));
 
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import { getState, upsertState, invalidate } from '../compaction-repository';
+
+const PAGE_SCOPE = { source: 'page' as const, pageId: 'page-1' };
+const GLOBAL_SCOPE = { source: 'global' as const };
 
 const baseParams = {
   conversationId: 'conv-1',
@@ -58,9 +62,9 @@ beforeEach(() => {
   selectChain.where.mockResolvedValue([]);
   insertChain.values.mockReturnValue(insertChain);
   insertChain.onConflictDoNothing.mockResolvedValue({ rowCount: 1 });
+  insertChain.onConflictDoUpdate.mockResolvedValue(undefined);
   updateChain.set.mockReturnValue(updateChain);
   updateChain.where.mockResolvedValue({ rowCount: 1 });
-  deleteChain.where.mockResolvedValue(undefined);
 });
 
 describe('getState', () => {
@@ -68,11 +72,28 @@ describe('getState', () => {
     const row = { conversationId: 'conv-1', summaryVersion: 3 };
     selectChain.where.mockResolvedValueOnce([row]);
 
-    await expect(getState('conv-1')).resolves.toBe(row);
+    await expect(getState('conv-1', PAGE_SCOPE)).resolves.toBe(row);
   });
 
   it('returns null when no row exists', async () => {
-    await expect(getState('conv-missing')).resolves.toBeNull();
+    await expect(getState('conv-missing', GLOBAL_SCOPE)).resolves.toBeNull();
+  });
+
+  it('constrains the read to the scope source (and page for page-source)', async () => {
+    await getState('conv-1', PAGE_SCOPE);
+
+    const eqArgs = vi.mocked(eq).mock.calls.map(([, val]) => val);
+    expect(eqArgs).toContain('conv-1');
+    expect(eqArgs).toContain('page');
+    expect(eqArgs).toContain('page-1');
+  });
+
+  it('does not filter by pageId for global scope', async () => {
+    await getState('conv-1', GLOBAL_SCOPE);
+
+    const eqArgs = vi.mocked(eq).mock.calls.map(([, val]) => val);
+    expect(eqArgs).toContain('global');
+    expect(eqArgs).not.toContain('page-1');
   });
 });
 
@@ -89,7 +110,7 @@ describe('upsertState — first insert (expectedVersion null)', () => {
     expect(insertChain.onConflictDoNothing).toHaveBeenCalledTimes(1);
   });
 
-  it('returns false when a concurrent insert won the race (rowCount 0)', async () => {
+  it('returns false when a concurrent insert (or tombstone) won the race (rowCount 0)', async () => {
     insertChain.onConflictDoNothing.mockResolvedValueOnce({ rowCount: 0 });
 
     await expect(upsertState({ ...baseParams, expectedVersion: null })).resolves.toBe(false);
@@ -115,11 +136,37 @@ describe('upsertState — version-guarded update (CAS)', () => {
   });
 });
 
-describe('invalidate', () => {
-  it('deletes the compaction row for the conversation', async () => {
-    await invalidate('conv-1');
+describe('invalidate — tombstone semantics', () => {
+  it('writes an empty-state tombstone via insert + onConflictDoUpdate (never a delete)', async () => {
+    await invalidate('conv-1', PAGE_SCOPE);
 
-    expect(db.delete).toHaveBeenCalledTimes(1);
-    expect(deleteChain.where).toHaveBeenCalledTimes(1);
+    expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(insertChain.values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        source: 'page',
+        pageId: 'page-1',
+        summary: '',
+        summaryTokens: 0,
+        compactedUpToMessageId: null,
+        compactedUpToCreatedAt: null,
+        summaryVersion: 1,
+      })
+    );
+    // Conflict path must clear the state AND bump the version so any pending
+    // CAS update from an in-flight compaction misses.
+    expect(insertChain.onConflictDoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({ summary: '', summaryTokens: 0 }),
+      })
+    );
+  });
+
+  it('global scope tombstones carry a null pageId', async () => {
+    await invalidate('conv-2', GLOBAL_SCOPE);
+
+    expect(insertChain.values).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-2', source: 'global', pageId: null })
+    );
   });
 });

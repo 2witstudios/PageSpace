@@ -87,9 +87,12 @@ export async function PATCH(
     // Invalidate compaction if the edited message was in the compacted range.
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
     try {
-      const state = await getState(conversationId);
-      if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
-        await invalidate(conversationId);
+      const state = await getState(conversationId, { source: 'page', pageId: agentId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'page', pageId: agentId });
       }
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after agent message edit', err as Error);
@@ -225,9 +228,12 @@ export async function DELETE(
     // Invalidate compaction if the deleted message was in the compacted range.
     // Awaited so the stale summary cannot be read by a concurrent request before we return.
     try {
-      const state = await getState(conversationId);
-      if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
-        await invalidate(conversationId);
+      const state = await getState(conversationId, { source: 'page', pageId: agentId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'page', pageId: agentId });
       }
     } catch (err) {
       loggers.api.error('Failed to invalidate compaction state after agent message delete', err as Error);

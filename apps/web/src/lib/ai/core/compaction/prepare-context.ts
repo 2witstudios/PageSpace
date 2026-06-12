@@ -57,7 +57,9 @@ export async function prepareConversationContext(
     return { messages, scheduleCompaction: noop, pendingCompaction: null };
   }
 
-  const compactionRow = await getState(conversationId);
+  // Scoped read: a reused/colliding conversationId must never attach another
+  // source's (or another page's) summary to this conversation.
+  const compactionRow = await getState(conversationId, { source, pageId });
 
   const compaction: CompactionState | null = compactionRow
     ? {
