@@ -142,8 +142,14 @@ Either way, returns the calendarEventId so you can pass it to delete_calendar_tr
         return { success: false, error: 'You do not have access to this drive.' };
       }
 
-      const tz = normalizeTimezone(tzInput ?? ctx.timezone);
-      const parsedAt = parseDateTime(triggerAt, undefined, tz);
+      let tz: string;
+      let parsedAt: Date;
+      try {
+        tz = normalizeTimezone(tzInput ?? ctx.timezone);
+        parsedAt = parseDateTime(triggerAt, undefined, tz);
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Invalid triggerAt or timezone.' };
+      }
       const endAt = new Date(parsedAt.getTime() + 60 * 60 * 1000);
 
       try {
@@ -361,12 +367,14 @@ Calling again with the same taskId + triggerType replaces the existing trigger (
         return { success: false, error: 'You do not have edit access to this task list.' };
       }
 
-      await db
-        .update(taskTriggers)
-        .set({ isEnabled: false, lastFireError: 'Disabled by agent', nextRunAt: null })
-        .where(and(eq(taskTriggers.taskItemId, taskId), eq(taskTriggers.triggerType, triggerType)));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(taskTriggers)
+          .set({ isEnabled: false, lastFireError: 'Disabled by agent', nextRunAt: null })
+          .where(and(eq(taskTriggers.taskItemId, taskId), eq(taskTriggers.triggerType, triggerType)));
 
-      await recomputeTaskTriggerMetadata(db, taskId, task.metadata as Record<string, unknown> | null);
+        await recomputeTaskTriggerMetadata(tx, taskId, task.metadata as Record<string, unknown> | null);
+      });
 
       void broadcastTaskEvent({ type: 'task_updated', taskId, taskListId: taskList?.id, userId, pageId: taskListPageId, data: { id: taskId, removedTriggerType: triggerType } });
 

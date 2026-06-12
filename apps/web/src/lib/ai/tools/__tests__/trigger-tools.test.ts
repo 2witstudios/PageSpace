@@ -89,7 +89,7 @@ vi.mock('../actor-permissions', () => ({
 }));
 vi.mock('@/lib/websocket/calendar-events', () => ({ broadcastCalendarEvent: mockBroadcastCalendarEvent }));
 vi.mock('@/lib/websocket', () => ({ broadcastTaskEvent: mockBroadcastTaskEvent }));
-vi.mock('../core/timestamp-utils', () => ({
+vi.mock('../../core/timestamp-utils', () => ({
   parseDateTime: vi.fn((s: string) => new Date(s)),
   normalizeTimezone: vi.fn((tz: string) => tz ?? 'UTC'),
 }));
@@ -377,6 +377,9 @@ describe('triggerTools.delete_task_trigger', () => {
     vi.clearAllMocks();
     mockDriveDeniedByAppToken.mockResolvedValue(false);
     mockBroadcastTaskEvent.mockResolvedValue(undefined);
+    mockDbTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      return fn({ update: mockUpdate });
+    });
     let callCount = 0;
     mockDbQuery.mockImplementation(() => {
       callCount++;
