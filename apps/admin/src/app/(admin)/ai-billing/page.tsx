@@ -307,7 +307,7 @@ export default function AdminAiBillingPage() {
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="period" tick={{ fontSize: 11 }} />
                 <YAxis tickFormatter={(v) => `$${v}`} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: number) => [`$${v.toFixed(2)}`]} />
+                <Tooltip formatter={(v) => [`$${Number(v ?? 0).toFixed(2)}`]} />
                 <Legend />
                 <Line type="monotone" dataKey="charged" name="Charged" stroke="#2563eb" strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="realCost" name="Real cost" stroke="#dc2626" strokeWidth={2} dot={false} />

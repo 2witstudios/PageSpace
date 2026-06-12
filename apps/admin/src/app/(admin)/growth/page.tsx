@@ -275,7 +275,7 @@ export default function GrowthPage() {
                     </Pie>
                     <Tooltip
                       contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                      formatter={(value: number, name: string) => [value.toLocaleString(), TIER_LABELS[name] ?? name]}
+                      formatter={(value, name) => [Number(value ?? 0).toLocaleString(), TIER_LABELS[String(name)] ?? String(name)]}
                     />
                   </PieChart>
                 </ResponsiveContainer>
