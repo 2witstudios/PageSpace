@@ -29,6 +29,8 @@ interface ImageCropperDialogProps {
 
 type CropShape = "circle" | "square";
 
+const MAX_AVATAR_SIZE = 512;
+
 function centerAspectCrop(
   mediaWidth: number,
   mediaHeight: number,
@@ -61,16 +63,13 @@ async function getCroppedImage(
     throw new Error("No 2d context");
   }
 
-  const MAX_AVATAR_SIZE = 512;
-
   const scaleX = image.naturalWidth / image.width;
   const scaleY = image.naturalHeight / image.height;
 
   const naturalWidth = crop.width * scaleX;
   const naturalHeight = crop.height * scaleY;
 
-  // Cap output to MAX_AVATAR_SIZE — devicePixelRatio is a display trick and doesn't belong in a file export;
-  // without this cap, large source images (e.g. phone photos) produce 6000×6000px PNGs that exceed the 5MB limit.
+  // Drop devicePixelRatio (display hint only) and cap to MAX_AVATAR_SIZE to prevent oversized PNG exports.
   const downScale = Math.min(1, MAX_AVATAR_SIZE / Math.max(naturalWidth, naturalHeight));
 
   canvas.width = Math.floor(naturalWidth * downScale);
