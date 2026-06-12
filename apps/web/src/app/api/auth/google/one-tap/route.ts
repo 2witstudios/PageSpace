@@ -15,7 +15,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@/lib/onboarding/home-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
@@ -225,12 +225,12 @@ export async function POST(req: Request) {
       });
     }
 
-    // Provision Getting Started drive for new or existing users without drives
-    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
+    // Provision the Home drive (idempotent) for new or existing users
+    let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
         provider: 'google-one-tap',
       });

@@ -14,6 +14,7 @@ import type { PendingInvite } from './PendingInviteRow';
 import { useToast } from '@/hooks/useToast';
 import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 
 interface DriveMember {
   id: string;
@@ -45,6 +46,7 @@ interface DriveMember {
 
 interface DriveMembersProps {
   driveId: string;
+  driveKind?: string | null;
 }
 
 interface DriveMemberSocketEvent {
@@ -65,7 +67,8 @@ const DRIVE_MEMBER_EVENTS = [
   'drive:member_role_changed',
 ] as const;
 
-export function DriveMembers({ driveId }: DriveMembersProps) {
+export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
+  const isHome = isHomeDrive({ kind: driveKind });
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [agentMembers, setAgentMembers] = useState<AgentMember[]>([]);
   const [appMembers, setAppMembers] = useState<AppMember[]>([]);
@@ -225,7 +228,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
             People with access to this drive
           </p>
         </div>
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
           <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
             <UserPlus className="w-4 h-4 mr-2" />
             Invite Member
@@ -233,7 +236,13 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         )}
       </div>
 
-      {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+      {isHome && (
+        <p className="text-sm text-muted-foreground">
+          Home is your private drive and can&apos;t be shared.
+        </p>
+      )}
+
+      {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
         <DriveShareLinkSection driveId={driveId} />
       )}
 
@@ -263,7 +272,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
               AI agents with access to this drive
             </p>
           </div>
-          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+          {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
             <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)}>
               <UserPlus className="h-4 w-4 mr-2" />
               Invite Agent

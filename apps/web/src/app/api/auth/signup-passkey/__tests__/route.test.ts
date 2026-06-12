@@ -78,8 +78,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
@@ -109,7 +109,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 
 const validPayload = {
   email: 'user@example.com',
@@ -193,7 +193,7 @@ describe('POST /api/auth/signup-passkey', () => {
     it('provisions getting started drive', async () => {
       await POST(createRequest());
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
     });
 
     it('logs auth events', async () => {
@@ -260,7 +260,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('redirects to /dashboard when drive provisioning returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce(null as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValueOnce(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -293,7 +293,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
   describe('graceful degradation', () => {
     it('continues when drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -301,13 +301,13 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toBe('/dashboard?welcome=true');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', new Error('Drive error'), {
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Home drive', new Error('Drive error'), {
         userId: 'new-user-1',
       });
     });
 
     it('continues when getting started drive returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce(null as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValueOnce(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();

@@ -88,6 +88,7 @@ const createDriveFixture = (overrides: Partial<DriveWithAccess> & { id: string; 
   name: overrides.name,
   slug: overrides.slug ?? overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'user_123',
+  kind: overrides.kind ?? 'STANDARD',
   createdAt: overrides.createdAt ?? new Date('2024-01-01'),
   updatedAt: overrides.updatedAt ?? new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,
@@ -331,7 +332,7 @@ describe('POST /api/drives', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Cannot create a drive named "Personal".');
+      expect(body.error).toBe('Cannot create a drive with that name.');
     });
 
     it('should reject "personal" as drive name (case-insensitive)', async () => {
@@ -344,7 +345,7 @@ describe('POST /api/drives', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Cannot create a drive named "Personal".');
+      expect(body.error).toBe('Cannot create a drive with that name.');
     });
 
     it('should reject "PERSONAL" as drive name (uppercase)', async () => {
@@ -357,7 +358,40 @@ describe('POST /api/drives', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Cannot create a drive named "Personal".');
+      expect(body.error).toBe('Cannot create a drive with that name.');
+    });
+
+    it('should reject "Home" as drive name', async () => {
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Home' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should reject "home" as drive name (case-insensitive)', async () => {
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'home' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should reject "HOME" as drive name (uppercase)', async () => {
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'HOME' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
     });
   });
 

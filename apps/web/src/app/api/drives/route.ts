@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
+import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -99,8 +100,8 @@ export async function POST(request: Request) {
   const { name } = parsed.data;
 
   try {
-    if (name.toLowerCase() === 'personal') {
-      return NextResponse.json({ error: 'Cannot create a drive named "Personal".' }, { status: 400 });
+    if (isReservedDriveName(name)) {
+      return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
     }
 
     const newDrive = await createDrive(userId, { name });

@@ -90,8 +90,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
+vi.mock('@/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
@@ -120,7 +120,7 @@ import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 
 const desktopMetadata = JSON.stringify({
   platform: 'desktop',
@@ -176,13 +176,13 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
 
     await GET(createVerifyRequest());
 
-    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
   });
 
-  it('does not provision drive for existing desktop users', async () => {
+  it('provisions Home drive for existing desktop users (lazy idempotent)', async () => {
     await GET(createVerifyRequest());
 
-    expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
   });
 
   it('falls through to web flow when no desktop metadata', async () => {

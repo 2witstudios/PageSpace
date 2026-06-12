@@ -3,6 +3,7 @@ import { db } from '@pagespace/db/db'
 import { drives } from '@pagespace/db/schema/core';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/utils/utils';
+import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -38,8 +39,8 @@ export async function POST(req: NextRequest) {
     const { name } = createDriveSchema.parse(body);
     
     // Validate name
-    if (name.toLowerCase() === 'personal') {
-      return NextResponse.json({ error: 'Cannot create a drive named "Personal"' }, { status: 400 });
+    if (isReservedDriveName(name)) {
+      return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
     }
 
     const slug = slugify(name);

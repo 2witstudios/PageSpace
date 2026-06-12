@@ -61,7 +61,7 @@ export default function MembersPage() {
           </Button>
         </div>
         
-        <DriveMembers driveId={driveId} />
+        <DriveMembers driveId={driveId} driveKind={drive.kind} />
       </div>
     </div>
   );

@@ -10,6 +10,10 @@ const { mockDb } = vi.hoisted(() => {
     insert: vi.fn(),
     update: vi.fn(),
     transaction: vi.fn(),
+    query: {
+      drives: { findFirst: vi.fn() },
+      pages: { findFirst: vi.fn() },
+    },
   };
   return { mockDb };
 });
@@ -158,6 +162,9 @@ function makeUpdateChain(result: unknown[] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: drives are STANDARD (not Home), pages have a drive
+  mockDb.query.drives.findFirst.mockResolvedValue({ kind: 'STANDARD' });
+  mockDb.query.pages.findFirst.mockResolvedValue({ driveId: DRIVE_ID });
 });
 
 describe('createDriveShareLink', () => {

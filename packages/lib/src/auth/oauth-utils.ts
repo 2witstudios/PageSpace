@@ -8,11 +8,9 @@
 import { OAuth2Client } from 'google-auth-library';
 import appleSignIn from 'apple-signin-auth';
 import { users } from '@pagespace/db/schema/auth';
-import { drives } from '@pagespace/db/schema/core';
 import { db } from '@pagespace/db/db';
-import { eq, count } from '@pagespace/db/operators';
+import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
-import { slugify } from '../utils/utils';
 import { loggers } from '../logging/logger-config';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 import { resolveOAuthMatch } from './oauth-account-match';
@@ -295,24 +293,8 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OA
     user = newUser;
   }
 
-  // Check if user needs a personal drive
-  const userDriveCount = await db
-    .select({ count: count() })
-    .from(drives)
-    .where(eq(drives.ownerId, user.id));
-
-  if (userDriveCount[0]?.count === 0) {
-    // Create personal drive for new user
-    const driveName = `${user.name || userName}'s Drive`;
-    const driveSlug = slugify(driveName);
-
-    await db.insert(drives).values({
-      name: driveName,
-      slug: driveSlug,
-      ownerId: user.id,
-      updatedAt: new Date(),
-    });
-  }
-
+  // Drive provisioning is NOT done here. Callers provision the user's Home
+  // drive (provisionHomeDriveIfNeeded) so account creation/linking stays
+  // drive-agnostic and every signup path shares one provisioning invariant.
   return { status: 'linked', user };
 }

@@ -316,16 +316,13 @@ describe('oauth-utils', () => {
       expect(result).toBeDefined();
     });
 
-    it('should create personal drive for new user with no drives', async () => {
+    it('does NOT create any drive for a new user — provisioning is the caller\'s job', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
       const mockReturning = vi.fn().mockResolvedValue([{
         id: 'new-user', name: 'New User', email: 'new@test.com',
       }]);
       const mockValues = vi.fn(() => ({ returning: mockReturning }));
       vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 0 }]); // 0 drives
-      const mockCountFrom = vi.fn(() => ({ where: mockCountWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockCountFrom } as never);
 
       await createOrLinkOAuthUser({
         providerId: 'apple-789',
@@ -336,36 +333,10 @@ describe('oauth-utils', () => {
         provider: OAuthProvider.APPLE,
       });
 
-      // insert called twice: once for user, once for drive
-      expect(db.insert).toHaveBeenCalledTimes(2);
-    });
-
-    it('should surface personal drive creation failure for new user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const mockUserReturning = vi.fn().mockResolvedValue([{
-        id: 'new-user', name: 'New User', email: 'new@test.com',
-      }]);
-      vi.mocked(db.insert)
-        .mockReturnValueOnce({ values: vi.fn(() => ({ returning: mockUserReturning })) } as never)
-        .mockReturnValueOnce({
-          values: vi.fn(() => {
-            throw new Error('drive insert failed');
-          }),
-        } as never);
-      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
-      const mockCountFrom = vi.fn(() => ({ where: mockCountWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockCountFrom } as never);
-
-      await expect(
-        createOrLinkOAuthUser({
-          providerId: 'apple-789',
-          email: 'new@test.com',
-          emailVerified: false,
-          name: undefined,
-          picture: undefined,
-          provider: OAuthProvider.APPLE,
-        }),
-      ).rejects.toThrow('drive insert failed');
+      // insert called exactly once: the user row. Home-drive provisioning
+      // happens in the auth routes via provisionHomeDriveIfNeeded.
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.select).not.toHaveBeenCalled();
     });
   });
 });

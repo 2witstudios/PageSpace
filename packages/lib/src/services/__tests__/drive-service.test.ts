@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  ne: vi.fn((a, b) => ({ op: 'ne', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
@@ -67,6 +68,7 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   name: overrides.name,
   slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'owner_123',
+  kind: 'STANDARD' as const,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,
