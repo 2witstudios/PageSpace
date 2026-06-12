@@ -75,6 +75,13 @@ At a minimum the server covers:
 - **Pages** — list and navigate the page tree, create pages, read page content, perform line operations and sheet cell edits (\`read\`, \`replace\`, \`insert\`, \`delete\`, \`edit-cells\`). Backed by \`/api/mcp/documents\` and \`/api/pages\`.
 - **Search** — global and multi-drive search. Backed by \`/api/search\` and \`/api/search/multi-drive\`.
 - **Tasks** — query and manage tasks on \`TASK_LIST\` pages. Backed by \`/api/pages/[pageId]/tasks\`.
+- **Calendar** — read availability, schedule events, invite attendees, RSVP, and set agent triggers on calendar events. Backed by \`/api/mcp/calendar\`.
+- **Slash Commands** — create and manage \`/commands\` that invoke pages as executable skills. Backed by \`/api/mcp/commands\`.
+- **Role Management** — drive role CRUD and per-page permission assignment. Backed by \`/api/mcp/roles\`.
+- **Agent Triggers** — attach agent runs to calendar events and tasks so agents fire automatically when those events occur. Backed by \`/api/mcp/triggers\`.
+- **Scheduled Workflows** — cron-based recurring agent automation. Backed by \`/api/mcp/schedules\`.
+- **Drive Members** — list drive members and connections/collaborators. Backed by \`/api/mcp/members\`.
+- **AI Models** — list available AI providers and models for dynamic model selection. Backed by \`/api/mcp/models\`.
 
 Every tool respects the caller's permissions. If you cannot view a page in the web UI, the MCP server cannot see it either.
 
