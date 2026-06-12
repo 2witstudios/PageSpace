@@ -178,7 +178,7 @@ export async function PATCH(
     }
     if (validatedBody.homePageId !== undefined) {
       previousValues.homePageId = drive.homePageId;
-      newValues.homePageId = updatedDrive?.homePageId ?? null;
+      newValues.homePageId = validatedBody.homePageId;
     }
 
     const isMCP = isMCPAuthResult(auth);

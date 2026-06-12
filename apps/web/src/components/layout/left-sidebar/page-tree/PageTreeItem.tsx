@@ -124,11 +124,17 @@ export const PageTreeItem = React.memo(function PageTreeItem({
   const hasChildren = item.children && item.children.length > 0;
   const driveId = params.driveId as string;
 
-  // Drive home page (owner/admin can set any page as the drive's landing page)
-  const drive = useDriveStore((state) => state.drives.find((d) => d.id === driveId));
+  // Drive home page (owner/admin can set any page as the drive's landing page).
+  // Primitive selectors: a tree row only re-renders when these booleans flip,
+  // not on every drives-store refresh.
+  const canManageDrive = useDriveStore((state) => {
+    const drive = state.drives.find((d) => d.id === driveId);
+    return !!drive && (drive.isOwned || drive.role === 'ADMIN');
+  });
+  const isHomePage = useDriveStore(
+    (state) => state.drives.find((d) => d.id === driveId)?.homePageId === item.id
+  );
   const updateDriveInStore = useDriveStore((state) => state.updateDrive);
-  const canManageDrive = !!drive && (drive.isOwned || drive.role === 'ADMIN');
-  const isHomePage = drive?.homePageId === item.id;
 
   // Multi-select state
   const isMultiSelectMode = useMultiSelectStore((state) => state.isMultiSelectMode);

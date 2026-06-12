@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -84,7 +84,12 @@ export default function GeneralSettingsPage() {
   );
 
   const homePageId = drive?.homePageId ?? null;
-  const homePageNode = homePageId ? findNodeAndParent(tree, homePageId)?.node ?? null : null;
+  // Memoized: the controlled name input re-renders this page per keystroke,
+  // and findNodeAndParent is a full tree walk.
+  const homePageNode = useMemo(
+    () => (homePageId ? findNodeAndParent(tree, homePageId)?.node ?? null : null),
+    [tree, homePageId]
+  );
 
   const handleClearHomePage = async () => {
     if (isClearingHomePage) return;
