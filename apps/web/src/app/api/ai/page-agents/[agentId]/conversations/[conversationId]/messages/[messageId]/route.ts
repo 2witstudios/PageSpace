@@ -11,6 +11,7 @@ import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/acti
 import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -82,6 +83,18 @@ export async function PATCH(
 
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+
+    // Invalidate compaction if the edited message was in the compacted range
+    void (async () => {
+      try {
+        const state = await getState(conversationId);
+        if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
+          await invalidate(conversationId);
+        }
+      } catch (err) {
+        loggers.api.error('Failed to invalidate compaction state after agent message edit', err as Error);
+      }
+    })();
 
     // Broadcast to remote viewers so their message bubble re-renders without a refetch.
     // Failure to broadcast must never break the request — wrapped in catch.
@@ -209,6 +222,18 @@ export async function DELETE(
 
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
+
+    // Invalidate compaction if the deleted message was in the compacted range
+    void (async () => {
+      try {
+        const state = await getState(conversationId);
+        if (state?.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt) {
+          await invalidate(conversationId);
+        }
+      } catch (err) {
+        loggers.api.error('Failed to invalidate compaction state after agent message delete', err as Error);
+      }
+    })();
 
     // Broadcast to remote viewers. Failure must never break the request.
     void (async () => {

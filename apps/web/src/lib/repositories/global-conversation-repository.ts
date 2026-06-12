@@ -8,6 +8,7 @@ import { eq, and, desc, sql, lt } from '@pagespace/db/operators'
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
+import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 
 // Types
 export interface ConversationSummary {
@@ -361,6 +362,9 @@ export const globalConversationRepository = {
         eq(conversations.userId, userId)
       ))
       .returning();
+
+    // Whole conversation cleared — drop any compaction summary unconditionally
+    void invalidateCompaction(conversationId).catch(() => undefined);
 
     return deletedConversation || null;
   },

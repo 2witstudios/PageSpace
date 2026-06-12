@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, hasToolCall, stepCountIs, tool, jsonSchema } from 'ai';
-import type { ToolSet } from 'ai';
+import type { ToolSet, ModelMessage } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -44,6 +44,7 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
 
 export const maxDuration = 300;
 
@@ -357,6 +358,32 @@ export async function POST(request: Request): Promise<Response> {
       .join('\n\n');
     const sanitized = sanitizeMessagesForModel(inferenceMessages);
 
+    // Sliding-window compaction: only active for thread-mode calls where we own history.
+    // Non-admin users, client-manages-history, and non-thread-mode all get exact legacy behavior.
+    let compactedModelMessages: ModelMessage[] = convertToModelMessages(sanitized);
+    let v1ScheduleCompaction: () => void = () => undefined;
+    if (isThreadMode && !clientManagesHistory) {
+      const prepared = await prepareConversationContext({
+        conversationId,
+        source: 'page',
+        pageId,
+        messages: sanitized as never,
+        model: providerResult.modelName,
+        provider: providerResult.provider,
+        systemPrompt: systemPrompt + (callerSystemPrompt ? `\n\n${callerSystemPrompt}` : '') + toolDiscoveryPrompt,
+        tools: finalTools as Record<string, unknown>,
+        user: { id: authResult.userId, role: gateUser?.role ?? null },
+      });
+      v1ScheduleCompaction = prepared.scheduleCompaction;
+      const hasSummary = prepared.messages.length > 0 && !prepared.messages[0].id;
+      const summaryText = hasSummary ? (prepared.messages[0].parts?.[0]?.text ?? '') : '';
+      const tailUIMessages = (hasSummary ? prepared.messages.slice(1) : prepared.messages) as Parameters<typeof convertToModelMessages>[0];
+      const tailModelMessages = convertToModelMessages(tailUIMessages);
+      compactedModelMessages = hasSummary
+        ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
+        : tailModelMessages;
+    }
+
     // Standard OpenAI-style cancel: the consumer closing the HTTP connection stops generation.
     // Next.js fires request.signal on disconnect; the ReadableStream's cancel() (below) is a
     // belt-and-suspenders path for disconnects detected at the response-stream layer.
@@ -434,7 +461,7 @@ export async function POST(request: Request): Promise<Response> {
     const aiResult = streamText({
       model: providerResult.model,
       system: systemPrompt + (callerSystemPrompt ? `\n\n${callerSystemPrompt}` : '') + toolDiscoveryPrompt,
-      messages: convertToModelMessages(sanitized),
+      messages: compactedModelMessages,
       tools: finalTools,
       stopWhen: stopConditions,
       // Aborts when the consumer closes the connection (see abortController above).
@@ -525,6 +552,7 @@ export async function POST(request: Request): Promise<Response> {
           const totalUsage = await aiResult.totalUsage.catch(() => undefined);
           const steps = await aiResult.steps.catch(() => undefined);
           await settle({ aborted, text: assistantText || undefined, totalUsage, steps });
+          if (!aborted) v1ScheduleCompaction();
           if (!aborted) {
             const toolSummary = buildToolSummaryEvent(steps ?? []);
             if (toolSummary) {

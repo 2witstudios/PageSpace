@@ -8,6 +8,7 @@ import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator'
 import { canUseCompaction } from './compaction-gating';
 import { getState } from './compaction-repository';
 import { runCompaction } from './compaction-service';
+import type { RunCompactionParams } from './compaction-service';
 
 export interface PrepareConversationContextParams {
   conversationId: string;
@@ -23,7 +24,15 @@ export interface PrepareConversationContextParams {
 
 export interface PreparedContext {
   messages: CompactionMessage[];
+  /** Schedule compaction via after() — suitable for top-level route handlers. */
   scheduleCompaction: () => void;
+  /**
+   * Pending compaction params ready to pass directly to runCompaction().
+   * Null when no compaction is needed or the user is not eligible.
+   * Use this instead of scheduleCompaction() in tool-execution contexts
+   * where after() from next/server is unavailable.
+   */
+  pendingCompaction: Omit<RunCompactionParams, never> | null;
 }
 
 export async function prepareConversationContext(
@@ -45,7 +54,7 @@ export async function prepareConversationContext(
 
   // Gate: non-admin users get exact legacy behavior
   if (!canUseCompaction(user)) {
-    return { messages, scheduleCompaction: noop };
+    return { messages, scheduleCompaction: noop, pendingCompaction: null };
   }
 
   const compactionRow = await getState(conversationId);
@@ -78,21 +87,24 @@ export async function prepareConversationContext(
     ? [result.summaryMessage, ...result.tailMessages]
     : result.tailMessages;
 
+  const pendingCompaction: PreparedContext['pendingCompaction'] =
+    result.compactionPlan && user?.id
+      ? {
+          conversationId,
+          source,
+          pageId: pageId ?? null,
+          userId: user.id,
+          provider,
+          model,
+          plan: result.compactionPlan,
+        }
+      : null;
+
   const scheduleCompaction = (): void => {
-    if (!result.compactionPlan || !user?.id) return;
-    const plan = result.compactionPlan;
-    after(() =>
-      runCompaction({
-        conversationId,
-        source,
-        pageId: pageId ?? null,
-        userId: user.id,
-        provider,
-        model,
-        plan,
-      })
-    );
+    if (!pendingCompaction) return;
+    const params = pendingCompaction;
+    after(() => runCompaction(params));
   };
 
-  return { messages: contextMessages, scheduleCompaction };
+  return { messages: contextMessages, scheduleCompaction, pendingCompaction };
 }

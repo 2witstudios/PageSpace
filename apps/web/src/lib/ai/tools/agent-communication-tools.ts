@@ -2,9 +2,13 @@ import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
+import type { ModelMessage } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
+import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -566,12 +570,45 @@ export const agentCommunicationTools = {
           requestOrigin: 'agent' as const,
         } as ToolExecutionContext & { agentCallDepth: number; currentAgentId: string };
         
+        // 10b. Sliding-window compaction — fire-and-forget after generateText because
+        // after() from next/server is unavailable inside tool execution mid-stream.
+        // Role lookup is best-effort: if the query fails, compaction simply won't fire
+        // (canUseCompaction returns false for role:null → exact legacy behaviour).
+        let callerUserRole: string | null = null;
+        try {
+          const [callerUserRow] = await db
+            .select({ role: users.role })
+            .from(users)
+            .where(eq(users.id, userId));
+          callerUserRole = callerUserRow?.role ?? null;
+        } catch {
+          // Fallback: role unknown → non-admin path
+        }
+        const prepared = await prepareConversationContext({
+          conversationId: activeConversationId,
+          source: 'page',
+          pageId: agentId,
+          messages: sanitizedMessages as never,
+          model: resolvedModelName,
+          provider: resolvedProvider,
+          systemPrompt,
+          tools: allAgentTools,
+          user: { id: userId, role: callerUserRole },
+        });
+        const agentHasSummary = prepared.messages.length > 0 && !prepared.messages[0].id;
+        const agentSummaryText = agentHasSummary ? (prepared.messages[0].parts?.[0]?.text ?? '') : '';
+        const agentTailUIMessages = (agentHasSummary ? prepared.messages.slice(1) : prepared.messages) as Parameters<typeof convertToModelMessages>[0];
+        const agentTailModelMessages = convertToModelMessages(agentTailUIMessages);
+        const agentModelMessages: ModelMessage[] = agentHasSummary
+          ? [{ role: 'user' as const, content: agentSummaryText }, ...agentTailModelMessages]
+          : agentTailModelMessages;
+
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0
           ? await generateText({
               model,
               system: systemPrompt,
-              messages: convertToModelMessages(sanitizedMessages),
+              messages: agentModelMessages,
               tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
@@ -588,10 +625,17 @@ export const agentCommunicationTools = {
           : await generateText({
               model,
               system: systemPrompt,
-              messages: convertToModelMessages(sanitizedMessages),
+              messages: agentModelMessages,
               experimental_context: nestedContext,
               maxRetries: 3,
             });
+
+        // Fire-and-forget compaction: after() is unavailable inside tool execution,
+        // so we launch directly — the parent stream is still open but this is safe
+        // as a detached promise (no response coupling).
+        if (prepared.pendingCompaction) {
+          void runCompaction(prepared.pendingCompaction);
+        }
 
         // Bill the requesting user for the sub-agent run. Use totalUsage so all
         // tool-loop round-trips (up to stepCountIs(20)) are metered, not just the

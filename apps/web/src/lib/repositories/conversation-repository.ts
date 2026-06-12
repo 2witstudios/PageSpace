@@ -9,6 +9,7 @@ import { eq, and, sql } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations } from '@pagespace/db/schema/conversations';
+import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 
 // Types for repository operations
 export interface AiAgent {
@@ -275,6 +276,8 @@ export const conversationRepository = {
         eq(chatMessages.pageId, agentId),
         eq(chatMessages.conversationId, conversationId)
       ));
+    // Whole conversation cleared — any summary is stale, drop it unconditionally
+    void invalidateCompaction(conversationId).catch(() => undefined);
   },
 
   /**

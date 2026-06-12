@@ -93,6 +93,18 @@ vi.mock('../../core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { role: 'role' },
+}));
+vi.mock('../../core/compaction/prepare-context', () => ({
+  prepareConversationContext: vi.fn().mockImplementation(({ messages }: { messages: unknown[] }) =>
+    Promise.resolve({ messages, scheduleCompaction: vi.fn(), pendingCompaction: null })
+  ),
+}));
+vi.mock('../../core/compaction/compaction-service', () => ({
+  runCompaction: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: {
     trackUsage: vi.fn(),

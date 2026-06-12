@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet, type ModelMessage } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
@@ -68,6 +68,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
+import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -526,59 +527,50 @@ export async function POST(
       conversationId
     });
 
-    // Convert UIMessages to ModelMessages for the AI model
-    // NOTE: We use database-loaded messages, NOT requestMessages from client
+    // Sanitize messages (removes tool parts without results, strips system role).
+    // NOTE: We use database-loaded messages, NOT requestMessages from client.
     const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
-    
-    // Process messages to inject visual content from previous tool calls
-    // Limit history to prevent memory issues with large conversations
-    const MAX_MESSAGES_WITH_IMAGES = 10; // Limit messages with images to prevent memory issues
-    const recentMessages = sanitizedMessages.slice(-MAX_MESSAGES_WITH_IMAGES);
-    
-    const processedMessages = recentMessages.map((msg: UIMessage) => {
-      if (msg.role === 'assistant' && msg.parts) {
-        // Check if any tool results contain visual content to inject
-        const toolResults = msg.parts.filter((part) => {
-          if (part && typeof part === 'object' && 'type' in part && part.type === 'tool-result') {
-            const result = (part as { result?: unknown }).result;
-            if (result && typeof result === 'object' && 'type' in result && 'imageDataUrl' in result) {
-              return (result as { type: string }).type === 'visual_content';
+
+    // modelMessages and stableBoundaryIndex are computed AFTER finalSystemPrompt
+    // and finalTools are assembled (later in this handler), so that the compaction
+    // token budget can count all three major cost components accurately.
+    // The visual-content injection helper is also defined here for reuse below.
+    const MAX_MESSAGES_WITH_IMAGES = 10;
+    const injectVisualContent = (msgs: UIMessage[]): UIMessage[] =>
+      msgs.map((msg: UIMessage) => {
+        if (msg.role === 'assistant' && msg.parts) {
+          const toolResults = msg.parts.filter((part) => {
+            if (part && typeof part === 'object' && 'type' in part && part.type === 'tool-result') {
+              const result = (part as { result?: unknown }).result;
+              if (result && typeof result === 'object' && 'type' in result && 'imageDataUrl' in result) {
+                return (result as { type: string }).type === 'visual_content';
+              }
             }
-          }
-          return false;
-        });
-        
-        if (toolResults.length > 0) {
-          // Create new parts array with injected images
-          const newParts = [...msg.parts];
-          
-          // Add image parts for each visual result
-          toolResults.forEach((toolResult) => {
-            const result = (toolResult as { result?: { imageDataUrl?: string; title?: string } }).result;
-            if (result?.imageDataUrl) {
-              // Add a data part that contains the visual content
-              // This will be processed by the client to display the image
-              newParts.push({
-                type: 'data-visual-content' as const,
-                data: {
-                  imageDataUrl: result.imageDataUrl,
-                  title: result.title || 'Visual content'
-                }
-              });
-              
-              // Clear the original imageDataUrl from tool result to save memory
-              const mutableResult = result as { imageDataUrl?: string; title?: string };
-              delete mutableResult.imageDataUrl;
-            }
+            return false;
           });
-          
-          return { ...msg, parts: newParts };
+          if (toolResults.length > 0) {
+            const newParts = [...msg.parts];
+            toolResults.forEach((toolResult) => {
+              const result = (toolResult as { result?: { imageDataUrl?: string; title?: string } }).result;
+              if (result?.imageDataUrl) {
+                newParts.push({
+                  type: 'data-visual-content' as const,
+                  data: { imageDataUrl: result.imageDataUrl, title: result.title || 'Visual content' },
+                });
+                const mutableResult = result as { imageDataUrl?: string; title?: string };
+                delete mutableResult.imageDataUrl;
+              }
+            });
+            return { ...msg, parts: newParts };
+          }
         }
-      }
-      return msg;
-    });
-    
-    const modelMessages = convertToModelMessages(processedMessages);
+        return msg;
+      });
+
+    // Placeholder — will be assigned after finalSystemPrompt + finalTools are built.
+    let modelMessages: ModelMessage[] = [];
+    let stableBoundaryIndex = 0;
+    let scheduleCompaction: () => void = () => undefined;
 
     // Fetch user personalization and timezone for AI system prompt injection
     const [personalization, userTimezone] = await Promise.all([
@@ -874,12 +866,41 @@ MENTION PROCESSING:
     // Always inject the finish tool so the model can signal task completion
     finalTools = { ...finalTools, ...finishTool } as ToolSet;
 
+    // Apply sliding-window compaction now that finalSystemPrompt + finalTools are known.
+    // For admin users this trims the tail and may prepend a synthetic summary message.
+    // Non-admin users get exact legacy behaviour (passthrough).
+    {
+      const prepared = await prepareConversationContext({
+        conversationId,
+        source: 'global',
+        messages: sanitizedMessages as never,
+        model: currentModel,
+        provider: currentProvider,
+        systemPrompt: finalSystemPrompt,
+        tools: finalTools as Record<string, unknown>,
+        user: { id: userId, role: auth.role ?? null },
+      });
+      scheduleCompaction = prepared.scheduleCompaction;
+
+      const hasSummary = prepared.messages.length > 0 && !prepared.messages[0].id;
+      const summaryText = hasSummary ? (prepared.messages[0].parts?.[0]?.text ?? '') : '';
+      const tailUIMessages = (hasSummary ? prepared.messages.slice(1) : prepared.messages) as UIMessage[];
+      // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES of the tail
+      const recentTail = tailUIMessages.slice(-MAX_MESSAGES_WITH_IMAGES);
+      const processedTail = injectVisualContent(recentTail);
+      const tailModelMessages = convertToModelMessages(processedTail);
+      modelMessages = hasSummary
+        ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
+        : tailModelMessages;
+      stableBoundaryIndex = hasSummary ? 1 : 0;
+    }
+
     loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 
     // Calculate context size BEFORE streaming (for real context window tracking)
     const contextCalculation = calculateTotalContextSize({
       systemPrompt: finalSystemPrompt,
-      messages: processedMessages, // Use UIMessage array (not model messages)
+      messages: sanitizedMessages, // full UIMessage history for accurate context tracking
       tools: finalTools,
       model: currentModel,
       provider: currentProvider,
@@ -940,7 +961,7 @@ MENTION PROCESSING:
     let agentRun: RunAgentWithRetryResult | undefined;
 
     const stream = createUIMessageStream({
-      originalMessages: processedMessages,
+      originalMessages: sanitizedMessages, // full history — UI always sees all messages
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
         // Execution feedback (UX spec §7): announce the command indicator as
@@ -975,9 +996,8 @@ MENTION PROCESSING:
               commandPrompt: commandSystemPrompt,
             });
             const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
-            // Apply cache breakpoints: mark last message (A). No stable boundary
-            // (B) yet — PR 2/3 will set stableBoundaryIndex to the summary position.
-            const cachedMessages = withCacheBreakpoints(messagesWithContext, 0);
+            // Apply cache breakpoints: A) last message, B) summary/elision boundary.
+            const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
             return streamText({
             model,
             // Stable system prompt — volatile sections removed; stays byte-identical
@@ -1013,10 +1033,9 @@ MENTION PROCESSING:
               });
               lifecycle!.finish(true);
             },
-            // Re-mark the tail breakpoint per step so mid-loop tool results
-            // are covered by the Anthropic prefix cache on each subsequent step.
+            // Re-mark breakpoints per step; stableBoundaryIndex is fixed for this request.
             prepareStep: ({ messages: stepMessages }) => ({
-              messages: withCacheBreakpoints(stepMessages, 0),
+              messages: withCacheBreakpoints(stepMessages, stableBoundaryIndex),
             }),
             })
           },
@@ -1143,6 +1162,9 @@ MENTION PROCESSING:
         // by the AIMonitoring.trackUsage call above (holdId threaded in), which
         // now also broadcasts the user's fresh balance — so no route-level emit
         // is needed for the header widget to update live.
+
+        // Schedule compaction for the NEXT request (summarises old tail via after()).
+        scheduleCompaction();
 
         // Reflect a user stop, including one that landed during inter-attempt backoff or
         // raced in after the loop broke (onAbort only fires while a streamText is live).

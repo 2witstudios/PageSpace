@@ -9,6 +9,7 @@ import {
   createUIMessageStreamResponse,
   type TextUIPart,
   type ToolSet,
+  type ModelMessage,
 } from 'ai';
 import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
@@ -61,6 +62,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
+import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
@@ -783,49 +785,8 @@ export async function POST(request: Request) {
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
-    loggers.ai.debug('AI Chat API: Loading conversation history', {
-      pageId: chatId
-    });
-
-    const pageId = chatId as string;
-    const dbMessages = await db
-      .select()
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, pageId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true)
-      ))
-      .orderBy(chatMessages.createdAt);
-
-    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
-      convertDbMessageToUIMessage({
-        id: msg.id,
-        pageId: msg.pageId,
-        userId: msg.userId,
-        role: msg.role,
-        content: msg.content,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        createdAt: msg.createdAt,
-        isActive: msg.isActive,
-        editedAt: msg.editedAt,
-        messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
-      })
-    );
-
-    loggers.ai.debug('AI Chat API: Loaded conversation from database', {
-      messageCount: conversationHistory.length,
-      pageId
-    });
-
-    // Convert UIMessages to ModelMessages for the AI model
-    // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
-    // NOTE: We use database-loaded messages, NOT messages from client
-    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
-    const modelMessages = convertToModelMessages(sanitizedMessages, {
-      tools: filteredTools  // Use original tools - no wrapping needed
-    });
+    // Build system prompt BEFORE history loading so its token estimate is
+    // available for prepareConversationContext's context-window budget math.
 
     // Fetch user personalization for AI system prompt injection
     const personalization = await getUserPersonalization(userId);
@@ -872,7 +833,7 @@ export async function POST(request: Request) {
         personalization ?? undefined
       );
     }
-    
+
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
     const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
@@ -894,6 +855,79 @@ export async function POST(request: Request) {
         });
       }
     }
+
+    loggers.ai.debug('AI Chat API: Loading conversation history', {
+      pageId: chatId
+    });
+
+    const pageId = chatId as string;
+    const dbMessages = await db
+      .select()
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, pageId),
+        eq(chatMessages.conversationId, conversationId),
+        eq(chatMessages.isActive, true)
+      ))
+      .orderBy(chatMessages.createdAt);
+
+    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
+      convertDbMessageToUIMessage({
+        id: msg.id,
+        pageId: msg.pageId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        editedAt: msg.editedAt,
+        messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
+      })
+    );
+
+    loggers.ai.debug('AI Chat API: Loaded conversation from database', {
+      messageCount: conversationHistory.length,
+      pageId
+    });
+
+    // Sanitize messages (removes tool parts without results, strips system role).
+    // NOTE: We use database-loaded messages, NOT messages from client.
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
+
+    // Apply sliding-window compaction for admin users. Non-admin: passthrough.
+    // createUIMessageStream keeps the FULL sanitizedMessages so the UI sees
+    // complete history; only baseMessages (model-facing) is compacted.
+    const { messages: compactedMessages, scheduleCompaction } =
+      await prepareConversationContext({
+        conversationId: conversationId!,
+        source: 'page',
+        pageId,
+        // UIMessage satisfies CompactionMessage structurally (same id/role/parts/createdAt)
+        messages: sanitizedMessages as never,
+        model: currentModel,
+        provider: currentProvider,
+        systemPrompt: systemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+        tools: filteredTools as Record<string, unknown>,
+        user: user ? { id: user.id, role: user.role } : null,
+      });
+
+    // Derive model messages from the compacted result.
+    // If compaction added a synthetic summary at index 0 (no .id), split it out
+    // and build it as a plain user ModelMessage so the AI SDK converts the tail
+    // UIMessages normally with tool-call graph intact.
+    const hasSummary = compactedMessages.length > 0 && !compactedMessages[0].id;
+    const summaryText = hasSummary ? (compactedMessages[0].parts?.[0]?.text ?? '') : '';
+    const tailUIMessages = (hasSummary ? compactedMessages.slice(1) : compactedMessages) as UIMessage[];
+    const tailModelMessages = convertToModelMessages(tailUIMessages, { tools: filteredTools });
+    const modelMessages: ModelMessage[] = hasSummary
+      ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
+      : tailModelMessages;
+    // stableBoundaryIndex: 1 when a summary exists (marks the first tail message
+    // in the compacted array as the start of the stable cross-request cache region);
+    // 0 means no stable boundary B (withCacheBreakpoints skips indices < 1).
+    const stableBoundaryIndex = hasSummary ? 1 : 0;
 
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
@@ -976,10 +1010,12 @@ export async function POST(request: Request) {
                 commandPrompt: commandSystemPrompt,
               });
               const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
-              // Apply cache breakpoints: mark last message (A) so tools+system+
-              // history cache on every step after step 1. No stable boundary (B)
-              // yet — PR 2/3 will set stableBoundaryIndex to the summary position.
-              const cachedMessages = withCacheBreakpoints(messagesWithContext, 0);
+              // Apply cache breakpoints:
+              //   A) last message — covers system+tools+history every step after step 1.
+              //   B) stableBoundaryIndex — the first tail message after the compaction
+              //      summary (index 1 when a summary exists, 0 = disabled otherwise).
+              //      This cross-request breakpoint survives until the next recompaction.
+              const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
               return streamText({
               model,
               // Stable system prompt — no volatile sections; stays byte-identical
@@ -1044,16 +1080,12 @@ export async function POST(request: Request) {
                 });
                 lifecycle!.finish(true);
               },
-              // Re-mark the tail breakpoint per step so mid-loop tool results
-              // are covered by the Anthropic prefix cache on each subsequent step.
-              // prepareStep(messages) receives the cumulative history for that
-              // step; re-applying withCacheBreakpoints(_, 0) marks only the
-              // final message without touching the stable boundary (index 0
-              // means no B breakpoint). The original messages array passed to
-              // buildStreamText already has breakpoints from the outer call;
-              // this per-step pass keeps them current as the tail grows.
+              // Re-mark breakpoints per step so mid-loop tool results are cached.
+              // stableBoundaryIndex stays fixed (the summary is always at position
+              // 0; its first tail neighbour at position 1 remains stable as new
+              // messages are appended to the END of the accumulating array).
               prepareStep: ({ messages: stepMessages }) => ({
-                messages: withCacheBreakpoints(stepMessages, 0),
+                messages: withCacheBreakpoints(stepMessages, stableBoundaryIndex),
               }),
             })
           },
@@ -1229,6 +1261,10 @@ export async function POST(request: Request) {
             loggers.ai.error('AI Chat API: Failed to settle AI usage/credits', error as Error);
             // Don't fail the response - but the hold may remain for the reconcile sweep.
           }
+
+          // Schedule compaction for the NEXT request (summarises old tail via after()).
+          // Runs after the response is fully sent; non-fatal if it fails.
+          scheduleCompaction();
 
           // Reflect a user stop, including one that landed during inter-attempt backoff or
           // raced in after the loop broke (onAbort only fires while a streamText is live).
