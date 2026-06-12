@@ -5,7 +5,7 @@ import { UsersTable } from "@/components/admin/UsersTable";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Users, AlertCircle, Shield, MessageCircle, Database, UserPlus } from "lucide-react";
+import { Users, AlertCircle, Shield, MessageCircle, Database, UserPlus, Clock } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { CreateUserForm } from "@/components/admin/CreateUserForm";
 import { isOnPrem } from "@/lib/deployment-mode";
@@ -32,6 +32,7 @@ interface UserData {
   tokenVersion: number;
   subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
   stripeCustomerId: string | null;
+  lastActiveAt: string | null;
   stats: {
     drives: number;
     pages: number;
@@ -135,14 +136,20 @@ export default function AdminUsersPage() {
     );
   }
 
+  const DORMANT_DAYS = 30;
   const totalStats = users.reduce(
-    (acc, user) => ({
-      totalDrives: acc.totalDrives + user.stats.drives,
-      totalPages: acc.totalPages + user.stats.pages,
-      totalMessages: acc.totalMessages + user.stats.totalMessages,
-      verifiedUsers: acc.verifiedUsers + (user.emailVerified ? 1 : 0),
-    }),
-    { totalDrives: 0, totalPages: 0, totalMessages: 0, verifiedUsers: 0 }
+    (acc, user) => {
+      const dormant = !user.lastActiveAt ||
+        (Date.now() - new Date(user.lastActiveAt).getTime()) / (1000 * 60 * 60 * 24) > DORMANT_DAYS;
+      return {
+        totalDrives: acc.totalDrives + user.stats.drives,
+        totalPages: acc.totalPages + user.stats.pages,
+        totalMessages: acc.totalMessages + user.stats.totalMessages,
+        verifiedUsers: acc.verifiedUsers + (user.emailVerified ? 1 : 0),
+        dormantUsers: acc.dormantUsers + (dormant ? 1 : 0),
+      };
+    },
+    { totalDrives: 0, totalPages: 0, totalMessages: 0, verifiedUsers: 0, dormantUsers: 0 }
   );
 
   return (
@@ -159,7 +166,7 @@ export default function AdminUsersPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 xl:grid-cols-5">
             <div className="text-center">
               <div className="text-2xl font-bold text-primary">{users.length}</div>
               <div className="text-muted-foreground flex items-center justify-center">
@@ -186,6 +193,13 @@ export default function AdminUsersPage() {
               <div className="text-muted-foreground flex items-center justify-center">
                 <MessageCircle className="h-4 w-4 mr-1" />
                 Total Messages
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-amber-500">{totalStats.dormantUsers}</div>
+              <div className="text-muted-foreground flex items-center justify-center">
+                <Clock className="h-4 w-4 mr-1" />
+                Dormant (30d+)
               </div>
             </div>
           </div>

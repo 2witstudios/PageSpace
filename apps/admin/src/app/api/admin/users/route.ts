@@ -1,9 +1,10 @@
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, count } from '@pagespace/db/operators'
+import { and, eq, inArray, desc, count, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages, chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations'
 import { subscriptions } from '@pagespace/db/schema/subscriptions'
+import { sessions } from '@pagespace/db/schema/sessions'
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -51,7 +52,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     );
 
     // Batch aggregate stats instead of per-user N+1 queries
-    const [driveCounts, pageCounts, chatMessageCounts, globalMessageCounts] = await Promise.all([
+    const [driveCounts, pageCounts, chatMessageCounts, globalMessageCounts, lastActiveDates] = await Promise.all([
       db.select({
         userId: drives.ownerId,
         count: count(),
@@ -81,6 +82,16 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         .from(messages)
         .where(inArray(messages.userId, userIds))
         .groupBy(messages.userId),
+      // Last active: across ALL sessions regardless of revoked state — a user who was
+      // active yesterday and then logged out still has a recent lastActiveAt. Use
+      // COALESCE to handle sessions where lastUsedAt was never set (fall back to createdAt).
+      db.select({
+        userId: sessions.userId,
+        lastActiveAt: sql<Date>`MAX(COALESCE(${sessions.lastUsedAt}, ${sessions.createdAt}))`,
+      })
+        .from(sessions)
+        .where(inArray(sessions.userId, userIds))
+        .groupBy(sessions.userId),
     ]);
 
     const toCountMap = (rows: Array<{ userId: string | null; count: unknown }>) => {
@@ -97,12 +108,17 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     const chatMessagesCountMap = toCountMap(chatMessageCounts);
     const globalMessagesCountMap = toCountMap(globalMessageCounts);
 
+    const lastActiveMap = new Map<string, Date | null>(
+      lastActiveDates.map(row => [row.userId, row.lastActiveAt ?? null])
+    );
+
     const usersWithStats = allUsers.map((user) => ({
       ...user,
       drivesCount: drivesCountMap.get(user.id) ?? 0,
       pagesCount: pagesCountMap.get(user.id) ?? 0,
       chatMessagesCount: chatMessagesCountMap.get(user.id) ?? 0,
       globalMessagesCount: globalMessagesCountMap.get(user.id) ?? 0,
+      lastActiveAt: lastActiveMap.get(user.id) ?? null,
     }));
 
     // Fetch Stripe subscription details to check if gifted (skip on-prem - no Stripe)
@@ -165,7 +181,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
       };
     });
 
-    // Remove the count fields from the response
+    // Remove raw count fields (they live under stats); keep lastActiveAt
     const cleanUsers = enrichedUsers.map((userData) => {
       const {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars

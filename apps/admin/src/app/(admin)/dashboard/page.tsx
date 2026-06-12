@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Database, MessageSquare, Users, Headphones } from "lucide-react";
+import { Activity, Database, MessageSquare, Users, Headphones, TrendingUp } from "lucide-react";
 
 interface AdminSection {
   title: string;
@@ -12,6 +12,12 @@ interface AdminSection {
 }
 
 const adminSections: AdminSection[] = [
+  {
+    title: "Growth",
+    description: "MAU, signups, retention, and tier breakdown",
+    icon: TrendingUp,
+    href: "/growth",
+  },
   {
     title: "Monitoring",
     description: "System monitoring dashboard",

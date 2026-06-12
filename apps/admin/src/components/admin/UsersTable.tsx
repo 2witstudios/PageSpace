@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle, Gift, ExternalLink, XCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, Shield, MessageCircle, Database, Settings, Crown, CreditCard, CheckCircle, Gift, ExternalLink, XCircle, Clock } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { post, del } from "@/lib/auth/auth-fetch";
 
@@ -62,6 +62,7 @@ interface UserData {
   tokenVersion: number;
   subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
   stripeCustomerId: string | null;
+  lastActiveAt: string | null;
   stats: UserStats;
   aiSettings: AiSetting[];
   recentTokens: RefreshToken[];
@@ -73,9 +74,28 @@ interface UsersTableProps {
   onUserUpdate?: (userId: string, updatedUser: Partial<UserData>) => void;
 }
 
+const DORMANT_DAYS = 30;
+
 function formatDate(dateString: string | null) {
   if (!dateString) return "Never";
   return new Date(dateString).toLocaleDateString();
+}
+
+function formatLastActive(dateString: string | null) {
+  if (!dateString) return "Never";
+  const d = new Date(dateString);
+  const diffDays = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 30) return `${diffDays}d ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+  return `${Math.floor(diffDays / 365)}y ago`;
+}
+
+function isDormant(lastActiveAt: string | null) {
+  if (!lastActiveAt) return true;
+  const diffDays = (Date.now() - new Date(lastActiveAt).getTime()) / (1000 * 60 * 60 * 24);
+  return diffDays > DORMANT_DAYS;
 }
 
 function formatDateTime(dateString: string | null) {
@@ -96,17 +116,20 @@ function getUserInitials(name: string | null | undefined) {
 
 export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
+  const [showDormantOnly, setShowDormantOnly] = useState(false);
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
   const [updatingUsers, setUpdatingUsers] = useState<Record<string, boolean>>({});
   const [recentlyUpdated, setRecentlyUpdated] = useState<Record<string, boolean>>({});
   const [selectedTiers, setSelectedTiers] = useState<Record<string, string>>({});
 
+  const dormantCount = users.filter(u => isDormant(u.lastActiveAt)).length;
+
   const filteredUsers = users.filter((user) => {
+    if (showDormantOnly && !isDormant(user.lastActiveAt)) return false;
     const normalizedSearchTerm = searchTerm.toLowerCase();
     const name = (user.name ?? "").toLowerCase();
     const email = (user.email ?? "").toLowerCase();
     const currentAiProvider = (user.currentAiProvider ?? "").toLowerCase();
-
     return (
       name.includes(normalizedSearchTerm) ||
       email.includes(normalizedSearchTerm) ||
@@ -192,14 +215,25 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
 
   return (
     <div className="space-y-4">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search users by name, email, or AI provider..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-        />
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search users by name, email, or AI provider..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+        <Button
+          variant={showDormantOnly ? "default" : "outline"}
+          size="sm"
+          onClick={() => setShowDormantOnly(v => !v)}
+          className="shrink-0"
+        >
+          <Clock className="h-4 w-4 mr-1.5" />
+          Dormant ({dormantCount})
+        </Button>
       </div>
 
       <div className="grid gap-4">
@@ -234,6 +268,11 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                       <Badge variant={user.emailVerified ? "default" : "secondary"}>
                         <Shield className="h-3 w-3 mr-1" />
                         {user.emailVerified ? "Verified" : "Unverified"}
+                      </Badge>
+
+                      <Badge variant={isDormant(user.lastActiveAt) ? "secondary" : "outline"}>
+                        <Clock className="h-3 w-3 mr-1" />
+                        {formatLastActive(user.lastActiveAt)}
                       </Badge>
 
                       <Badge variant="outline">
@@ -313,6 +352,10 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">User ID:</span>
                             <span className="font-mono text-xs">{user.id}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Last Active:</span>
+                            <span>{user.lastActiveAt ? formatDateTime(user.lastActiveAt) : "Never"}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Email Verified:</span>

@@ -24,8 +24,16 @@ import {
   Calendar,
   ExternalLink,
   ChevronLeft,
-  ChevronRight as ChevronRightIcon
+  ChevronRight as ChevronRightIcon,
+  CheckCircle2,
+  Circle,
 } from "lucide-react";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+
+interface RegisteredUser {
+  id: string;
+  subscriptionTier: string | null;
+}
 
 interface ContactSubmission {
   id: string;
@@ -34,6 +42,8 @@ interface ContactSubmission {
   subject: string;
   message: string;
   createdAt: string;
+  resolvedAt: string | null;
+  registeredUser: RegisteredUser | null;
 }
 
 interface ContactSubmissionsTableProps {
@@ -49,6 +59,8 @@ interface ContactSubmissionsTableProps {
   onSearch: (searchTerm: string) => void;
   onPageChange: (page: number) => void;
   onSort: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
+  onStatusFilter: (status: 'all' | 'open' | 'closed') => void;
+  statusFilter: 'all' | 'open' | 'closed';
   isLoading?: boolean;
 }
 
@@ -65,18 +77,32 @@ function truncateText(text: string, maxLength: number = 100) {
   return text.substring(0, maxLength) + '...';
 }
 
+function tierColor(tier: string | null): string {
+  switch (tier) {
+    case 'pro': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+    case 'founder': return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
+    case 'business': return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
+    default: return 'bg-muted text-muted-foreground';
+  }
+}
+
 export function ContactSubmissionsTable({
   submissions,
   pagination,
   onSearch,
   onPageChange,
   onSort,
+  onStatusFilter,
+  statusFilter,
   isLoading = false
 }: ContactSubmissionsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedSubmissions, setExpandedSubmissions] = useState<Record<string, boolean>>({});
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [localResolved, setLocalResolved] = useState<Record<string, boolean>>({});
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const handleSearch = (value: string) => {
     setSearchTerm(value);
@@ -102,6 +128,35 @@ export function ContactSubmissionsTable({
     return sortOrder === 'asc' ? '↑' : '↓';
   };
 
+  const handleToggleResolved = async (submission: ContactSubmission) => {
+    const isResolved = localResolved[submission.id] !== undefined
+      ? localResolved[submission.id]
+      : submission.resolvedAt !== null;
+    setResolvingId(submission.id);
+    setResolveError(null);
+    try {
+      const response = await fetchWithAuth(`/api/admin/contact/${submission.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved: !isResolved }),
+      });
+      if (response.ok) {
+        setLocalResolved(prev => ({ ...prev, [submission.id]: !isResolved }));
+      } else {
+        setResolveError(`Failed to update submission (${response.status})`);
+      }
+    } catch {
+      setResolveError('Network error — please try again');
+    } finally {
+      setResolvingId(null);
+    }
+  };
+
+  const isResolved = (submission: ContactSubmission) =>
+    localResolved[submission.id] !== undefined
+      ? localResolved[submission.id]
+      : submission.resolvedAt !== null;
+
   if (isLoading) {
     return (
       <Card>
@@ -119,14 +174,34 @@ export function ContactSubmissionsTable({
 
   return (
     <div className="space-y-4">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search submissions by name, email, subject, or message..."
-          value={searchTerm}
-          onChange={(e) => handleSearch(e.target.value)}
-          className="pl-10"
-        />
+      {resolveError && (
+        <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded">
+          {resolveError}
+        </div>
+      )}
+      <div className="flex gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name, email, subject, or message…"
+            value={searchTerm}
+            onChange={(e) => handleSearch(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+        <div className="flex gap-1">
+          {(['all', 'open', 'closed'] as const).map((s) => (
+            <Button
+              key={s}
+              variant={statusFilter === s ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => onStatusFilter(s)}
+              className="capitalize"
+            >
+              {s}
+            </Button>
+          ))}
+        </div>
       </div>
 
       <Card>
@@ -137,7 +212,7 @@ export function ContactSubmissionsTable({
               Contact Submissions
             </span>
             <Badge variant="secondary">
-              {pagination.total} total submissions
+              {pagination.total} {statusFilter !== 'all' ? statusFilter : 'total'} submissions
             </Badge>
           </CardTitle>
         </CardHeader>
@@ -152,6 +227,7 @@ export function ContactSubmissionsTable({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[50px]"></TableHead>
+                    <TableHead className="w-[90px]">Status</TableHead>
                     <TableHead
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => handleSort('name')}
@@ -209,7 +285,31 @@ export function ContactSubmissionsTable({
                               </Button>
                             </CollapsibleTrigger>
                           </TableCell>
-                          <TableCell className="font-medium">{submission.name}</TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="p-1 h-auto"
+                              onClick={(e) => { e.stopPropagation(); handleToggleResolved(submission); }}
+                              disabled={resolvingId === submission.id}
+                              title={isResolved(submission) ? 'Mark open' : 'Mark resolved'}
+                            >
+                              {isResolved(submission)
+                                ? <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                : <Circle className="h-4 w-4 text-muted-foreground" />
+                              }
+                            </Button>
+                          </TableCell>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-1.5">
+                              {submission.name}
+                              {submission.registeredUser && (
+                                <Badge className={`text-[10px] px-1 py-0 ${tierColor(submission.registeredUser.subscriptionTier)}`}>
+                                  {submission.registeredUser.subscriptionTier ?? 'free'}
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center">
                               <span className="mr-2">{submission.email}</span>
@@ -241,7 +341,7 @@ export function ContactSubmissionsTable({
                         </TableRow>
                         <CollapsibleContent asChild>
                           <TableRow>
-                            <TableCell colSpan={6} className="bg-muted/30">
+                            <TableCell colSpan={7} className="bg-muted/30">
                               <div className="p-4 space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                   <div>
@@ -265,10 +365,32 @@ export function ContactSubmissionsTable({
                                           </a>
                                         </span>
                                       </div>
+                                      {submission.registeredUser ? (
+                                        <div>
+                                          <span className="text-muted-foreground">Account:</span>
+                                          <span className="ml-2 flex items-center gap-1.5 inline-flex">
+                                            <Badge className={`text-xs ${tierColor(submission.registeredUser.subscriptionTier)}`}>
+                                              {submission.registeredUser.subscriptionTier ?? 'free'} user
+                                            </Badge>
+                                            <span className="text-muted-foreground text-xs font-mono">{submission.registeredUser.id}</span>
+                                          </span>
+                                        </div>
+                                      ) : (
+                                        <div>
+                                          <span className="text-muted-foreground">Account:</span>
+                                          <span className="ml-2 text-muted-foreground text-xs">Not registered</span>
+                                        </div>
+                                      )}
                                       <div>
                                         <span className="text-muted-foreground">Submitted:</span>
                                         <span className="ml-2">{formatDateTime(submission.createdAt)}</span>
                                       </div>
+                                      {isResolved(submission) && (
+                                        <div>
+                                          <span className="text-muted-foreground">Resolved:</span>
+                                          <span className="ml-2 text-green-600 dark:text-green-400">Yes</span>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                   <div>
@@ -287,7 +409,19 @@ export function ContactSubmissionsTable({
                                     {submission.message}
                                   </div>
                                 </div>
-                                <div className="flex justify-end">
+                                <div className="flex justify-between items-center">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleToggleResolved(submission)}
+                                    disabled={resolvingId === submission.id}
+                                    className="gap-2"
+                                  >
+                                    {isResolved(submission)
+                                      ? <><Circle className="h-4 w-4" />Mark open</>
+                                      : <><CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />Mark resolved</>
+                                    }
+                                  </Button>
                                   <Button asChild size="sm">
                                     <a href={`mailto:${submission.email}?subject=Re: ${submission.subject}`}>
                                       <Mail className="h-4 w-4 mr-2" />

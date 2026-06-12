@@ -13,6 +13,7 @@ import {
   getLiveHolds,
   getBalanceDriftAlerts,
   getNegativeMarginAccounts,
+  getMarginByPeriod,
   type Granularity,
 } from '@/lib/monitoring';
 import {
@@ -70,6 +71,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       holds,
       balanceDrift,
       negativeMargin,
+      marginByPeriod,
     ] = await Promise.all([
       getTokenUsageSummary(startDate, endDate),
       getTokenUsageByModel(startDate, endDate, 50),
@@ -82,6 +84,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       getLiveHolds(),
       getBalanceDriftAlerts(),
       getNegativeMarginAccounts(startDate, endDate),
+      getMarginByPeriod(startDate, endDate, granularity),
     ]);
 
     const enforcement = {
@@ -126,6 +129,9 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       for (const r of negativeMargin) {
         rows.push(['alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents)]);
       }
+      for (const r of marginByPeriod) {
+        rows.push(['margin_period', typeof r.period === 'string' ? r.period : String(r.period), '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.marginCents)]);
+      }
 
       return new NextResponse(toCsv(rows), {
         status: 200,
@@ -153,6 +159,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       liability,
       holds,
       alerts: { balanceDrift, negativeMargin },
+      marginByPeriod,
     });
   } catch (error) {
     loggers.api.error('Error fetching ai-billing data:', error as Error);
