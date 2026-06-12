@@ -43,6 +43,11 @@ const WRITE_TOOLS = new Set([
   'create_workflow',
   'update_workflow',
   'delete_workflow',
+  // Trigger operations
+  'set_calendar_trigger',
+  'delete_calendar_trigger',
+  'set_task_trigger',
+  'delete_task_trigger',
 ]);
 
 // Web search tools (excluded when web search is disabled)
