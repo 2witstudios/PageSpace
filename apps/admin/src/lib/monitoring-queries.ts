@@ -5,7 +5,7 @@
 import { db } from '@pagespace/db/db'
 import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
+import { apiMetrics, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
@@ -1204,8 +1204,6 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), 1);
 
   const [totalUsersResult] = await db.select({ count: count() }).from(users);
