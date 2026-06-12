@@ -41,17 +41,19 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(
     (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)
   ),
+  checkMCPDriveScope: vi.fn(),
+  canPrincipalViewPage: vi.fn(),
 }));
 
 import { PATCH, DELETE } from '../[commandId]/route';
 import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
-const mockedCanView = vi.mocked(canUserViewPage);
+const mockedCanView = vi.mocked(canPrincipalViewPage);
 const mockedIsOwnerOrAdmin = vi.mocked(isDriveOwnerOrAdmin);
 
 const USER_ID = 'user_1';
@@ -110,6 +112,7 @@ const deleteRequest = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   mockedAuth.mockResolvedValue(webAuth());
+  vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   mockedDb.query.commands.findFirst.mockResolvedValue(personalCommand as never);
   mockedDb.query.pages.findFirst.mockResolvedValue({
     id: 'page_2',
