@@ -1211,35 +1211,42 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   const [totalUsersResult] = await db.select({ count: count() }).from(users);
   const totalUsers = totalUsersResult?.count ?? 0;
 
-  // Current MAU/WAU/DAU from session activity (most reliable signal)
+  // Current MAU/WAU/DAU from session activity — count ALL sessions with lastUsedAt in
+  // the window, regardless of revokedAt. A user who was active 15 days ago and then logged
+  // out still counts toward MAU; revokedAt describes current session state, not history.
   const [mauResult] = await db
     .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
     .from(sessions)
-    .where(and(gte(sessions.lastUsedAt, thirtyDaysAgo), isNull(sessions.revokedAt)));
+    .where(gte(sessions.lastUsedAt, thirtyDaysAgo));
 
   const [wauResult] = await db
     .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
     .from(sessions)
-    .where(and(gte(sessions.lastUsedAt, sevenDaysAgo), isNull(sessions.revokedAt)));
+    .where(gte(sessions.lastUsedAt, sevenDaysAgo));
 
   const [dauResult] = await db
     .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
     .from(sessions)
-    .where(and(gte(sessions.lastUsedAt, oneDayAgo), isNull(sessions.revokedAt)));
+    .where(gte(sessions.lastUsedAt, oneDayAgo));
 
   const mau = mauResult?.count ?? 0;
   const wau = wauResult?.count ?? 0;
   const dau = dauResult?.count ?? 0;
 
+  // Use rolling 30-day vs previous 30-day window to avoid partial-month bias.
+  // Calendar-month comparison (current partial month vs full last month) systematically
+  // shows negative growth before month-end — rolling windows are bias-free.
+  const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
   const [newThisMonthResult] = await db
     .select({ count: count() })
     .from(users)
-    .where(gte(users.createdAt, startOfThisMonth));
+    .where(gte(users.createdAt, thirtyDaysAgo));
 
   const [newLastMonthResult] = await db
     .select({ count: count() })
     .from(users)
-    .where(and(gte(users.createdAt, startOfLastMonth), lt(users.createdAt, startOfThisMonth)));
+    .where(and(gte(users.createdAt, sixtyDaysAgo), lt(users.createdAt, thirtyDaysAgo)));
 
   const newUsersThisMonth = newThisMonthResult?.count ?? 0;
   const newUsersLastMonth = newLastMonthResult?.count ?? 0;
@@ -1274,11 +1281,14 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     .groupBy(sql`DATE_TRUNC('month', ${users.createdAt})`)
     .orderBy(asc(sql`DATE_TRUNC('month', ${users.createdAt})`));
 
-  const signupsByMonth = new Map(signupsByMonthRaw.map(r => [r.month, r.signups]));
+  // DATE_TRUNC returns Date objects from the node-postgres driver despite the sql<string>
+  // annotation — normalise to ISO strings so Map key equality works across queries.
+  const toKey = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
+  const signupsByMonth = new Map(signupsByMonthRaw.map(r => [toKey(r.month), r.signups]));
   const mauTrend: MAUTrendRow[] = mauTrendRaw.map(r => ({
-    period: r.month,
+    period: toKey(r.month),
     mau: r.mau,
-    newUsers: signupsByMonth.get(r.month) ?? 0,
+    newUsers: signupsByMonth.get(toKey(r.month)) ?? 0,
   }));
 
   // DAU trend (last 30 days) from activity_logs
@@ -1302,11 +1312,11 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     .groupBy(sql`DATE_TRUNC('day', ${users.createdAt})`)
     .orderBy(asc(sql`DATE_TRUNC('day', ${users.createdAt})`));
 
-  const signupsByDay = new Map(signupsByDayRaw.map(r => [r.day, r.signups]));
+  const signupsByDay = new Map(signupsByDayRaw.map(r => [toKey(r.day), r.signups]));
   const dauTrend: DAUTrendRow[] = dauTrendRaw.map(r => ({
-    day: r.day,
+    day: toKey(r.day),
     dau: r.dau,
-    signups: signupsByDay.get(r.day) ?? 0,
+    signups: signupsByDay.get(toKey(r.day)) ?? 0,
   }));
 
   // Tier breakdown

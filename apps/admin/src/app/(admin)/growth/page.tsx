@@ -178,9 +178,9 @@ export default function GrowthPage() {
       {/* Secondary stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <StatCard
-          title="New Users This Month"
+          title="New (Last 30d)"
           value={s?.newUsersThisMonth.toLocaleString() ?? "—"}
-          sub={`Last month: ${s?.newUsersLastMonth ?? 0}`}
+          sub={`Prior 30d: ${s?.newUsersLastMonth ?? 0}`}
           icon={TrendingUp}
           badge={momBadge}
           isLoading={isLoading}
@@ -193,9 +193,9 @@ export default function GrowthPage() {
           isLoading={isLoading}
         />
         <StatCard
-          title="MoM Signup Growth"
+          title="30d Signup Growth"
           value={s ? fmtPct(s.momGrowthPct) : "—"}
-          sub="New users vs prior month"
+          sub="Last 30d vs prior 30d"
           icon={TrendingUp}
           isLoading={isLoading}
         />
