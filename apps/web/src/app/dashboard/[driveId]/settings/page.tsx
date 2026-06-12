@@ -6,7 +6,6 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
 import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
 
@@ -19,7 +18,6 @@ export default function DriveSettingsPage() {
   const params = useParams();
   const router = useRouter();
   const driveId = params.driveId as string;
-  const { user } = useAuth();
   const drives = useDriveStore((state) => state.drives);
   const isLoading = useDriveStore((state) => state.isLoading);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
