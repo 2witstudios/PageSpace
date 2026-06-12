@@ -108,6 +108,26 @@ describe('estimateToolDefinitionTokens', () => {
 // estimateMessageTokens
 // ---------------------------------------------------------------------------
 describe('estimateMessageTokens', () => {
+  it('counts AI SDK v5 tool-{name} parts (input/output fields), not just legacy tool-call/tool-result', () => {
+    const bigOutput = 'x'.repeat(8000); // ~2000 tokens
+    const sdkMessage = {
+      role: 'assistant' as const,
+      parts: [
+        {
+          type: 'tool-read_page',
+          toolCallId: 'call-1',
+          input: { pageId: 'p1' },
+          output: bigOutput,
+        } as never,
+      ],
+    };
+    const tokens = estimateMessageTokens(sdkMessage);
+    // Without the tool-* branch this collapses to ~15 tokens of overhead and
+    // compaction thresholds never fire on real persisted histories.
+    expect(tokens).toBeGreaterThan(2000);
+  });
+
+
   it('should add 5 (role) + 10 (overhead) for a message with no parts', () => {
     const msg: UIMessage = { role: 'user', parts: [] };
     expect(estimateMessageTokens(msg)).toBe(15);

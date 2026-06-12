@@ -14,6 +14,7 @@ import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/acti
 import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -101,6 +102,20 @@ export async function PATCH(
 
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+
+    // Invalidate compaction if the edited message was in the compacted range.
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(message.conversationId, { source: 'page', pageId: message.pageId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(message.conversationId, { source: 'page', pageId: message.pageId });
+      }
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after message edit', err as Error);
+    }
 
     // Broadcast to remote viewers. Failure must never break the request.
     void (async () => {
@@ -221,6 +236,20 @@ export async function DELETE(
 
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
+
+    // Invalidate compaction if the deleted message was in the compacted range.
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(message.conversationId, { source: 'page', pageId: message.pageId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(message.conversationId, { source: 'page', pageId: message.pageId });
+      }
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after message delete', err as Error);
+    }
 
     // Broadcast to remote viewers. Failure must never break the request.
     void (async () => {

@@ -8,6 +8,7 @@ import { eq, and, desc, sql, lt } from '@pagespace/db/operators'
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
+import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 
 // Types
 export interface ConversationSummary {
@@ -37,6 +38,7 @@ export interface Message {
   content: string;
   role: string;
   isActive: boolean;
+  createdAt: Date;
 }
 
 export interface UsageLog {
@@ -361,6 +363,13 @@ export const globalConversationRepository = {
         eq(conversations.userId, userId)
       ))
       .returning();
+
+    // Invalidate only when the user-scoped delete actually matched a row —
+    // a caller holding someone else's conversation ID must not be able to
+    // disturb that conversation's compaction state.
+    if (deletedConversation) {
+      await invalidateCompaction(conversationId, { source: 'global' });
+    }
 
     return deletedConversation || null;
   },

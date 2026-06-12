@@ -99,11 +99,14 @@ export async function resolvePageAgentIntegrationTools(params: {
 
   const executor = createConfiguredExecutor(userId, agentId, driveId);
 
-  return convertIntegrationToolsToAISDK(
+  const tools = convertIntegrationToolsToAISDK(
     grants,
     { userId, agentId, driveId },
     executor
   );
+  // Sort keys so tool array order is deterministic across requests (only real config
+  // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
+  return Object.fromEntries(Object.keys(tools).sort().map(k => [k, tools[k]]));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -137,9 +140,12 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
 
   const executor = createConfiguredExecutor(userId, null, driveId);
 
-  return convertIntegrationToolsToAISDK(
+  const tools = convertIntegrationToolsToAISDK(
     grants,
     { userId, agentId: null, driveId },
     executor
   );
+  // Sort keys so tool array order is deterministic across requests (only real config
+  // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
+  return Object.fromEntries(Object.keys(tools).sort().map(k => [k, tools[k]]));
 }

@@ -2,9 +2,13 @@ import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
 import { generateText, convertToModelMessages, UIMessage } from 'ai';
+import type { ModelMessage } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
+import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -546,6 +550,10 @@ export const agentCommunicationTools = {
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
         }
+        // Key order is already deterministic — agentTools filters the module-constant
+        // base map (stable insertion order) and the integration resolver returns
+        // sorted keys — so the serialized tool bytes are prefix-cache-stable without
+        // re-sorting here (same guarantee as the chat/global route merges).
         const allAgentTools = { ...agentTools, ...integrationTools };
 
         // 10. Create enhanced execution context for nested calls
@@ -566,12 +574,57 @@ export const agentCommunicationTools = {
           requestOrigin: 'agent' as const,
         } as ToolExecutionContext & { agentCallDepth: number; currentAgentId: string };
         
+        // 10b. Sliding-window compaction — fire-and-forget after generateText because
+        // after() from next/server is unavailable inside tool execution mid-stream.
+        // Role lookup is best-effort: if the query fails, compaction simply won't fire
+        // (canUseCompaction returns false for role:null → exact legacy behaviour).
+        let callerUserRole: string | null = null;
+        try {
+          const [callerUserRow] = await db
+            .select({ role: users.role })
+            .from(users)
+            .where(eq(users.id, userId));
+          callerUserRole = callerUserRow?.role ?? null;
+        } catch {
+          // Fallback: role unknown → non-admin path
+        }
+        // Budget against the EXACT tool set generateText will receive below —
+        // the tool-enabled branch adds finishTool, and undercounting schema
+        // bytes here could pass context-window prep yet exceed the model limit
+        // at generation time.
+        const executionTools =
+          Object.keys(allAgentTools).length > 0
+            ? ({ ...allAgentTools, ...finishTool } as Record<string, unknown>)
+            : (allAgentTools as Record<string, unknown>);
+
+        // Full seam (sanitize → compact → elide): sub-agent histories accumulate the
+        // same stale read-tool outputs as top-level chats, so they get the same
+        // chunk-aligned elision treatment, not just compaction. The seam re-sanitizes
+        // internally, which is idempotent over sanitizedMessages.
+        const prepared = await prepareHistoryForModel({
+          history: sanitizedMessages,
+          conversationId: activeConversationId,
+          source: 'page',
+          pageId: agentId,
+          model: resolvedModelName,
+          provider: resolvedProvider,
+          systemPrompt,
+          tools: executionTools,
+          user: { id: userId, role: callerUserRole },
+        });
+        const tailModelMessages: ModelMessage[] = convertToModelMessages(
+          prepared.messages as Parameters<typeof convertToModelMessages>[0]
+        );
+        const agentModelMessages: ModelMessage[] = prepared.summaryText
+          ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
+          : tailModelMessages;
+
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0
           ? await generateText({
               model,
               system: systemPrompt,
-              messages: convertToModelMessages(sanitizedMessages),
+              messages: agentModelMessages,
               tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
@@ -588,10 +641,17 @@ export const agentCommunicationTools = {
           : await generateText({
               model,
               system: systemPrompt,
-              messages: convertToModelMessages(sanitizedMessages),
+              messages: agentModelMessages,
               experimental_context: nestedContext,
               maxRetries: 3,
             });
+
+        // Fire-and-forget compaction: after() is unavailable inside tool execution,
+        // so we launch directly — the parent stream is still open but this is safe
+        // as a detached promise (no response coupling).
+        if (prepared.pendingCompaction) {
+          void runCompaction(prepared.pendingCompaction);
+        }
 
         // Bill the requesting user for the sub-agent run. Use totalUsage so all
         // tool-loop round-trips (up to stepCountIs(20)) are metered, not just the

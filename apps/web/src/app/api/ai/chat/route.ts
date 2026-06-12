@@ -9,6 +9,7 @@ import {
   createUIMessageStreamResponse,
   type TextUIPart,
   type ToolSet,
+  type ModelMessage,
 } from 'ai';
 import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
@@ -56,6 +57,13 @@ import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+import {
+  buildVolatileTurnContext,
+  appendTurnContextToLastUserMessage,
+  withCacheBreakpoints,
+} from '@/lib/ai/core/prompt-assembly';
+import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
+import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
@@ -571,7 +579,8 @@ export async function POST(request: Request) {
       selectedModel,
     };
 
-    const providerResult = await createAIProvider(userId, providerRequest);
+    // Thread the already-loaded user row through the factory so it skips redundant DB selects.
+    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null });
 
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
@@ -588,8 +597,8 @@ export async function POST(request: Request) {
         ? makeOnStepFinishHandler(creditAbortController, availableBalanceCents, resolvedModelName ?? 'unknown')
         : null;
 
-    // Update user's current provider/model if changed
-    await updateUserProviderSettings(userId, selectedProvider, selectedModel);
+    // Update user's current provider/model if changed (thread the loaded row to skip a DB select).
+    await updateUserProviderSettings(userId, selectedProvider, selectedModel, { user: user ?? null });
 
     // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
@@ -680,8 +689,11 @@ export async function POST(request: Request) {
 
         // Create execute functions that signal client-side execution
         // The AI SDK will call these, but we throw a special error that the client intercepts
+        // Sort keys so tool array order is deterministic across requests (only real config
+        // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
         const mcpToolsWithExecute: Record<string, unknown> = {};
-        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
+        for (const toolName of Object.keys(mcpToolSchemas).sort()) {
+          const toolSchema = mcpToolSchemas[toolName];
           mcpToolsWithExecute[toolName] = {
             ...toolSchema,
             execute: async (args: Record<string, unknown>) => {
@@ -776,49 +788,8 @@ export async function POST(request: Request) {
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
-    loggers.ai.debug('AI Chat API: Loading conversation history', {
-      pageId: chatId
-    });
-
-    const pageId = chatId as string;
-    const dbMessages = await db
-      .select()
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, pageId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true)
-      ))
-      .orderBy(chatMessages.createdAt);
-
-    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
-      convertDbMessageToUIMessage({
-        id: msg.id,
-        pageId: msg.pageId,
-        userId: msg.userId,
-        role: msg.role,
-        content: msg.content,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        createdAt: msg.createdAt,
-        isActive: msg.isActive,
-        editedAt: msg.editedAt,
-        messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
-      })
-    );
-
-    loggers.ai.debug('AI Chat API: Loaded conversation from database', {
-      messageCount: conversationHistory.length,
-      pageId
-    });
-
-    // Convert UIMessages to ModelMessages for the AI model
-    // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
-    // NOTE: We use database-loaded messages, NOT messages from client
-    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
-    const modelMessages = convertToModelMessages(sanitizedMessages, {
-      tools: filteredTools  // Use original tools - no wrapping needed
-    });
+    // Build system prompt BEFORE history loading so its token estimate is
+    // available for prepareConversationContext's context-window budget math.
 
     // Fetch user personalization for AI system prompt injection
     const personalization = await getUserPersonalization(userId);
@@ -865,7 +836,7 @@ export async function POST(request: Request) {
         personalization ?? undefined
       );
     }
-    
+
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
     const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
@@ -887,6 +858,83 @@ export async function POST(request: Request) {
         });
       }
     }
+
+    // Build agent memory section (AI_CHAT pages only). Fetches the "Agent Memory"
+    // child page content — stable per request, only changes when the agent edits
+    // the page, so it lives in the STABLE system section (not the volatile block).
+    let agentMemoryPrompt = '';
+    if (page.type === 'AI_CHAT') {
+      const memoryContent = await getAgentMemoryContext(chatId, userId);
+      agentMemoryPrompt = buildAgentMemorySection(memoryContent);
+    }
+
+    loggers.ai.debug('AI Chat API: Loading conversation history', {
+      pageId: chatId
+    });
+
+    const pageId = chatId as string;
+    const dbMessages = await db
+      .select()
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, pageId),
+        eq(chatMessages.conversationId, conversationId),
+        eq(chatMessages.isActive, true)
+      ))
+      .orderBy(chatMessages.createdAt);
+
+    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
+      convertDbMessageToUIMessage({
+        id: msg.id,
+        pageId: msg.pageId,
+        userId: msg.userId,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: msg.createdAt,
+        isActive: msg.isActive,
+        editedAt: msg.editedAt,
+        messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
+      })
+    );
+
+    loggers.ai.debug('AI Chat API: Loaded conversation from database', {
+      messageCount: conversationHistory.length,
+      pageId
+    });
+
+    // Sanitize, compact, and elide — all in the unified seam.
+    // createUIMessageStream keeps the FULL conversationHistory for the UI;
+    // only the model-facing messages go through the seam.
+    const {
+      messages: preparedMessages,
+      summaryText,
+      stableBoundaryIndex,
+      scheduleCompaction,
+    } = await prepareHistoryForModel({
+      history: conversationHistory,
+      conversationId: conversationId!,
+      source: 'page',
+      pageId,
+      model: resolvedModelName ?? currentModel,
+      provider: resolvedProvider ?? currentProvider,
+      systemPrompt: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
+      tools: filteredTools as Record<string, unknown>,
+      user: user ? { id: user.id, role: user.role } : null,
+    });
+
+    // Convert elided UIMessages to ModelMessages for streamText.
+    const tailModelMessages = convertToModelMessages(preparedMessages, { tools: filteredTools });
+    const modelMessages: ModelMessage[] = summaryText
+      ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
+      : tailModelMessages;
+
+    // Intentional second sanitize (prepareHistoryForModel already sanitized once):
+    // createUIMessageStream must receive the FULL conversation history for the UI
+    // (originalMessages), not the compacted/elided model tail in preparedMessages —
+    // so conversationHistory is sanitized directly instead of reusing the seam output.
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
 
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
@@ -959,10 +1007,29 @@ export async function POST(request: Request) {
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
-            buildStreamText: (messages) => streamText({
+            buildStreamText: (messages) => {
+              // Volatile per-turn data (timestamp/mention/command) is appended
+              // to the last user message so the system prefix stays byte-stable
+              // and provider prefix caches (Anthropic/OpenAI/Gemini) are not
+              // invalidated on every turn.
+              const turnContext = buildVolatileTurnContext({
+                timestampPrompt: timestampSystemPrompt,
+                mentionPrompt: mentionSystemPrompt,
+                commandPrompt: commandSystemPrompt,
+              });
+              const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
+              // Apply cache breakpoints:
+              //   A) last message — covers system+tools+history every step after step 1.
+              //   B) stableBoundaryIndex — the first tail message after the compaction
+              //      summary (index 1 when a summary exists, 0 = disabled otherwise).
+              //      This cross-request breakpoint survives until the next recompaction.
+              const cachedMessages = withCacheBreakpoints(messagesWithContext, stableBoundaryIndex);
+              return streamText({
               model,
-              system: systemPrompt + mentionSystemPrompt + commandSystemPrompt + timestampSystemPrompt + pageTreePrompt + toolDiscoveryPrompt,
-              messages,
+              // Stable system prompt — no volatile sections; stays byte-identical
+              // across turns so provider prefix caches survive per request.
+              system: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
+              messages: cachedMessages,
               tools: filteredTools,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
               // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
@@ -1021,7 +1088,15 @@ export async function POST(request: Request) {
                 });
                 lifecycle!.finish(true);
               },
-            }),
+              // Re-mark breakpoints per step so mid-loop tool results are cached.
+              // stableBoundaryIndex stays fixed (the summary is always at position
+              // 0; its first tail neighbour at position 1 remains stable as new
+              // messages are appended to the END of the accumulating array).
+              prepareStep: ({ messages: stepMessages }) => ({
+                messages: withCacheBreakpoints(stepMessages, stableBoundaryIndex),
+              }),
+            })
+          },
           });
 
           // Billing reads the SUMMED usage / OpenRouter cost across every attempt
@@ -1201,6 +1276,10 @@ export async function POST(request: Request) {
             loggers.ai.error('AI Chat API: Failed to settle AI usage/credits', error as Error);
             // Don't fail the response - but the hold may remain for the reconcile sweep.
           }
+
+          // Schedule compaction for the NEXT request (summarises old tail via after()).
+          // Runs after the response is fully sent; non-fatal if it fails.
+          scheduleCompaction();
 
           // Reflect a user stop, including one that landed during inter-attempt backoff or
           // raced in after the loop broke (onAbort only fires while a streamText is live).

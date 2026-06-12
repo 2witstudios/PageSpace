@@ -121,6 +121,28 @@ export function estimateMessageTokens(message: UIMessage): number {
             : JSON.stringify(part.result);
           tokens += estimateTokens(resultStr);
         }
+      } else if (
+        part.type !== 'text' &&
+        part.type !== 'file' &&
+        part.type !== 'step-start' &&
+        part.type.startsWith('tool-')
+      ) {
+        // AI SDK v5 UIMessage format: type is 'tool-{name}' with `input`/`output`
+        // fields. Without this branch, large persisted tool results count as
+        // message overhead only — compaction/truncation thresholds never fire
+        // and the provider rejects the oversized context instead.
+        tokens += 10; // Tool call ID overhead
+        tokens += estimateTokens(part.type.replace(/^tool-/, ''));
+        const sdkPart = part as { input?: unknown; output?: unknown };
+        if (sdkPart.input !== undefined && sdkPart.input !== null) {
+          tokens += estimateTokens(JSON.stringify(sdkPart.input));
+        }
+        if (sdkPart.output !== undefined && sdkPart.output !== null) {
+          const outStr = typeof sdkPart.output === 'string'
+            ? sdkPart.output
+            : JSON.stringify(sdkPart.output);
+          tokens += estimateTokens(outStr);
+        }
       }
     }
   }

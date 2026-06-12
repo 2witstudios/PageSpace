@@ -756,7 +756,7 @@ export const pageReadTools = {
    * List all conversations for an AI_CHAT page
    */
   list_conversations: tool({
-    description: 'List all conversations for an AI agent (AI_CHAT page). Returns conversation metadata including message counts and last activity.',
+    description: 'List all conversations for an AI agent (AI_CHAT page). Returns conversation metadata including message counts and last activity. Use to locate a conversation ID before calling read_conversation to recover condensed or elided history.',
     inputSchema: z.object({
       pageId: z.string().describe('The unique ID of the AI_CHAT page'),
       title: z.string().describe('The agent title for display context'),
@@ -900,7 +900,7 @@ export const pageReadTools = {
    * Read messages from a specific conversation
    */
   read_conversation: tool({
-    description: 'Read messages from a specific conversation. Use lineStart/lineEnd to read specific message ranges. Messages are formatted with attribution showing who sent them.',
+    description: 'Read messages from a specific conversation. Use lineStart/lineEnd to read specific message ranges. Messages are formatted with attribution showing who sent them. Use to recover earlier context that has been condensed into a summary or elided from the active context window — the full transcript is always available here.',
     inputSchema: z.object({
       pageId: z.string().describe('The unique ID of the AI_CHAT page'),
       conversationId: z.string().describe('The conversation ID to read'),

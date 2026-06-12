@@ -5,11 +5,9 @@
  * Used by the admin global-prompt viewer to show the exact context window.
  */
 
-import { buildSystemPrompt, buildNonCoreToolNamesPrompt } from './system-prompt';
+import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from './system-prompt';
 import { filterToolsForReadOnly, isWriteTool } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
-import { buildTimestampSystemPrompt } from './timestamp-utils';
-import { buildMentionSystemPrompt } from './mention-processor';
 import {
   buildInlineInstructions,
   buildGlobalAssistantInstructions,
@@ -22,6 +20,9 @@ import {
 } from './schema-introspection';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { pageSpaceTools } from './ai-tools';
+import { buildTimestampSystemPrompt } from './timestamp-utils';
+import { buildMentionSystemPrompt } from './mention-processor';
+import { buildVolatileTurnContext } from './prompt-assembly';
 
 export interface LocationContext {
   currentPage?: {
@@ -80,6 +81,7 @@ export interface CompletePayloadResult {
     systemPrompt: number;
     tools: number;
     experimentalContext: number;
+    volatileTurnContext: number;
     total: number;
   };
   toolsSummary: {
@@ -127,12 +129,6 @@ export function buildCompleteRequest(
     isReadOnly
   );
 
-  // Build additional prompt sections
-  const timestampSystemPrompt = buildTimestampSystemPrompt();
-  const mentionSystemPrompt = buildMentionSystemPrompt([
-    { id: 'example-page-id', label: 'Example Document', type: 'page' },
-  ]);
-
   // Build inline instructions based on context type
   let inlineInstructions: string;
   if (contextType === 'page' && locationContext?.currentPage) {
@@ -169,11 +165,12 @@ export function buildCompleteRequest(
   // Append non-core tool names to system prompt (matches real Global Assistant behavior)
   const nonCoreNamesSection = buildNonCoreToolNamesPrompt(nonCoreToolNames);
 
-  // Complete system prompt (with non-core tool names section, matching real Global Assistant)
+  // Stable system prompt: base → TOOL_DISCOVERY → global instructions → nonCoreToolNames.
+  // Volatile sections (timestamp/mention/command) are omitted here — they are
+  // appended to the last user message at assembly time in production routes.
   const systemPrompt =
     baseSystemPrompt +
-    mentionSystemPrompt +
-    timestampSystemPrompt +
+    '\n\n' + TOOL_DISCOVERY_PROMPT +
     inlineInstructions +
     (nonCoreNamesSection ? '\n\n' + nonCoreNamesSection : '');
 
@@ -265,9 +262,29 @@ export function buildCompleteRequest(
     enabledTools: null as string[] | null,
   };
 
-  // Build example messages
+  // Volatile per-turn context (timestamp + example mention prompt). Production
+  // appends this to the LAST user message via appendTurnContextToLastUserMessage
+  // so the system prefix stays cache-stable; mirror that here to keep the
+  // "exactly as it would be sent" contract of this viewer.
+  const volatileTurnContext = buildVolatileTurnContext({
+    timestampPrompt: buildTimestampSystemPrompt(),
+    mentionPrompt: buildMentionSystemPrompt([
+      { id: 'example-page-id', label: 'Example Document', type: 'page' },
+    ]),
+    commandPrompt: '',
+  });
+
+  // Build example messages (volatile block appended to the last user message,
+  // exactly like the production routes do)
   const messages: CompleteAIRequest['messages'] = includeExampleMessage
-    ? [{ role: 'user' as const, content: 'What documents are in this drive?' }]
+    ? [
+        {
+          role: 'user' as const,
+          content:
+            'What documents are in this drive?' +
+            (volatileTurnContext ? `\n\n${volatileTurnContext}` : ''),
+        },
+      ]
     : [];
 
   // Build the complete request object
@@ -288,12 +305,14 @@ export function buildCompleteRequest(
   const contextTokens = estimateSystemPromptTokens(
     JSON.stringify(experimental_context)
   );
+  const volatileTokens = estimateSystemPromptTokens(volatileTurnContext);
 
   const tokenEstimates = {
     systemPrompt: systemPromptTokens,
     tools: toolTokens,
     experimentalContext: contextTokens,
-    total: systemPromptTokens + toolTokens + contextTokens,
+    volatileTurnContext: volatileTokens,
+    total: systemPromptTokens + toolTokens + contextTokens + volatileTokens,
   };
 
   // Format as a human-readable string
@@ -321,6 +340,7 @@ function formatCompletePayload(
     systemPrompt: number;
     tools: number;
     experimentalContext: number;
+    volatileTurnContext: number;
     total: number;
   },
   isReadOnly: boolean
@@ -355,7 +375,7 @@ ${toolsJson}
 
 ${contextJson}
 
-─── MESSAGE FORMAT (Example) ${sectionDivider.slice(30)}
+─── MESSAGE FORMAT (Example, incl. volatile turn context ~${tokenEstimates.volatileTurnContext.toLocaleString()} tokens) ${sectionDivider.slice(30)}
 
 ${messagesJson}
 
