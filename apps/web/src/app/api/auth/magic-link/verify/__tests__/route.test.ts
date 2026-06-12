@@ -598,6 +598,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_abc');
       expect(location).toContain('auth=success');
+      // Provisioning must run even when `next` is present
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
     it('falls back to /dashboard when next is /invite/<token> (invite acceptance no longer travels via next; the inviteToken metadata path consumes invites server-side)', async () => {
@@ -640,6 +642,8 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_abc');
       expect(location).not.toContain('provisioned-drive-id');
+      // Provisioning still fires even though `next` wins the redirect
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
   });
 
@@ -725,6 +729,28 @@ describe('GET /api/auth/magic-link/verify', () => {
       const location = response.headers.get('Location')!;
       expect(location).toContain('/dashboard/drive_invited_42');
       expect(location).not.toContain('some_other_drive');
+    });
+
+    it('provisions Home drive even when invite redirect wins (invitedDriveId takes priority over provisioned drive)', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ inviteToken: 'ps_invite_abc' }),
+        },
+      });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
+      });
+
+      const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
+
+      // Redirect goes to the invited drive
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard/drive_invited_42');
+      // But provisioning still ran unconditionally
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
     });
 
     it('given consumeAnyInviteIfPresent throws (DB blip), still completes login and lands on /dashboard (session is already committed)', async () => {
