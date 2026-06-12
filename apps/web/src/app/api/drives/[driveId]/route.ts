@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getDriveById, getDriveWithAccess, updateDrive, trashDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveById, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage } from '@pagespace/lib/services/drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -18,6 +18,8 @@ const patchSchema = z.object({
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
   drivePrompt: z.string().max(10000).optional(),
+  // min(1): "" must never reach the FK; null is the only clear signal
+  homePageId: z.string().min(1).nullable().optional(),
 });
 
 /**
@@ -124,14 +126,26 @@ export async function PATCH(
       );
     }
 
+    // A home page must be a non-trashed page belonging to this drive
+    if (typeof validatedBody.homePageId === 'string') {
+      const validHomePage = await isValidDriveHomePage(driveId, validatedBody.homePageId);
+      if (!validHomePage) {
+        return NextResponse.json(
+          { error: 'Home page must be a non-trashed page in this drive' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Update the drive
     const updatedDrive = await updateDrive(driveId, {
       name: validatedBody.name,
       drivePrompt: validatedBody.drivePrompt,
+      homePageId: validatedBody.homePageId,
     });
 
-    // Broadcast drive update event if name or drivePrompt changed
-    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined)) {
+    // Broadcast drive update event if name, drivePrompt, or homePageId changed
+    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined)) {
       const recipientUserIds = await getDriveRecipientUserIds(driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {
@@ -161,6 +175,10 @@ export async function PATCH(
     if (validatedBody.drivePrompt !== undefined) {
       previousValues.drivePrompt = drive.drivePrompt;
       newValues.drivePrompt = updatedDrive?.drivePrompt ?? drive.drivePrompt;
+    }
+    if (validatedBody.homePageId !== undefined) {
+      previousValues.homePageId = drive.homePageId;
+      newValues.homePageId = updatedDrive?.homePageId ?? null;
     }
 
     const isMCP = isMCPAuthResult(auth);
