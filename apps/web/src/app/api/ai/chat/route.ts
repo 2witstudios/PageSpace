@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
   streamText,
-  convertToModelMessages,
   UIMessage,
   stepCountIs,
   hasToolCall,
@@ -9,7 +8,6 @@ import {
   createUIMessageStreamResponse,
   type TextUIPart,
   type ToolSet,
-  type ModelMessage,
 } from 'ai';
 import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
@@ -62,7 +60,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
@@ -907,12 +905,7 @@ export async function POST(request: Request) {
     // Sanitize, compact, and elide — all in the unified seam.
     // createUIMessageStream keeps the FULL conversationHistory for the UI;
     // only the model-facing messages go through the seam.
-    const {
-      messages: preparedMessages,
-      summaryText,
-      stableBoundaryIndex,
-      scheduleCompaction,
-    } = await prepareHistoryForModel({
+    const prepared = await prepareHistoryForModel({
       history: conversationHistory,
       conversationId: conversationId!,
       source: 'page',
@@ -923,12 +916,11 @@ export async function POST(request: Request) {
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
     });
-
-    // Convert elided UIMessages to ModelMessages for streamText.
-    const tailModelMessages = convertToModelMessages(preparedMessages, { tools: filteredTools });
-    const modelMessages: ModelMessage[] = summaryText
-      ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
-      : tailModelMessages;
+    const { scheduleCompaction } = prepared;
+    const { modelMessages, stableBoundaryIndex } = finishModelRequest({
+      prepared,
+      tools: filteredTools,
+    });
 
     // Intentional second sanitize (prepareHistoryForModel already sanitized once):
     // createUIMessageStream must receive the FULL conversation history for the UI

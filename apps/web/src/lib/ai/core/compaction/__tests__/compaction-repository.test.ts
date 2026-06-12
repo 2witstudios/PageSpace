@@ -95,6 +95,25 @@ describe('getState', () => {
     expect(eqArgs).toContain('global');
     expect(eqArgs).not.toContain('page-1');
   });
+
+  it('page and global scopes coexist for the same conversationId — reads are independently scoped', async () => {
+    const pageRow = { conversationId: 'conv-shared', source: 'page', summaryVersion: 2 };
+    const globalRow = { conversationId: 'conv-shared', source: 'global', summaryVersion: 7 };
+
+    selectChain.where.mockResolvedValueOnce([pageRow]);
+    selectChain.where.mockResolvedValueOnce([globalRow]);
+
+    const gotPage = await getState('conv-shared', { source: 'page', pageId: 'p1' });
+    const gotGlobal = await getState('conv-shared', GLOBAL_SCOPE);
+
+    expect(gotPage).toBe(pageRow);
+    expect(gotGlobal).toBe(globalRow);
+
+    // Both reads scoped to their respective sources via eq() predicates
+    const eqArgs = vi.mocked(eq).mock.calls.map(([, val]) => val);
+    expect(eqArgs).toContain('page');
+    expect(eqArgs).toContain('global');
+  });
 });
 
 describe('upsertState — first insert (expectedVersion null)', () => {
@@ -107,6 +126,7 @@ describe('upsertState — first insert (expectedVersion null)', () => {
     expect(insertChain.values).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1', summaryVersion: 1 })
     );
+    // onConflictDoNothing is scoped by the composite PK (conversationId, source)
     expect(insertChain.onConflictDoNothing).toHaveBeenCalledTimes(1);
   });
 
@@ -134,13 +154,24 @@ describe('upsertState — version-guarded update (CAS)', () => {
 
     await expect(upsertState({ ...baseParams, expectedVersion: 5 })).resolves.toBe(false);
   });
+
+  it('scopes the CAS WHERE to conversationId + expectedVersion + source (+ pageId for page scope)', async () => {
+    await upsertState({ ...baseParams, expectedVersion: 5 });
+
+    const eqArgs = vi.mocked(eq).mock.calls.map(([, val]) => val);
+    expect(eqArgs).toContain('conv-1');  // conversationId
+    expect(eqArgs).toContain(5);          // expectedVersion
+    expect(eqArgs).toContain('page');     // source
+    expect(eqArgs).toContain('page-1');   // pageId
+  });
 });
 
 describe('invalidate — tombstone semantics', () => {
-  it('writes an empty-state tombstone: PK-claiming insert, then scope-guarded clear+bump (never a delete)', async () => {
+  it('writes an empty-state tombstone: composite-key-claiming insert, then scope-guarded clear+bump (never a delete)', async () => {
     await invalidate('conv-1', PAGE_SCOPE);
 
-    // Step 1: claim the PK so a pending first-compaction insert loses
+    // Step 1: claim the (conversationId, source) composite key slot so a pending
+    // first-compaction insert for the same scope hits the conflict and loses
     expect(db.insert).toHaveBeenCalledTimes(1);
     expect(insertChain.values).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -156,8 +187,9 @@ describe('invalidate — tombstone semantics', () => {
     );
     expect(insertChain.onConflictDoNothing).toHaveBeenCalledTimes(1);
 
-    // Step 2: scoped clear + version bump so a pending CAS update misses —
-    // and so another scope's row holding the same PK is never touched.
+    // Step 2: scoped clear + version bump so a pending CAS update misses.
+    // Uses clean Drizzle and(eq(...)) conditions — another scope's row for the
+    // same conversationId is a distinct key slot and is never touched.
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(updateChain.set).toHaveBeenCalledWith(
       expect.objectContaining({ summary: '', summaryTokens: 0 })
@@ -170,5 +202,25 @@ describe('invalidate — tombstone semantics', () => {
     expect(insertChain.values).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-2', source: 'global', pageId: null })
     );
+  });
+
+  it('page and global tombstones for the same conversationId are independent — each scopes only its own key slot', async () => {
+    await invalidate('conv-shared', PAGE_SCOPE);
+    vi.clearAllMocks();
+    insertChain.values.mockReturnValue(insertChain);
+    insertChain.onConflictDoNothing.mockResolvedValue({ rowCount: 0 });
+    updateChain.set.mockReturnValue(updateChain);
+    updateChain.where.mockResolvedValue({ rowCount: 1 });
+    await invalidate('conv-shared', GLOBAL_SCOPE);
+
+    // Global invalidation inserts with source 'global', not 'page'
+    expect(insertChain.values).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-shared', source: 'global', pageId: null })
+    );
+
+    // Global update scoped to 'global' source
+    const eqArgs = vi.mocked(eq).mock.calls.map(([, val]) => val);
+    expect(eqArgs).toContain('global');
+    expect(eqArgs).not.toContain('page');
   });
 });

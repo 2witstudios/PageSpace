@@ -22,6 +22,11 @@
       "import": "./dist/commands/command-core.js",
       "require": "./dist/commands/command-core.js"
     },
+    "./ai/normalize-parts": {
+      "types": "./dist/ai/normalize-parts.d.ts",
+      "import": "./dist/ai/normalize-parts.js",
+      "require": "./dist/ai/normalize-parts.js"
+    },
     "./ai/context-window": {
       "types": "./dist/ai/context-window.d.ts",
       "import": "./dist/ai/context-window.js",
@@ -962,6 +967,9 @@
     "*": {
       "client-safe": [
         "./dist/client-safe.d.ts"
+      ],
+      "ai/normalize-parts": [
+        "./dist/ai/normalize-parts.d.ts"
       ],
       "ai/context-window": [
         "./dist/ai/context-window.d.ts"

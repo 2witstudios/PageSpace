@@ -4,6 +4,7 @@ import {
   type CompactionMessage,
   type CompactionPlan,
 } from '@pagespace/lib/ai/context-window';
+import { normalizeMessageParts, type NormalizableMessage } from '@pagespace/lib/ai/normalize-parts';
 import { buildSummarizationPrompt } from '@pagespace/lib/ai/summarization-prompt';
 import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -41,7 +42,13 @@ async function summarize(
     throw new Error(`Provider error: ${model.error}`);
   }
 
-  const stripped = stripNonTextForSummarizer(messages);
+  // Normalize SDK-dialect parts (tool-{name}/input/output) to canonical
+  // (tool-call/tool-result/args/result) before summarization. This is the
+  // ONLY place normalization is applied — convertToModelMessages in the routes
+  // requires SDK-dialect parts and cannot receive canonical tool-call/tool-result
+  // types (it would extract "call"/"result" as tool names via getToolName).
+  const normalized = normalizeMessageParts(messages as NormalizableMessage[]) as CompactionMessage[];
+  const stripped = stripNonTextForSummarizer(normalized);
   const { system, prompt } = buildSummarizationPrompt({
     previousSummary,
     transcript: stripped,
