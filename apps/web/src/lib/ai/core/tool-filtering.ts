@@ -11,6 +11,8 @@ const WRITE_TOOLS = new Set([
   'create_page',
   'rename_page',
   'replace_lines',
+  'find_and_replace',
+  'insert_content',
   'move_page',
   'edit_sheet_cells',
   // Drive operations

@@ -100,7 +100,22 @@ export function insertAtAnchor(params: InsertAtAnchorParams): InsertAtAnchorResu
     return { oldContent, newContent: oldContent, inserted: false, anchorLine: null };
   }
 
-  const insertAt = position === 'before' ? anchorIndex : anchorIndex + 1;
+  let insertAt = position === 'before' ? anchorIndex : anchorIndex + 1;
+
+  // For HTML pages, snap to the block boundary so insertion lands outside the
+  // containing element rather than inside it.
+  // after:  advance past all immediately following closing tags (</tag>)
+  // before: back up past the one opening tag immediately preceding the anchor
+  if (!isRawText) {
+    if (position === 'after') {
+      while (insertAt < lines.length && lines[insertAt].trimStart().startsWith('</')) {
+        insertAt++;
+      }
+    } else if (insertAt > 0 && /^\s*<[^/!]/.test(lines[insertAt - 1])) {
+      insertAt--;
+    }
+  }
+
   const newLines = [...lines.slice(0, insertAt), insertion, ...lines.slice(insertAt)];
 
   return {

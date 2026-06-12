@@ -285,4 +285,81 @@ describe('insertAtAnchor', () => {
       expect(result.newContent).toContain('New paragraph');
     });
   });
+
+  describe('HTML block boundary snapping', () => {
+    it('inserts AFTER the closing </h2> tag, not inside it', () => {
+      // Without boundary snapping the anchor "Summary" would match the text
+      // line inside <h2>, and the insertion would land between "Summary" and
+      // "</h2>", producing invalid markup.
+      const htmlContent = '<h2>Summary</h2><p>Details</p>';
+
+      const result = insertAtAnchor({
+        content: htmlContent,
+        anchor: 'Summary',
+        insertion: 'New section',
+        position: 'after',
+        isRawText: false,
+      });
+
+      expect(result.inserted).toBe(true);
+      const newLines = result.newContent.split('\n');
+      const h2CloseIdx = newLines.findIndex(l => l.includes('</h2>'));
+      const insertionIdx = newLines.findIndex(l => l === 'New section');
+      // Insertion must be AFTER the </h2> closing tag
+      expect(insertionIdx).toBeGreaterThan(h2CloseIdx);
+    });
+
+    it('inserts BEFORE the opening <h2> tag, not inside it', () => {
+      const htmlContent = '<p>Before</p><h2>Summary</h2>';
+
+      const result = insertAtAnchor({
+        content: htmlContent,
+        anchor: 'Summary',
+        insertion: 'New section',
+        position: 'before',
+        isRawText: false,
+      });
+
+      expect(result.inserted).toBe(true);
+      const newLines = result.newContent.split('\n');
+      const h2OpenIdx = newLines.findIndex(l => l.includes('<h2>'));
+      const insertionIdx = newLines.findIndex(l => l === 'New section');
+      // Insertion must be BEFORE the <h2> opening tag
+      expect(insertionIdx).toBeLessThan(h2OpenIdx);
+    });
+
+    it('advances past multiple closing tags for nested blocks', () => {
+      // <blockquote><p>Quote text</p></blockquote>
+      const htmlContent = '<blockquote><p>Quote text</p></blockquote>';
+
+      const result = insertAtAnchor({
+        content: htmlContent,
+        anchor: 'Quote text',
+        insertion: 'After blockquote',
+        position: 'after',
+        isRawText: false,
+      });
+
+      expect(result.inserted).toBe(true);
+      // Insertion should be after the entire </blockquote>, not between </p> and </blockquote>
+      const newLines = result.newContent.split('\n');
+      const blockquoteCloseIdx = newLines.findIndex(l => l.includes('</blockquote>'));
+      const insertionIdx = newLines.findIndex(l => l === 'After blockquote');
+      expect(insertionIdx).toBeGreaterThan(blockquoteCloseIdx);
+    });
+
+    it('does not snap boundaries for raw text (markdown/code)', () => {
+      // Raw text has no HTML tags — the current line-based behavior is correct
+      const result = insertAtAnchor({
+        content: 'line one\nline two\nline three',
+        anchor: 'line two',
+        insertion: 'inserted',
+        position: 'after',
+        isRawText: true,
+      });
+
+      // Standard after-line insertion, no HTML snapping
+      expect(result.newContent).toBe('line one\nline two\ninserted\nline three');
+    });
+  });
 });
