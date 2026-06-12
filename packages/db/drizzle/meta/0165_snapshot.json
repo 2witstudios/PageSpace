@@ -1,6 +1,6 @@
 {
-  "id": "31a03145-1e5d-468a-9146-048b72216fc4",
-  "prevId": "5549e4cb-b0b8-4246-b78e-395f689b47a2",
+  "id": "c57b6db7-05fa-4edf-849d-1e0c782f453f",
+  "prevId": "31a03145-1e5d-468a-9146-048b72216fc4",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -9466,6 +9466,13 @@
         },
         "cancelAtPeriodEnd": {
           "name": "cancelAtPeriodEnd",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "gifted": {
+          "name": "gifted",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
