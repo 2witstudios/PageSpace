@@ -118,6 +118,24 @@ export interface PerformanceMetricsData {
   }>;
 }
 
+export interface GrowthMetricsData {
+  summary: {
+    totalUsers: number;
+    mau: number;
+    wau: number;
+    dau: number;
+    dauMauRatio: number;
+    newUsersThisMonth: number;
+    newUsersLastMonth: number;
+    momGrowthPct: number | null;
+    payingUsers: number;
+    payingUsersPct: number;
+  };
+  mauTrend: Array<{ period: string; mau: number; newUsers: number }>;
+  dauTrend: Array<{ day: string; dau: number; signups: number }>;
+  tierBreakdown: Array<{ tier: string; count: number; pct: number }>;
+}
+
 export interface MonitoringWidgetProps<T> {
   data: T | null;
   isLoading: boolean;

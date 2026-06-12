@@ -5,6 +5,7 @@ import {
   getUnitEconomicsSummary,
   getMarginByPeriod,
   getMarginByModel,
+  getMarginByTier,
   getTopSpendersByMargin,
   getOutstandingDebtByUser,
   type Granularity,
@@ -48,10 +49,11 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
 
     const { startDate, endDate } = getDateRange(range);
 
-    const [summary, byPeriod, byModel, topSpenders, debtByUser] = await Promise.all([
+    const [summary, byPeriod, byModel, byTier, topSpenders, debtByUser] = await Promise.all([
       getUnitEconomicsSummary(startDate, endDate),
       getMarginByPeriod(startDate, endDate, granularity),
       getMarginByModel(startDate, endDate),
+      getMarginByTier(startDate, endDate),
       getTopSpendersByMargin(startDate, endDate, 10),
       getOutstandingDebtByUser(10),
     ]);
@@ -77,6 +79,9 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       for (const r of debtByUser) {
         rows.push(['debt', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', '', '', centsToDollars(r.debtCents)]);
       }
+      for (const r of byTier) {
+        rows.push(['tier', r.tier, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), centsToDollars(r.appliedCents), centsToDollars(r.marginCents), r.marginPct === null ? '' : r.marginPct.toFixed(2), r.requestCount, '']);
+      }
 
       return new NextResponse(toCsv(rows), {
         status: 200,
@@ -87,7 +92,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       });
     }
 
-    return NextResponse.json({ range, granularity, startDate, endDate, summary, byPeriod, byModel, topSpenders, debtByUser });
+    return NextResponse.json({ range, granularity, startDate, endDate, summary, byPeriod, byModel, byTier, topSpenders, debtByUser });
   } catch (error) {
     loggers.api.error('Error fetching unit-economics data:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch unit-economics data' }, { status: 500 });
