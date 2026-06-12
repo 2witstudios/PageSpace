@@ -372,6 +372,19 @@ async function resolvePostLoginRedirectPath({
   next?: string;
   invitedDriveId?: string | null;
 }): Promise<string> {
+  // Provision unconditionally — idempotent, so safe regardless of which redirect wins.
+  // Must run before the early-return branches so users with an invite or a `next` param
+  // still get a Home drive provisioned on their first login.
+  let provisionedDriveId: string | null = null;
+  try {
+    const result = await provisionHomeDriveIfNeeded(userId);
+    if (result.created) {
+      provisionedDriveId = result.driveId;
+    }
+  } catch (error) {
+    loggers.auth.error('Failed to provision Home drive', error as Error, { userId });
+  }
+
   if (invitedDriveId) {
     return `/dashboard/${invitedDriveId}`;
   }
@@ -380,13 +393,8 @@ async function resolvePostLoginRedirectPath({
     return next;
   }
 
-  try {
-    const provisionedDrive = await provisionHomeDriveIfNeeded(userId);
-    if (provisionedDrive?.created) {
-      return `/dashboard/${provisionedDrive.driveId}`;
-    }
-  } catch (error) {
-    loggers.auth.error('Failed to provision Home drive', error as Error, { userId });
+  if (provisionedDriveId) {
+    return `/dashboard/${provisionedDriveId}`;
   }
 
   return '/dashboard';
