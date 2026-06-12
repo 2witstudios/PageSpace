@@ -8,7 +8,7 @@ import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { useTouchDevice } from '@/hooks/useTouchDevice';
 import { Skeleton } from "@/components/ui/skeleton";
 import { Drive } from "@/hooks/useDrive";
-import { Folder, Trash2, MoreHorizontal, Pencil, Undo2 } from "lucide-react";
+import { Folder, House, Trash2, MoreHorizontal, Pencil, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useFileDrop } from '@/hooks/useFileDrop';
 import {
@@ -24,6 +24,18 @@ import { toast } from "sonner";
 import { patch, del, post } from '@/lib/auth/auth-fetch';
 import { PullToRefresh } from "@/components/ui/pull-to-refresh";
 import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+
+/** Puts the single Home drive (kind='HOME') first; all others follow in their
+ *  original order. Treats undefined kind as STANDARD (stale cache safety). */
+export function pinHomeFirst(drives: Drive[]): Drive[] {
+  const homeIdx = drives.findIndex(d => isHomeDrive(d));
+  if (homeIdx <= 0) return [...drives];
+  const result = [...drives];
+  const [home] = result.splice(homeIdx, 1);
+  result.unshift(home);
+  return result;
+}
 
 const DriveListItem = ({
   drive,
@@ -81,7 +93,7 @@ const DriveListItem = ({
         )}
       >
         <Link href={`/dashboard/${drive.id}`} className="flex items-center gap-2 flex-1 min-w-0">
-          <Folder className="h-4 w-4" />
+          {isHomeDrive(drive) ? <House className="h-4 w-4" /> : <Folder className="h-4 w-4" />}
           <span className="truncate">{drive.name}</span>
         </Link>
         {canManage && (
@@ -265,7 +277,7 @@ export default function DriveList() {
         shared.push(d);
       }
     });
-    return { ownedDrives: owned, sharedDrives: shared, trashedDrives: trashed };
+    return { ownedDrives: pinHomeFirst(owned), sharedDrives: shared, trashedDrives: trashed };
   }, [drives]);
 
   const handleRefresh = useCallback(async () => {
@@ -298,7 +310,7 @@ export default function DriveList() {
                     key={drive.id}
                     drive={drive}
                     isActive={!isTrashView && drive.id === urlDriveId}
-                    canManage={true}
+                    canManage={!isHomeDrive(drive)}
                     isTouchDevice={isTouchDevice}
                     onRename={() => setRenameDialogState({ isOpen: true, drive })}
                     onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
