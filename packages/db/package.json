@@ -206,6 +206,10 @@
     "./schema/commands": {
       "types": "./dist/schema/commands.d.ts",
       "default": "./dist/schema/commands.js"
+    },
+    "./schema/ai-compaction": {
+      "types": "./dist/schema/ai-compaction.d.ts",
+      "default": "./dist/schema/ai-compaction.js"
     }
   },
   "scripts": {

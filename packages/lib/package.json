@@ -22,6 +22,16 @@
       "import": "./dist/commands/command-core.js",
       "require": "./dist/commands/command-core.js"
     },
+    "./ai/context-window": {
+      "types": "./dist/ai/context-window.d.ts",
+      "import": "./dist/ai/context-window.js",
+      "require": "./dist/ai/context-window.js"
+    },
+    "./ai/summarization-prompt": {
+      "types": "./dist/ai/summarization-prompt.d.ts",
+      "import": "./dist/ai/summarization-prompt.js",
+      "require": "./dist/ai/summarization-prompt.js"
+    },
     "./ai/global-channel-id": {
       "types": "./dist/ai/global-channel-id.d.ts",
       "import": "./dist/ai/global-channel-id.js",
@@ -937,6 +947,12 @@
     "*": {
       "client-safe": [
         "./dist/client-safe.d.ts"
+      ],
+      "ai/context-window": [
+        "./dist/ai/context-window.d.ts"
+      ],
+      "ai/summarization-prompt": [
+        "./dist/ai/summarization-prompt.d.ts"
       ],
       "ai/global-channel-id": [
         "./dist/ai/global-channel-id.d.ts"
