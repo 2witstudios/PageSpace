@@ -48,6 +48,8 @@ export interface DriveEventPayload {
   operation: DriveOperation;
   name?: string;
   slug?: string;
+  /** Discriminates command/workflow broadcasts from drive-level changes. Absent = drive-level. */
+  resourceType?: 'command' | 'workflow';
 }
 
 export interface DriveMemberEventPayload {
@@ -445,6 +447,7 @@ export function createDriveEventPayload(
   options: {
     name?: string;
     slug?: string;
+    resourceType?: DriveEventPayload['resourceType'];
   } = {}
 ): DriveEventPayload {
   return {

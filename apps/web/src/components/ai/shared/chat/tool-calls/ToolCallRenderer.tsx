@@ -70,7 +70,6 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'delete_channel_message': 'Delete Message',
   // Page write tools
   'replace_lines': 'Edit Document',
-  'find_and_replace': 'Find & Replace',
   'insert_content': 'Insert Content',
   'create_page': 'Create Page',
   'rename_page': 'Rename Page',

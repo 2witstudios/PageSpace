@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { checkDriveAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
@@ -134,6 +136,13 @@ export async function PATCH(
 
   auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId, details: { updatedFields: Object.keys(data) } });
 
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(workflow.driveId);
+    await broadcastDriveEvent(createDriveEventPayload(workflow.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
+  } catch (broadcastError) {
+    loggers.api.error('[WORKFLOWS_PATCH_BROADCAST]', broadcastError as Error);
+  }
+
   return NextResponse.json(updated);
 }
 
@@ -152,6 +161,13 @@ export async function DELETE(
   await db.delete(workflows).where(eq(workflows.id, workflowId));
 
   auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId });
+
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(result.workflow.driveId);
+    await broadcastDriveEvent(createDriveEventPayload(result.workflow.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
+  } catch (broadcastError) {
+    loggers.api.error('[WORKFLOWS_DELETE_BROADCAST]', broadcastError as Error);
+  }
 
   return NextResponse.json({ success: true });
 }
