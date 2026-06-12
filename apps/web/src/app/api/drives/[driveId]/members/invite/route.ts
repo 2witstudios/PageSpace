@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -93,6 +94,10 @@ export async function POST(
     const drive = await driveInviteRepository.findDriveById(driveId);
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    }
+
+    if (isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'invite') }, { status: 403 });
     }
 
     const isOwner = drive.ownerId === inviterUserId;

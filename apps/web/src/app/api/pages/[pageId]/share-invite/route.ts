@@ -14,6 +14,8 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { getDriveById } from '@pagespace/lib/services/drive-service';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -97,6 +99,12 @@ export async function POST(
     const page = await pageInviteRepository.findPageById(pageId);
     if (!page) {
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Home drive guard: pages inside a Home drive cannot be shared.
+    const pageDrive = await getDriveById(page.driveId);
+    if (pageDrive && isHomeDrive(pageDrive)) {
+      return NextResponse.json({ error: homeDriveActionError(pageDrive, 'share') }, { status: 403 });
     }
 
     // Pair-scoped rate limit (inviter + email)

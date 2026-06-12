@@ -994,4 +994,42 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
   });
 
+  // ==========================================================================
+  // Home drive guard
+  // ==========================================================================
+
+  describe('Home drive guard', () => {
+    it('returns 403 when trying to invite to a Home drive', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
+        id: mockDriveId,
+        name: 'Home',
+        slug: 'home',
+        ownerId: mockUserId,
+        kind: 'HOME',
+      } as never);
+
+      const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+      const json = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(json.error).toMatch(/home/i);
+    });
+
+    it('does not create any member row when drive is Home', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
+        id: mockDriveId,
+        name: 'Home',
+        slug: 'home',
+        ownerId: mockUserId,
+        kind: 'HOME',
+      } as never);
+
+      await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
+
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createAcceptedMemberWithPermissions).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createPendingInvite).not.toHaveBeenCalled();
+    });
+  });
+
 });

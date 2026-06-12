@@ -331,7 +331,7 @@ describe('POST /api/drives', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Cannot create a drive named "Personal".');
+      expect(body.error).toBe('Cannot create a drive with that name.');
     });
 
     it('should reject "personal" as drive name (case-insensitive)', async () => {
@@ -344,7 +344,7 @@ describe('POST /api/drives', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Cannot create a drive named "Personal".');
+      expect(body.error).toBe('Cannot create a drive with that name.');
     });
 
     it('should reject "PERSONAL" as drive name (uppercase)', async () => {
@@ -357,7 +357,43 @@ describe('POST /api/drives', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Cannot create a drive named "Personal".');
+      expect(body.error).toBe('Cannot create a drive with that name.');
+    });
+
+    it('should reject "Home" as drive name', async () => {
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Home' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should reject "home" as drive name (case-insensitive)', async () => {
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'home' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should reject "HOME" as drive name (uppercase)', async () => {
+      const request = new Request('https://example.com/api/drives', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'HOME' }),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
     });
   });
 

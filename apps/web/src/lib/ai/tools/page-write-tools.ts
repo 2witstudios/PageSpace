@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { canActorEditPage, canActorDeletePage, driveDeniedByAppToken } from './actor-permissions';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -293,6 +294,10 @@ async function trashDrive(
     throw new Error('Drive not found or you do not have permission to delete it');
   }
 
+  if (isHomeDrive(drive)) {
+    throw new Error(homeDriveActionError(drive, 'trash')!);
+  }
+
   if (drive.name !== confirmDriveName) {
     throw new Error(`Drive name confirmation failed. Expected "${drive.name}" but got "${confirmDriveName}"`);
   }
@@ -366,6 +371,10 @@ async function restoreDrive(
 
   if (!drive) {
     throw new Error('Drive not found or you do not have permission to restore it');
+  }
+
+  if (isHomeDrive(drive)) {
+    throw new Error(homeDriveActionError(drive, 'trash')!);
   }
 
   if (!drive.isTrashed) {

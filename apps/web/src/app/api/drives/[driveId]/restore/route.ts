@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core';
+import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -51,6 +52,10 @@ export async function POST(
 
     if (!drive) {
       return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+    }
+
+    if (isHomeDrive(drive)) {
+      return NextResponse.json({ error: homeDriveActionError(drive, 'trash') }, { status: 403 });
     }
 
     if (!drive.isTrashed) {

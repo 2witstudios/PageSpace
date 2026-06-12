@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, not, inArray, isNotNull, sql } from '@pagespace/db/operators';
+import { eq, ne, and, not, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
@@ -342,10 +342,14 @@ export async function updateDrive(
     updateData.drivePrompt = input.drivePrompt;
   }
 
+  const whereClause = input.name !== undefined
+    ? and(eq(drives.id, driveId), ne(drives.kind, 'HOME'))
+    : eq(drives.id, driveId);
+
   const [updated] = await db
     .update(drives)
     .set(updateData)
-    .where(eq(drives.id, driveId))
+    .where(whereClause)
     .returning();
 
   return updated || null;
@@ -362,10 +366,20 @@ export async function trashDrive(driveId: string): Promise<typeof drives.$inferS
       trashedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(drives.id, driveId))
+    .where(and(eq(drives.id, driveId), ne(drives.kind, 'HOME')))
     .returning();
 
   return updated || null;
+}
+
+/**
+ * Find the Home drive for a user (ignores isTrashed — Home is never trashed).
+ */
+export async function getHomeDrive(userId: string): Promise<typeof drives.$inferSelect | null> {
+  const drive = await db.query.drives.findFirst({
+    where: and(eq(drives.ownerId, userId), eq(drives.kind, 'HOME')),
+  });
+  return drive ?? null;
 }
 
 /**

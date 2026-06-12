@@ -15,6 +15,7 @@ export interface DriveRecord {
   name: string;
   slug: string;
   ownerId: string;
+  kind: 'STANDARD' | 'HOME';
   isTrashed: boolean;
   trashedAt: Date | null;
 }
