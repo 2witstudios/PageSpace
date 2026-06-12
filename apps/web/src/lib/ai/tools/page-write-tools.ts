@@ -20,7 +20,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { replaceLines } from '@/lib/editor/line-edit';
-import { findAndReplace, insertAtAnchor } from '@/lib/editor/text-edit';
+import { insertAtAnchor } from '@/lib/editor/text-edit';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -1044,111 +1044,6 @@ export const pageWriteTools = {
           newParentId: maskIdentifier(newParentId || undefined),
         });
         throw new Error(`Failed to move page "${title}": ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  }),
-
-  /**
-   * Find and replace text in a document or code page
-   */
-  find_and_replace: tool({
-    description: 'Find and replace a text string in a document or code page. More resilient than replace_lines because it anchors to content rather than line numbers. Replaces the first occurrence by default; set replaceAll: true to replace every occurrence.',
-    inputSchema: z.object({
-      title: z.string().describe('The document title for display context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
-      search: z.string().min(1).describe('The text to find'),
-      replacement: z.string().describe('The text to replace it with (empty string to delete the match)'),
-      replaceAll: z.boolean().optional().describe('Replace every occurrence instead of just the first (default false)'),
-    }),
-    execute: async ({ title, pageId, search, replacement, replaceAll = false }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
-
-      try {
-        const page = await pageRepository.findById(pageId);
-        if (!page) {
-          throw new Error(`Page with ID "${pageId}" not found`);
-        }
-
-        if (page.type === 'FILE') {
-          return {
-            success: false,
-            error: 'Cannot edit FILE pages',
-            message: 'This is an uploaded file. File content is read-only.',
-            pageInfo: { pageId: page.id, title: page.title, type: page.type, mimeType: page.mimeType },
-          };
-        }
-
-        if (isSheetType(page.type as PageType)) {
-          return {
-            success: false,
-            error: 'Cannot use text editing on sheets',
-            message: 'Use edit_sheet_cells for sheet pages.',
-            pageInfo: { pageId: page.id, title: page.title, type: page.type },
-          };
-        }
-
-        const canEdit = await canActorEditPage(context as ToolExecutionContext, page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to edit this document');
-        }
-
-        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const { oldContent, newContent, matchCount, found } = findAndReplace({
-          content: page.content,
-          search,
-          replacement,
-          replaceAll,
-          isRawText,
-        });
-
-        if (!found) {
-          return {
-            success: true,
-            pageId: page.id,
-            title: page.title,
-            found: false,
-            matchCount: 0,
-            message: `Search string not found in "${page.title}"`,
-          };
-        }
-
-        const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
-          metadata: { matchCount, replaceAll },
-        });
-
-        await applyPageMutation({
-          pageId: page.id,
-          operation: 'update',
-          updates: { content: newContent },
-          updatedFields: ['content'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: mutationContext,
-        });
-
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, page.id, 'content-updated', { title: page.title })
-        );
-
-        return {
-          success: true,
-          pageId: page.id,
-          title: page.title,
-          found: true,
-          matchCount,
-          oldContent,
-          newContent,
-          message: `Replaced ${matchCount} occurrence${matchCount === 1 ? '' : 's'} in "${page.title}"`,
-        };
-      } catch (error) {
-        pageWriteLogger.error('Failed to find and replace', error instanceof Error ? error : undefined, {
-          userId: maskIdentifier(userId),
-          pageId: maskIdentifier(pageId),
-          title,
-        });
-        throw new Error(`Failed to find and replace in "${title}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),
