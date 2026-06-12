@@ -5,10 +5,12 @@ import { commands } from '@pagespace/db/schema/commands';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -60,7 +62,7 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    const memberDriveIds = await getMemberDriveIds(userId);
+    const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(userId));
 
     const visible = await db.query.commands.findMany({
       where: memberDriveIds.length
@@ -88,7 +90,7 @@ export async function GET(request: Request) {
     const viewableByPageId = new Map(
       await Promise.all(
         entryPages.map(
-          async (page) => [page.id, await canUserViewPage(userId, page.id)] as const
+          async (page) => [page.id, await canPrincipalViewPage(auth, page.id)] as const
         )
       )
     );
@@ -188,6 +190,8 @@ export async function POST(request: Request) {
     const commandDriveId = typeof driveId === 'string' ? driveId : null;
 
     if (commandDriveId !== null) {
+      const scopeError = checkMCPDriveScope(auth, commandDriveId);
+      if (scopeError) return scopeError;
       const allowed = await isDriveOwnerOrAdmin(userId, commandDriveId);
       if (!allowed) {
         return NextResponse.json(
@@ -197,7 +201,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const entryPageError = await validateEntryPage(userId, entryPageId, commandDriveId);
+    const entryPageError = await validateEntryPage(auth, entryPageId, commandDriveId);
     if (entryPageError) return entryPageError;
 
     const duplicate = await db.query.commands.findFirst({
@@ -253,6 +257,15 @@ export async function POST(request: Request) {
         driveId: created.driveId,
       },
     });
+
+    if (commandDriveId !== null) {
+      try {
+        const recipientUserIds = await getDriveRecipientUserIds(commandDriveId);
+        await broadcastDriveEvent(createDriveEventPayload(commandDriveId, 'updated', { resourceType: 'command' }), recipientUserIds);
+      } catch (broadcastError) {
+        loggers.api.error('[COMMANDS_POST_BROADCAST]', broadcastError as Error);
+      }
+    }
 
     return NextResponse.json({ command: toCommandResponse(created) }, { status: 201 });
   } catch (error) {

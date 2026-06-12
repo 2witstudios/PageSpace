@@ -124,6 +124,20 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(isWebSearchTool('create_page')).toBe(false);
   });
 
+  it('classifies insert_content as a write tool', () => {
+    expect(isWriteTool('insert_content')).toBe(true);
+  });
+
+  it('excludes insert_content in read-only mode', () => {
+    const tools = {
+      insert_content: 'w',
+      read_page: 'r',
+    };
+    const filtered = filterToolsForReadOnly(tools, true);
+    expect(filtered).not.toHaveProperty('insert_content');
+    expect(filtered).toHaveProperty('read_page');
+  });
+
   it('classifies workflow tools: writes are write tools, list is read', () => {
     expect(isWriteTool('create_workflow')).toBe(true);
     expect(isWriteTool('update_workflow')).toBe(true);

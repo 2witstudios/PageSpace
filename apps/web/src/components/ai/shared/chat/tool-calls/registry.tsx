@@ -316,6 +316,30 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   },
 
   // === PAGE WRITE TOOLS ===
+  insert_content: ({ parsedOutput }) => {
+    if (parsedOutput.success && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
+      return (
+        <RichDiffRenderer
+          title={(parsedOutput.title as string | undefined) || 'Document'}
+          oldContent={parsedOutput.oldContent}
+          newContent={parsedOutput.newContent}
+          pageId={parsedOutput.pageId as string | undefined}
+          changeSummary={parsedOutput.message as string | undefined}
+        />
+      );
+    }
+    return (
+      <ActionResultRenderer
+        actionType="update"
+        success={parsedOutput.success !== false}
+        title={parsedOutput.title as string | undefined}
+        pageId={parsedOutput.pageId as string | undefined}
+        message={parsedOutput.message as string | undefined}
+        errorMessage={parsedOutput.error as string | undefined}
+      />
+    );
+  },
+
   replace_lines: ({ parsedOutput }) => {
     if (parsedOutput.success && parsedOutput.oldContent && parsedOutput.newContent) {
       return (
@@ -893,6 +917,33 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  list_event_drives: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  share_event_with_drive: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  unshare_event_from_drive: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === COMMAND TOOLS ===
   create_command: ({ parsedOutput }) => (
     <ActionResultRenderer
@@ -940,6 +991,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       />
     );
   },
+
 
   // === WORKFLOWS ===
   list_workflows: ({ parsedOutput }) => {

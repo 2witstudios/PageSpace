@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { checkDriveAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNotNull, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
@@ -10,7 +12,8 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 const createWorkflowSchema = z.object({
@@ -26,7 +29,7 @@ const createWorkflowSchema = z.object({
 
 // GET /api/workflows?driveId=xxx - List scheduled workflows for a drive
 export async function GET(request: Request) {
-  const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: false });
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
@@ -37,11 +40,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'driveId is required' }, { status: 400 });
   }
 
-  const access = await checkDriveAccess(driveId, userId);
-  if (!access.drive) {
-    return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-  }
-  if (!access.isOwner && !access.isAdmin) {
+  const scopeError = checkMCPDriveScope(auth, driveId);
+  if (scopeError) return scopeError;
+
+  if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+    const access = await checkDriveAccess(driveId, userId);
+    if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
@@ -107,7 +111,7 @@ export async function GET(request: Request) {
 
 // POST /api/workflows - Create a new scheduled workflow
 export async function POST(request: Request) {
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
@@ -120,12 +124,12 @@ export async function POST(request: Request) {
 
   const data = parsed.data;
 
-  // Check drive access - must be owner or admin
-  const access = await checkDriveAccess(data.driveId, userId);
-  if (!access.drive) {
-    return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-  }
-  if (!access.isOwner && !access.isAdmin) {
+  const scopeError = checkMCPDriveScope(auth, data.driveId);
+  if (scopeError) return scopeError;
+
+  if (!(await isPrincipalDriveOwnerOrAdmin(auth, data.driveId))) {
+    const access = await checkDriveAccess(data.driveId, userId);
+    if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
@@ -175,6 +179,13 @@ export async function POST(request: Request) {
   }).returning();
 
   auditRequest(request, { eventType: 'data.write', userId, resourceType: 'workflow', resourceId: workflow.id, details: { driveId: data.driveId, triggerType: MANAGEABLE_TRIGGER_TYPE } });
+
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(data.driveId);
+    await broadcastDriveEvent(createDriveEventPayload(data.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
+  } catch (broadcastError) {
+    loggers.api.error('[WORKFLOWS_POST_BROADCAST]', broadcastError as Error);
+  }
 
   return NextResponse.json(workflow, { status: 201 });
 }

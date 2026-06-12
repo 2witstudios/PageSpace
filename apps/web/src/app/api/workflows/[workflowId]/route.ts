@@ -1,16 +1,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
+import { checkDriveAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
 const updateWorkflowSchema = z.object({
@@ -23,7 +25,7 @@ const updateWorkflowSchema = z.object({
   isEnabled: z.boolean().optional(),
 }).strict();
 
-async function getWorkflowWithAuth(workflowId: string, userId: string) {
+async function getWorkflowWithAuth(workflowId: string, auth: AuthResult) {
   const [workflow] = await db
     .select()
     .from(workflows)
@@ -36,9 +38,12 @@ async function getWorkflowWithAuth(workflowId: string, userId: string) {
     return { error: NextResponse.json({ error: 'Workflow not found' }, { status: 404 }) };
   }
 
-  const access = await checkDriveAccess(workflow.driveId, userId);
-  if (!access.drive) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
-  if (!access.isOwner && !access.isAdmin) {
+  const scopeError = checkMCPDriveScope(auth, workflow.driveId);
+  if (scopeError) return { error: scopeError };
+
+  if (!(await isPrincipalDriveOwnerOrAdmin(auth, workflow.driveId))) {
+    const access = await checkDriveAccess(workflow.driveId, auth.userId);
+    if (!access.drive) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
     return { error: NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }) };
   }
 
@@ -54,7 +59,7 @@ export async function GET(
   if (isAuthError(auth)) return auth.error;
 
   const { workflowId } = await context.params;
-  const result = await getWorkflowWithAuth(workflowId, auth.userId);
+  const result = await getWorkflowWithAuth(workflowId, auth);
   if ('error' in result) return result.error;
 
   auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId });
@@ -71,7 +76,7 @@ export async function PATCH(
   if (isAuthError(auth)) return auth.error;
 
   const { workflowId } = await context.params;
-  const result = await getWorkflowWithAuth(workflowId, auth.userId);
+  const result = await getWorkflowWithAuth(workflowId, auth);
   if ('error' in result) return result.error;
 
   const workflow = result.workflow;
@@ -134,6 +139,13 @@ export async function PATCH(
 
   auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId, details: { updatedFields: Object.keys(data) } });
 
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(workflow.driveId);
+    await broadcastDriveEvent(createDriveEventPayload(workflow.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
+  } catch (broadcastError) {
+    loggers.api.error('[WORKFLOWS_PATCH_BROADCAST]', broadcastError as Error);
+  }
+
   return NextResponse.json(updated);
 }
 
@@ -146,12 +158,19 @@ export async function DELETE(
   if (isAuthError(auth)) return auth.error;
 
   const { workflowId } = await context.params;
-  const result = await getWorkflowWithAuth(workflowId, auth.userId);
+  const result = await getWorkflowWithAuth(workflowId, auth);
   if ('error' in result) return result.error;
 
   await db.delete(workflows).where(eq(workflows.id, workflowId));
 
   auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'workflow', resourceId: workflowId });
+
+  try {
+    const recipientUserIds = await getDriveRecipientUserIds(result.workflow.driveId);
+    await broadcastDriveEvent(createDriveEventPayload(result.workflow.driveId, 'updated', { resourceType: 'workflow' }), recipientUserIds);
+  } catch (broadcastError) {
+    loggers.api.error('[WORKFLOWS_DELETE_BROADCAST]', broadcastError as Error);
+  }
 
   return NextResponse.json({ success: true });
 }

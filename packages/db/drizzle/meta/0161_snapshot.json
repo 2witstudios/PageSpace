@@ -1,6 +1,6 @@
 {
-  "id": "a48112d6-5587-4508-8987-3128f3011dd8",
-  "prevId": "f2362b43-9d4a-49a2-a0c7-f86334bdae27",
+  "id": "a2631fd8-2e2d-48c4-911a-3fe01378e89d",
+  "prevId": "a48112d6-5587-4508-8987-3128f3011dd8",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1566,6 +1566,14 @@
           "primaryKey": false,
           "notNull": true
         },
+        "kind": {
+          "name": "kind",
+          "type": "DriveKind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'STANDARD'"
+        },
         "isTrashed": {
           "name": "isTrashed",
           "type": "boolean",
@@ -1644,6 +1652,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drives_owner_home_unique": {
+          "name": "drives_owner_home_unique",
+          "columns": [
+            {
+              "expression": "ownerId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"drives\".\"kind\" = 'HOME'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -16613,6 +16637,14 @@
       "values": [
         "user",
         "admin"
+      ]
+    },
+    "public.DriveKind": {
+      "name": "DriveKind",
+      "schema": "public",
+      "values": [
+        "STANDARD",
+        "HOME"
       ]
     },
     "public.FavoriteItemType": {

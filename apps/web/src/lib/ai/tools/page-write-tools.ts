@@ -21,6 +21,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { replaceLines } from '@/lib/editor/line-edit';
+import { insertAtAnchor } from '@/lib/editor/text-edit';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -1052,6 +1053,111 @@ export const pageWriteTools = {
           newParentId: maskIdentifier(newParentId || undefined),
         });
         throw new Error(`Failed to move page "${title}": ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Insert content before or after an anchor line in a document or code page
+   */
+  insert_content: tool({
+    description: 'Anchored line insert — adds a new line of content immediately before or after the first line containing a given anchor string. Useful for agents that need to insert content relative to headings or landmarks without knowing exact line numbers.',
+    inputSchema: z.object({
+      title: z.string().describe('The document title for display context'),
+      pageId: z.string().describe('The unique ID of the page to edit'),
+      anchor: z.string().min(1).describe('Text to search for within a line — the first line containing this substring is used'),
+      content: z.string().describe('Content to insert as a new line'),
+      position: z.enum(['before', 'after']).describe('Insert the new line before or after the anchor line'),
+    }),
+    execute: async ({ title, pageId, anchor, content, position }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        const page = await pageRepository.findById(pageId);
+        if (!page) {
+          throw new Error(`Page with ID "${pageId}" not found`);
+        }
+
+        if (page.type === 'FILE') {
+          return {
+            success: false,
+            error: 'Cannot edit FILE pages',
+            message: 'This is an uploaded file. File content is read-only.',
+            pageInfo: { pageId: page.id, title: page.title, type: page.type, mimeType: page.mimeType },
+          };
+        }
+
+        if (isSheetType(page.type as PageType)) {
+          return {
+            success: false,
+            error: 'Cannot use line insertion on sheets',
+            message: 'Use edit_sheet_cells for sheet pages.',
+            pageInfo: { pageId: page.id, title: page.title, type: page.type },
+          };
+        }
+
+        const canEdit = await canActorEditPage(context as ToolExecutionContext, page.id);
+        if (!canEdit) {
+          throw new Error('Insufficient permissions to edit this document');
+        }
+
+        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
+        const { oldContent, newContent, inserted, anchorLine } = insertAtAnchor({
+          content: page.content,
+          anchor,
+          insertion: content,
+          position,
+          isRawText,
+        });
+
+        if (!inserted) {
+          return {
+            success: true,
+            pageId: page.id,
+            title: page.title,
+            inserted: false,
+            anchorLine: null,
+            message: `Anchor text not found in "${page.title}"`,
+          };
+        }
+
+        const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
+          metadata: { anchorLine, position },
+        });
+
+        await applyPageMutation({
+          pageId: page.id,
+          operation: 'update',
+          updates: { content: newContent },
+          updatedFields: ['content'],
+          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+          context: mutationContext,
+        });
+
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, page.id, 'content-updated', { title: page.title })
+        );
+
+        return {
+          success: true,
+          pageId: page.id,
+          title: page.title,
+          inserted: true,
+          anchorLine,
+          oldContent,
+          newContent,
+          message: `Inserted content ${position} line ${anchorLine} in "${page.title}"`,
+        };
+      } catch (error) {
+        pageWriteLogger.error('Failed to insert content', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          pageId: maskIdentifier(pageId),
+          title,
+        });
+        throw new Error(`Failed to insert content in "${title}": ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

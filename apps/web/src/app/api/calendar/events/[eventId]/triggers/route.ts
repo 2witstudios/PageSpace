@@ -14,8 +14,8 @@ import {
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
-const SESSION_READ = { allow: ['session'] as const, requireCSRF: false };
-const SESSION_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 // Same auth shape as PATCH /api/calendar/events/[eventId]: creator OR drive
 // owner/admin. Personal events (no driveId) are creator-only by construction.
@@ -175,6 +175,9 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // TRIGGER SAFETY: execution context is always the home drive (event.driveId).
+  // Drives shared via calendar_event_drives have read visibility only — they cannot
+  // manage or receive triggers. canManageEventTrigger above enforces this.
   try {
     await upsertCalendarTriggerWorkflow(db, {
       driveId: event.driveId,

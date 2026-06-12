@@ -5,6 +5,7 @@ export const CORE_TOOL_NAMES = new Set([
   'get_page_details',
   'create_page',
   'replace_lines',
+  'insert_content',
   'regex_search',
   'multi_drive_search',
 ]);

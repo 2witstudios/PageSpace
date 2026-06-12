@@ -2,11 +2,12 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gte, lte, inArray, isNull, desc, sql } from '@pagespace/db/operators'
-import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { calendarEvents, calendarEventDrives, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { isUserMemberOfAnyEventDrive, listEventDrives, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
@@ -19,10 +20,13 @@ async function canAccessEvent(
   event: typeof calendarEvents.$inferSelect,
   context?: ToolExecutionContext
 ): Promise<boolean> {
-  // A scoped MCP token may never reach a drive-tied event outside its scope,
-  // even one it created (no-op for unscoped callers).
-  if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'view')) {
-    return false;
+  // A scoped MCP token must have access to at least one of the event's drives
+  // (home drive + any shared drives). Check all drives so tokens scoped to a
+  // shared drive can still reach the event.
+  if (context && event.driveId) {
+    const allDriveIds = await getAllDriveIdsForEvent(event.id);
+    const accessible = await filterDriveIdsByAppTokenScope(context, allDriveIds);
+    if (accessible.length === 0) return false;
   }
   // A drive-scoped token has no identity power over the owner's PERSONAL
   // (drive-less) events — it belongs to a workspace, not to all of you.
@@ -46,9 +50,9 @@ async function canAccessEvent(
     return true;
   }
 
-  // Check drive membership for drive events with DRIVE visibility
-  if (event.driveId && event.visibility === 'DRIVE') {
-    return isUserDriveMember(userId, event.driveId);
+  // Check membership in home drive OR any shared drive for DRIVE-visible events
+  if (event.visibility === 'DRIVE') {
+    return isUserMemberOfAnyEventDrive(userId, event);
   }
 
   return false;
@@ -263,7 +267,14 @@ export const calendarReadTools = {
             };
           }
 
-          // Get event IDs where user is an attendee (for ATTENDEES_ONLY events)
+          // Event IDs shared into this drive via the junction table (DRIVE visibility only)
+          const sharedRows = await db
+            .select({ eventId: calendarEventDrives.eventId })
+            .from(calendarEventDrives)
+            .where(eq(calendarEventDrives.driveId, driveId));
+          const sharedEventIds = sharedRows.map((r) => r.eventId);
+
+          // Event IDs where user is an attendee (for ATTENDEES_ONLY events in this drive)
           const attendeeEventsInDrive = await db
             .select({ eventId: eventAttendees.eventId })
             .from(eventAttendees)
@@ -271,14 +282,24 @@ export const calendarReadTools = {
             .where(
               and(
                 eq(eventAttendees.userId, userId),
-                eq(calendarEvents.driveId, driveId)
+                or(
+                  eq(calendarEvents.driveId, driveId),
+                  sharedEventIds.length > 0
+                    ? inArray(calendarEvents.id, sharedEventIds)
+                    : eq(calendarEvents.id, '__never_match__')
+                )
               )
             );
           const attendeeEventIdsInDrive = attendeeEventsInDrive.map((e) => e.eventId);
 
           const events = await db.query.calendarEvents.findMany({
             where: and(
-              eq(calendarEvents.driveId, driveId),
+              or(
+                eq(calendarEvents.driveId, driveId),
+                sharedEventIds.length > 0
+                  ? inArray(calendarEvents.id, sharedEventIds)
+                  : eq(calendarEvents.id, '__never_match__')
+              ),
               eq(calendarEvents.isTrashed, false),
               lte(calendarEvents.startAt, parsedEndDate),
               gte(calendarEvents.endAt, parsedStartDate),
@@ -356,11 +377,23 @@ export const calendarReadTools = {
           );
         }
 
-        // Drive events with DRIVE visibility
+        // Drive events with DRIVE visibility (home drive or shared into user's drives)
         if (driveIds.length > 0) {
+          // Events shared into any of the user's drives via junction table
+          const sharedEventRows = await db
+            .select({ eventId: calendarEventDrives.eventId })
+            .from(calendarEventDrives)
+            .where(inArray(calendarEventDrives.driveId, driveIds));
+          const sharedEventIds = sharedEventRows.map((r) => r.eventId);
+
           conditions.push(
             and(
-              inArray(calendarEvents.driveId, driveIds),
+              or(
+                inArray(calendarEvents.driveId, driveIds),
+                sharedEventIds.length > 0
+                  ? inArray(calendarEvents.id, sharedEventIds)
+                  : eq(calendarEvents.id, '__never_match__')
+              ),
               eq(calendarEvents.visibility, 'DRIVE')
             )
           );
@@ -667,11 +700,22 @@ export const calendarReadTools = {
         // Events where user is the creator (any visibility, any drive)
         conditions.push(eq(calendarEvents.createdById, userId));
 
-        // Drive events with DRIVE visibility (visible to all drive members)
+        // Drive events with DRIVE visibility (home drive or shared into user's drives)
         if (driveIds.length > 0) {
+          const sharedBusyRows = await db
+            .select({ eventId: calendarEventDrives.eventId })
+            .from(calendarEventDrives)
+            .where(inArray(calendarEventDrives.driveId, driveIds));
+          const sharedBusyIds = sharedBusyRows.map((r) => r.eventId);
+
           conditions.push(
             and(
-              inArray(calendarEvents.driveId, driveIds),
+              or(
+                inArray(calendarEvents.driveId, driveIds),
+                sharedBusyIds.length > 0
+                  ? inArray(calendarEvents.id, sharedBusyIds)
+                  : eq(calendarEvents.id, '__never_match__')
+              ),
               eq(calendarEvents.visibility, 'DRIVE')
             )
           );
@@ -839,6 +883,48 @@ export const calendarReadTools = {
           `Failed to check availability: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    },
+  }),
+
+  list_event_drives: tool({
+    description:
+      'List all drives an event is shared with. ' +
+      'The home drive (where the event was created) is always listed first with isHome=true. ' +
+      'Returns an empty array for personal events (not tied to any drive).',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event'),
+    }),
+    execute: async ({ eventId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+
+      // Verify event exists and caller has access before exposing drive topology
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+      const hasAccess = await canAccessEvent(userId, event, context);
+      if (!hasAccess) return { success: false, error: 'You do not have access to this event.' };
+
+      const drives = await listEventDrives(eventId);
+
+      return {
+        success: true,
+        data: { eventId, drives },
+        summary:
+          drives.length === 0
+            ? 'This is a personal event not shared with any drive.'
+            : `Event is visible in ${drives.length} drive(s): ${drives.map((d) => d.driveName).join(', ')}`,
+        nextSteps:
+          drives.length > 0
+            ? [
+                'Use share_event_with_drive to share with additional drives',
+                'Use unshare_event_from_drive to remove from a shared drive',
+              ]
+            : [],
+      };
     },
   }),
 };

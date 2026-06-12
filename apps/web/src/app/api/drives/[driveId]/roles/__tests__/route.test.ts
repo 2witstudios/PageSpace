@@ -24,10 +24,11 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
 import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
@@ -97,6 +98,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -123,7 +125,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -270,6 +272,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(validateRolePermissions).mockReturnValue(true);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -303,7 +306,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });
