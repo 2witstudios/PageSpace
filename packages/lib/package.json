@@ -32,6 +32,11 @@
       "import": "./dist/ai/summarization-prompt.js",
       "require": "./dist/ai/summarization-prompt.js"
     },
+    "./ai/tool-result-eliding": {
+      "types": "./dist/ai/tool-result-eliding.d.ts",
+      "import": "./dist/ai/tool-result-eliding.js",
+      "require": "./dist/ai/tool-result-eliding.js"
+    },
     "./ai/global-channel-id": {
       "types": "./dist/ai/global-channel-id.d.ts",
       "import": "./dist/ai/global-channel-id.js",
@@ -953,6 +958,9 @@
       ],
       "ai/summarization-prompt": [
         "./dist/ai/summarization-prompt.d.ts"
+      ],
+      "ai/tool-result-eliding": [
+        "./dist/ai/tool-result-eliding.d.ts"
       ],
       "ai/global-channel-id": [
         "./dist/ai/global-channel-id.d.ts"

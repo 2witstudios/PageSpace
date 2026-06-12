@@ -62,7 +62,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
+import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
@@ -893,42 +893,34 @@ export async function POST(request: Request) {
       pageId
     });
 
-    // Sanitize messages (removes tool parts without results, strips system role).
-    // NOTE: We use database-loaded messages, NOT messages from client.
-    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
+    // Sanitize, compact, and elide — all in the unified seam.
+    // createUIMessageStream keeps the FULL conversationHistory for the UI;
+    // only the model-facing messages go through the seam.
+    const {
+      messages: preparedMessages,
+      summaryText,
+      stableBoundaryIndex,
+      scheduleCompaction,
+    } = await prepareHistoryForModel({
+      history: conversationHistory,
+      conversationId: conversationId!,
+      source: 'page',
+      pageId,
+      model: currentModel,
+      provider: currentProvider,
+      systemPrompt: systemPrompt + pageTreePrompt + toolDiscoveryPrompt,
+      tools: filteredTools as Record<string, unknown>,
+      user: user ? { id: user.id, role: user.role } : null,
+    });
 
-    // Apply sliding-window compaction for admin users. Non-admin: passthrough.
-    // createUIMessageStream keeps the FULL sanitizedMessages so the UI sees
-    // complete history; only baseMessages (model-facing) is compacted.
-    const { messages: compactedMessages, scheduleCompaction } =
-      await prepareConversationContext({
-        conversationId: conversationId!,
-        source: 'page',
-        pageId,
-        // UIMessage satisfies CompactionMessage structurally (same id/role/parts/createdAt)
-        messages: sanitizedMessages as never,
-        model: currentModel,
-        provider: currentProvider,
-        systemPrompt: systemPrompt + pageTreePrompt + toolDiscoveryPrompt,
-        tools: filteredTools as Record<string, unknown>,
-        user: user ? { id: user.id, role: user.role } : null,
-      });
-
-    // Derive model messages from the compacted result.
-    // If compaction added a synthetic summary at index 0 (no .id), split it out
-    // and build it as a plain user ModelMessage so the AI SDK converts the tail
-    // UIMessages normally with tool-call graph intact.
-    const hasSummary = compactedMessages.length > 0 && !compactedMessages[0].id;
-    const summaryText = hasSummary ? (compactedMessages[0].parts?.[0]?.text ?? '') : '';
-    const tailUIMessages = (hasSummary ? compactedMessages.slice(1) : compactedMessages) as UIMessage[];
-    const tailModelMessages = convertToModelMessages(tailUIMessages, { tools: filteredTools });
-    const modelMessages: ModelMessage[] = hasSummary
+    // Convert elided UIMessages to ModelMessages for streamText.
+    const tailModelMessages = convertToModelMessages(preparedMessages, { tools: filteredTools });
+    const modelMessages: ModelMessage[] = summaryText
       ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
       : tailModelMessages;
-    // stableBoundaryIndex: 1 when a summary exists (marks the first tail message
-    // in the compacted array as the start of the stable cross-request cache region);
-    // 0 means no stable boundary B (withCacheBreakpoints skips indices < 1).
-    const stableBoundaryIndex = hasSummary ? 1 : 0;
+
+    // sanitizedMessages is still needed by createUIMessageStream for full UI history.
+    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
 
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });

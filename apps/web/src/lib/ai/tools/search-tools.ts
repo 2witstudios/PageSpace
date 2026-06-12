@@ -11,7 +11,7 @@ export const searchTools = {
    * Search page content and conversations using regular expressions
    */
   regex_search: tool({
-    description: 'Search page content and conversation messages using regular expression patterns. Searches both documents and conversations by default. Returns matches with IDs, titles, and context for reference.',
+    description: 'Search page content and conversation messages using regular expression patterns. Searches both documents and conversations by default. Returns matches with IDs, titles, and context for reference. Also use to recover earlier tool results or conversation context that has been condensed or elided from the active context window.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to search in'),
       pattern: z.string().describe('Regular expression pattern to search for (e.g., "TODO.*urgent", "\\d{4}-\\d{2}-\\d{2}", "deprecated.*API")'),

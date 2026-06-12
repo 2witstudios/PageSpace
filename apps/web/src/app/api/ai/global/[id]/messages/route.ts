@@ -68,7 +68,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
+import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -866,14 +866,13 @@ MENTION PROCESSING:
     // Always inject the finish tool so the model can signal task completion
     finalTools = { ...finalTools, ...finishTool } as ToolSet;
 
-    // Apply sliding-window compaction now that finalSystemPrompt + finalTools are known.
-    // For admin users this trims the tail and may prepend a synthetic summary message.
-    // Non-admin users get exact legacy behaviour (passthrough).
+    // Sanitize, compact, and elide via the unified seam.
+    // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
     {
-      const prepared = await prepareConversationContext({
+      const prepared = await prepareHistoryForModel({
+        history: conversationHistory,
         conversationId,
         source: 'global',
-        messages: sanitizedMessages as never,
         model: currentModel,
         provider: currentProvider,
         systemPrompt: finalSystemPrompt,
@@ -881,18 +880,15 @@ MENTION PROCESSING:
         user: { id: userId, role: auth.role ?? null },
       });
       scheduleCompaction = prepared.scheduleCompaction;
+      stableBoundaryIndex = prepared.stableBoundaryIndex;
 
-      const hasSummary = prepared.messages.length > 0 && !prepared.messages[0].id;
-      const summaryText = hasSummary ? (prepared.messages[0].parts?.[0]?.text ?? '') : '';
-      const tailUIMessages = (hasSummary ? prepared.messages.slice(1) : prepared.messages) as UIMessage[];
       // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES of the tail
-      const recentTail = tailUIMessages.slice(-MAX_MESSAGES_WITH_IMAGES);
+      const recentTail = prepared.messages.slice(-MAX_MESSAGES_WITH_IMAGES);
       const processedTail = injectVisualContent(recentTail);
       const tailModelMessages = convertToModelMessages(processedTail);
-      modelMessages = hasSummary
-        ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
+      modelMessages = prepared.summaryText
+        ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
         : tailModelMessages;
-      stableBoundaryIndex = hasSummary ? 1 : 0;
     }
 
     loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
