@@ -43,6 +43,10 @@ const WRITE_TOOLS = new Set([
   'create_workflow',
   'update_workflow',
   'delete_workflow',
+  // Command operations
+  'create_command',
+  'update_command',
+  'delete_command',
 ]);
 
 // Web search tools (excluded when web search is disabled)
@@ -163,6 +167,8 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     'ask_agent',
     // Model catalog (read-only)
     'list_models',
+    // Command read
+    'list_commands',
     // Workflow read
     'list_workflows',
     // Write tools

@@ -8,7 +8,6 @@ import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
 import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
-import { canUseCommands } from "@/lib/commands/command-gating";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
@@ -97,16 +96,13 @@ export default function SettingsPage() {
           href: "/settings/personalization",
           available: true,
         },
-        // Launch exposure gate (universal-commands spec §0): admin accounts only
-        ...(canUseCommands(user)
-          ? [{
-              title: "Commands",
-              description: "Register pages as slash commands for AI",
-              icon: SlashSquare,
-              href: "/settings/commands",
-              available: true,
-            }]
-          : []),
+        {
+          title: "Commands",
+          description: "Register pages as slash commands for AI",
+          icon: SlashSquare,
+          href: "/settings/commands",
+          available: true,
+        },
         {
           title: "AI Providers",
           description: "Check which AI providers are available on this deployment",

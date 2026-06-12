@@ -119,6 +119,15 @@ vi.mock('../../tools/member-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/command-tools', () => ({
+  commandTools: {
+    create_command: { name: 'create_command', description: 'Create command' },
+    update_command: { name: 'update_command', description: 'Update command' },
+    delete_command: { name: 'delete_command', description: 'Delete command' },
+    list_commands: { name: 'list_commands', description: 'List commands' },
+  },
+}));
+
 // Stub the sandbox tools so the builder can be exercised without loading the DB
 // module graph or the real Fly Sprites driver.
 vi.mock('../../tools/sandbox-tools-runtime', () => ({
@@ -146,6 +155,7 @@ import { calendarWriteTools } from '../../tools/calendar-write-tools';
 import { channelTools } from '../../tools/channel-tools';
 import { workflowTools } from '../../tools/workflow-tools';
 import { modelTools } from '../../tools/model-tools';
+import { commandTools } from '../../tools/command-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -170,6 +180,7 @@ describe('ai-tools', () => {
         ...channelTools,
         ...workflowTools,
         ...modelTools,
+        ...commandTools,
       });
     });
 
@@ -190,6 +201,7 @@ describe('ai-tools', () => {
         Object.keys(channelTools),
         Object.keys(workflowTools),
         Object.keys(modelTools),
+        Object.keys(commandTools),
       ];
 
       const allKeys = moduleKeysets.flat();

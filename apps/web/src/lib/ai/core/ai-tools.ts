@@ -15,6 +15,7 @@ import { calendarWriteTools } from '../tools/calendar-write-tools';
 import { channelTools } from '../tools/channel-tools';
 import { workflowTools } from '../tools/workflow-tools';
 import { modelTools } from '../tools/model-tools';
+import { commandTools } from '../tools/command-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
@@ -34,6 +35,7 @@ const baseTools = {
   ...channelTools,
   ...workflowTools,
   ...modelTools,
+  ...commandTools,
 };
 
 /**
