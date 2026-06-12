@@ -138,9 +138,11 @@ import { canActorViewPage } from '../actor-permissions';
 import { createAIProvider } from '../../core/provider-factory';
 import { saveMessageToDatabase } from '../../core/message-utils';
 import type { ToolExecutionContext } from '../../core/types';
-import { generateText } from 'ai';
+import { generateText, convertToModelMessages } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { prepareConversationContext } from '../../core/compaction/prepare-context';
+import { runCompaction } from '../../core/compaction/compaction-service';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -712,6 +714,111 @@ describe('agent-communication-tools', () => {
           sourceAgentId: null,
           role: 'user',
         });
+      });
+    });
+
+    describe('compaction-aware context assembly', () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'test-model' } as never,
+          provider: 'openai',
+          modelName: 'openai/gpt-5.3-chat',
+        } as Awaited<ReturnType<typeof createAIProvider>>);
+        vi.mocked(generateText).mockResolvedValue({
+          text: 'Agent response',
+          steps: [],
+          totalUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        } as never);
+      });
+
+      it('passes the full prepared.messages (including synthetic summary) to convertToModelMessages', async () => {
+        const syntheticSummary = {
+          role: 'user' as const,
+          parts: [{ type: 'text', text: '<conversation_summary>\nold stuff\n</conversation_summary>' }],
+        };
+        const tailMsg = {
+          id: 'msg-1',
+          role: 'user' as const,
+          parts: [{ type: 'text', text: 'current question' }],
+          createdAt: new Date(),
+        };
+        const mockModelMessages = [{ role: 'user', content: 'converted' }];
+
+        vi.mocked(prepareConversationContext).mockResolvedValueOnce({
+          messages: [syntheticSummary, tailMsg] as never,
+          pendingCompaction: null,
+          scheduleCompaction: vi.fn(),
+        });
+        vi.mocked(convertToModelMessages).mockReturnValueOnce(mockModelMessages as never);
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          context
+        );
+
+        // convertToModelMessages must receive the full array including the synthetic summary
+        expect(convertToModelMessages).toHaveBeenCalledWith(
+          expect.arrayContaining([syntheticSummary, tailMsg])
+        );
+        // generateText receives the converted result
+        expect(generateText).toHaveBeenCalledWith(
+          expect.objectContaining({ messages: mockModelMessages })
+        );
+      });
+
+      it('fires runCompaction when prepareConversationContext returns pendingCompaction', async () => {
+        const pendingCompaction = {
+          conversationId: 'conv-1',
+          source: 'page' as const,
+          pageId: 'agent-1',
+          userId: 'user-123',
+          provider: 'openai',
+          model: 'openai/gpt-5.3-chat',
+          plan: {
+            reason: 'over-soft-threshold' as const,
+            cutBeforeIndex: 0,
+            estimatedTailTokens: 100,
+            messagesToSummarize: [],
+            compactedUpToMessageId: null,
+            compactedUpToCreatedAt: null,
+            currentSummaryVersion: null,
+            previousSummary: null,
+          },
+        };
+
+        vi.mocked(prepareConversationContext).mockResolvedValueOnce({
+          messages: [] as never,
+          pendingCompaction,
+          scheduleCompaction: vi.fn(),
+        });
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          context
+        );
+
+        expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
       });
     });
 
