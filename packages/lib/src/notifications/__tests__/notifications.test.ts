@@ -549,6 +549,31 @@ describe('createMentionNotification', () => {
     await createMentionNotification('user-1', 'page-1', 'user-2');
     expect(db.insert).toHaveBeenCalled();
   });
+
+  it('uses mentionerNameOverride in message and metadata when provided', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
+
+    await createMentionNotification('user-1', 'page-1', 'user-2', { mentionerNameOverride: 'ResearchBot' });
+
+    const insertArg = valuesFn.mock.calls[0][0];
+    expect(insertArg.message).toContain('ResearchBot');
+    expect(insertArg.metadata?.mentionerName).toBe('ResearchBot');
+  });
+
+  it('falls back to DB user name when no override', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
+
+    await createMentionNotification('user-1', 'page-1', 'user-2');
+
+    const insertArg = valuesFn.mock.calls[0][0];
+    expect(insertArg.message).toContain('Alice');
+    expect(insertArg.metadata?.mentionerName).toBe('Alice');
+  });
+
+  it('self-mention still returns null even with override', async () => {
+    const result = await createMentionNotification('user-1', 'page-1', 'user-1', { mentionerNameOverride: 'Bot' });
+    expect(result).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

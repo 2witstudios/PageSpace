@@ -101,6 +101,11 @@ vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
 
+const mockNotifyMentionedUsers = vi.fn();
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({
+  notifyMentionedUsers: (...args: unknown[]) => mockNotifyMentionedUsers(...args),
+}));
+
 import { channelTools } from '../channel-tools';
 import { canActorEditPage } from '../actor-permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -472,6 +477,65 @@ describe('channel-tools', () => {
           context
         )
       ).rejects.toThrow('Message content cannot be empty');
+    });
+
+    it('fires notifyMentionedUsers with senderIdentity.senderName as override', async () => {
+      mockNotifyMentionedUsers.mockResolvedValue(undefined);
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1',
+        title: 'General',
+        type: 'CHANNEL',
+        driveId: 'drive-1',
+        drive: { ownerId: 'user-456' },
+      });
+      mockCanActorEditPage.mockResolvedValue(true);
+      mockDriveMembersFindMany.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          chatSource: { type: 'page', agentPageId: 'agent-1', agentTitle: 'ResearchBot' },
+        } as ToolExecutionContext,
+      };
+
+      await executeToolAs({ channelId: 'ch-1', content: 'hello @[Bob](bob-id:user)' }, context);
+
+      // Fire-and-forget — flush microtasks
+      await vi.runAllTimersAsync().catch(() => undefined);
+      await Promise.resolve();
+
+      expect(mockNotifyMentionedUsers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'hello @[Bob](bob-id:user)',
+          pageId: 'ch-1',
+          driveId: 'drive-1',
+          triggeredByUserId: 'user-123',
+          mentionerNameOverride: 'ResearchBot (Test User)',
+        })
+      );
+    });
+
+    it('send succeeds even when notifyMentionedUsers rejects', async () => {
+      mockNotifyMentionedUsers.mockRejectedValue(new Error('notify exploded'));
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1',
+        title: 'General',
+        type: 'CHANNEL',
+        driveId: 'drive-1',
+        drive: { ownerId: 'user-456' },
+      });
+      mockCanActorEditPage.mockResolvedValue(true);
+      mockDriveMembersFindMany.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        executeToolAs({ channelId: 'ch-1', content: 'hi' }, context)
+      ).resolves.toMatchObject({ success: true });
     });
   });
 

@@ -8,6 +8,7 @@ import { db } from '@pagespace/db/db'
 import { chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 
 /** Narrow a UIMessage part to TextUIPart */
 function isTextPart(part: { type: string }): part is TextUIPart {
@@ -452,6 +453,7 @@ export async function saveMessageToDatabase({
   toolResults,
   uiMessage,
   sourceAgentId,
+  mentionNotify,
 }: {
   messageId: string;
   pageId: string;
@@ -463,6 +465,7 @@ export async function saveMessageToDatabase({
   toolResults?: ToolResult[];
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
   sourceAgentId?: string | null; // ID of the AI agent that sent this message (for agent-to-agent communication)
+  mentionNotify?: { driveId: string; triggeredByUserId: string; mentionerName?: string };
 }) {
   try {
     let structuredContent = content;
@@ -502,6 +505,17 @@ export async function saveMessageToDatabase({
           sourceAgentId: sourceAgentId ?? null,
         }
       });
+
+    // Fire-and-forget mention notifications for assistant messages only
+    if (mentionNotify && role === 'assistant' && content.trim()) {
+      void notifyMentionedUsers({
+        content,
+        pageId,
+        driveId: mentionNotify.driveId,
+        triggeredByUserId: mentionNotify.triggeredByUserId,
+        mentionerNameOverride: mentionNotify.mentionerName,
+      });
+    }
 
   } catch (error) {
     loggers.ai.error('Failed to save message to database', error as Error);
